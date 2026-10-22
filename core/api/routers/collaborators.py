@@ -56,6 +56,9 @@ class CollaboratorItem(BaseModel):
     id: uuid.UUID
     email: str
     username: str | None
+    nombre: str | None
+    telefono: str | None
+    avatar_url: str | None
     role: str
     active: bool
     is_self: bool
@@ -69,6 +72,14 @@ class PackRole(BaseModel):
     label: str
 
 
+class ExisteResponse(BaseModel):
+    existe: bool
+
+
+class UsernameDisponibleResponse(BaseModel):
+    disponible: bool
+
+
 @router.get("/pack-roles", response_model=list[PackRole])
 async def list_pack_roles(
     principal: Annotated[Principal, Depends(require("collaborators"))],
@@ -77,16 +88,49 @@ async def list_pack_roles(
     return [PackRole(**r) for r in await pack_collaborator_roles()]
 
 
+@router.get("/existe", response_model=ExisteResponse)
+async def email_existe(
+    email: str,
+    principal: Annotated[Principal, Depends(require("collaborators"))],
+) -> ExisteResponse:
+    """¿Ya existe una cuenta con este correo? Lo usa el alta en dos pasos (D-SPEC-34)."""
+    email = email.strip().lower()
+    async with get_session() as session:
+        existe = (
+            await session.execute(select(Admin.id).where(Admin.email == email))
+        ).scalar_one_or_none() is not None
+    return ExisteResponse(existe=existe)
+
+
+@router.get("/username-disponible", response_model=UsernameDisponibleResponse)
+async def username_disponible(
+    username: str,
+    principal: Annotated[Principal, Depends(require("collaborators"))],
+) -> UsernameDisponibleResponse:
+    """¿El `username` está libre? Validación en tiempo real del alta (D-SPEC-34)."""
+    usuario = username.strip()
+    if not usuario:
+        return UsernameDisponibleResponse(disponible=False)
+    async with get_session() as session:
+        ocupado = (
+            await session.execute(select(Admin.id).where(Admin.username == usuario))
+        ).scalar_one_or_none() is not None
+    return UsernameDisponibleResponse(disponible=not ocupado)
+
+
 @router.get("", response_model=list[CollaboratorItem])
 async def list_collaborators(
     principal: Annotated[Principal, Depends(require("collaborators"))],
+    todos: bool = False,
 ) -> list[CollaboratorItem]:
+    """Cuentas del **negocio activo**. El master puede pedir `?todos=1` para ver todas las
+    cuentas de la plataforma (gestión de cuentas); un owner siempre ve solo su negocio."""
     me = principal.admin
     is_master = me.role == "master"
     tid = principal.tenant_id
 
     async with get_session() as session:
-        if is_master:
+        if is_master and (todos or tid is None):
             admins = (await session.execute(select(Admin).order_by(Admin.email))).scalars().all()
         else:
             admins = list(
@@ -108,8 +152,8 @@ async def list_collaborators(
         if admin_ids:
             perm_where = [AdminPermission.admin_id.in_(admin_ids)]
             link_where = [TenantUser.admin_id.in_(admin_ids)]
-            if not is_master:
-                # Un owner solo ve el scope de SU tenant.
+            if not (is_master and todos):
+                # Sin «todas las cuentas», solo el scope de SU tenant.
                 perm_where.append(AdminPermission.tenant_id == tid)
                 link_where.append(TenantUser.tenant_id == tid)
             perms = (
@@ -147,6 +191,9 @@ async def list_collaborators(
             id=a.id,
             email=a.email,
             username=a.username,
+            nombre=a.nombre,
+            telefono=a.telefono,
+            avatar_url=a.avatar_url,
             role=a.role,
             active=a.active,
             is_self=a.id == me.id,
@@ -166,6 +213,8 @@ class CollaboratorCreate(BaseModel):
     password: str
     role: str = "colaborador"
     username: str = ""
+    nombre: str = ""
+    telefono: str = ""
     tenant: str = ""
     pack_roles: list[str] = []
 
@@ -225,6 +274,8 @@ async def create_collaborator_endpoint(
             password=payload.password,
             role=payload.role,
             username=payload.username,
+            nombre=payload.nombre,
+            telefono=payload.telefono,
             tenant_slug=payload.tenant,
             pack_roles=payload.pack_roles,
         )

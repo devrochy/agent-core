@@ -533,6 +533,11 @@ class Admin(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(Text, unique=True)
     username: Mapped[str | None] = mapped_column(Text, unique=True)
+    # Perfil de la cuenta (sección Equipo, D-SPEC-34): nombre completo, teléfono con indicativo
+    # y foto de perfil (editable desde el perfil del propio usuario).
+    nombre: Mapped[str | None] = mapped_column(Text)
+    telefono: Mapped[str | None] = mapped_column(Text)
+    avatar_url: Mapped[str | None] = mapped_column(Text)
     password_hash: Mapped[str] = mapped_column(Text)
     role: Mapped[str] = mapped_column(Text, default="colaborador")  # master | colaborador
     active: Mapped[bool] = mapped_column(Boolean, default=True)

@@ -151,6 +151,8 @@ async def create_collaborator(
     password: str,
     role: str,
     username: str = "",
+    nombre: str = "",
+    telefono: str = "",
     tenant_slug: str = "",
     pack_roles: list[str] | None = None,
 ) -> AltaResultado | str:
@@ -169,9 +171,8 @@ async def create_collaborator(
 
     if is_master:
         admin_role = "master" if role == "master" else "colaborador"
-        tenant_id = await resolve_tenant_id(tenant_slug) if tenant_slug else None
-        if tenant_slug and tenant_id is None:
-            return "tenant no encontrado"
+        # Sin slug, la cuenta cae en el negocio activo (D-SPEC-34: el negocio ya no se elige).
+        tenant_id = await resolve_tenant_id(tenant_slug) if tenant_slug else get_current_tenant_id()
         tenant_role = "colaborador" if role == "colaborador" else "owner"
     else:
         admin_role = "colaborador"
@@ -211,9 +212,18 @@ async def create_collaborator(
             from core.billing.enforcement import enforce_growth
 
             await enforce_growth(tenant_id, "colaboradores", session=session)
+        usuario = username.strip() or None
+        if usuario:
+            ocupado = (
+                await session.execute(select(Admin.id).where(Admin.username == usuario))
+            ).scalar_one_or_none()
+            if ocupado is not None:
+                return "ese nombre de usuario ya está en uso"
         new_admin = Admin(
             email=email,
-            username=username.strip() or None,
+            username=usuario,
+            nombre=nombre.strip() or None,
+            telefono=telefono.strip() or None,
             password_hash=hash_password(password),
             role=admin_role,
         )
