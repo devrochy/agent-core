@@ -34,6 +34,7 @@ from core.provisioning.antiabuso import (
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.shared.texto_seguro import contiene_url
+from pack_commerce.fotos import url_foto
 from pack_commerce.models import (
     CategoryComplement,
     Inventory,
@@ -1092,7 +1093,7 @@ class CatalogSkill(BaseSkill):
             # `tiene_foto` solo cuando hay foto: sin ella, el resultado queda igual que antes de
             # HU-CRM-01 (las grabaciones de los journeys en replay lo comparan). Mismo criterio que
             # `_foto_del_unico`: una URL http vieja no cuenta.
-            if (product.image_url or "").strip().lower().startswith("https://"):
+            if (url_foto(product) or "").strip().lower().startswith("https://"):
                 match["tiene_foto"] = True
             return match
 
@@ -1128,7 +1129,7 @@ class CatalogSkill(BaseSkill):
 
             if matches:
                 resultado: dict[str, Any] = {"matches": matches}
-                fotos = {str(variant.id): product.image_url or "" for variant, product, _ in rows}
+                fotos = {str(variant.id): (url_foto(product) or "") for variant, product, _ in rows}
                 foto = _foto_del_unico(sku, query, matches, fotos)
                 if foto:
                     # El core la adjunta a la última burbuja (safe_renderer); el LLM no la ve.

@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import func
 
 from core.sync import SyncAdapter, register_sync
+from pack_commerce.fotos import url_foto
 from pack_commerce.models import Category, Order, Product, Promotion
 
 
@@ -21,7 +22,7 @@ def _serializar_producto(row: Product) -> dict[str, Any]:
         "id": str(row.id),
         "nombre": row.name,
         "descripcion": row.description,
-        "imagenUrl": row.image_url,
+        "imagenUrl": url_foto(row),
         "categoriaId": str(row.category_id) if row.category_id else None,
         "variantes": row.has_variants,
         "updatedAt": row.updated_at.isoformat(),

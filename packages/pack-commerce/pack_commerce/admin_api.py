@@ -19,15 +19,18 @@ from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select, update
 
+from core import almacenamiento
 from core.api.deps import Principal, get_principal, require
 from core.api.errors import ApiError
 from core.db.session import get_owned, get_session
+from core.shared.tenant import tenant_slug
 
 from . import aliados
 
 # Registra los providers de búsqueda global del pack (ADR-0096).
 from . import search as _search  # noqa: F401
 from . import sync as _sync  # noqa: F401
+from .fotos import url_foto
 from .models import Ally, Category, Inventory, Order, OrderItem, Product, ProductVariant, Promotion
 
 router = APIRouter(prefix="/api/v1/pack/commerce", tags=["pack · comercio"])
@@ -142,7 +145,9 @@ class ProductOut(BaseModel):
     category: str
     ally_id: uuid.UUID | None = None  # HU-CRM-03
     price: float
-    image_url: str | None = None  # HU-CRM-01
+    image_url: str | None = None  # resuelta: firmada si hay subida, si no el link (para mostrar)
+    image_url_externa: str | None = None  # link externo crudo (HU-CRM-01), para el formulario
+    image_key: str | None = None  # HU-CRM-05 (clave de la foto subida)
     variants: list[VariantOut]
 
 
@@ -164,6 +169,8 @@ class ProductSave(BaseModel):
     trial_days: int | None = Field(default=None, ge=0, le=365)
     # HU-CRM-01: None = no cambia; "" = quita la foto.
     image_url: str | None = Field(default=None, max_length=IMAGE_URL_MAX)
+    # HU-CRM-05: clave de la foto subida (controlador único). None = no cambia; "" = quita.
+    image_key: str | None = None
 
     @field_validator("image_url")
     @classmethod
@@ -183,6 +190,13 @@ async def _validar_plan(tenant_id: uuid.UUID | None, payload: ProductSave, ya_re
     estado = await estado_proveedor(tenant_id)
     if estado["estado"] == "sin_proveedor":
         raise ApiError.bad_request(estado["mensaje"], "sin_proveedor_de_suscripciones")
+
+
+def _key_producto_valida(key: str, slug: str | None) -> bool:
+    """La clave de una foto subida tiene que ser de este negocio y existir en disco."""
+    if not slug or not key.startswith(f"{slug}/productos/"):
+        return False
+    return almacenamiento.abrir(key) is not None
 
 
 @router.get("/products", response_model=list[ProductOut])
@@ -257,7 +271,9 @@ async def list_products(
                 category=cat_by_id.get(p.category_id, "Sin categoría"),
                 ally_id=p.ally_id,
                 price=float(product_variants[0].price or 0) if product_variants else 0.0,
-                image_url=p.image_url or None,
+                image_url=url_foto(p),
+                image_url_externa=p.image_url,
+                image_key=p.image_key,
                 variants=[
                     VariantOut(
                         id=v.id,
@@ -283,6 +299,8 @@ async def save_product(
 ) -> Response:
     """Alta/edición del producto con su variante por defecto e inventario."""
     tenant_id = principal.tenant_id
+    slug = await tenant_slug(tenant_id) if tenant_id is not None else None
+    viejo_key: str | None = None
     async with get_session() as session:
         # Defensa en profundidad: no dejar la categoría colgando a otro tenant.
         resolved_category_id: uuid.UUID | None = None
@@ -302,6 +320,13 @@ async def save_product(
             product.category_id = resolved_category_id
             if payload.image_url is not None:
                 product.image_url = payload.image_url or None
+            if payload.image_key is not None:
+                nueva_key = payload.image_key or None
+                if nueva_key is not None and not _key_producto_valida(nueva_key, slug):
+                    raise ApiError.bad_request("La foto subida no es válida.", "image_key_invalida")
+                if product.image_key and product.image_key != nueva_key:
+                    viejo_key = product.image_key
+                product.image_key = nueva_key
             if cambia_aliado:
                 product.ally_id = resolved_ally_id
             variant = (
@@ -340,11 +365,15 @@ async def save_product(
                     inventory.stock_quantity = payload.stock
         else:
             await _validar_plan(tenant_id, payload, ya_recurrente=False)
+            nueva_key = payload.image_key or None
+            if nueva_key is not None and not _key_producto_valida(nueva_key, slug):
+                raise ApiError.bad_request("La foto subida no es válida.", "image_key_invalida")
             product = Product(
                 name=payload.name,
                 description=payload.description or "",
                 category_id=resolved_category_id,
                 image_url=payload.image_url or None,
+                image_key=nueva_key,
                 ally_id=resolved_ally_id,
             )
             session.add(product)
@@ -360,7 +389,33 @@ async def save_product(
             await session.flush()
             session.add(Inventory(variant_id=variant.id, stock_quantity=payload.stock))
             product.has_variants = False
+    if viejo_key:
+        # La foto anterior se reemplazó: se borra después de confirmar el cambio de clave.
+        almacenamiento.borrar(viejo_key)
     return Response(status_code=204)
+
+
+@router.post("/products/image", status_code=201)
+async def upload_product_image(
+    archivo: Annotated[UploadFile, File()],
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> dict[str, str]:
+    """Sube la foto de un producto al controlador único (HU-CRM-05) y devuelve su clave y URL.
+
+    El panel/APK la suben antes de guardar el producto; luego mandan `image_key` en el alta."""
+    tenant_id = principal.tenant_id
+    slug = await tenant_slug(tenant_id) if tenant_id is not None else None
+    if slug is None:
+        raise ApiError.bad_request("No hay negocio activo.", "no_tenant")
+    limite = almacenamiento.PERFILES["producto"].max_bytes
+    contenido = await archivo.read(limite + 1)
+    try:
+        ref = almacenamiento.guardar(
+            "producto", contenido, mimetype=archivo.content_type, tenant_slug=slug
+        )
+    except almacenamiento.StorageInvalido as exc:
+        raise ApiError.bad_request(str(exc), exc.codigo) from exc
+    return {"image_key": ref.key, "image_url": ref.url}
 
 
 # ------------------------------------------------------------------ categorías
