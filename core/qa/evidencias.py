@@ -16,6 +16,8 @@ from core.onboarding import tenants_root
 
 MAX_POR_PASO = 10
 _PREFIJO = ".plataforma/pruebas/"
+# Compatibilidad con `core/api/routers/qa.py`: el límite es el del perfil `qa`.
+MAX_BYTES = almacenamiento.PERFILES["qa"].max_bytes
 
 
 class EvidenciaInvalida(ValueError):
