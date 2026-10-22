@@ -30,6 +30,7 @@ from core.admin.collaborators_service import (
     unlink_tenant,
 )
 from core.admin.permissions import acceso_y_origen
+from core.almacenamiento import resolver_avatar
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.plan_limits import plan_limit_error, plan_limit_responses
@@ -193,7 +194,7 @@ async def list_collaborators(
             username=a.username,
             nombre=a.nombre,
             telefono=a.telefono,
-            avatar_url=a.avatar_url,
+            avatar_url=resolver_avatar(a.avatar_url),
             role=a.role,
             active=a.active,
             is_self=a.id == me.id,
