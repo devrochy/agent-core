@@ -114,6 +114,8 @@ class Product(TenantMixin, Base):
     name: Mapped[str] = mapped_column(Text)
     description: Mapped[str] = mapped_column(Text, default="")
     image_url: Mapped[str | None] = mapped_column(Text)
+    # HU-CRM-05: foto subida al controlador único (`<slug>/productos/...`); gana sobre image_url.
+    image_key: Mapped[str | None] = mapped_column(Text)
     category_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))  # FK lógica a crm_categories
     ally_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)  # FK lógica (HU-CRM-03)
     has_variants: Mapped[bool] = mapped_column(Boolean, default=False)
