@@ -66,3 +66,57 @@ como el `AgentSpec` → mover a BD (follow-up).
 - `docker-compose.yml` (volumen `tenants-data` en api/worker/beat).
 - `docs/despliegue-coolify.md` (montaje del volumen en Coolify + backup).
 - `core/onboarding.py` (asegurar dirs) y `scripts/entrypoint.sh` (mkdir de `TENANTS_ROOT`).
+
+## Enmienda 2026-10-21 — controlador único de almacenamiento
+
+- **Estado:** aceptada
+- **Decisión de producto:** D-SPEC-04-2 pasa a ✅ (archivos bajo `TENANTS_ROOT`, no blobs en
+  Postgres; S3/R2 como evolución).
+
+### Contexto
+
+El ADR fijó **dónde** viven los artefactos, pero no **cómo** se guardan. Cada feature que
+recibe archivos reimplementó validación, límites, ruta segura, nombrado y limpieza:
+`core/qa/evidencias.py` (capturas), `packages/pack-knowledge/pack_knowledge/archivos.py`
+(documentos) y, próximamente, las imágenes de producto (HU-CRM-05), la media entrante
+(HU-MEDIA-02) y los comprobantes. Eso multiplica el riesgo de un MIME mal validado, un path
+traversal o una cuota olvidada.
+
+### Decisión
+
+1. **Un solo controlador** `core/almacenamiento` (puerto + backend de filesystem). Todo archivo de
+   usuario o de canal pasa por él; ninguna feature escribe archivos por su cuenta.
+2. **Perfiles por `kind`** (`producto`, `conocimiento`, `qa`, `media`, `comprobante`): MIME +
+   magic bytes + tamaño + extensión + carpeta + si es por negocio o de plataforma + retención.
+3. **`key` = ruta relativa a `TENANTS_ROOT`**, con el nombre físico puesto por el servidor y
+   chequeo de traversal. Se **mantienen los paths actuales** de QA (`.plataforma/pruebas/`) y
+   conocimiento (`<slug>/conocimiento/`) para no mover archivos existentes.
+4. **URLs firmadas** con `APP_SECRET_KEY` y vida corta (`/api/v1/files/{token}`): 15 min para
+   panel/APK y 60 min para que Meta descargue al enviar. No se exponen rutas internas.
+5. **Registro `stored_files`** (tabla de sistema, `tenant_id` nulo = plataforma): metadatos
+   para retención, cuota, auditoría y limpieza de huérfanos. **Siguiente paso de HU-ALM-01**
+   (con su migración): hoy el controlador es stateless y el `Content-Type` sale de la extensión.
+6. **Evolución S3/R2** detrás del mismo puerto; el filesystem es el backend por defecto.
+
+### Prerrequisito
+
+El volumen `tenants-data` debe estar **compartido y sano en api, worker y beat**. Hoy el
+worker y el beat aparecen vacíos (pendientes del dueño, A.4); con un controlador único, un
+archivo escrito por el worker que el api no ve es un fallo, no una molestia.
+
+### Consecuencias
+
+**Positivas:** una sola validación, un solo firmado, una sola retención; QA, conocimiento,
+productos y media comparten contrato; migrar a S3/R2 no toca features.
+
+**Negativas / lo que aceptamos pagar:** un perfil más que mantener; la tabla de sistema con
+scoping explícito en vez de RLS (como `tenant_invitations`); el controlador es un punto único
+que hay que probar bien (aislamiento, traversal, MIME, tamaño, atómico).
+
+### Impacto en el código
+
+- `core/almacenamiento/` (`perfiles.py`, `firmas.py`, `__init__.py`), `core/api/routers/files.py`.
+- (siguiente paso) `core/db/models.py` (`StoredFile`) y su migración, cuando el número de
+  migración quede libre.
+- `pack_commerce` (HU-CRM-05), `core/qa/evidencias.py` y `pack_knowledge/archivos.py` (refactor
+  con los mismos paths).
