@@ -94,7 +94,12 @@ def test_vacio_y_muy_grande() -> None:
 
 # ------------------------------------------------------------------ rutas
 def test_guardar_resolver_y_borrar(tmp_path, monkeypatch) -> None:
+    import core.almacenamiento as almacenamiento
+
     monkeypatch.setattr(archivos, "carpeta_del_tenant", lambda slug: tmp_path / slug)
+    # El alta pasa por el controlador único: se aísla también su raíz.
+    monkeypatch.setattr(almacenamiento, "carpeta_del_tenant", lambda slug: tmp_path / slug)
+    monkeypatch.setattr(almacenamiento, "tenants_root", lambda: tmp_path)
     doc = uuid.uuid4()
     ruta = archivos.guardar("negocio-a", doc, MIME_PDF, b"%PDF-1.4 x")
     assert ruta == f"{doc}.pdf"
