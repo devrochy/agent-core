@@ -34,7 +34,6 @@ __all__ = [
     "abrir",
     "borrar",
     "guardar",
-    "resolver_avatar",
     "url",
 ]
 
@@ -132,12 +131,3 @@ def borrar(key: str) -> None:
     destino = _ruta(key)
     if destino is not None:
         destino.unlink(missing_ok=True)
-
-
-def resolver_avatar(valor: str | None) -> str | None:
-    """URL para mostrar un avatar: respeta una URL externa o firma la `key` guardada."""
-    if not valor:
-        return None
-    if valor.startswith(("http://", "https://")):
-        return valor
-    return url(valor)

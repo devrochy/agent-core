@@ -95,7 +95,6 @@ class Perfil:
 # `qa` mantiene la ruta histórica `.plataforma/pruebas/<run_id>/` para no mover evidencias.
 PERFILES: dict[str, Perfil] = {
     "producto": Perfil("producto", "productos", _IMAGENES, 5 * MB),
-    "avatar": Perfil("avatar", "avatares", _IMAGENES, 2 * MB, tenant_scoped=False),
     "conocimiento": Perfil("conocimiento", "conocimiento", _DOCUMENTOS, 20 * MB),
     "qa": Perfil("qa", ".plataforma/pruebas", _IMAGENES | {MIME_PDF}, 5 * MB, tenant_scoped=False),
     "media": Perfil("media", "media", _IMAGENES | _AUDIO | _VIDEO | {MIME_PDF}, 25 * MB),
