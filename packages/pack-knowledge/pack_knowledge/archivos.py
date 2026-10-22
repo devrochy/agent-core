@@ -18,6 +18,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
+from core import almacenamiento
 from core.onboarding import carpeta_del_tenant
 
 MIME_PDF = "application/pdf"
@@ -108,14 +109,14 @@ def carpeta(slug: str) -> Path:
 
 
 def guardar(slug: str, document_id: uuid.UUID, tipo: str, contenido: bytes) -> str:
-    """Escribe el original y devuelve la ruta relativa a `carpeta(slug)`."""
-    destino_dir = carpeta(slug)
-    destino_dir.mkdir(parents=True, exist_ok=True)
-    nombre = f"{document_id}{EXTENSIONES[tipo]}"
-    temporal = destino_dir / f".{nombre}.tmp"
-    temporal.write_bytes(contenido)
-    temporal.replace(destino_dir / nombre)
-    return nombre
+    """Escribe el original (vía el controlador) y devuelve la ruta relativa a `carpeta(slug)`."""
+    try:
+        ref = almacenamiento.guardar(
+            "conocimiento", contenido, mimetype=tipo, tenant_slug=slug, nombre_base=str(document_id)
+        )
+    except almacenamiento.StorageInvalido as exc:
+        raise ArchivoInvalido(exc.codigo, str(exc)) from exc
+    return ref.key.rsplit("/", 1)[-1]
 
 
 def resolver(slug: str, ruta_relativa: str | None) -> Path | None:

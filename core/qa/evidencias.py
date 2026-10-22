@@ -1,10 +1,9 @@
-"""Capturas de los pasos de prueba (D-SPEC-30-4).
+"""Capturas de los pasos de prueba (D-SPEC-30-4, HU-ALM-02).
 
-Viven en `TENANTS_ROOT/.plataforma/pruebas/<run_id>/`, el volumen persistente que ya
-guarda las evidencias de cobranza (cubierto por el backup). El punto inicial evita
-choques con cualquier slug de negocio (`[a-zA-Z0-9_-]+`). **No se guardan blobs en
-Postgres.** El nombre físico es un `uuid4` (nunca el que manda el navegador) y la
-ruta se resuelve siempre contra la raíz con chequeo de traversal.
+Viven en `TENANTS_ROOT/.plataforma/pruebas/<run_id>/`, el perfil `qa` del controlador único
+(ADR-0085 enmendado). El controlador valida tipo/tamaño y escribe; este módulo solo resuelve
+la ruta y la limita a su carpeta. **No se guardan blobs en Postgres.** El nombre físico lo pone
+el servidor y la ruta se resuelve siempre contra la raíz con chequeo de traversal.
 """
 
 from __future__ import annotations
@@ -12,16 +11,13 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+from core import almacenamiento
 from core.onboarding import tenants_root
 
-MIME_EXT = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-    "application/pdf": ".pdf",
-}
-MAX_BYTES = 5 * 1024 * 1024
 MAX_POR_PASO = 10
+_PREFIJO = ".plataforma/pruebas/"
+# Compatibilidad con `core/api/routers/qa.py`: el límite es el del perfil `qa`.
+MAX_BYTES = almacenamiento.PERFILES["qa"].max_bytes
 
 
 class EvidenciaInvalida(ValueError):
@@ -32,40 +28,14 @@ def raiz() -> Path:
     return tenants_root() / ".plataforma" / "pruebas"
 
 
-def _firma_coincide(tipo: str, contenido: bytes) -> bool:
-    """Los primeros bytes confirman el tipo declarado por el navegador."""
-    if tipo == "image/png":
-        return contenido.startswith(b"\x89PNG\r\n\x1a\n")
-    if tipo == "image/jpeg":
-        return contenido.startswith(b"\xff\xd8\xff")
-    if tipo == "image/webp":
-        return contenido[:4] == b"RIFF" and contenido[8:12] == b"WEBP"
-    if tipo == "application/pdf":
-        return contenido.startswith(b"%PDF-")
-    return False
-
-
-def tipo_normalizado(mimetype: str | None) -> str:
-    return (mimetype or "").split(";")[0].strip().lower()
-
-
 def guardar(run_id: uuid.UUID, mimetype: str | None, contenido: bytes) -> tuple[str, str, int]:
-    """Guarda la captura y devuelve `(ruta_relativa, mimetype, tamaño)`."""
-    tipo = tipo_normalizado(mimetype)
-    ext = MIME_EXT.get(tipo)
-    if ext is None:
-        raise EvidenciaInvalida("Tipo de archivo no admitido: usa jpeg, png, webp o pdf.")
-    if not contenido:
-        raise EvidenciaInvalida("El archivo está vacío.")
-    if len(contenido) > MAX_BYTES:
-        raise EvidenciaInvalida("El archivo supera 5 MB.")
-    if not _firma_coincide(tipo, contenido):
-        raise EvidenciaInvalida("El contenido no corresponde a una imagen o PDF válido.")
-    carpeta = raiz() / str(run_id)
-    carpeta.mkdir(parents=True, exist_ok=True)
-    nombre = f"{uuid.uuid4().hex}{ext}"
-    (carpeta / nombre).write_bytes(contenido)
-    return f"{run_id}/{nombre}", tipo, len(contenido)
+    """Guarda la captura (vía el controlador) y devuelve `(ruta_relativa, mimetype, tamaño)`."""
+    try:
+        ref = almacenamiento.guardar("qa", contenido, mimetype=mimetype, subcarpeta=str(run_id))
+    except almacenamiento.StorageInvalido as exc:
+        raise EvidenciaInvalida(str(exc)) from exc
+    ruta = ref.key[len(_PREFIJO):] if ref.key.startswith(_PREFIJO) else ref.key
+    return ruta, ref.mimetype, ref.bytes
 
 
 def resolver(ruta_relativa: str) -> Path | None:
