@@ -67,6 +67,26 @@ celery.conf.beat_schedule[_META_SUBSCRIPTIONS_HEALTH_TASK] = {
     "schedule": crontab(minute="*/15"),
 }
 
+# Refresco del token de 60 días de Instagram Login (diario, de madrugada): Meta solo deja refrescar un token de al
+# menos 24 h y aún vigente, así que se corre una vez al día y solo toca los que están por vencer (HU-CHAN-04).
+_INSTAGRAM_TOKEN_REFRESH_TASK = "core.instagram_token_refresh"
+
+
+@celery.task(name=_INSTAGRAM_TOKEN_REFRESH_TASK)
+def _instagram_token_refresh() -> None:
+    from core.tasks.instagram_token_refresh import refresh_instagram_tokens
+
+    try:
+        run_async(refresh_instagram_tokens())
+    except Exception:
+        log.exception("cron_task_failed", task=_INSTAGRAM_TOKEN_REFRESH_TASK)
+
+
+celery.conf.beat_schedule[_INSTAGRAM_TOKEN_REFRESH_TASK] = {
+    "task": _INSTAGRAM_TOKEN_REFRESH_TASK,
+    "schedule": crontab(hour="3", minute="30"),
+}
+
 # Sync de plantillas de WhatsApp (cada hora): el webhook `message_template_
 # status_update` es la fuente de verdad real, esto es solo el fallback.
 _MESSAGE_TEMPLATE_SYNC_TASK = "core.message_template_sync"

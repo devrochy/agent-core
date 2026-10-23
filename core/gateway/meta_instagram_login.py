@@ -77,6 +77,25 @@ def url_de_autorizacion(state: str) -> str:
     return f"{IG_AUTHORIZE_URL}?{urlencode(params)}"
 
 
+def _json(response: httpx.Response) -> dict[str, Any]:
+    """El cuerpo como objeto; una respuesta que no es JSON (un proxy, una página de error) es un error de Instagram, no
+    una excepción suelta."""
+    try:
+        cuerpo = response.json()
+    except ValueError as exc:
+        raise InstagramLoginError("Instagram devolvió una respuesta que no se puede leer.") from exc
+    return cuerpo if isinstance(cuerpo, dict) else {}
+
+
+def _vencimiento(cuerpo: dict[str, Any]) -> datetime:
+    """Cuándo vence el token: `expires_in` de Meta (segundos) o, si falta o no es un número, 60 días."""
+    try:
+        segundos = int(cuerpo.get("expires_in") or 0)
+    except (TypeError, ValueError):
+        segundos = 0
+    return utcnow() + (timedelta(seconds=segundos) if segundos > 0 else timedelta(days=LONG_LIVED_DAYS))
+
+
 def _error(response: httpx.Response) -> GraphError:
     try:
         body = response.json()
@@ -103,7 +122,7 @@ async def canjear_codigo(code: str) -> tuple[str, str | None]:
     del data
     if response.status_code >= 400:
         raise _error(response)
-    cuerpo = response.json() or {}
+    cuerpo = _json(response)
     # La respuesta puede venir envuelta en `data: [{...}]` en versiones viejas del producto.
     if isinstance(cuerpo.get("data"), list) and cuerpo["data"]:
         cuerpo = cuerpo["data"][0]
@@ -128,13 +147,11 @@ async def canjear_por_token_largo(token_corto: str) -> tuple[str, datetime]:
         )
     if response.status_code >= 400:
         raise _error(response)
-    cuerpo = response.json() or {}
+    cuerpo = _json(response)
     token = cuerpo.get("access_token")
     if not token:
         raise InstagramLoginError("Instagram no devolvió el token de larga duración.")
-    segundos = cuerpo.get("expires_in")
-    vence = utcnow() + (timedelta(seconds=int(segundos)) if segundos else timedelta(days=LONG_LIVED_DAYS))
-    return str(token), vence
+    return str(token), _vencimiento(cuerpo)
 
 
 async def refrescar_token(token: str) -> tuple[str, datetime]:
@@ -147,13 +164,11 @@ async def refrescar_token(token: str) -> tuple[str, datetime]:
         )
     if response.status_code >= 400:
         raise _error(response)
-    cuerpo = response.json() or {}
+    cuerpo = _json(response)
     nuevo = cuerpo.get("access_token")
     if not nuevo:
         raise GraphError("Instagram no devolvió el token en el refresco", category="PERMANENT")
-    segundos = cuerpo.get("expires_in")
-    vence = utcnow() + (timedelta(seconds=int(segundos)) if segundos else timedelta(days=LONG_LIVED_DAYS))
-    return str(nuevo), vence
+    return str(nuevo), _vencimiento(cuerpo)
 
 
 async def datos_de_la_cuenta(token: str) -> tuple[str, str | None]:
@@ -165,7 +180,7 @@ async def datos_de_la_cuenta(token: str) -> tuple[str, str | None]:
         )
     if response.status_code >= 400:
         raise _error(response)
-    cuerpo = response.json() or {}
+    cuerpo = _json(response)
     ig_user_id = cuerpo.get("user_id") or cuerpo.get("id")
     if not ig_user_id:
         raise InstagramLoginError("Instagram no devolvió el identificador de la cuenta.")
@@ -187,7 +202,7 @@ async def suscribir_y_verificar(ig_user_id: str, token: str, version: str) -> tu
     if verificacion.status_code >= 400:
         raise _error(verificacion)
     campos: set[str] = set()
-    for entrada in (verificacion.json() or {}).get("data", []):
+    for entrada in _json(verificacion).get("data", []):
         campos.update(str(c) for c in entrada.get("subscribed_fields", []))
     return CAMPO_OBLIGATORIO in campos, tuple(sorted(campos))
 
@@ -202,4 +217,4 @@ async def enviar_mensaje(ig_user_id: str, token: str, version: str, payload: dic
         )
     if response.status_code >= 400:
         raise _error(response)
-    return str((response.json() or {}).get("message_id", ""))
+    return str(_json(response).get("message_id", ""))

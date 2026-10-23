@@ -99,6 +99,8 @@ async def test_el_estado_dice_si_esta_lista_la_app_y_si_el_plan_lo_incluye(app_c
         # La de Instagram es propia: no es la de Messenger ni la de WhatsApp.
         "config_id": "config-instagram", "graph_api_version": r.json()["graph_api_version"],
         "missing_settings": [], "plan_includes": True,
+        # Instagram Login (ruta b) está apagada por defecto: dice qué falta para ofrecerla.
+        "login_available": False, "login_missing": ["INSTAGRAM_LOGIN_ENABLED"],
     }
     r = await app_client.get(BASE, headers=await api_headers(app_client, free))
     assert r.json()["plan_includes"] is False

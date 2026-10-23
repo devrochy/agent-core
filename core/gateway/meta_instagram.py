@@ -18,6 +18,27 @@ from core.shared.exceptions import AgentCoreError
 
 MAX_TEXT_BYTES = 1000
 LOGIN_ROUTE_FACEBOOK = "ig_facebook_login"
+LOGIN_ROUTE_INSTAGRAM = "ig_instagram_login"
+
+# Estado de una cuenta, en `ig_accounts.raw` (la tabla no tiene columna de estado): `connected` o `degraded` (el
+# refresco del token de Instagram Login falló y hay que reconectar). Un solo lugar para leerlo y escribirlo.
+ESTADO_CONECTADA = "connected"
+ESTADO_DEGRADADA = "degraded"
+
+
+def con_estado(raw: dict | None, estado: str, motivo: str | None = None) -> dict:
+    """`raw` con el estado de la cuenta (sin tocar el resto). Una cuenta conectada no lleva motivo."""
+    nuevo = {k: v for k, v in (raw or {}).items() if k not in ("status", "status_reason")}
+    nuevo["status"] = estado
+    if motivo and estado != ESTADO_CONECTADA:
+        nuevo["status_reason"] = motivo
+    return nuevo
+
+
+def estado_de(raw: dict | None) -> tuple[str, str | None]:
+    """`(estado, motivo)` de la cuenta; sin dato, conectada."""
+    raw = raw or {}
+    return str(raw.get("status") or ESTADO_CONECTADA), raw.get("status_reason")
 
 
 class InstagramSendError(AgentCoreError):

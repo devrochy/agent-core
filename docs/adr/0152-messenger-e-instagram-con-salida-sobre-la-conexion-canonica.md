@@ -160,6 +160,42 @@ Decisiones al construir `core/gateway/meta_instagram_alta.py`, `channels/instagr
    permisos de la Login Configuration. El interruptor «Permitir acceso a los mensajes» de Instagram, si está apagado,
    no lo reporta Meta como error: la prueba de humo con diagnóstico va en la entrega 4b.
 
+## Adenda del 2026-10-24: Instagram Login, refresco del token y prueba de humo (entrega 4b)
+
+Decisiones al construir `meta_instagram_login.py`, `meta_instagram_login_alta.py`, `tasks/instagram_token_refresh.py` y
+los endpoints `/login/*`, `/accounts` y `/accounts/{id}/diagnostic`:
+
+1. **Instagram Login es la ruta (b) y va detrás de `INSTAGRAM_LOGIN_ENABLED`** (apagada por defecto). Es otra app de Meta
+   (`INSTAGRAM_APP_ID/SECRET`), con otros permisos (`instagram_business_basic`,
+   `instagram_business_manage_messages`) y otros hosts (`instagram.com`, `api.instagram.com`, `graph.instagram.com`).
+   Nunca se mezcla con Facebook Login en el mismo diálogo. Sus endpoints no se pudieron contrastar con la documentación de
+   Meta desde el entorno de desarrollo: se prende solo tras probarla con una cuenta real en test.
+2. **El `state` del OAuth es un intento de un solo uso, no una firma.** Atado al negocio y al admin (Redis, 15 min, su
+   propio espacio de claves), así no hay secreto que pueda faltar ni degradarse: el diseño viejo firmaba con el App Secret
+   y el auditor exigió que no cayera a uno débil. Lo consume `completar_login` junto con el `code`.
+3. **Una sola cuenta por autorización, sin paso de elección.** La cuenta (`user_id` del canje; `/me` solo si falta) se
+   reclama con el mismo candado de una-cuenta-un-dueño; su cuenta de Meta es otra que la de Facebook Login
+   (`meta_app_id` = la app de Instagram), así que las dos rutas conviven y, si la misma cuenta cambia de ruta, su conexión
+   canónica se religa. Un `user_id` que no es numérico se rechaza.
+4. **Envío por la propia cuenta:** `POST graph.instagram.com/{version}/{ig_user_id}/messages` con el token de la cuenta.
+   Mismas reglas de ventana, `HUMAN_AGENT` y texto que Facebook Login. Un token vencido da credenciales vacías (el envío
+   falla con claridad y no se manda con un token muerto).
+5. **Refresco diario (03:30)** del token de 60 días: solo los que tienen al menos 24 h (la edad se deduce de `expires_at`,
+   sin columna nueva) y están a 10 días o menos de vencer. Si Meta lo rechaza, la cuenta queda `degraded` (en
+   `ig_accounts.raw`, sin migración) con «reconecta la cuenta», **sin reintentar en el mismo ciclo**; un refresco posterior
+   que funciona la devuelve a `connected`. Recorre a todos los negocios con la función de enumeración de sistema y lee cada
+   cuenta bajo el `tenant_scope` de SU negocio; una caída no frena a las demás.
+6. **Los webhooks de Instagram pueden venir firmados con el secreto de la app de Instagram.** Se aceptan como secreto de
+   *plataforma* (`platform_app_secrets()`), con la misma confianza que el de la app de Meta: ningún negocio los conoce.
+   **A validar con una cuenta real:** con qué secreto firma Meta los eventos de Instagram Login.
+7. **Prueba de humo** (`/accounts/{id}/diagnostic`): «Permitir acceso a los mensajes» apagado en Instagram es un fallo
+   silencioso, Meta nunca lo reporta. La persona envía un mensaje directo desde OTRO perfil y el panel consulta si llegó
+   al webhook (registro de entregas del negocio, filtrado por negocio y cuenta). Si no llega en 90 s, la API dice la causa
+   más probable: `token_degraded`, `not_subscribed` o `access_to_messages_off`.
+8. **Seguimiento de la auditoría resuelto:** `get_token(respect_expiry=True)` para los tokens de vida corta (el del
+   usuario en el alta de Messenger e Instagram y el de Instagram Login). Sigue pendiente atar el paso 3 del alta con
+   Facebook Login al admin del paso 2 (dentro del mismo negocio).
+
 ## Alternativas descartadas
 
 | Alternativa | Por qué no |
