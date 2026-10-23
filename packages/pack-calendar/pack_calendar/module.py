@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -87,12 +88,33 @@ _ORACION = re.compile(r"[^.!?\n]+[.!?\n]?")
 _CON_QUEDAR = frozenset({"agendada", "reagendada", "cancelada"})
 
 
-def _sin_pasos_futuros(text: str, affirm: re.Pattern[str]) -> str:
-    """Quita las oraciones donde un marcador de futuro precede a la afirmación."""
+# Una promesa de consultar ("si me dices el día, reviso los horarios libres") no afirma que un
+# horario esté libre: anuncia que se va a mirar (pass^4 de los procedimientos, 2026-10-23). Solo
+# verbos en presente, futuro o infinitivo: "revisé los horarios libres" sí afirma haberlo hecho.
+_PROMETE_CONSULTAR = re.compile(
+    r"\b(?:revis(?:o|amos|ar|ar[eé]|aremos)|consult(?:o|amos|ar|ar[eé]|aremos)|"
+    r"verific(?:o|amos|ar|ar[eé]|aremos)|busc(?:o|amos|ar|ar[eé]|aremos)|mir(?:o|amos|ar|ar[eé])|"
+    r"(?:voy\s+a|puedo|d[eé]jame|permíteme)\s+ver)\b",
+    re.IGNORECASE,
+)
+# Con una hora concreta en la oración ya no es una promesa: dice cuál está libre.
+_HORA = re.compile(r"\b\d{1,2}:\d{2}\b|\b\d{1,2}\s*(?:am|pm|a\.\s?m\.|p\.\s?m\.|hs?)\b", re.IGNORECASE)
+
+
+def _es_paso_futuro(oracion: str, inicio: int) -> bool:
+    return bool(_PROSPECTIVO.search(oracion[:inicio]))
+
+
+def _es_promesa_de_consultar(oracion: str, inicio: int) -> bool:
+    return bool(_PROMETE_CONSULTAR.search(oracion[:inicio])) and not _HORA.search(oracion)
+
+
+def _sin_oraciones_exentas(text: str, affirm: re.Pattern[str], exenta: Callable[[str, int], bool]) -> str:
+    """Quita las oraciones donde la afirmación aparece dentro de un paso futuro o una promesa."""
     conservadas: list[str] = []
     for oracion in _ORACION.findall(text):
         coincidencia = affirm.search(oracion)
-        if coincidencia and _PROSPECTIVO.search(oracion[: coincidencia.start()]):
+        if coincidencia and exenta(oracion, coincidencia.start()):
             continue
         conservadas.append(oracion)
     return "".join(conservadas)
@@ -288,7 +310,9 @@ def _builtin_verdict(label: str, text: str, results: list[dict[str, Any]]) -> Gu
         )
     affirm_text = claim.deny.sub(" ", text) if claim.deny is not None else text
     if label in _CON_QUEDAR:
-        affirm_text = _sin_pasos_futuros(affirm_text, claim.affirm)
+        affirm_text = _sin_oraciones_exentas(affirm_text, claim.affirm, _es_paso_futuro)
+    elif label == "disponibilidad":
+        affirm_text = _sin_oraciones_exentas(affirm_text, claim.affirm, _es_promesa_de_consultar)
     if not claim.affirm.search(affirm_text) or _affirmation_backed(label, results):
         return None
 

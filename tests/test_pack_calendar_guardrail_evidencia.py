@@ -403,3 +403,50 @@ async def test_pasos_futuros_con_la_cita_creada_en_el_turno_siguen_pasando():
         _r("create_calendar_event", status="created", event_id="a-1"),
     )
     assert verdict.passed, verdict.reason
+
+
+# ---------------------------------------------------------------- promesas de consultar (pass^4, 2026-10-23)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        # Borradores reales que escalaron `agendar-una-demo` sin el motor.
+        "Lo que sí puedo ofrecerte es agendar una demo con un asesor. ¿Te gustaría que te la agende?\n\n"
+        "Si me dices qué día te queda cómodo, reviso los horarios libres.",
+        "Si me dices qué día te queda cómodo, reviso los horarios disponibles.",
+        "Dime el día y consulto los horarios libres.",
+        "Voy a ver los horarios libres de la próxima semana.",
+    ],
+)
+async def test_prometer_consultar_los_horarios_no_afirma_disponibilidad(texto: str):
+    verdict = await _check(texto)
+    assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Los horarios libres son el martes a las 10:00 y el miércoles a las 3:00 pm.",
+        # Con una hora concreta ya dice cuál está libre, aunque anuncie que revisa.
+        "Reviso y los horarios libres son a las 10:00 y a las 11:00.",
+        # Pasado: afirma haber consultado, y sin la tool no hay respaldo.
+        "Revisé los horarios libres y mañana hay varios.",
+        "Tenemos horarios libres el martes.",
+    ],
+)
+async def test_afirmar_disponibilidad_sin_consultar_sigue_bloqueando(texto: str):
+    verdict = await _check(texto)
+    assert not verdict.passed
+    assert "disponibilidad" in verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_prometer_consultar_con_la_consulta_hecha_pasa():
+    verdict = await _check(
+        "Reviso los horarios libres: el martes a las 10:00.",
+        _r("check_availability", slots=["2026-10-27T10:00"]),
+    )
+    assert verdict.passed, verdict.reason
