@@ -56,7 +56,9 @@ async def health_overview(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
                 "last_health_check_at": c.last_health_check_at,
                 "health": dict(c.health or {}),
                 "checks": checks_de_salud(c.health),
-                "billing_manual_status": ((c.health or {}).get("billing") or {}).get("manual_status"),
+                "billing_manual_status": ((c.health or {}).get("billing") or {}).get(
+                    "manual_status"
+                ),
                 "business_id": c.business_id,
                 "meta_app_id": c.meta_app_id,
                 "token_expires_at": exp,
@@ -108,16 +110,24 @@ async def diagnose_connection(tenant_id: uuid.UUID, connection_id: str) -> str |
             # secreto (ADR-0101); solo se reactiva a propósito, desde `set_connection_status`.
             # Y solo mejora con el diagnóstico verificado (ADR-0102): un alta fallida sin
             # token no pasa a `connected` ni le quita el secreto a la conexión sana.
-            if db_connection.status in _ESTADOS_SIN_DIAGNOSTICO or db_connection.deleted_at is not None:
+            if (
+                db_connection.status in _ESTADOS_SIN_DIAGNOSTICO
+                or db_connection.deleted_at is not None
+            ):
                 pass
             elif esperando_registro(db_connection):
                 # Solo espera el registro del número (ADR-0127): la deja `connected` el registro
                 # con el PIN, no el diagnóstico. Pero empeorar siempre se puede (ADR-0102): sin
                 # el check del número (que falla por definición), un token muerto la pasa a
                 # `error`.
-                sin_numero = {k: v for k, v in checks.items() if not k.startswith("number_registered")}
+                sin_numero = {
+                    k: v for k, v in checks.items() if not k.startswith("number_registered")
+                }
                 nuevo, motivo = next_status(
-                    db_connection.status, db_connection.status_reason, db_connection.origin, sin_numero
+                    db_connection.status,
+                    db_connection.status_reason,
+                    db_connection.origin,
+                    sin_numero,
                 )
                 if nuevo == "error":
                     db_connection.status, db_connection.status_reason = nuevo, motivo
@@ -175,9 +185,15 @@ async def set_billing_status(
 
         # El check se rearma con el estado nuevo: guardar solo `manual_status` lo sacaba de
         # la lista de checks hasta el próximo diagnóstico, y el detalle quedaba viejo.
-        connection.health = {**(connection.health or {}), "billing": {"manual_status": manual_status}}
+        connection.health = {
+            **(connection.health or {}),
+            "billing": {"manual_status": manual_status},
+        }
         billing = check_billing(connection).model_dump(mode="json")
-        connection.health = {**connection.health, "billing": {**billing, "manual_status": manual_status}}
+        connection.health = {
+            **connection.health,
+            "billing": {**billing, "manual_status": manual_status},
+        }
     return None
 
 
@@ -287,7 +303,9 @@ async def verify_token_de_registro(connection: MetaConnection) -> str:
     return await stored_verify_token(connection) or get_settings().whatsapp_verify_token or ""
 
 
-async def register_connection_webhook(tid: uuid.UUID, connection_id: str, *, es_master: bool) -> None:
+async def register_connection_webhook(
+    tid: uuid.UUID, connection_id: str, *, es_master: bool
+) -> None:
     """Registra (o re-registra) la suscripción de APP de UNA conexión (HU-CONN-05).
 
     - **BYOK:** en la app de esa conexión, con su App Secret, la URL por slug del negocio y
@@ -330,7 +348,9 @@ async def register_connection_webhook(tid: uuid.UUID, connection_id: str, *, es_
             raise WebhookRegistroError("La conexión no existe.", code="not_found", status=404)
         object_ = {v: k for k, v in OBJECT_TO_CHANNEL.items()}.get(connection.channel)
         if object_ is None:
-            raise WebhookRegistroError(f"Canal desconocido: {connection.channel}", code="unknown_channel")
+            raise WebhookRegistroError(
+                f"Canal desconocido: {connection.channel}", code="unknown_channel"
+            )
         de_plataforma = uses_platform_app(connection)
         if de_plataforma and not es_master:
             # Antes que cualquier otra validación: al dueño no se le dice nada más de esa app.
@@ -358,7 +378,9 @@ async def register_connection_webhook(tid: uuid.UUID, connection_id: str, *, es_
         config = AppCredentials(
             app_id=app.app_id,
             app_secret=app.app_secret,
-            config_id=settings.meta_config_id if de_plataforma else (connection.meta_config_id or ""),
+            config_id=settings.meta_config_id
+            if de_plataforma
+            else (connection.meta_config_id or ""),
             graph_api_version=connection.graph_api_version,
             connection_id=connection.id,
         )
@@ -370,12 +392,21 @@ async def register_connection_webhook(tid: uuid.UUID, connection_id: str, *, es_
             verify_token = await verify_token_de_registro(connection)
 
         try:
-            await upsert_app_subscription(config, object_, callback_url=callback_url, verify_token=verify_token)
+            await upsert_app_subscription(
+                config, object_, callback_url=callback_url, verify_token=verify_token
+            )
         except SubscriptionError as exc:
             raise WebhookRegistroError(str(exc)[:200], code="register_failed") from exc
         except GraphError as exc:
-            raise WebhookRegistroError(humanize_subscription_error(exc)[:200], code="register_failed") from exc
-    log.info("webhook_registrado", tenant_id=str(tid), connection_id=str(cid), app_de_plataforma=de_plataforma)
+            raise WebhookRegistroError(
+                humanize_subscription_error(exc)[:200], code="register_failed"
+            ) from exc
+    log.info(
+        "webhook_registrado",
+        tenant_id=str(tid),
+        connection_id=str(cid),
+        app_de_plataforma=de_plataforma,
+    )
 
 
 async def register_channel_subscription(tid: uuid.UUID, channel: str, *, es_master: bool) -> None:
@@ -479,7 +510,9 @@ async def set_connection_status(
 
     try:
         await refrescar_suscripcion_de_conexion(connection)
-        checks = await asyncio.wait_for(run_health_checks(connection, tenant_id), timeout=_ACTIVAR_TIMEOUT_S)
+        checks = await asyncio.wait_for(
+            run_health_checks(connection, tenant_id), timeout=_ACTIVAR_TIMEOUT_S
+        )
     except TimeoutError:
         return "Meta no respondió a tiempo: intenta de nuevo en unos minutos"
 
@@ -491,8 +524,14 @@ async def set_connection_status(
 
     async with get_session() as session:
         db_connection = await get_live_meta_connection(session, cid, tenant_id, for_update=True)
-        if db_connection is None or db_connection.status != "revoked" or not misma_conexion(connection, db_connection):
-            return "La conexión cambió mientras se diagnosticaba: revisa su estado e intenta de nuevo"
+        if (
+            db_connection is None
+            or db_connection.status != "revoked"
+            or not misma_conexion(connection, db_connection)
+        ):
+            return (
+                "La conexión cambió mientras se diagnosticaba: revisa su estado e intenta de nuevo"
+            )
         db_connection.status, db_connection.status_reason = status, reason
         db_connection.health = merge_health(db_connection.health, checks)
         db_connection.last_health_check_at = utcnow()
@@ -513,7 +552,7 @@ async def soft_delete_connection(tenant_id: uuid.UUID, connection_id: str) -> st
     """
     from sqlalchemy import update
 
-    from core.db.models import PhoneNumber, WabaAccount
+    from core.db.models import ChannelConnection, PhoneNumber, WabaAccount
     from core.gateway import meta_token_store
     from core.gateway.meta_credentials import CredentialsUnavailable, credentials_for
 
@@ -544,17 +583,32 @@ async def soft_delete_connection(tenant_id: uuid.UUID, connection_id: str) -> st
         db_connection.status = "revoked"
         db_connection.status_reason = "Eliminada desde el panel"
         wabas = (
-            await session.execute(
-                update(WabaAccount)
-                .where(
-                    WabaAccount.connection_id == cid,
-                    WabaAccount.tenant_id == tenant_id,
-                    WabaAccount.deleted_at.is_(None),
+            (
+                await session.execute(
+                    update(WabaAccount)
+                    .where(
+                        WabaAccount.connection_id == cid,
+                        WabaAccount.tenant_id == tenant_id,
+                        WabaAccount.deleted_at.is_(None),
+                    )
+                    .values(deleted_at=now)
+                    .returning(WabaAccount.waba_id)
                 )
-                .values(deleted_at=now)
-                .returning(WabaAccount.waba_id)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
+        # La conexión canónica del número (la que lista la consola) también se archiva.
+        # Reconectar el mismo número la revive, como a las WABAs y los números.
+        await session.execute(
+            update(ChannelConnection)
+            .where(
+                ChannelConnection.tenant_id == tenant_id,
+                ChannelConnection.meta_connection_id == cid,
+                ChannelConnection.deleted_at.is_(None),
+            )
+            .values(deleted_at=now)
+        )
         await session.execute(
             update(PhoneNumber)
             .where(
@@ -606,19 +660,36 @@ async def _desuscribir_waba_de_la_plataforma(
         # cortaría la entrada (auditor-multitenant).
         de_otro = (
             await session.execute(
-                text("select meta_asset_claimed_by_other_tenant(:w, NULL, :t)"), {"w": waba_id, "t": tenant_id}
+                text("select meta_asset_claimed_by_other_tenant(:w, NULL, :t)"),
+                {"w": waba_id, "t": tenant_id},
             )
         ).scalar_one()
     if compartida is not None or de_otro:
-        log.info("waba_compartida_no_se_desuscribe", waba_id=waba_id, connection_id=str(connection_id))
+        log.info(
+            "waba_compartida_no_se_desuscribe", waba_id=waba_id, connection_id=str(connection_id)
+        )
         return
     try:
         await graph_fetch(
-            f"/{waba_id}/subscribed_apps", method="DELETE", token=creds.access_token, app_secret=creds.app_secret,
-            version=creds.graph_api_version, connection_id=connection_id,
+            f"/{waba_id}/subscribed_apps",
+            method="DELETE",
+            token=creds.access_token,
+            app_secret=creds.app_secret,
+            version=creds.graph_api_version,
+            connection_id=connection_id,
         )
         log.info("waba_desuscrita_al_eliminar", waba_id=waba_id, connection_id=str(connection_id))
     except GraphError as exc:
-        log.warning("waba_no_desuscrita_al_eliminar", waba_id=waba_id, connection_id=str(connection_id), error=exc.message[:200])
+        log.warning(
+            "waba_no_desuscrita_al_eliminar",
+            waba_id=waba_id,
+            connection_id=str(connection_id),
+            error=exc.message[:200],
+        )
     except Exception:
-        log.warning("waba_no_desuscrita_al_eliminar", waba_id=waba_id, connection_id=str(connection_id), exc_info=True)
+        log.warning(
+            "waba_no_desuscrita_al_eliminar",
+            waba_id=waba_id,
+            connection_id=str(connection_id),
+            exc_info=True,
+        )

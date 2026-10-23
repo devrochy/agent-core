@@ -94,6 +94,30 @@ async def _meta(tid: uuid.UUID, *, origin: str = "byok", app_id: str | None = No
             return fila.id
 
 
+async def _canal_meta(tid: uuid.UUID, mid: uuid.UUID) -> uuid.UUID:
+    from core.db.models import ChannelConnection
+    from core.db.session import get_session
+    from core.gateway.connection_types import CATEGORY_COMMUNICATION
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            fila = ChannelConnection(
+                tenant_id=tid,
+                channel="whatsapp",
+                provider="meta",
+                type_id="whatsapp_meta",
+                category=CATEGORY_COMMUNICATION,
+                label="Meta canal",
+                active=True,
+                external_id=uniq("ph"),
+                meta_connection_id=mid,
+            )
+            session.add(fila)
+            await session.flush()
+            return fila.id
+
+
 async def _tokens(tid: uuid.UUID, cid: uuid.UUID, app_id: str) -> None:
     from core.gateway import meta_token_store
     from core.gateway.meta_byok import (
@@ -172,6 +196,7 @@ async def test_credenciales_meta_byok_y_eliminar(app_client):
     tid = await _tenant()
     app_id = uniq("app")
     cid = await _meta(tid, app_id=app_id)
+    canal = await _canal_meta(tid, cid)
     await _tokens(tid, cid, app_id)
     h = await api_headers(app_client, tid)
 
@@ -203,6 +228,11 @@ async def test_credenciales_meta_byok_y_eliminar(app_client):
             accion, headers=h, json={"action": "delete", "password": admin_password()}
         )
     ).status_code == 204
+
+    from test_kernel_ingress import _filas
+
+    (fila,) = await _filas(tid, "SELECT deleted_at FROM channel_connections WHERE id = :c", c=canal)
+    assert fila["deleted_at"] is not None
 
 
 async def test_meta_no_revela_los_secretos_de_la_plataforma(app_client, monkeypatch):
