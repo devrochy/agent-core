@@ -294,3 +294,36 @@ async def test_un_id_de_cuenta_con_formato_raro_es_400(app_client, ig_login) -> 
     headers = await api_headers(app_client, tid)
     for malo in ("abc", "12%2034", "1" * 40):
         assert (await app_client.post(f"{BASE}/accounts/{malo}/diagnostic", headers=headers)).status_code in (400, 404), malo
+
+
+async def test_el_diagnostico_ignora_lo_que_no_es_un_mensaje_y_acota_la_ventana(app_client, ig_login) -> None:
+    from core.db.models import WebhookEvent
+    from core.db.session import get_session
+
+    tid, ig = await _new_tenant("apil-solo-msj"), _ig()
+    headers = await api_headers(app_client, tid)
+    await _conectar(app_client, headers, ig_login(ig))
+    since = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    async with get_session() as session:  # una lectura (`read`) dirigida a la cuenta: no es un mensaje
+        session.add(
+            WebhookEvent(
+                tenant_id=tid, meta_app_id="app-test", object_type="instagram", field="messaging", external_id=uniq("h"),
+                signature_ok=True, received_at=datetime.now(UTC),
+                payload={"sender": {"id": "IGSID9"}, "recipient": {"id": ig}, "read": {"mid": "m_1"}},
+            )
+        )
+    r = await app_client.get(f"{BASE}/accounts/{ig}/diagnostic", params={"since": since}, headers=headers)
+    assert r.json()["arrived"] is False
+
+    # Un mensaje de hace 3 días queda fuera aunque se pida `since` de hace una semana.
+    await _evento(tid, ig, recibido=datetime.now(UTC) - timedelta(days=3))
+    antiguo = (datetime.now(UTC) - timedelta(days=7)).isoformat()
+    r = await app_client.get(f"{BASE}/accounts/{ig}/diagnostic", params={"since": antiguo}, headers=headers)
+    assert r.json()["arrived"] is False
+
+
+async def test_un_id_con_digitos_que_no_son_ascii_es_400(app_client, ig_login) -> None:
+    tid = await _new_tenant("apil-unicode")
+    headers = await api_headers(app_client, tid)
+    r = await app_client.post(f"{BASE}/connect", headers=headers, json={"connection_id": str(uuid.uuid4()), "ig_user_ids": ["١٢٣"]})
+    assert (r.status_code, r.json()["error"]["code"]) == (400, "invalid_id")

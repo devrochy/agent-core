@@ -17,3 +17,10 @@ Facebook). **Apagada por defecto** (`INSTAGRAM_LOGIN_ENABLED`): se prende tras p
   plataforma.
 - `meta_token_store.get_token(respect_expiry=True)`: el token del usuario del alta de Messenger e Instagram ya no sirve vencido.
 - `GET /api/v1/admin/meta/instagram` suma `login_available` y `login_missing`.
+- **Cambio de ruta de la misma cuenta** (Facebook Login ↔ Instagram Login): la conexión canónica se religa solo con el token
+  ya guardado; la fila de la ruta que dejó de usarse queda `superseded` (sin borrado) y no se lista ni se refresca.
+- **Auditoría (`auditor-multitenant`, sin hallazgos altos), corregida:** el secreto de la app de Instagram solo autoriza
+  eventos de Instagram; la enumeración del refresco está aislada por negocio; un error transitorio (límite de uso, 5xx, red) no
+  degrada la cuenta; el identificador de la cuenta es el de `GET /me`; los cortes de red y las respuestas ilegibles son errores
+  controlados; dos altas simultáneas comparten la cuenta de Meta; los IDs solo aceptan dígitos ASCII (también en Messenger);
+  el diagnóstico solo cuenta mensajes y acota `since` a 24 h.

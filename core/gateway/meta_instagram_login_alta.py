@@ -20,7 +20,9 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from core.config import get_settings
 from core.db.models import IgAccount, MetaConnection, utcnow
@@ -103,10 +105,9 @@ async def iniciar_login(tenant_id: uuid.UUID, admin_id: uuid.UUID) -> LoginInici
     return LoginIniciado(url=url_de_autorizacion(state), expires_in=INTENTO_TTL_S)
 
 
-async def _cuenta_del_negocio(tenant_id: uuid.UUID, settings: Any) -> MetaConnection:
-    """La cuenta viva de Instagram del negocio con la app de Instagram; la crea en `draft` si no hay."""
+async def _buscar_cuenta(tenant_id: uuid.UUID, settings: Any) -> MetaConnection | None:
     async with get_session() as session:
-        existente = (
+        return (
             await session.execute(
                 select(MetaConnection).where(
                     MetaConnection.tenant_id == tenant_id,
@@ -117,15 +118,26 @@ async def _cuenta_del_negocio(tenant_id: uuid.UUID, settings: Any) -> MetaConnec
                 )
             )
         ).scalars().first()
-        if existente is not None:
+
+
+async def _cuenta_del_negocio(tenant_id: uuid.UUID, settings: Any) -> MetaConnection:
+    """La cuenta viva de Instagram del negocio con la app de Instagram; la crea en `draft` si no hay. Dos altas
+    simultáneas chocan con el índice único parcial: la perdedora lee la que creó la otra."""
+    if (existente := await _buscar_cuenta(tenant_id, settings)) is not None:
+        return existente
+    try:
+        async with get_session() as session:
+            cuenta = MetaConnection(
+                tenant_id=tenant_id, channel="instagram", environment="production", origin="embedded_signup",
+                meta_app_id=settings.instagram_app_id, graph_api_version=settings.graph_api_version, status="draft",
+            )
+            session.add(cuenta)
+            await session.flush()
+            return cuenta
+    except IntegrityError:
+        if (existente := await _buscar_cuenta(tenant_id, settings)) is not None:
             return existente
-        cuenta = MetaConnection(
-            tenant_id=tenant_id, channel="instagram", environment="production", origin="embedded_signup",
-            meta_app_id=settings.instagram_app_id, graph_api_version=settings.graph_api_version, status="draft",
-        )
-        session.add(cuenta)
-        await session.flush()
-        return cuenta
+        raise
 
 
 async def completar_login(
@@ -142,7 +154,7 @@ async def completar_login(
         token_corto, user_id_del_canje = await canjear_codigo(code)
         token_largo, vence = await canjear_por_token_largo(token_corto)
         ig_user_id, username = await datos_de_la_cuenta(token_largo)
-    except (GraphError, InstagramLoginError) as exc:
+    except (GraphError, InstagramLoginError, httpx.HTTPError) as exc:
         log.warning("instagram_login_canje_rechazado", tenant_id=str(tenant_id), detail=getattr(exc, "code", None))
         raise InstagramAltaError(
             "Instagram no aceptó la autorización (el código vence a la hora): vuelve a conectar con Instagram.",
@@ -150,11 +162,12 @@ async def completar_login(
         ) from exc
     finally:
         del code
-    # El `user_id` del canje es la cuenta profesional; si `/me` trae otro valor, manda el del canje.
+    # Manda el `user_id` de `/me` con el token largo: es la cuenta profesional, el `entry.id` con el que Meta entrega sus
+    # mensajes. El del canje puede ser el identificador con alcance de la app; si difieren solo se registra (sin los ids,
+    # que no hacen falta) para confirmarlo con la primera cuenta real.
     if user_id_del_canje and user_id_del_canje != ig_user_id:
         log.warning("instagram_login_ids_distintos", tenant_id=str(tenant_id))
-        ig_user_id = user_id_del_canje
-    if not ig_user_id.isdigit() or len(ig_user_id) > 32:
+    if not (ig_user_id.isascii() and ig_user_id.isdigit()) or len(ig_user_id) > 32:
         raise InstagramAltaError("Instagram devolvió un identificador de cuenta inválido.", code="meta_error")
 
     cuenta = await _cuenta_del_negocio(tenant_id, settings)
@@ -166,7 +179,7 @@ async def completar_login(
     version = cuenta.graph_api_version or settings.graph_api_version
     try:
         suscrita, campos = await suscribir_y_verificar(ig_user_id, token_largo, version)
-    except (GraphError, InstagramLoginError) as exc:
+    except (GraphError, InstagramLoginError, httpx.HTTPError) as exc:
         log.warning("instagram_login_suscripcion_fallo", ig_user_id=ig_user_id, detail=getattr(exc, "code", None))
         suscrita, campos = False, ()
     await _cerrar(tenant_id, admin_id, cuenta.id, ig_user_id, suscrita, campos)

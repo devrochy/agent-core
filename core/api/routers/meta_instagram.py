@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -25,7 +25,7 @@ from core.gateway import meta_instagram_login_alta as login_alta
 router = APIRouter(prefix="/admin/meta/instagram", tags=["admin · instagram"])
 
 # Los IDs de cuenta de Instagram son numéricos en Graph y van en consultas: sin `/` ni `?` que las cambien.
-_ID_DE_CUENTA = re.compile(r"\d{1,32}")
+_ID_DE_CUENTA = re.compile(r"[0-9]{1,32}")
 MAX_CUENTAS = 50
 
 
@@ -269,6 +269,8 @@ async def instagram_login_complete(
 
 # ------------------------------------------------------------------ cuentas conectadas y diagnóstico
 DIAGNOSTICO_ESPERA_S = 90
+# Tope de `since`: la consulta recorre el registro de entregas del negocio, que no tiene índice por cuenta.
+DIAGNOSTICO_MAX_ANTIGUEDAD_H = 24
 
 
 class InstagramAccountStatusOut(BaseModel):
@@ -308,6 +310,7 @@ async def _cuenta_del_negocio(tenant_id: uuid.UUID, ig_user_id: str):
 
     from core.db.models import IgAccount, MetaConnection
     from core.db.session import get_session
+    from core.gateway.meta_instagram_cuentas import no_reemplazada
 
     async with get_session() as session:
         fila = (
@@ -319,6 +322,7 @@ async def _cuenta_del_negocio(tenant_id: uuid.UUID, ig_user_id: str):
                     IgAccount.ig_user_id == ig_user_id,
                     MetaConnection.tenant_id == tenant_id,
                     MetaConnection.deleted_at.is_(None),
+                    no_reemplazada(),  # la ruta que dejó de usarse no cuenta
                 )
                 .order_by(IgAccount.created_at.desc())
                 .limit(1)
@@ -341,6 +345,7 @@ async def instagram_accounts(
     from core.db.session import get_session
     from core.gateway import meta_token_store
     from core.gateway.meta_instagram import LOGIN_ROUTE_INSTAGRAM, estado_de
+    from core.gateway.meta_instagram_cuentas import no_reemplazada
     from core.gateway.meta_instagram_login import IG_LONG_LIVED_TOKEN_KIND
 
     tenant_id = _negocio(principal)
@@ -353,6 +358,7 @@ async def instagram_accounts(
                     IgAccount.tenant_id == tenant_id,
                     MetaConnection.tenant_id == tenant_id,
                     MetaConnection.deleted_at.is_(None),
+                    no_reemplazada(),
                 )
                 .order_by(IgAccount.created_at)
             )
@@ -405,6 +411,7 @@ async def instagram_diagnostic(
     cuenta = await _cuenta_del_negocio(tenant_id, ig_user_id)
     if since.tzinfo is None:
         since = since.replace(tzinfo=UTC)
+    since = max(since, datetime.now(UTC) - timedelta(hours=DIAGNOSTICO_MAX_ANTIGUEDAD_H))
     llegaron = await mensajes_recibidos_desde(tenant_id, "instagram", ig_user_id, since)
     if llegaron:
         return InstagramDiagnosticOut(arrived=True)

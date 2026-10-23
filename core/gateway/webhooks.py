@@ -647,6 +647,8 @@ async def mensajes_recibidos_desde(tenant_id: uuid.UUID, object_type: str, recip
                         WebhookEvent.object_type == object_type,
                         WebhookEvent.received_at >= since,
                         WebhookEvent.payload["recipient"]["id"].astext == recipient_id,
+                        # Solo mensajes: una lectura o una reacción no prueban que lleguen los mensajes directos.
+                        WebhookEvent.payload["message"]["mid"].astext.is_not(None),
                     )
                 )
             ).scalar_one()

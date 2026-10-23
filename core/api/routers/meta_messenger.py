@@ -23,7 +23,7 @@ from core.gateway import meta_messenger_alta as alta
 router = APIRouter(prefix="/admin/meta/messenger", tags=["admin · messenger"])
 
 # Los IDs de Página son numéricos en Graph y van en la ruta de las llamadas: sin `/` ni `?` que la cambien.
-_ID_DE_PAGINA = re.compile(r"\d{1,32}")
+_ID_DE_PAGINA = re.compile(r"[0-9]{1,32}")
 MAX_PAGINAS = 50
 
 
