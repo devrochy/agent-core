@@ -157,11 +157,10 @@ async def _rutear_grupos(
 
 
 def _firmo_la_plataforma(raw_body: bytes, firma: str) -> bool:
-    from core.gateway.connections import platform_app_secret
+    from core.gateway.connections import platform_app_secrets
     from core.gateway.webhook_verify import verify_signature
 
-    plataforma = platform_app_secret()
-    return bool(plataforma) and verify_signature(raw_body, firma, plataforma)
+    return any(verify_signature(raw_body, firma, secreto) for secreto in platform_app_secrets())
 
 
 async def _rechazo_previo(
@@ -209,11 +208,11 @@ async def _firmantes_del_post(
     trae; qué secreto se prueba lo decide la base de datos. Por el endpoint por slug solo
     cuentan los grupos de ese negocio (los demás se rechazan como `tenant_mismatch`).
     `Firmantes` sin plataforma ni grupos = firma inválida."""
-    from core.gateway.connections import platform_app_secret
+    from core.gateway.connections import platform_app_secrets
     from core.gateway.webhook_verify import verify_signature
 
-    plataforma = platform_app_secret()
-    if plataforma and verify_signature(raw_body, firma, plataforma):
+    plataforma = platform_app_secrets()
+    if any(verify_signature(raw_body, firma, secreto) for secreto in plataforma):
         return Firmantes(plataforma=True)
 
     hay_secreto = bool(plataforma)

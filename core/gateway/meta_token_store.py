@@ -76,9 +76,15 @@ async def put_token(
 
 
 async def get_token(
-    connection_id: uuid.UUID, kind: str, subject_id: str, *, tenant_id: uuid.UUID | None = None
+    connection_id: uuid.UUID,
+    kind: str,
+    subject_id: str,
+    *,
+    tenant_id: uuid.UUID | None = None,
+    respect_expiry: bool = False,
 ) -> str | None:
-    """Descifra y devuelve el token, o None si no existe/fue revocado."""
+    """Descifra y devuelve el token, o None si no existe/fue revocado. Con `respect_expiry`, un token cuyo
+    `expires_at` ya pasó también es None (los de vida corta: el del usuario del alta, el de Instagram Login)."""
     tid = tenant_id if tenant_id is not None else get_current_tenant_id()
     async with get_session() as session:
         row = (
@@ -95,6 +101,8 @@ async def get_token(
             )
         ).scalar_one_or_none()
     if row is None:
+        return None
+    if respect_expiry and row.expires_at is not None and row.expires_at <= datetime.now(row.expires_at.tzinfo):
         return None
     plaintext = unseal_parts(row.ciphertext, row.iv, row.auth_tag, row.key_id, aad=_aad(tid, connection_id, kind))
     return plaintext.decode()

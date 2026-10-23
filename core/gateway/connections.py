@@ -254,6 +254,14 @@ def platform_app_secret() -> str:
     return settings.whatsapp_app_secret or settings.meta_app_secret or ""
 
 
+def platform_app_secrets() -> tuple[str, ...]:
+    """Todos los App Secrets de la plataforma con los que puede venir firmado un webhook: el de la app de Meta y,
+    si hay, el de la app de Instagram (Instagram Login, HU-CHAN-04). Los dos son de la plataforma y ningún negocio
+    los conoce, así que autorizan con la misma confianza (ADR-0100)."""
+    settings = get_settings()
+    return tuple(dict.fromkeys(s for s in (platform_app_secret(), getattr(settings, "instagram_app_secret", "")) if s))
+
+
 async def save_connection(
     label: str,
     credentials: dict[str, Any],

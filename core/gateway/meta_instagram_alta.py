@@ -329,7 +329,7 @@ async def conectar_cuentas(
     if cuenta is None or cuenta.tenant_id != tenant_id or cuenta.channel != CANAL or cuenta.deleted_at is not None:
         raise InstagramAltaError("No encontré esa conexión de Instagram.", code="not_found", status=404)
     user_token = await meta_token_store.get_token(
-        connection_id, USER_TOKEN_KIND, USER_TOKEN_SUBJECT, tenant_id=tenant_id
+        connection_id, USER_TOKEN_KIND, USER_TOKEN_SUBJECT, tenant_id=tenant_id, respect_expiry=True
     )
     if not user_token:
         raise InstagramAltaError(
