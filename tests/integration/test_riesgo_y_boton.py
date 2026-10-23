@@ -417,6 +417,107 @@ async def test_si_a_secas_no_confirma_y_confirmo_si(negocio: uuid.UUID, monkeypa
         await _banderas(negocio, False)
 
 
+async def _resumen_entregado(negocio: uuid.UUID, monkeypatch) -> tuple[Any, uuid.UUID, Any, Any]:  # type: ignore[no-untyped-def]
+    """Conversación con el resumen único ya enviado al cliente. Devuelve (conv, tarea, comando, mensaje)."""
+    from core.db.models import Message
+    from core.kernel.egress import entregar
+    from core.kernel.procedures.ejecucion import contexto_del_motor
+    from core.mcp.host import mcp_host
+    from core.shared.tenant import tenant_scope
+
+    monkeypatch.setattr("core.tasks.outbound_send.outbound_send_task.delay", lambda mid, tid: None)
+    conv = await _conversacion(negocio, "lo quiero anual")
+    task = await _tarea(conv, "confirmar")
+    guion = _Guion([("cotizar_r", {}), ("aceptar_r", {"periodicidad": "anual", "cantidad": 2}), "¿Confirmas?"])
+    resultado = await _turno(conv, _Proveedores(guion), monkeypatch, "lo quiero anual")
+    assert resultado is not None and resultado.confirmacion is not None
+    async with tenant_scope(negocio):
+        await entregar(conv.id, resultado)
+    herramientas = mcp_host.get_skill_tools(["prueba_aos09"])
+
+    async def mensaje(direccion: str, contenido: str) -> None:
+        async with _scope(negocio) as s:
+            s.add(Message(tenant_id=negocio, conversation_id=conv.id, direction=direccion,
+                          sender_type="customer" if direccion == "inbound" else "agent", content=contenido))
+
+    async def comando(texto: str, *, nuevo: bool = True) -> Any:
+        if nuevo:
+            await mensaje("inbound", texto)
+        async with tenant_scope(negocio):
+            motor = await contexto_del_motor(
+                conv.id, customer_id=conv.customer_id, channel="whatsapp", enabled={"core", PACK}, disabled=set(),
+                herramientas_base=herramientas, candidatas=herramientas, texto_cliente=texto,
+            )
+            assert motor is not None
+            return await motor.aplicar_comando("confirmar_tarea", {})
+
+    return conv, task, comando, mensaje
+
+
+async def test_un_toque_que_no_confirma_no_vence_el_si_escrito(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Ciclo visto en test (2026-10-23): el cliente toca «Confirmar» y no queda confirmado; el aviso del
+    kernel le pide escribir «Sí, confirmo», pero el toque (un mensaje suyo posterior al resumen) vencía
+    la petición y el sí escrito se volvía a pedir una y otra vez. El rechazo del toque tiene que dejar la
+    petición vigente para el sí que el propio aviso pide."""
+    await _banderas(negocio, True)
+    try:
+        conv, task, comando, mensaje = await _resumen_entregado(negocio, monkeypatch)
+        # El toque llegó como el título del botón y no confirmó (payload vencido o rechazado): el
+        # consumer deja la marca de interactivo y el turno no lo toma como un sí escrito.
+        from core.kernel.procedures.ejecucion import _marcar_interactivo
+
+        await mensaje("inbound", "Confirmar")
+        await _marcar_interactivo(negocio, conv.id)
+        assert (await comando("Confirmar", nuevo=False)).ok is False
+        await mensaje("outbound", "Todavía no me quedó claro el sí. Escríbeme «Sí, confirmo».")
+        # El sí escrito que pide el aviso confirma la petición, que sigue vigente.
+        assert (await comando("Si, confirmo")).ok is True
+        assert (await _tipos(conv, task))[-1] in ("confirmed", "stage_entered")
+    finally:
+        await _banderas(negocio, False)
+
+
+async def test_un_toque_rechazado_renueva_la_peticion_sin_depender_del_modelo(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """El kernel renueva la petición al rechazar el toque (payload de otra petición), aunque el modelo
+    no llame `confirmar_tarea` en ese turno."""
+    from core.kernel.procedures.ejecucion import entrada_sin_llm, payload_de_confirmacion
+    from core.shared.tenant import tenant_scope
+
+    await _banderas(negocio, True)
+    try:
+        conv, task, comando, mensaje = await _resumen_entregado(negocio, monkeypatch)
+        await mensaje("inbound", "Confirmar")
+        async with tenant_scope(negocio):
+            await entrada_sin_llm(conv, {"interactive_id": payload_de_confirmacion(negocio, task, 999)})
+        tipos = await _tipos(conv, task)
+        assert tipos[-1] == "confirmation_requested" and tipos.count("confirmation_requested") == 2
+        # El turno del toque (el mensaje ya está guardado): el modelo pide confirmar y no hay otra renovación.
+        assert (await comando("Confirmar", nuevo=False)).ok is False
+        assert (await _tipos(conv, task)).count("confirmation_requested") == 2
+        await mensaje("outbound", "Todavía no quedó registrada tu aceptación. Escríbeme «Sí, confirmo».")
+        assert (await comando("Si, confirmo")).ok is True
+    finally:
+        await _banderas(negocio, False)
+
+
+async def test_una_peticion_ya_vencida_no_se_revive_con_un_mensaje_que_no_confirma(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Otro intercambio entre el resumen y el mensaje que no confirma vence la petición: un «sí» a una
+    pregunta vieja no vale, y no se renueva (la regla de vigencia sigue siendo la del turno anterior)."""
+    await _banderas(negocio, True)
+    try:
+        conv, task, comando, mensaje = await _resumen_entregado(negocio, monkeypatch)
+        await mensaje("inbound", "¿hacen envíos a Cali?")
+        await mensaje("outbound", "Sí, hacemos envíos a Cali.")
+        antes = await _tipos(conv, task)
+        assert (await comando("Confirmar")).ok is False
+        assert await _tipos(conv, task) == antes  # no se renovó
+        await mensaje("outbound", "Todavía no me quedó claro el sí.")
+        resultado = await comando("Si, confirmo")
+        assert resultado.ok is False and "venció" in resultado.errores[0]
+    finally:
+        await _banderas(negocio, False)
+
+
 async def test_con_la_bandera_apagada_nada_cambia(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     await _banderas(negocio, False)
     conv = await _conversacion(negocio, "lo quiero anual")

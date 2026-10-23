@@ -137,7 +137,9 @@ def salud(*, active: bool, meta_status: str | None, tiene_cuenta: bool) -> str:
 
 
 def alcance_de_pausa(*, tiene_cuenta: bool, type_id: str | None) -> str:
-    del type_id  # el chat web también es una conexión (pausa propia, sincronizada con Configuración)
+    del (
+        type_id
+    )  # el chat web también es una conexión (pausa propia, sincronizada con Configuración)
     return PAUSA_CUENTA_META if tiene_cuenta else PAUSA_CONEXION
 
 
@@ -161,7 +163,13 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
         total = int(
             (
                 await session.execute(
-                    text("SELECT count(*) FROM channel_connections WHERE tenant_id = :t AND deleted_at IS NULL"),
+                    text(
+                        "SELECT count(*) FROM channel_connections cc "
+                        "LEFT JOIN meta_connections mc "
+                        "  ON mc.tenant_id = cc.tenant_id AND mc.id = cc.meta_connection_id AND mc.deleted_at IS NULL "
+                        "WHERE cc.tenant_id = :t AND cc.deleted_at IS NULL "
+                        "  AND (cc.meta_connection_id IS NULL OR mc.id IS NOT NULL)"
+                    ),
                     {"t": tenant_id},
                 )
             ).scalar_one()
@@ -177,6 +185,7 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                     "LEFT JOIN meta_connections mc "
                     "  ON mc.tenant_id = cc.tenant_id AND mc.id = cc.meta_connection_id AND mc.deleted_at IS NULL "
                     "WHERE cc.tenant_id = :t AND cc.deleted_at IS NULL "
+                    "  AND (cc.meta_connection_id IS NULL OR mc.id IS NOT NULL) "
                     "ORDER BY coalesce(ct.produces_conversations, true) DESC, cc.created_at, cc.id "
                     "OFFSET :o LIMIT :l"
                 ),
@@ -242,7 +251,9 @@ def _con_version(a: dict[str, Any], activa: uuid.UUID | None) -> AgenteFila:
     )
 
 
-async def _agentes(session: Any, tenant_id: uuid.UUID, ids: list[uuid.UUID]) -> dict[uuid.UUID, list[dict[str, Any]]]:
+async def _agentes(
+    session: Any, tenant_id: uuid.UUID, ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[dict[str, Any]]]:
     """Instancias vivas por conexión (Coordinador primero, luego por prioridad), con la versión de
     cada release donde figuran (para elegir la de la activa)."""
     if not ids:
@@ -294,7 +305,9 @@ async def _agentes(session: Any, tenant_id: uuid.UUID, ids: list[uuid.UUID]) -> 
     return salida
 
 
-async def _releases(session: Any, tenant_id: uuid.UUID, ids: list[uuid.UUID]) -> dict[uuid.UUID, ReleaseFila]:
+async def _releases(
+    session: Any, tenant_id: uuid.UUID, ids: list[uuid.UUID]
+) -> dict[uuid.UUID, ReleaseFila]:
     if not ids:
         return {}
     filas = (
@@ -308,7 +321,9 @@ async def _releases(session: Any, tenant_id: uuid.UUID, ids: list[uuid.UUID]) ->
     return {f[0]: ReleaseFila(f[0], int(f[1]), f[2]) for f in filas}
 
 
-async def _consumo(session: Any, tenant_id: uuid.UUID, ids: list[uuid.UUID]) -> dict[uuid.UUID, ConsumoFila]:
+async def _consumo(
+    session: Any, tenant_id: uuid.UUID, ids: list[uuid.UUID]
+) -> dict[uuid.UUID, ConsumoFila]:
     """Últimos 7 días. Con `aos_runtime = legacy` el loop escribe `connection_id` NULL: da cero."""
     if not ids:
         return {}
@@ -324,7 +339,9 @@ async def _consumo(session: Any, tenant_id: uuid.UUID, ids: list[uuid.UUID]) -> 
             {"t": tenant_id, "ids": ids, "desde": utcnow() - VENTANA_CONSUMO},
         )
     ).all()
-    return {f[0]: ConsumoFila(int(f[1]), int(f[2]), int(f[3]), int(f[4]), float(f[5])) for f in filas}
+    return {
+        f[0]: ConsumoFila(int(f[1]), int(f[2]), int(f[3]), int(f[4]), float(f[5])) for f in filas
+    }
 
 
 async def _consistencia(session: Any, tenant_id: uuid.UUID) -> Consistencia | None:
