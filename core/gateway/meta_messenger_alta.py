@@ -272,8 +272,9 @@ async def _cuenta_del_negocio(tenant_id: uuid.UUID, settings: Any) -> MetaConnec
 
 
 def config_id_de_messenger(settings: Any) -> str:
-    """Login Configuration de Messenger; sin una propia, la de la plataforma."""
-    return settings.meta_messenger_config_id or settings.meta_config_id
+    """Login Configuration de Messenger. No cae a `META_CONFIG_ID`: esa es la de Embedded Signup de WhatsApp,
+    abriría el registro de WhatsApp y no concede los permisos de Páginas (ADR-0152, §5)."""
+    return settings.meta_messenger_config_id
 
 
 def faltan_para_messenger(settings: Any) -> list[str]:

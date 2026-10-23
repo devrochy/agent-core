@@ -103,10 +103,8 @@ async def test_sin_configuracion_propia_usa_la_de_la_plataforma_y_sin_nada_dice_
     settings = get_settings()
     headers = await api_headers(app_client, tid)
 
+    # Sin la propia no cae a la de WhatsApp (abriría el registro de WhatsApp).
     monkeypatch.setattr(settings, "meta_messenger_config_id", "")
-    assert (await app_client.get(BASE, headers=headers)).json()["config_id"] == "config-whatsapp"
-
-    monkeypatch.setattr(settings, "meta_config_id", "")
     estado = (await app_client.get(BASE, headers=headers)).json()
     assert (estado["meta_configured"], estado["missing_settings"]) == (False, ["META_MESSENGER_CONFIG_ID"])
     assert "platform-secret-test" not in str(estado)  # el App Secret nunca sale

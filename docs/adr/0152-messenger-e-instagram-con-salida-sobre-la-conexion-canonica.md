@@ -101,8 +101,8 @@ Decisiones tomadas al construir `core/gateway/meta_messenger_alta.py` y `core/ap
    Las dos páginas de Meta discrepan (2026-10-23): se exigen `MESSAGING` **y** uno de los otros tres. Un administrador
    de la Página los tiene todos. **A validar con una Página real** en test.
 5. **Configuración propia: `META_MESSENGER_CONFIG_ID`.** La Login Configuration de Embedded Signup de WhatsApp
-   (`META_CONFIG_ID`) no concede `pages_messaging` ni `pages_manage_metadata`; Messenger necesita la suya. Sin ella se
-   usa `META_CONFIG_ID` (en dev), pero en producción hay que crearla en Meta.
+   (`META_CONFIG_ID`) no concede `pages_messaging` ni `pages_manage_metadata`; Messenger necesita la suya. Sin ella el
+   alta no está disponible (no cae a `META_CONFIG_ID`: abriría el registro de WhatsApp); hay que crearla en Meta.
 6. **Plan (decisión del dueño, 2026-10-23).** Messenger **e Instagram** quedan en todos los planes de pago (Basic,
    Premium y Empresarial); Free solo WhatsApp. Se aplica con `features.canales` de `plans.py` y el alta responde
    `409 plan_channel_not_included`. Basic hoy prometía solo WhatsApp: cambia lo que promete ese plan, a reflejar en

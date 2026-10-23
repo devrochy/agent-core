@@ -14,8 +14,8 @@ Tercer paso del rescate de Messenger: el alta por la API. Sin la UI del panel (s
   Página. El token del usuario dura una hora y se revoca al terminar.
 - **Plan:** Messenger e Instagram en todos los planes de pago (decisión del dueño); Free solo WhatsApp.
   `features.canales` de Basic, Premium y Empresarial.
-- **Nueva variable `META_MESSENGER_CONFIG_ID`** (opcional): Login Configuration de Facebook Login for Business con
-  los permisos de Páginas. Distinta de `META_CONFIG_ID` (Embedded Signup de WhatsApp); sin ella se usa esa.
+- **Nueva variable `META_MESSENGER_CONFIG_ID`** (opcional hasta activar Messenger): Login Configuration de Facebook Login for Business con
+  los permisos de Páginas. Distinta de `META_CONFIG_ID` (Embedded Signup de WhatsApp); sin ella el alta de Messenger no está disponible.
   Documentada en `docs/despliegue-coolify.md`.
 - `meta_onboarding._fetch_exchange_token` acepta `redirect_path` (el reintento con `redirect_uri` apuntaba siempre a
   la ruta de WhatsApp); por defecto no cambia.
