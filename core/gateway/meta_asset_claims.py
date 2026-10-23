@@ -31,6 +31,11 @@ from core.shared.logger import get_logger
 
 log = get_logger(__name__)
 
+CLAIMED_MESSAGING_MESSAGE = (
+    "Esta Página de Facebook o esta cuenta de Instagram ya están conectadas a otro negocio "
+    "de la plataforma. Si son tuyas, pide soporte."
+)
+
 CLAIMED_MESSAGE = (
     "Esta cuenta de WhatsApp Business o este número ya están conectados a otro negocio "
     "de la plataforma. Si son tuyos, pide soporte."
@@ -161,6 +166,68 @@ async def _claimed_by_other_tenant(
             await session.execute(
                 text("select meta_asset_claimed_by_other_tenant(:w, :p, :t)"),
                 {"w": waba_id, "p": phone_number_id, "t": tenant_id},
+            )
+        ).scalar_one()
+    )
+
+
+# ------------------------------------------------- Páginas y cuentas de Instagram (ADR-0152)
+# El webhook rutea Messenger por `page_id` e Instagram por `ig_user_id`: igual que con la WABA y
+# el número, un negocio que guardara el activo de otro recibiría sus mensajes. La verificación
+# contra Graph (que el token ve la Página o la cuenta) la hace cada alta ANTES de preguntar.
+
+
+async def claim_messaging_assets(
+    session: Any,
+    tenant_id: uuid.UUID,
+    *,
+    page_id: str | None = None,
+    ig_user_id: str | None = None,
+) -> None:
+    """Falla si otro negocio ya tiene la Página o la cuenta de Instagram. Va en la MISMA sesión
+    que el insert: el candado (uno por activo, en el mismo orden) dura hasta el commit, así dos
+    altas simultáneas del mismo activo se serializan y la segunda ve la fila de la primera."""
+    if await _lock_and_check_messaging(session, tenant_id, page_id=page_id, ig_user_id=ig_user_id):
+        raise MetaAssetError(CLAIMED_MESSAGING_MESSAGE, code="asset_claimed")
+
+
+async def messaging_asset_claimed_by_other_tenant(
+    tenant_id: uuid.UUID | None, *, page_id: str | None = None, ig_user_id: str | None = None
+) -> bool:
+    """¿Otro negocio ya tiene la Página o la cuenta? Sin candado: para decidir si un evento sin
+    dueño es ambiguo (dos negocios) o simplemente no es de nadie. `tenant_id=None`: cualquier
+    dueño cuenta como otro."""
+    async with get_session() as session:
+        return await _messaging_claimed(
+            session, tenant_id, page_id=(page_id or "").strip() or None, ig_user_id=(ig_user_id or "").strip() or None
+        )
+
+
+async def _lock_and_check_messaging(
+    session: Any, tenant_id: uuid.UUID | None, *, page_id: str | None, ig_user_id: str | None
+) -> bool:
+    page_id = (page_id or "").strip() or None
+    ig_user_id = (ig_user_id or "").strip() or None
+    activos = []
+    if page_id:
+        activos.append(f"page:{page_id}")
+    if ig_user_id:
+        activos.append(f"ig:{ig_user_id}")
+    for activo in activos:
+        await session.execute(
+            text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"meta_asset:{activo}"}
+        )
+    return await _messaging_claimed(session, tenant_id, page_id=page_id, ig_user_id=ig_user_id)
+
+
+async def _messaging_claimed(
+    session: Any, tenant_id: uuid.UUID | None, *, page_id: str | None, ig_user_id: str | None
+) -> bool:
+    return bool(
+        (
+            await session.execute(
+                text("select meta_messaging_asset_claimed_by_other_tenant(:p, :i, :t)"),
+                {"p": page_id, "i": ig_user_id, "t": tenant_id},
             )
         ).scalar_one()
     )

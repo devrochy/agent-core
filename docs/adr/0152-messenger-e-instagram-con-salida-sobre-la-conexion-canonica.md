@@ -1,6 +1,6 @@
 # ADR-0152 — Messenger e Instagram con salida: se rescatan portando el código viejo sobre la conexión canónica
 
-- **Estado:** propuesto (HU-CHAN-01 Messenger y HU-CHAN-04 Instagram, SPEC-17 en `solvershub-docs`)
+- **Estado:** aceptado el 2026-10-23 por el dueño al mergear #520 (HU-CHAN-01 Messenger y HU-CHAN-04 Instagram, SPEC-17 en `solvershub-docs`)
 - **Fecha:** 2026-10-23
 - **Contexto:** los PRs #45 (Messenger) y #46 (Instagram) figuran como mergeados, pero estaban apilados sobre otras
   ramas (`feat/messenger-connection`, `feat/instagram-connection`) y se cerraron segundos después de #44: su código
