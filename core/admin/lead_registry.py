@@ -122,6 +122,12 @@ class LeadProvider:
     filter_query: LeadFilterQuery | None = None
     timeline: LeadTimeline | None = None
     edicion: LeadEdicion | None = None
+    # Área del cliente a la que pertenece la data del pack (Ventas, Cobranza, Agenda…).
+    # El panel la usa para agrupar columnas y mostrar el icono del agente; el core no
+    # conoce los nombres comerciales de los packs. Sin esto, la clave es el `plugin_id`.
+    agent_key: str | None = None
+    agent_name: str | None = None
+    icon: str | None = None
 
 
 class LeadRegistry:
@@ -137,10 +143,23 @@ class LeadRegistry:
         filter_query: LeadFilterQuery | None = None,
         timeline: LeadTimeline | None = None,
         edicion: LeadEdicion | None = None,
+        *,
+        agent_key: str | None = None,
+        agent_name: str | None = None,
+        icon: str | None = None,
     ) -> None:
         """Idempotente: registrar dos veces el mismo pack reemplaza la entrada."""
         self._providers[plugin_id] = LeadProvider(
-            plugin_id, list(columns), resolver, list(filters or []), filter_query, timeline, edicion
+            plugin_id,
+            list(columns),
+            resolver,
+            list(filters or []),
+            filter_query,
+            timeline,
+            edicion,
+            agent_key,
+            agent_name,
+            icon,
         )
 
     def providers_for(self, enabled: set[str] | None) -> list[LeadProvider]:

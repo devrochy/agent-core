@@ -430,3 +430,28 @@ async def test_una_promocion_que_falla_no_escala_y_131050_da_de_baja_una_vez(app
                 )
             ).scalar()
     assert revocados == 1  # el segundo 131050 no agrega otra fila
+
+
+async def test_vista_previa_de_un_solo_cliente(app_client) -> None:
+    """Tanda 2: el icono de Ventas manda la plantilla solo a ese cliente."""
+    tid = await _negocio()
+    ids = await _escenario(tid)
+    headers = await api_headers(app_client, tid)
+    cuerpo = _cuerpo(ids)
+
+    r = await app_client.post(
+        f"{ACC}/vista-previa", params={"lead_id": str(ids["ana"])}, json=cuerpo, headers=headers
+    )
+    assert r.status_code == 200, r.text
+    vista = r.json()
+    assert vista["candidatos"] == 1
+    assert vista["elegibles"] == 1
+
+    r = await app_client.post(
+        f"{ACC}/vista-previa", params={"lead_id": str(ids["beto"])}, json=cuerpo, headers=headers
+    )
+    assert r.status_code == 200, r.text
+    vista = r.json()
+    assert vista["candidatos"] == 1
+    assert vista["elegibles"] == 0
+    assert any(e["motivo"] == "sin_consentimiento" for e in vista["excluidos"])

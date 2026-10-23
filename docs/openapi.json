@@ -21320,6 +21320,25 @@
             }
           },
           {
+            "name": "lead_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Solo este cliente.",
+              "title": "Lead Id"
+            },
+            "description": "Solo este cliente."
+          },
+          {
             "name": "filtro",
             "in": "query",
             "required": false,
@@ -21991,6 +22010,445 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MediaTestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/leads/{lead_id}/geocodificar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Geocodificar Lead",
+        "description": "Convierte la dirección del cliente en coordenadas y las guarda en el perfil.\n\nEl proveedor recibe solo la dirección compuesta (dirección, municipio, departamento y\npaís). La plataforma paga la llamada y hay topes global y por negocio (ADR-0154).",
+        "operationId": "geocodificar_lead_api_v1_admin_leads__lead_id__geocodificar_post",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadGeocodificacion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/leads/{lead_id}/perfil": {
+      "patch": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Update Lead Perfil",
+        "description": "Corrige los datos base del cliente desde la pestaña General.\n\nSolo acepta las claves canónicas de `core.memory.perfil`; escribe por\n`core/memory/facts.py` con `source=\"human\"` para que el agente lo use desde la\nsiguiente conversación y quede la procedencia en la ficha.",
+        "operationId": "update_lead_perfil_api_v1_admin_leads__lead_id__perfil_patch",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadPerfilUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/collaborators/{admin_id}/permissions": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · colaboradores"
+        ],
+        "summary": "Read Collaborator Permissions",
+        "description": "Acceso efectivo por sección y si es heredado, para la grilla de permisos (D-SPEC-34-1).\n\nUn owner/tester ve el estado en su negocio activo; el master elige el negocio con `tenant`\n(vacío = alcance global).",
+        "operationId": "read_collaborator_permissions_api_v1_admin_collaborators__admin_id__permissions_get",
+        "parameters": [
+          {
+            "name": "admin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Admin Id"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Tenant"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PermissionState"
+                  },
+                  "title": "Response Read Collaborator Permissions Api V1 Admin Collaborators  Admin Id  Permissions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · colaboradores"
+        ],
+        "summary": "Set Collaborator Permissions",
+        "description": "Aplica en bloque los permisos de un colaborador (grilla, D-SPEC-34-1).",
+        "operationId": "set_collaborator_permissions_api_v1_admin_collaborators__admin_id__permissions_post",
+        "parameters": [
+          {
+            "name": "admin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Admin Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPermissionsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/invitations/outgoing": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · invitaciones"
+        ],
+        "summary": "List Outgoing",
+        "description": "Invitaciones pendientes ENVIADAS por un negocio, para listarlas y revocarlas (HU-UI-14).\n\nUn owner/tester ve las de su negocio activo; el master elige el negocio con `tenant`\n(vacío = el activo del selector).",
+        "operationId": "list_outgoing_api_v1_admin_invitations_outgoing_get",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Tenant"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OutgoingItem"
+                  },
+                  "title": "Response List Outgoing Api V1 Admin Invitations Outgoing Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/{token}": {
+      "get": {
+        "tags": [
+          "api",
+          "archivos"
+        ],
+        "summary": "Serve File",
+        "operationId": "serve_file_api_v1_files__token__get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/commerce/products/image": {
+      "post": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Upload Product Image",
+        "description": "Sube la foto de un producto al controlador único (HU-CRM-05) y devuelve su clave y URL.\n\nEl panel/APK la suben antes de guardar el producto; luego mandan `image_key` en el alta.",
+        "operationId": "upload_product_image_api_v1_pack_commerce_products_image_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_product_image_api_v1_pack_commerce_products_image_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Upload Product Image Api V1 Pack Commerce Products Image Post"
                 }
               }
             }
@@ -27321,6 +27779,16 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Extras"
+          },
+          "perfil": {
+            "$ref": "#/components/schemas/LeadPerfilOut"
+          },
+          "agentes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Agentes"
           }
         },
         "type": "object",
@@ -27329,7 +27797,9 @@
           "cliente",
           "canal",
           "alta",
-          "extras"
+          "extras",
+          "perfil",
+          "agentes"
         ],
         "title": "LeadRow"
       },
@@ -27348,6 +27818,13 @@
             },
             "type": "array",
             "title": "Filters"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/LeadAgentOut"
+            },
+            "type": "array",
+            "title": "Agents"
           },
           "items": {
             "items": {
@@ -27376,6 +27853,7 @@
         "type": "object",
         "required": [
           "columns",
+          "agents",
           "items",
           "total",
           "page",
@@ -30558,6 +31036,28 @@
             ],
             "title": "Image Url"
           },
+          "image_url_externa": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url Externa"
+          },
+          "image_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Key"
+          },
           "variants": {
             "items": {
               "$ref": "#/components/schemas/VariantOut"
@@ -30685,6 +31185,17 @@
               }
             ],
             "title": "Image Url"
+          },
+          "image_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Key"
           }
         },
         "type": "object",
@@ -40683,6 +41194,23 @@
             "type": "array",
             "title": "Columns"
           },
+          "perfil": {
+            "$ref": "#/components/schemas/LeadPerfilOut"
+          },
+          "agentes": {
+            "items": {
+              "$ref": "#/components/schemas/LeadAgentData"
+            },
+            "type": "array",
+            "title": "Agentes"
+          },
+          "campos_perfil": {
+            "items": {
+              "$ref": "#/components/schemas/LeadCampoPerfil"
+            },
+            "type": "array",
+            "title": "Campos Perfil"
+          },
           "editables": {
             "items": {
               "$ref": "#/components/schemas/LeadEditable"
@@ -40705,7 +41233,11 @@
           "ultima_conversacion_id",
           "datos",
           "extras",
-          "columns"
+          "columns",
+          "perfil",
+          "agentes",
+          "campos_perfil",
+          "editables"
         ],
         "title": "LeadDetail"
       },
@@ -42085,6 +42617,661 @@
           "provider"
         ],
         "title": "MediaVisionUpdate"
+      },
+      "Body_upload_product_image_api_v1_pack_commerce_products_image_post": {
+        "properties": {
+          "archivo": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Archivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "archivo"
+        ],
+        "title": "Body_upload_product_image_api_v1_pack_commerce_products_image_post"
+      },
+      "LeadAgentData": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
+          },
+          "pack_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pack Id"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/LeadColumnValue"
+            },
+            "type": "array",
+            "title": "Columns"
+          },
+          "editables": {
+            "items": {
+              "$ref": "#/components/schemas/LeadEditable"
+            },
+            "type": "array",
+            "title": "Editables"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "columns",
+          "editables"
+        ],
+        "title": "LeadAgentData",
+        "description": "La data de un agente para la ficha: columnas con su valor y campos editables."
+      },
+      "LeadAgentOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
+          },
+          "pack_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pack Id"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/LeadColumn"
+            },
+            "type": "array",
+            "title": "Columns"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "columns"
+        ],
+        "title": "LeadAgentOut",
+        "description": "Un agente del negocio y las columnas que aporta a la lista de clientes."
+      },
+      "LeadCampoPerfil": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "texto",
+              "email",
+              "telefono",
+              "opciones",
+              "numero",
+              "url"
+            ],
+            "title": "Tipo"
+          },
+          "max_length": {
+            "type": "integer",
+            "title": "Max Length"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/LeadFilterOption"
+            },
+            "type": "array",
+            "title": "Options"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group"
+          },
+          "help": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Help"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "tipo",
+          "max_length",
+          "options",
+          "group"
+        ],
+        "title": "LeadCampoPerfil",
+        "description": "Metadatos de un campo editable del perfil (los comparte la ficha y la API)."
+      },
+      "LeadColumnValue": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "LeadColumnValue"
+      },
+      "LeadGeocodificacion": {
+        "properties": {
+          "latitud": {
+            "type": "number",
+            "title": "Latitud"
+          },
+          "longitud": {
+            "type": "number",
+            "title": "Longitud"
+          },
+          "direccion_normalizada": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direccion Normalizada"
+          },
+          "precision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precision"
+          },
+          "proveedor": {
+            "type": "string",
+            "title": "Proveedor"
+          },
+          "perfil": {
+            "$ref": "#/components/schemas/LeadPerfilOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "latitud",
+          "longitud",
+          "proveedor",
+          "perfil"
+        ],
+        "title": "LeadGeocodificacion",
+        "description": "Resultado de geocodificar la dirección y el perfil actualizado."
+      },
+      "LeadPerfilOut": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "apellido": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apellido"
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias"
+          },
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Url"
+          },
+          "nombre_visible": {
+            "type": "string",
+            "title": "Nombre Visible"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "phone_e164": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone E164"
+          },
+          "phone_indicativo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone Indicativo"
+          },
+          "phone_local": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone Local"
+          },
+          "pais_telefono": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pais Telefono"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "tipo_documento": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tipo Documento"
+          },
+          "id_document": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id Document"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          },
+          "municipio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Municipio"
+          },
+          "departamento": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Departamento"
+          },
+          "pais": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pais"
+          },
+          "latitud": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitud"
+          },
+          "longitud": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitud"
+          },
+          "direccion_completa": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direccion Completa"
+          },
+          "direccion_normalizada": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direccion Normalizada"
+          },
+          "geocodificado_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geocodificado En"
+          },
+          "geocodificacion_precision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geocodificacion Precision"
+          },
+          "geocodificacion_proveedor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geocodificacion Proveedor"
+          },
+          "mapa_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mapa Url"
+          },
+          "clasificacion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clasificacion"
+          },
+          "clasificacion_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clasificacion Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nombre_visible"
+        ],
+        "title": "LeadPerfilOut",
+        "description": "Datos base del cliente. Las claves son las canónicas de `core.memory.perfil`."
+      },
+      "LeadPerfilUpdate": {
+        "properties": {
+          "valores": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Valores"
+          },
+          "otros": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Otros"
+          }
+        },
+        "type": "object",
+        "title": "LeadPerfilUpdate",
+        "description": "Campos canónicos del perfil que se cambian desde la pestaña General.\n\n`otros` conserva la posibilidad de guardar un dato libre (una preferencia, por ejemplo)\nsin saltarse las reglas de `facts.py`: no admite claves del sistema ni datos sensibles."
+      },
+      "OutgoingItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "rol": {
+            "type": "string",
+            "title": "Rol"
+          },
+          "creadaEn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creadaen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "rol",
+          "creadaEn"
+        ],
+        "title": "OutgoingItem"
+      },
+      "PermissionState": {
+        "properties": {
+          "section": {
+            "type": "string",
+            "title": "Section"
+          },
+          "access": {
+            "type": "string",
+            "title": "Access"
+          },
+          "heredado": {
+            "type": "boolean",
+            "title": "Heredado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "section",
+          "access",
+          "heredado"
+        ],
+        "title": "PermissionState"
+      },
+      "SetPermissionsRequest": {
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "title": "Tenant",
+            "default": ""
+          },
+          "permissions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Permissions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "permissions"
+        ],
+        "title": "SetPermissionsRequest"
       },
       "CredentialField": {
         "properties": {
