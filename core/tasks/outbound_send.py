@@ -27,7 +27,7 @@ from sqlalchemy import and_, or_, select
 from core.admin.envios_segmento import es_de_un_envio
 from core.db.models import Conversation, Customer, Message, utcnow
 from core.db.session import get_session
-from core.gateway.channels.registry import outbound_adapter_for
+from core.gateway.channels.registry import CANALES_DE_MENSAJERIA_META, outbound_adapter_for
 from core.gateway.meta_errors import REENGAGEMENT_WINDOW_CODE, GraphError
 from core.gateway.sender import resolve_credentials
 from core.shared.async_bridge import run_async
@@ -258,7 +258,22 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
             # tiempo ni los reintentos lo arreglan. Falla ya y se escala.
             await _release_claim(message.id, message.conversation_id, tenant_id)
             return GraphError("La conexión de WhatsApp no tiene credenciales para enviar", category="PERMANENT")
-        adapter = outbound_adapter_for(provider)
+        if conversation.channel in CANALES_DE_MENSAJERIA_META:
+            # Ventana y autoría para decidir `RESPONSE` o `HUMAN_AGENT` (ADR-0152): los datos del
+            # mensaje que el adaptador no ve.
+            credentials = {
+                **credentials,
+                "service_window_expires_at": (
+                    conversation.service_window_expires_at.isoformat() if conversation.service_window_expires_at else ""
+                ),
+                "human": "true" if message.sender_type == "human" else "false",
+            }
+        try:
+            adapter = outbound_adapter_for(provider, conversation.channel)
+        except KeyError as exc:
+            # Canal sin adaptador de salida: ni el tiempo ni los reintentos lo arreglan.
+            await _release_claim(message.id, message.conversation_id, tenant_id)
+            return GraphError(str(exc), category="PERMANENT")
 
         try:
             if message.template_name:

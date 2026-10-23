@@ -107,6 +107,58 @@ async def _resolve_meta_connection_credentials(
     return {"phone_number_id": phone.phone_number_id, "access_token": token}
 
 
+async def _resolve_messenger_credentials(
+    meta_connection_id: uuid.UUID, page_id: str, expected_tenant_id: uuid.UUID | None
+) -> dict[str, str] | None:
+    """Credenciales de una Página de Messenger (ADR-0152): el token de la PROPIA Página, no el de la
+    cuenta, y solo si la Página es viva y de esta conexión. Mismas defensas que
+    `_resolve_meta_connection_credentials`: pausa o borrado (ADR-0122), tenant explícito además de
+    RLS y sin respaldo silencioso a otra Página, a WhatsApp ni al `.env`."""
+    from core.db.models import FbPage
+    from core.gateway import meta_token_store
+    from core.gateway.meta_connection_state import motivo_pausa
+    from core.gateway.meta_credentials import CredentialsUnavailable, app_credentials_for
+    from core.gateway.meta_messenger import PAGE_TOKEN_KIND
+
+    async with get_session() as session:
+        connection = await session.get(MetaConnection, meta_connection_id)
+        if connection is None:
+            return None
+        if (motivo := motivo_pausa(connection)) is not None:
+            log.warning("meta_connection_no_utilizable", meta_connection_id=str(meta_connection_id), motivo=motivo)
+            return None
+        if expected_tenant_id is not None and connection.tenant_id != expected_tenant_id:
+            log.error(
+                "meta_connection_tenant_mismatch",
+                meta_connection_id=str(meta_connection_id),
+                connection_tenant_id=str(connection.tenant_id),
+                expected_tenant_id=str(expected_tenant_id),
+            )
+            return None
+        pagina = (
+            await session.execute(
+                select(FbPage).where(
+                    FbPage.connection_id == meta_connection_id,
+                    FbPage.tenant_id == connection.tenant_id,
+                    FbPage.page_id == page_id,
+                )
+            )
+        ).scalars().first()
+    if pagina is None:
+        return None
+    token = await meta_token_store.get_token(
+        meta_connection_id, PAGE_TOKEN_KIND, page_id, tenant_id=connection.tenant_id
+    )
+    if not token:
+        return None
+    credentials = {"page_id": page_id, "access_token": token, "graph_api_version": connection.graph_api_version or ""}
+    try:
+        credentials["app_secret"] = (await app_credentials_for(connection)).app_secret
+    except CredentialsUnavailable:
+        pass  # sin `appsecret_proof`: Meta lo exige solo si la app lo tiene activado
+    return credentials
+
+
 async def resolve_credentials(
     connection_id: uuid.UUID | None,
     meta_connection_id: uuid.UUID | None = None,
@@ -152,6 +204,12 @@ async def resolve_credentials(
             # inalcanzable en operación normal.
             log.warning("conexion_de_la_conversacion_no_disponible", connection_id=str(connection_id))
             return "meta", {}
+        if connection.meta_connection_id is not None and connection.channel == "messenger":
+            # Página de Messenger (ADR-0152): su token es el de la Página. Sin respaldo silencioso.
+            creds = await _resolve_messenger_credentials(
+                connection.meta_connection_id, connection.external_id or "", expected_tenant_id
+            )
+            return "meta", creds or {}
         if connection.meta_connection_id is not None:
             # Conexión canónica de un número de Meta (ADR-0115): sin credenciales propias, la
             # cuenta las pone y el número es el de la conexión. Sin respaldo silencioso
@@ -226,17 +284,28 @@ async def resolve_credentials(
     }
 
 
-def validate_service_window(conversation: Conversation, *, is_template: bool) -> None:
-    """Ventana de 24h de WhatsApp: fuera de ventana solo se puede enviar una
-    plantilla. Se llama ANTES de encolar -- nunca gasta un ciclo de cola/
-    rate-limit en un envío libre que Meta va a rechazar seguro (131047)."""
+def validate_service_window(conversation: Conversation, *, is_template: bool, sender_type: str = "agent") -> None:
+    """Ventana de 24h de Meta: fuera de ventana solo se puede enviar una
+    plantilla (WhatsApp). Se llama ANTES de encolar -- nunca gasta un ciclo de cola/
+    rate-limit en un envío libre que Meta va a rechazar seguro (131047).
+
+    Messenger e Instagram no tienen plantillas: fuera de la ventana solo una PERSONA puede
+    responder, hasta 7 días después del último mensaje del cliente (etiqueta `HUMAN_AGENT`,
+    ADR-0152). El asistente nunca."""
     if is_template:
         return
     expires_at = conversation.service_window_expires_at
-    if expires_at is not None and expires_at < utcnow():
-        raise OutboundWindowExpiredError(
-            "La ventana de servicio de 24h venció -- reenviá como plantilla"
-        )
+    if expires_at is None or expires_at >= utcnow():
+        return
+    if conversation.channel in ("messenger", "instagram"):
+        from core.gateway.meta_messenger import MessengerSendError, plan_de_envio
+
+        try:
+            plan_de_envio(service_window_expires_at=expires_at, humano=sender_type == "human", ahora=utcnow())
+        except MessengerSendError as exc:
+            raise OutboundWindowExpiredError(str(exc)) from exc
+        return
+    raise OutboundWindowExpiredError("La ventana de servicio de 24h venció -- reenviá como plantilla")
 
 
 async def _registrar_si_pausada(conversation: Conversation, content: str, sender_type: str) -> bool:
@@ -301,7 +370,7 @@ async def send_to_conversation(
         return False
 
     try:
-        validate_service_window(conversation, is_template=is_template)
+        validate_service_window(conversation, is_template=is_template, sender_type=sender_type)
     except OutboundWindowExpiredError as exc:
         async with get_session() as session:
             session.add(
