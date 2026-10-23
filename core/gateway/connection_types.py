@@ -176,7 +176,7 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         description="Página de Facebook vía Meta",
         external_id_key="page_id",
         produces_conversations=True,
-        available=False,
+        available=True,
         setup_kind=SETUP_WIZARD,
         sort_order=30,
     ),
@@ -261,6 +261,8 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
 BY_ID: dict[str, ConnectionType] = {t.id: t for t in CONNECTION_TYPES}
 
 WHATSAPP_META = "whatsapp_meta"
+MESSENGER_META = "messenger_meta"
+INSTAGRAM_META = "instagram_meta"
 WEBCHAT = "webchat"
 
 

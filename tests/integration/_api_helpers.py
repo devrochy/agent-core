@@ -72,3 +72,39 @@ async def banderas_como_dueno(tenant_id: uuid.UUID, **columnas: object) -> None:
             await conn.execute(text(f"update tenants set {asignaciones} where id = :t"), {"t": tenant_id, **columnas})
     finally:
         await engine.dispose()
+
+
+APP_ID_PLATAFORMA = "platform-app-test"
+
+
+class MetaSimulado:
+    """Meta simulado para las altas de Messenger: las Páginas del usuario y qué responde cada suscripción."""
+
+    def __init__(self, paginas: list[dict], *, suscripcion_falla: set[str] | None = None):
+        self.paginas = paginas
+        self.suscripcion_falla = suscripcion_falla or set()
+        self.llamadas: list[tuple[str, str, str]] = []
+
+    async def graph_fetch(self, path, *, token, app_secret, method="GET", body=None, query=None, **_kw):
+        from core.gateway.meta_errors import GraphError
+
+        self.llamadas.append((method, path, token))
+        if path == "/me/accounts":
+            return {"data": self.paginas}
+        page_id = path.split("/")[1]
+        if path.endswith("/subscribed_apps"):
+            if page_id in self.suscripcion_falla:
+                raise GraphError("(#200) Permissions error", category="PERMANENT", code=200)
+            if method == "POST":
+                assert "subscribed_fields" in (query or {})  # el nombre correcto del parámetro
+                return {"success": True}
+            return {"data": [{"id": APP_ID_PLATAFORMA, "subscribed_fields": ["messages", "messaging_postbacks"]}]}
+        raise AssertionError(f"llamada inesperada a Graph: {method} {path}")
+
+
+def pagina_de_meta(page_id: str, *, tasks=("MESSAGING", "MANAGE"), token: str | None = None) -> dict:
+    """Una Página como la devuelve `GET /me/accounts`."""
+    return {
+        "id": page_id, "name": f"Página {page_id}", "category": "Tienda",
+        "tasks": list(tasks), "access_token": token or f"tok-{page_id}",
+    }

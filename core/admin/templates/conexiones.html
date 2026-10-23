@@ -177,7 +177,7 @@
           <div class="row row-cols-2 row-cols-md-3 g-3">
             {% for item in group['items'] %}
             <div class="col">
-              {% if item.available %}
+              {% if item.available and item.url %}
               <a href="{{ item.url }}" class="card text-decoration-none text-body h-100 text-center py-3">
                 <i class="bi {{ item.icon }} fs-1 mb-2"></i>
                 <div class="fw-semibold">{{ item.label }}</div>
@@ -188,7 +188,7 @@
                 <i class="bi {{ item.icon }} fs-1 mb-2"></i>
                 <div class="fw-semibold">{{ item.label }}</div>
                 {% if item.description %}<div class="small text-secondary">{{ item.description }}</div>{% endif %}
-                <span class="badge text-bg-secondary mx-auto mt-1">Próximamente</span>
+                <span class="badge text-bg-secondary mx-auto mt-1">{{ "Solo en el panel nuevo" if item.available else "Próximamente" }}</span>
               </div>
               {% endif %}
             </div>

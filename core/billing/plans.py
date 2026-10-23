@@ -105,7 +105,7 @@ PLANS: tuple[Plan, ...] = (
             "documentos": 20,
             "conocimiento_mb": 100,
         },
-        features={"soporte": "email", "canales": ["whatsapp"]},
+        features={"soporte": "email", "canales": ["whatsapp", "messenger", "instagram"]},
     ),
     Plan(
         id="premium",
@@ -126,7 +126,7 @@ PLANS: tuple[Plan, ...] = (
             "documentos": 100,
             "conocimiento_mb": 500,
         },
-        features={"soporte": "prioritario", "canales": ["whatsapp", "instagram"]},
+        features={"soporte": "prioritario", "canales": ["whatsapp", "messenger", "instagram"]},
     ),
     Plan(
         id="empresarial",
@@ -147,7 +147,7 @@ PLANS: tuple[Plan, ...] = (
             "documentos": 500,
             "conocimiento_mb": 2_000,
         },
-        features={"soporte": "dedicado", "canales": ["whatsapp", "instagram", "web"]},
+        features={"soporte": "dedicado", "canales": ["whatsapp", "messenger", "instagram", "web"]},
     ),
 )
 
