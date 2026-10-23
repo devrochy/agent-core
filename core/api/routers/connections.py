@@ -105,9 +105,7 @@ async def list_connections_endpoint(
                     .all()
                 )
                 for p in phone_rows:
-                    phones.setdefault(
-                        p.connection_id, p.display_phone_number or p.phone_number_id
-                    )
+                    phones.setdefault(p.connection_id, p.display_phone_number or p.phone_number_id)
 
         from core.gateway.meta_credentials import origin_label
 
@@ -152,7 +150,9 @@ class ConsoleAgent(BaseModel):
     is_default: bool
     enabled: bool
     priority: int
-    release_version: int | None = Field(description="Versión que corre en la release activa; null si no figura.")
+    release_version: int | None = Field(
+        description="Versión que corre en la release activa; null si no figura."
+    )
     latest_version: int | None = Field(description="Última versión publicada del agente.")
 
 
@@ -183,13 +183,17 @@ class ConsoleConnection(BaseModel):
     meta_connection_id: uuid.UUID | None
     health: Literal["ok", "degraded", "error", "paused", "pending"]
     pause_scope: Literal["meta_account", "connection", "webchat_settings"]
-    pausable: bool = Field(description=(
+    pausable: bool = Field(
+        description=(
             "La consola ofrece pausar: la cuenta de Meta, las conexiones manuales o de WhatsApp Web "
             "(ADR-0122 y su adenda 2026-10-19) y el chat web (alcance `connection`: el mismo estado que "
             "Configuración → Chat web). `webchat_settings` ya no se emite."
-        ))
+        )
+    )
     coordinator: ConsoleAgent | None
-    agents: list[ConsoleAgent] = Field(description="Especialistas y back-office, sin el Coordinador.")
+    agents: list[ConsoleAgent] = Field(
+        description="Especialistas y back-office, sin el Coordinador."
+    )
     active_release: ConsoleRelease | None
     canary_release: ConsoleRelease | None
     usage_7d: ConsoleUsage
@@ -218,7 +222,9 @@ class ConnectionsConsole(BaseModel):
     page_size: int
     has_more: bool
     runtime: Literal["legacy", "v3"]
-    routing: Literal["off", "shadow", "active"] = Field(description="`tenants.aos_routing`, solo lectura.")
+    routing: Literal["off", "shadow", "active"] = Field(
+        description="`tenants.aos_routing`, solo lectura."
+    )
     consistency: ConsoleConsistency | None = Field(description="pass^k del último run del negocio.")
     can_edit: bool = Field(description="Acceso de escritura a `connections`.")
     unassigned_agents: list[ConsoleUnassignedAgent] = Field(
@@ -303,13 +309,17 @@ async def connections_console(
         routing=datos.routing if datos.routing in ("off", "shadow", "active") else "off",  # type: ignore[arg-type]
         consistency=(
             ConsoleConsistency(
-                pass_k=datos.consistency.pass_k, k=datos.consistency.k, measured_at=datos.consistency.measured_at
+                pass_k=datos.consistency.pass_k,
+                k=datos.consistency.k,
+                measured_at=datos.consistency.measured_at,
             )
             if datos.consistency is not None
             else None
         ),
         can_edit=can_edit,
-        unassigned_agents=[ConsoleUnassignedAgent(id=a.id, key=a.key, name=a.name) for a in datos.unassigned_agents],
+        unassigned_agents=[
+            ConsoleUnassignedAgent(id=a.id, key=a.key, name=a.name) for a in datos.unassigned_agents
+        ],
     )
 
 
@@ -330,7 +340,9 @@ async def audit_connection_action(principal: Principal, action: str, connection_
             )
     except Exception:
         # La acción ya se aplicó: un 500 invitaría a repetirla. Queda en el log para revisar.
-        log.exception("connection_action_audit_failed", action=action, connection_id=str(connection_id))
+        log.exception(
+            "connection_action_audit_failed", action=action, connection_id=str(connection_id)
+        )
 
 
 # ------------------------------------------------------------------ catálogo y alta manual
@@ -375,6 +387,34 @@ class ManualSaveRequest(BaseModel):
 
 class ConnectionActionRequest(BaseModel):
     action: Literal["activate", "deactivate", "primary", "delete"]
+    # Solo para `delete`: la contraseña actual del usuario (step-up).
+    password: str | None = None
+
+
+class CredentialField(BaseModel):
+    name: str
+    label: str
+    value: str | None = None
+    secret: bool = False
+    configured: bool = False
+    # `platform`: lo custodia la plataforma y no se revela al negocio (App Secret/verify de Meta).
+    platform: bool = False
+
+
+class ConnectionCredentialsResponse(BaseModel):
+    id: uuid.UUID
+    kind: Literal["manual"]
+    type_id: str
+    label: str
+    fields: list[CredentialField]
+
+
+class RevealCredentialsRequest(BaseModel):
+    password: str = ""
+
+
+class RevealedSecretsResponse(BaseModel):
+    secrets: dict[str, str]
 
 
 @router.get("/catalog", response_model=CatalogResponse)
@@ -426,7 +466,9 @@ async def connection_manual_form(
         from core.gateway.connections import credentials_of
 
         async with get_session() as session:
-            existing = await get_owned(session, ChannelConnection, connection_id, principal.tenant_id)
+            existing = await get_owned(
+                session, ChannelConnection, connection_id, principal.tenant_id
+            )
         # La conexión canónica de un número de Meta no es manual (ADR-0115): no se edita acá.
         if existing is None or administrada_aparte(existing):
             raise ApiError.not_found("Conexión no encontrada.")
@@ -442,6 +484,95 @@ async def connection_manual_form(
         values=redacted,
         configured_secrets=configured,
     )
+
+
+def _label_de_campo(name: str, prop: dict[str, Any]) -> str:
+    title = prop.get("title")
+    return str(title) if isinstance(title, str) and title else name.replace("_", " ").capitalize()
+
+
+def _valor_visible(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return "Sí" if value else "No"
+    return str(value)
+
+
+async def _manual_connection_of(principal: Principal, connection_id: uuid.UUID):
+    """Conexión manual del tenant activo; las de Meta/chat web no se consultan por aquí."""
+    from core.db.models import ChannelConnection
+
+    async with get_session() as session:
+        existing = await get_owned(session, ChannelConnection, connection_id, principal.tenant_id)
+    if existing is None or administrada_aparte(existing):
+        raise ApiError.not_found("Conexión no encontrada.")
+    return existing
+
+
+@router.get("/{connection_id}/credentials", response_model=ConnectionCredentialsResponse)
+async def connection_credentials(
+    connection_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections"))],
+) -> ConnectionCredentialsResponse:
+    """Datos de registro de una conexión manual; los secretos solo indican si están cargados."""
+    from core.api.forms import is_secret
+    from core.gateway.connection_types import get_connection_type
+    from core.gateway.connections import credentials_of
+
+    existing = await _manual_connection_of(principal, connection_id)
+    ctype = get_connection_type(existing.type_id) if existing.type_id else None
+    if ctype is None:
+        raise ApiError.not_found("Tipo de conexión no encontrado.")
+    values = credentials_of(existing)
+    fields: list[CredentialField] = []
+    for name, prop in (ctype.credentials_schema.get("properties") or {}).items():
+        if not isinstance(prop, dict):
+            continue
+        secreto = is_secret(prop)
+        fields.append(
+            CredentialField(
+                name=name,
+                label=_label_de_campo(name, prop),
+                value=None if secreto else _valor_visible(values.get(name)),
+                secret=secreto,
+                configured=values.get(name) not in (None, ""),
+            )
+        )
+    return ConnectionCredentialsResponse(
+        id=existing.id,
+        kind="manual",
+        type_id=ctype.id,
+        label=existing.label,
+        fields=fields,
+    )
+
+
+@router.post("/{connection_id}/credentials/reveal", response_model=RevealedSecretsResponse)
+async def reveal_connection_credentials(
+    connection_id: uuid.UUID,
+    payload: RevealCredentialsRequest,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> RevealedSecretsResponse:
+    """Revela los secretos de una conexión manual tras confirmar la contraseña del usuario."""
+    from core.api.forms import is_secret
+    from core.api.step_up import confirmar_password
+    from core.gateway.connection_types import get_connection_type
+    from core.gateway.connections import credentials_of
+
+    await confirmar_password(principal, payload.password, proposito="connection_credentials")
+    existing = await _manual_connection_of(principal, connection_id)
+    ctype = get_connection_type(existing.type_id) if existing.type_id else None
+    if ctype is None:
+        raise ApiError.not_found("Tipo de conexión no encontrado.")
+    values = credentials_of(existing)
+    secrets = {
+        name: str(values[name])
+        for name, prop in (ctype.credentials_schema.get("properties") or {}).items()
+        if isinstance(prop, dict) and is_secret(prop) and values.get(name) not in (None, "")
+    }
+    await audit_connection_action(principal, "connection.credentials_revealed", str(existing.id))
+    return RevealedSecretsResponse(secrets=secrets)
 
 
 @router.post("/manual", status_code=204)
@@ -519,6 +650,11 @@ async def connection_action(
     if existing is None or administrada_aparte(existing):
         raise ApiError.not_found("Conexión no encontrada.")
 
+    if payload.action == "delete":
+        from core.api.step_up import confirmar_password
+
+        await confirmar_password(principal, payload.password, proposito="connection_delete")
+
     from core.gateway.connections import delete_connection, set_active, set_primary
 
     if payload.action == "activate":
@@ -533,7 +669,9 @@ async def connection_action(
     return Response(status_code=204)
 
 
-async def _pausar_chat_web(principal: Principal, connection_id: uuid.UUID, *, enabled: bool) -> None:
+async def _pausar_chat_web(
+    principal: Principal, connection_id: uuid.UUID, *, enabled: bool
+) -> None:
     """El chat web desde la consola (HU-AOS-23): el mismo interruptor que Configuración → Chat web
     (`app_settings.web_chat_config.enabled` y `channel_connections.active` en una transacción) y
     la misma auditoría que las demás conexiones (también si ya estaba así, como ellas)."""
@@ -548,11 +686,15 @@ async def _pausar_chat_web(principal: Principal, connection_id: uuid.UUID, *, en
             )
     except chat_web_conexion.WidgetDesincronizado:
         raise ApiError(
-            409, "conflict", "No se pudo cambiar el chat web: revisa Configuración → Chat web y vuelve a intentarlo."
+            409,
+            "conflict",
+            "No se pudo cambiar el chat web: revisa Configuración → Chat web y vuelve a intentarlo.",
         ) from None
     if previo is None:
         raise ApiError.not_found("Conexión no encontrada.")
-    await audit_connection_action(principal, _ACCION_AUDITADA["activate" if enabled else "deactivate"], str(connection_id))
+    await audit_connection_action(
+        principal, _ACCION_AUDITADA["activate" if enabled else "deactivate"], str(connection_id)
+    )
 
 
 _ACCION_AUDITADA = {

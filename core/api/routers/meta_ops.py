@@ -187,9 +187,7 @@ async def billing(
     payload: BillingRequest,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> Response:
-    error = await set_billing_status(
-        principal.tenant_id, connection_id, payload.manual_status
-    )
+    error = await set_billing_status(principal.tenant_id, connection_id, payload.manual_status)
     if error is not None:
         raise ApiError.bad_request(error, "billing_failed")
     return Response(status_code=204)
@@ -234,9 +232,13 @@ async def register_webhook(
     es_master = actua_como_master(principal.admin)
     try:
         if payload.connection_id is not None:
-            await register_connection_webhook(principal.tenant_id, str(payload.connection_id), es_master=es_master)
+            await register_connection_webhook(
+                principal.tenant_id, str(payload.connection_id), es_master=es_master
+            )
         else:
-            await register_channel_subscription(principal.tenant_id, payload.channel, es_master=es_master)
+            await register_channel_subscription(
+                principal.tenant_id, payload.channel, es_master=es_master
+            )
     except WebhookRegistroError as exc:
         raise _api_error(exc) from exc
     return Response(status_code=204)
@@ -314,9 +316,7 @@ async def list_connection_numbers(
 ) -> NumbersResponse:
     """Números de una conexión Meta (sincroniza con Meta antes de listar)."""
     rows, sync_error = await list_numbers(principal.tenant_id, connection_id)
-    return NumbersResponse(
-        numbers=[PhoneNumberItem(**row) for row in rows], sync_error=sync_error
-    )
+    return NumbersResponse(numbers=[PhoneNumberItem(**row) for row in rows], sync_error=sync_error)
 
 
 @router.get("/connections/{connection_id}/business-numbers", response_model=BusinessNumbersResponse)
@@ -328,7 +328,9 @@ async def list_business_numbers(
     números de Meta cuenta el portafolio entero). Solo lectura: no guarda nada."""
     data, error = await business_numbers(principal.tenant_id, connection_id)
     if error is not None or data is None:
-        raise ApiError.bad_request(error or "No se pudieron leer los números", "business_numbers_failed")
+        raise ApiError.bad_request(
+            error or "No se pudieron leer los números", "business_numbers_failed"
+        )
     return BusinessNumbersResponse(
         business_id=data["business_id"],
         business_name=data["business_name"],
@@ -520,6 +522,8 @@ async def reset_waweb_session(
 
 class MetaConnectionAction(BaseModel):
     action: Literal["activate", "deactivate", "delete", "primary"]
+    # Solo para `delete`: la contraseña actual del usuario (step-up).
+    password: str | None = None
 
 
 PRIMARY_NOT_APPLICABLE = (
@@ -542,11 +546,16 @@ async def meta_connection_action(
     conexión canónica nace y queda con `is_primary = false` (ADR-0115 §1)."""
     if payload.action == "primary":
         async with get_session() as session:
-            existe = await get_live_meta_connection(session, _uuid_o_none(connection_id), principal.tenant_id)
+            existe = await get_live_meta_connection(
+                session, _uuid_o_none(connection_id), principal.tenant_id
+            )
         if existe is None:
             raise ApiError.not_found("Conexión no encontrada.")
         raise ApiError(409, "primary_not_applicable", PRIMARY_NOT_APPLICABLE)
     if payload.action == "delete":
+        from core.api.step_up import confirmar_password
+
+        await confirmar_password(principal, payload.password, proposito="meta_connection_delete")
         error = await soft_delete_connection(principal.tenant_id, connection_id)
     else:
         error = await set_connection_status(
@@ -558,12 +567,229 @@ async def meta_connection_action(
 
     await audit_connection_action(
         principal,
-        {"activate": "meta_connection.resumed", "deactivate": "meta_connection.paused", "delete": "meta_connection.deleted"}[
-            payload.action
-        ],
+        {
+            "activate": "meta_connection.resumed",
+            "deactivate": "meta_connection.paused",
+            "delete": "meta_connection.deleted",
+        }[payload.action],
         connection_id,
     )
     return Response(status_code=204)
+
+
+class MetaCredentialField(BaseModel):
+    name: str
+    label: str
+    value: str | None = None
+    secret: bool = False
+    configured: bool = False
+    # `platform`: secreto de la app de la plataforma; nunca se revela al negocio.
+    platform: bool = False
+
+
+class MetaCredentialsResponse(BaseModel):
+    id: uuid.UUID
+    kind: Literal["meta"]
+    channel: str
+    environment: str
+    origin: str
+    fields: list[MetaCredentialField]
+
+
+class MetaRevealRequest(BaseModel):
+    password: str = ""
+
+
+class MetaRevealedSecrets(BaseModel):
+    secrets: dict[str, str]
+
+
+async def _meta_connection_of(principal: Principal, connection_id: str):
+    async with get_session() as session:
+        return await get_live_meta_connection(
+            session, _uuid_o_none(connection_id), principal.tenant_id
+        )
+
+
+async def _meta_datos_de_la_conexion(
+    principal: Principal, connection
+) -> tuple[list[MetaCredentialField], Any]:
+    """Campos visibles (sin secretos) + credenciales efectivas para decidir qué se revela."""
+    from core.db.models import PhoneNumber, WabaAccount
+    from core.gateway.meta_credentials import (
+        ORIGIN_LABELS,
+        CredentialsUnavailable,
+        access_token_expires_at,
+        credentials_for,
+        stored_verify_token,
+        uses_platform_app,
+    )
+
+    creds = None
+    try:
+        creds = await credentials_for(connection)
+    except CredentialsUnavailable:
+        creds = None
+
+    async with get_session() as session:
+        wabas = (
+            (
+                await session.execute(
+                    select(WabaAccount.waba_id).where(
+                        WabaAccount.connection_id == connection.id,
+                        WabaAccount.tenant_id == principal.tenant_id,
+                        WabaAccount.deleted_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        numeros = (
+            await session.execute(
+                select(PhoneNumber.display_phone_number, PhoneNumber.phone_number_id).where(
+                    PhoneNumber.connection_id == connection.id,
+                    PhoneNumber.tenant_id == principal.tenant_id,
+                    PhoneNumber.deleted_at.is_(None),
+                )
+            )
+        ).all()
+
+    de_plataforma = uses_platform_app(connection)
+    verify_token = None if de_plataforma else await stored_verify_token(connection)
+    expira = await access_token_expires_at(connection)
+
+    fields = [
+        MetaCredentialField(
+            name="app_id", label="App ID", value=(creds.app_id if creds else connection.meta_app_id)
+        ),
+        MetaCredentialField(
+            name="business_id",
+            label="Business ID",
+            value=(creds.business_id if creds else connection.business_id),
+        ),
+        MetaCredentialField(
+            name="waba_id",
+            label="WABA ID",
+            value=", ".join(str(w) for w in wabas) or (creds.waba_id if creds else None),
+        ),
+        MetaCredentialField(
+            name="numeros",
+            label="Números",
+            value=", ".join(str(n[0] or n[1]) for n in numeros) or None,
+        ),
+        MetaCredentialField(
+            name="entorno",
+            label="Entorno",
+            value="Producción" if connection.environment == "production" else "Prueba",
+        ),
+        MetaCredentialField(
+            name="origen",
+            label="Origen",
+            value=ORIGIN_LABELS.get(connection.origin, connection.origin),
+        ),
+        MetaCredentialField(
+            name="graph_version", label="Versión de Graph", value=connection.graph_api_version
+        ),
+        MetaCredentialField(
+            name="token_expira",
+            label="El token vence",
+            value=expira.isoformat() if expira else None,
+        ),
+        MetaCredentialField(
+            name="access_token",
+            label="Access token",
+            secret=True,
+            configured=bool(creds and creds.access_token),
+        ),
+        MetaCredentialField(
+            name="app_secret",
+            label="App Secret",
+            secret=True,
+            configured=bool(creds and creds.app_secret),
+            platform=de_plataforma,
+        ),
+        MetaCredentialField(
+            name="verify_token",
+            label="Verify token",
+            secret=True,
+            configured=bool(verify_token),
+            platform=de_plataforma,
+        ),
+    ]
+    return fields, (creds, verify_token)
+
+
+@router.get("/connections/{connection_id}/credentials", response_model=MetaCredentialsResponse)
+async def meta_connection_credentials(
+    connection_id: str,
+    principal: Annotated[Principal, Depends(require("connections"))],
+    response: Response,
+) -> MetaCredentialsResponse:
+    """Datos de registro de una conexión Meta; los secretos solo indican si están cargados."""
+    connection = await _meta_connection_of(principal, connection_id)
+    if connection is None:
+        raise ApiError.not_found("Conexión no encontrada.")
+    fields, _ = await _meta_datos_de_la_conexion(principal, connection)
+    response.headers["Cache-Control"] = "no-store"
+    return MetaCredentialsResponse(
+        id=connection.id,
+        kind="meta",
+        channel=connection.channel,
+        environment=connection.environment,
+        origin=connection.origin,
+        fields=fields,
+    )
+
+
+@router.post("/connections/{connection_id}/credentials/reveal", response_model=MetaRevealedSecrets)
+async def reveal_meta_connection_credentials(
+    connection_id: str,
+    payload: MetaRevealRequest,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+    response: Response,
+) -> MetaRevealedSecrets:
+    """Revela los secretos propios del negocio tras confirmar la contraseña.
+
+    Nunca devuelve el App Secret ni el verify token de la **app de la plataforma**
+    (Embedded Signup / carga manual): esos son compartidos y no pertenecen al negocio.
+    """
+    from core.api.step_up import confirmar_password
+    from core.gateway.meta_credentials import (
+        CredentialsUnavailable,
+        credentials_for,
+        stored_verify_token,
+        uses_platform_app,
+    )
+
+    await confirmar_password(principal, payload.password, proposito="meta_connection_credentials")
+    connection = await _meta_connection_of(principal, connection_id)
+    if connection is None:
+        raise ApiError.not_found("Conexión no encontrada.")
+
+    try:
+        creds = await credentials_for(connection)
+    except CredentialsUnavailable as exc:
+        raise ApiError.bad_request(exc.message, exc.reason) from exc
+
+    secrets: dict[str, str] = {}
+    if creds.access_token:
+        secrets["access_token"] = creds.access_token
+    if not uses_platform_app(connection):
+        if creds.app_secret:
+            secrets["app_secret"] = creds.app_secret
+        verify_token = await stored_verify_token(connection)
+        if verify_token:
+            secrets["verify_token"] = verify_token
+
+    from core.api.routers.connections import audit_connection_action
+
+    await audit_connection_action(
+        principal, "meta_connection.credentials_revealed", str(connection.id)
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return MetaRevealedSecrets(secrets=secrets)
+
 
 class TemplateCreate(BaseModel):
     """Alta de plantilla (texto; los encabezados con multimedia se suben aparte)."""
@@ -621,12 +847,14 @@ async def create_connection_template(
         # mensaje fijo, sin el texto de la excepción.
         from core.shared.logger import get_logger
 
-        get_logger(__name__).exception("create_template_resolucion_fallida", connection_id=connection_id)
-        raise ApiError.bad_request("No hay conexión/WABA lista todavía.", "connection_not_ready") from exc
-    if connection is None or waba is None or creds is None:
+        get_logger(__name__).exception(
+            "create_template_resolucion_fallida", connection_id=connection_id
+        )
         raise ApiError.bad_request(
             "No hay conexión/WABA lista todavía.", "connection_not_ready"
-        )
+        ) from exc
+    if connection is None or waba is None or creds is None:
+        raise ApiError.bad_request("No hay conexión/WABA lista todavía.", "connection_not_ready")
 
     form = {
         "name": payload.name.strip(),
@@ -664,6 +892,7 @@ async def create_connection_template(
     except GraphError as exc:
         raise ApiError.bad_request(str(getattr(exc, "message", exc))[:200], "graph_error") from exc
     return Response(status_code=201)
+
 
 # ------------------------------------------------- token BYOK (extender/inspeccionar)
 class TokenConnectionRequest(BaseModel):
@@ -799,9 +1028,7 @@ async def extend_byok_token(
         raise ApiError.bad_request(str(getattr(exc, "message", exc))[:200], "graph_error") from exc
 
     expires_in = info.get("expires_in")
-    expires_at = (
-        datetime.now(UTC) + timedelta(seconds=int(expires_in)) if expires_in else None
-    )
+    expires_at = datetime.now(UTC) + timedelta(seconds=int(expires_in)) if expires_in else None
     async with tenant_scope(principal.tenant_id):
         await meta_token_store.put_token(
             connection.id,
@@ -857,10 +1084,14 @@ async def _checklist_steps(tenant_id: Any) -> tuple[list[ChecklistStep], bool]:
     )
     async with get_session() as session:
         filas = (
-            await session.execute(
-                select(MetaSetupChecklist).where(MetaSetupChecklist.tenant_id == tenant_id)
+            (
+                await session.execute(
+                    select(MetaSetupChecklist).where(MetaSetupChecklist.tenant_id == tenant_id)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     estado = {f.step_key: f for f in filas}
     return (
         [
@@ -932,13 +1163,12 @@ async def checklist_step(
             )
         ).scalar_one_or_none()
         if fila is None:
-            fila = MetaSetupChecklist(
-                tenant_id=principal.tenant_id, step_key=payload.step_key
-            )
+            fila = MetaSetupChecklist(tenant_id=principal.tenant_id, step_key=payload.step_key)
             session.add(fila)
         fila.done = payload.done
         fila.notes = payload.notes.strip() or None
     return Response(status_code=204)
+
 
 @router.post("/checklist/production/run", response_model=list[PreflightOut], deprecated=True)
 async def run_production_checks(
@@ -959,9 +1189,13 @@ async def run_production_checks(
         except (readiness.ConnectionNotFound, readiness.EnqueueFailed):
             pass
         latest = await readiness.latest_connection_run(tenant_id, connection_id)
-        for item in (latest.checks if latest is not None and latest.status == "done" else []):
+        for item in latest.checks if latest is not None and latest.status == "done" else []:
             out.append(
-                PreflightOut(key=f"{str(connection_id)[:8]}:{item['key']}", ok=item.get("ok"), detail=item.get("detail"))
+                PreflightOut(
+                    key=f"{str(connection_id)[:8]}:{item['key']}",
+                    ok=item.get("ok"),
+                    detail=item.get("detail"),
+                )
             )
     if not out:
         out.append(
@@ -995,7 +1229,9 @@ def _connection_uuid(connection_id: str) -> uuid.UUID:
         raise ApiError.not_found("Conexión no encontrada.") from exc
 
 
-async def _connection_production(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> ConnectionProduction:
+async def _connection_production(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID
+) -> ConnectionProduction:
     from core.admin.production_readiness_service import latest_connection_run, owned_connection
 
     connection = await owned_connection(tenant_id, connection_id)
@@ -1025,7 +1261,9 @@ async def get_connection_production(
 
 
 @router.post(
-    "/connections/{connection_id}/production/run", response_model=ConnectionProduction, status_code=202
+    "/connections/{connection_id}/production/run",
+    response_model=ConnectionProduction,
+    status_code=202,
 )
 async def run_connection_production(
     connection_id: str,
