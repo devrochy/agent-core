@@ -390,7 +390,7 @@ async def conectar_paginas(
     ):
         raise MessengerAltaError("No encontré esa conexión de Messenger.", code="not_found", status=404)
     user_token = await meta_token_store.get_token(
-        connection_id, USER_TOKEN_KIND, USER_TOKEN_SUBJECT, tenant_id=tenant_id
+        connection_id, USER_TOKEN_KIND, USER_TOKEN_SUBJECT, tenant_id=tenant_id, respect_expiry=True
     )
     if not user_token:
         raise MessengerAltaError(

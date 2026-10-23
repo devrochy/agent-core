@@ -181,7 +181,7 @@ async def _resolve_instagram_credentials(
     token de la Página vinculada a esa cuenta. Solo si la cuenta es viva, de esta conexión y de esta ruta de
     login, con las mismas defensas que Messenger y sin respaldo a otra cuenta ni al `.env`."""
     from core.db.models import IgAccount
-    from core.gateway.meta_instagram import LOGIN_ROUTE_FACEBOOK
+    from core.gateway.meta_instagram import LOGIN_ROUTE_FACEBOOK, LOGIN_ROUTE_INSTAGRAM
 
     async with get_session() as session:
         connection = _cuenta_utilizable(await session.get(MetaConnection, meta_connection_id), meta_connection_id, expected_tenant_id)
@@ -196,9 +196,27 @@ async def _resolve_instagram_credentials(
                 )
             )
         ).scalars().first()
-    if cuenta is None or cuenta.login_route != LOGIN_ROUTE_FACEBOOK or not cuenta.linked_page_id:
+    if cuenta is None:
         return None
-    return await _credenciales_de_pagina(connection, cuenta.linked_page_id)
+    if cuenta.login_route == LOGIN_ROUTE_INSTAGRAM:
+        # Instagram Login: se escribe con el token de la propia cuenta (60 días), no con el de una Página. Vencido = sin
+        # credenciales: el envío falla con un motivo claro y el refresco o la reconexión lo arreglan.
+        from core.gateway import meta_token_store
+        from core.gateway.meta_instagram_login import IG_LONG_LIVED_TOKEN_KIND
+
+        token = await meta_token_store.get_token(
+            connection.id, IG_LONG_LIVED_TOKEN_KIND, ig_user_id, tenant_id=connection.tenant_id, respect_expiry=True
+        )
+        if not token:
+            return None
+        return {
+            "login_route": LOGIN_ROUTE_INSTAGRAM, "ig_user_id": ig_user_id, "access_token": token,
+            "graph_api_version": connection.graph_api_version or "",
+        }
+    if cuenta.login_route != LOGIN_ROUTE_FACEBOOK or not cuenta.linked_page_id:
+        return None
+    credenciales = await _credenciales_de_pagina(connection, cuenta.linked_page_id)
+    return {**credenciales, "login_route": LOGIN_ROUTE_FACEBOOK} if credenciales else None
 
 
 async def resolve_credentials(

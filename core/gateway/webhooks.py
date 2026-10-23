@@ -124,9 +124,11 @@ class Firmantes:
     # ¿Algún grupo tenía un secreto propio contra el que verificar (o no se pudo leer)? Sin
     # ninguno, un 401 es "grupo sin conexión dueña", no una firma inválida (ADR-0126).
     con_candidatos: bool = False
+    # Objetos que autoriza un secreto de plataforma ACOTADO (el de la app de Instagram: solo `instagram`).
+    objetos: frozenset[str] = frozenset()
 
     def autoriza(self, grupo: _Grupo) -> bool:
-        return self.plataforma or grupo.clave in self.grupos
+        return self.plataforma or grupo.clave in self.grupos or grupo.events[0].object_type in self.objetos
 
 
 # Tope de grupos (entry, número) distintos en un POST que no firmó la plataforma. Cada grupo
@@ -157,11 +159,15 @@ async def _rutear_grupos(
 
 
 def _firmo_la_plataforma(raw_body: bytes, firma: str) -> bool:
-    from core.gateway.connections import platform_app_secret
+    from core.gateway.connections import instagram_platform_secret, platform_app_secret
     from core.gateway.webhook_verify import verify_signature
 
-    plataforma = platform_app_secret()
-    return bool(plataforma) and verify_signature(raw_body, firma, plataforma)
+    # La app de Instagram también cuenta para el tope de grupos (es una firma válida de la plataforma); lo que autoriza
+    # cada una lo decide `_firmantes_del_post`.
+    return any(
+        bool(secreto) and verify_signature(raw_body, firma, secreto)
+        for secreto in (platform_app_secret(), instagram_platform_secret())
+    )
 
 
 async def _rechazo_previo(
@@ -209,14 +215,18 @@ async def _firmantes_del_post(
     trae; qué secreto se prueba lo decide la base de datos. Por el endpoint por slug solo
     cuentan los grupos de ese negocio (los demás se rechazan como `tenant_mismatch`).
     `Firmantes` sin plataforma ni grupos = firma inválida."""
-    from core.gateway.connections import platform_app_secret
+    from core.gateway.connections import instagram_platform_secret, platform_app_secret
     from core.gateway.webhook_verify import verify_signature
 
     plataforma = platform_app_secret()
     if plataforma and verify_signature(raw_body, firma, plataforma):
         return Firmantes(plataforma=True)
+    instagram = instagram_platform_secret()
+    if instagram and verify_signature(raw_body, firma, instagram):
+        # Firma de la app de Instagram: solo autoriza los grupos de Instagram; los demás se rechazan como firma ajena.
+        return Firmantes(plataforma=False, objetos=frozenset({"instagram"}), con_candidatos=True)
 
-    hay_secreto = bool(plataforma)
+    hay_secreto = bool(plataforma) or bool(instagram)
     con_candidatos = False
     cache: CacheDeSecretos = {}
     verificados: dict[str, bool] = {}
@@ -284,11 +294,11 @@ async def receive_whatsapp(request: Request) -> Response:
         if rechazo is not None:
             return rechazo
         firmantes = Firmantes(plataforma=True)  # escape de test: nada que verificar, como antes
-    elif not firmantes.plataforma and not firmantes.grupos:
+    elif not firmantes.plataforma and not firmantes.grupos and not firmantes.objetos:
         log.warning("webhook_signature_invalid", grupos=len(grupos))
         await _alert_on_invalid_signature(get_settings().meta_app_id)
         return Response(status_code=401)
-    elif not firmantes.plataforma:
+    elif not firmantes.plataforma and not firmantes.objetos:
         # Una app propia apuntando al genérico (el wizard BYOK registra el slug): se mide
         # para poder migrar esas suscripciones y retirar esta rama (ADR-0100).
         log.info("webhook_generico_firmado_por_negocio", tenant_ids=sorted(str(t) for t in firmantes.negocios))
@@ -417,7 +427,7 @@ async def receive_whatsapp_tenant(request: Request, slug: str) -> Response:
         if rechazo is not None:
             return rechazo
         firmantes = Firmantes(plataforma=True)  # escape de test: nada que verificar, como antes
-    elif not firmantes.plataforma and not firmantes.grupos:
+    elif not firmantes.plataforma and not firmantes.grupos and not firmantes.objetos:
         if not firmantes.con_candidatos:
             # Ningún grupo es de una conexión del negocio (un número sin sincronizar, un
             # evento de prueba del panel de Meta): no hay secreto que verificar y no es una
@@ -617,6 +627,32 @@ def _webhook_events_failure_response() -> Response:
     # (única vía real en este repo hoy: log.error, no hay Sentry/Slack).
     log.error("webhook_events_insert_failed_alertar")
     return Response(status_code=500)
+
+
+async def mensajes_recibidos_desde(tenant_id: uuid.UUID, object_type: str, recipient_id: str, since: Any) -> int:
+    """Cuántos eventos de `object_type` dirigidos a `recipient_id` (la cuenta o la Página del negocio) llegaron desde
+    `since`. Para la prueba de humo de Instagram. `webhook_events` no tiene RLS: el filtro por negocio es explícito y está
+    aquí, en el único módulo que toca la tabla (`tests/test_webhook_events_solo_desde_webhooks.py`)."""
+    from sqlalchemy import func, select
+
+    from core.db.models import WebhookEvent
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        return int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(WebhookEvent).where(
+                        WebhookEvent.tenant_id == tenant_id,
+                        WebhookEvent.object_type == object_type,
+                        WebhookEvent.received_at >= since,
+                        WebhookEvent.payload["recipient"]["id"].astext == recipient_id,
+                        # Solo mensajes: una lectura o una reacción no prueban que lleguen los mensajes directos.
+                        WebhookEvent.payload["message"]["mid"].astext.is_not(None),
+                    )
+                )
+            ).scalar_one()
+        )
 
 
 async def _log_webhook_event(

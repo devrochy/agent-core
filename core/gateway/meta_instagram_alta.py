@@ -29,18 +29,21 @@ from core.config import get_settings
 from core.db.models import IgAccount, MetaConnection, utcnow
 from core.db.session import get_session
 from core.gateway import meta_token_store
-from core.gateway.conexion_canonica import asegurar_conexion_de_cuenta_ig
 from core.gateway.meta_asset_claims import MetaAssetError, claim_messaging_assets
 from core.gateway.meta_errors import GraphError
 from core.gateway.meta_graph import graph_fetch
 from core.gateway.meta_instagram import LOGIN_ROUTE_FACEBOOK
+from core.gateway.meta_instagram_cuentas import (
+    MENSAJE_CHOQUE_MANUAL,
+    activar_ruta,
+    hay_conexion_manual,
+)
 from core.gateway.meta_messenger import PAGE_TOKEN_KIND
 from core.gateway.meta_messenger_alta import (
     INTENTO_TTL_S as INTENTO_TTL_S,  # re-exportado: la API informa cuánto dura el intento
 )
 from core.gateway.meta_messenger_alta import (
     MAX_PAGINAS_DE_GRAPH,
-    MENSAJE_CHOQUE_MANUAL,
     USER_TOKEN_KIND,
     USER_TOKEN_SUBJECT,
     USER_TOKEN_TTL,
@@ -329,7 +332,7 @@ async def conectar_cuentas(
     if cuenta is None or cuenta.tenant_id != tenant_id or cuenta.channel != CANAL or cuenta.deleted_at is not None:
         raise InstagramAltaError("No encontré esa conexión de Instagram.", code="not_found", status=404)
     user_token = await meta_token_store.get_token(
-        connection_id, USER_TOKEN_KIND, USER_TOKEN_SUBJECT, tenant_id=tenant_id
+        connection_id, USER_TOKEN_KIND, USER_TOKEN_SUBJECT, tenant_id=tenant_id, respect_expiry=True
     )
     if not user_token:
         raise InstagramAltaError(
@@ -380,9 +383,10 @@ async def conectar_cuentas(
 async def _guardar_cuenta(
     tenant_id: uuid.UUID, admin_id: uuid.UUID, connection_id: uuid.UUID, cuenta_ig: CuentaCandidata
 ) -> uuid.UUID:
-    """Reclama la cuenta y escribe todo lo suyo en UNA transacción; el token de la Página vinculada se guarda DESPUÉS
-    de que confirme. Así un alta que falla no toca el token de una cuenta que ya funcionaba ni deja uno vivo en una
-    conexión que se eliminó mientras tanto."""
+    """Reclama la cuenta y escribe su fila en UNA transacción; guarda el token de la Página vinculada DESPUÉS de que
+    confirme, y solo entonces religa la conexión canónica (`activar_ruta`). Así un alta que falla a la mitad no toca el
+    token de una cuenta que ya funcionaba, no deja uno vivo en una conexión eliminada y no deja la cuenta apuntando a una
+    ruta sin token."""
     assert cuenta_ig.page_access_token is not None
     async with get_session() as session:
         await claim_messaging_assets(session, tenant_id, ig_user_id=cuenta_ig.ig_user_id)
@@ -392,6 +396,8 @@ async def _guardar_cuenta(
                 "La conexión se eliminó mientras se completaba el alta: empieza de nuevo.",
                 code="connection_deleted",
             )
+        if await hay_conexion_manual(session, tenant_id, cuenta_ig.ig_user_id):
+            raise MetaAssetError(MENSAJE_CHOQUE_MANUAL, code="manual_connection_conflict")
         fila = (
             await session.execute(
                 select(IgAccount).where(
@@ -416,22 +422,11 @@ async def _guardar_cuenta(
         if cuenta.status == "draft":
             cuenta.status = "pending"
             cuenta.connected_by = admin_id
-        await session.flush()
-        nombre = f"@{cuenta_ig.username}" if cuenta_ig.username else cuenta_ig.page_name
-        canonica_id, resultado = await asegurar_conexion_de_cuenta_ig(
-            session, tenant_id, cuenta_ig.ig_user_id, connection_id, nombre=nombre
-        )
-        if resultado == "choque_manual":
-            # Ya hay una conexión manual con este identificador y credenciales propias: respondería por ella, no
-            # por la Página. Se deshace todo y se explica.
-            raise MetaAssetError(MENSAJE_CHOQUE_MANUAL, code="manual_connection_conflict")
-        from core.agents.instancias import instancias_de_conexion_nueva
-
-        await instancias_de_conexion_nueva(session, tenant_id, canonica_id)
     await meta_token_store.put_token(
         connection_id, PAGE_TOKEN_KIND, cuenta_ig.page_id, cuenta_ig.page_access_token, tenant_id=tenant_id
     )
-    return canonica_id
+    nombre = f"@{cuenta_ig.username}" if cuenta_ig.username else cuenta_ig.page_name
+    return await activar_ruta(tenant_id, cuenta_ig.ig_user_id, connection_id, nombre=nombre)
 
 
 async def _registrar_campos(

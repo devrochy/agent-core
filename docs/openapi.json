@@ -23175,6 +23175,297 @@
           }
         }
       }
+    },
+    "/api/v1/admin/meta/instagram/login/start": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · instagram"
+        ],
+        "summary": "Instagram Login Start",
+        "description": "Arranca el alta con Instagram Login: el `state` es un intento de un solo uso atado al negocio y al admin.",
+        "operationId": "instagram_login_start_api_v1_admin_meta_instagram_login_start_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstagramLoginStartOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/instagram/login/complete": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · instagram"
+        ],
+        "summary": "Instagram Login Complete",
+        "description": "Canjea el `code` de Instagram y conecta la cuenta que la persona autorizó. Los tokens no salen del servidor.",
+        "operationId": "instagram_login_complete_api_v1_admin_meta_instagram_login_complete_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstagramLoginCompleteIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstagramLoginCompleteOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/instagram/accounts": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · instagram"
+        ],
+        "summary": "Instagram Accounts",
+        "description": "Las cuentas de Instagram del negocio con su estado (`connected` o `degraded`) y, en Instagram Login, cuándo vence\nsu token. Sin tokens.",
+        "operationId": "instagram_accounts_api_v1_admin_meta_instagram_accounts_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstagramAccountsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/instagram/accounts/{ig_user_id}/diagnostic": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · instagram"
+        ],
+        "summary": "Instagram Diagnostic Start",
+        "description": "Prueba de humo: la persona envía un mensaje directo a esta cuenta desde OTRO perfil de Instagram y el panel\nconsulta si llegó. Devuelve el momento (del servidor) desde el que se cuenta.",
+        "operationId": "instagram_diagnostic_start_api_v1_admin_meta_instagram_accounts__ig_user_id__diagnostic_post",
+        "parameters": [
+          {
+            "name": "ig_user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ig User Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstagramDiagnosticStartOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "api",
+          "admin · instagram"
+        ],
+        "summary": "Instagram Diagnostic",
+        "description": "¿Llegó al webhook un mensaje de un cliente a esta cuenta desde `since`? Se mira el registro de entregas del\nnegocio (nunca el de otro). Si no llegó, dice la causa más probable.",
+        "operationId": "instagram_diagnostic_api_v1_admin_meta_instagram_accounts__ig_user_id__diagnostic_get",
+        "parameters": [
+          {
+            "name": "ig_user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ig User Id"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "title": "Since"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstagramDiagnosticOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -44471,6 +44762,19 @@
           "plan_includes": {
             "type": "boolean",
             "title": "Plan Includes"
+          },
+          "login_available": {
+            "type": "boolean",
+            "title": "Login Available",
+            "default": false
+          },
+          "login_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Login Missing",
+            "default": []
           }
         },
         "type": "object",
@@ -44483,6 +44787,239 @@
         ],
         "title": "InstagramState",
         "description": "Qué puede ofrecer el alta en este entorno. `app_id` y `config_id` son públicos (los usa el SDK de\nFacebook en el navegador); el App Secret nunca sale del servidor. `plan_includes`: el plan del negocio\nincluye el canal."
+      },
+      "InstagramAccountStatusOut": {
+        "properties": {
+          "ig_user_id": {
+            "type": "string",
+            "title": "Ig User Id"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          },
+          "login_route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Login Route"
+          },
+          "page_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
+          },
+          "subscribed_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Subscribed Fields",
+            "default": []
+          },
+          "token_expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ig_user_id",
+          "status"
+        ],
+        "title": "InstagramAccountStatusOut"
+      },
+      "InstagramAccountsOut": {
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/InstagramAccountStatusOut"
+            },
+            "type": "array",
+            "title": "Accounts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "accounts"
+        ],
+        "title": "InstagramAccountsOut"
+      },
+      "InstagramDiagnosticOut": {
+        "properties": {
+          "arrived": {
+            "type": "boolean",
+            "title": "Arrived"
+          },
+          "likely_cause": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Likely Cause"
+          }
+        },
+        "type": "object",
+        "required": [
+          "arrived"
+        ],
+        "title": "InstagramDiagnosticOut",
+        "description": "`arrived`: llegó un mensaje de un cliente a esta cuenta desde `since`. Si no, `likely_cause` es lo más probable:\n`token_degraded` (reconectar), `not_subscribed` (la suscripción no confirmó `messages`) o\n`access_to_messages_off` (todo parece bien: casi siempre es «Permitir acceso a los mensajes» apagado en Instagram,\nque Meta nunca reporta como error)."
+      },
+      "InstagramDiagnosticStartOut": {
+        "properties": {
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Since"
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "title": "Wait Seconds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "since",
+          "wait_seconds"
+        ],
+        "title": "InstagramDiagnosticStartOut",
+        "description": "Momento (del servidor) desde el que se espera el mensaje de prueba, y cuánto vale esperar."
+      },
+      "InstagramLoginCompleteIn": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "format": "password",
+            "title": "Code",
+            "writeOnly": true
+          },
+          "state": {
+            "type": "string",
+            "format": "password",
+            "title": "State",
+            "writeOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "state"
+        ],
+        "title": "InstagramLoginCompleteIn"
+      },
+      "InstagramLoginCompleteOut": {
+        "properties": {
+          "ig_user_id": {
+            "type": "string",
+            "title": "Ig User Id"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          },
+          "channel_connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Channel Connection Id"
+          },
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "subscribed": {
+            "type": "boolean",
+            "title": "Subscribed"
+          },
+          "subscribed_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Subscribed Fields",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "ig_user_id",
+          "channel_connection_id",
+          "connection_id",
+          "subscribed"
+        ],
+        "title": "InstagramLoginCompleteOut"
+      },
+      "InstagramLoginStartOut": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "expires_in"
+        ],
+        "title": "InstagramLoginStartOut",
+        "description": "Dirección de autorización de Instagram a la que el panel manda el navegador."
       }
     }
   }

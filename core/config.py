@@ -211,6 +211,13 @@ class Settings(BaseSettings):
     # Configuración de Facebook Login for Business de Instagram (`instagram_basic`, `instagram_manage_messages`,
     # `pages_show_list`, `pages_manage_metadata`; HU-CHAN-04). PROPIA: no se mezcla con la de Messenger.
     meta_instagram_config_id: str = Field(default="", alias="META_INSTAGRAM_CONFIG_ID")
+    # Instagram Login (HU-CHAN-04, ruta b): otra app de Meta (la «app de Instagram» del producto), con su propio
+    # App ID/Secret y sus propios permisos. Nunca se mezclan con los de Facebook Login. Apagada por defecto
+    # (`INSTAGRAM_LOGIN_ENABLED`): se prende solo después de probarla con una cuenta real en test.
+    instagram_app_id: str = Field(default="", alias="INSTAGRAM_APP_ID")
+    instagram_app_secret: str = Field(default="", alias="INSTAGRAM_APP_SECRET")
+    instagram_login_redirect_uri: str = Field(default="", alias="INSTAGRAM_LOGIN_REDIRECT_URI")
+    instagram_login_enabled: bool = Field(default=False, alias="INSTAGRAM_LOGIN_ENABLED")
     # Versión de Graph API usada SOLO por el módulo de preflight (core/gateway/
     # meta_preflight.py) -- no toca los v21.0 hardcodeados en outbound.py ni en
     # connections.py::verify_meta_credentials (envío de mensajes en producción).
