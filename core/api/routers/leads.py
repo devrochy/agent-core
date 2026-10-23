@@ -772,7 +772,7 @@ async def geocodificar_lead(
     """Convierte la dirección del cliente en coordenadas y las guarda en el perfil.
 
     El proveedor recibe solo la dirección compuesta (dirección, municipio, departamento y
-    país). La plataforma paga la llamada y hay topes global y por negocio (ADR-0152).
+    país). La plataforma paga la llamada y hay topes global y por negocio (ADR-0153).
     """
     if not geocoding_disponible():
         raise ApiError(503, "geocoding_no_configurado", "La geocodificación no está configurada.")
@@ -915,8 +915,6 @@ async def update_lead(
     for clave, valor in datos.items():
         if not clave or len(clave) > 80:
             errores[clave or "(vacía)"] = "La clave debe tener entre 1 y 80 caracteres."
-        elif perfil_cliente.es_campo_canonico(clave):
-            errores[clave] = "Este dato se edita en los campos del perfil."
         elif clave in facts.CLAVES_DEL_SISTEMA:
             errores[clave] = "Este dato lo administra el sistema."
         elif facts.clasificar(facts.PERFIL, clave) == "sensitive":
