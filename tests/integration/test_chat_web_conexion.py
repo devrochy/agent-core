@@ -413,7 +413,7 @@ async def test_webhook_de_meta_a_dos_numeros_responde_por_cada_numero(app_client
             enviados.append(credentials["phone_number_id"])
             return f"wamid.out.{uuid.uuid4().hex[:6]}"
 
-    monkeypatch.setattr(outbound_mod, "outbound_adapter_for", lambda _provider: _Adaptador())
+    monkeypatch.setattr(outbound_mod, "outbound_adapter_for", lambda _provider, _channel=None: _Adaptador())
     monkeypatch.setattr(outbound_mod, "_enqueue_next", _sin_cadena)
     for phone in (uno, dos):
         async with tenant_scope(tid):
