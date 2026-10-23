@@ -22690,6 +22690,268 @@
         }
       }
     },
+    "/api/v1/admin/connections/{connection_id}/credentials": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · conexiones"
+        ],
+        "summary": "Connection Credentials",
+        "description": "Datos de registro de una conexión manual; los secretos solo indican si están cargados.",
+        "operationId": "connection_credentials_api_v1_admin_connections__connection_id__credentials_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionCredentialsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/{connection_id}/credentials/reveal": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · conexiones"
+        ],
+        "summary": "Reveal Connection Credentials",
+        "description": "Revela los secretos de una conexión manual tras confirmar la contraseña del usuario.",
+        "operationId": "reveal_connection_credentials_api_v1_admin_connections__connection_id__credentials_reveal_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevealCredentialsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevealedSecretsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/connections/{connection_id}/credentials": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Meta Connection Credentials",
+        "description": "Datos de registro de una conexión Meta; los secretos solo indican si están cargados.",
+        "operationId": "meta_connection_credentials_api_v1_admin_meta_connections__connection_id__credentials_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaCredentialsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/connections/{connection_id}/credentials/reveal": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · meta"
+        ],
+        "summary": "Reveal Meta Connection Credentials",
+        "description": "Revela los secretos propios del negocio tras confirmar la contraseña.\n\nNunca devuelve el App Secret ni el verify token de la **app de la plataforma**\n(Embedded Signup / carga manual): esos son compartidos y no pertenecen al negocio.",
+        "operationId": "reveal_meta_connection_credentials_api_v1_admin_meta_connections__connection_id__credentials_reveal_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetaRevealRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaRevealedSecrets"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/meta/instagram": {
       "get": {
         "tags": [
@@ -25449,6 +25711,17 @@
               "delete"
             ],
             "title": "Action"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
           }
         },
         "type": "object",
@@ -28831,6 +29104,17 @@
               "primary"
             ],
             "title": "Action"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
           }
         },
         "type": "object",
@@ -43701,6 +43985,229 @@
           "permissions"
         ],
         "title": "SetPermissionsRequest"
+      },
+      "CredentialField": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "secret": {
+            "type": "boolean",
+            "title": "Secret",
+            "default": false
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured",
+            "default": false
+          },
+          "platform": {
+            "type": "boolean",
+            "title": "Platform",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "label"
+        ],
+        "title": "CredentialField"
+      },
+      "ConnectionCredentialsResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "manual",
+            "title": "Kind"
+          },
+          "type_id": {
+            "type": "string",
+            "title": "Type Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/CredentialField"
+            },
+            "type": "array",
+            "title": "Fields"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "type_id",
+          "label",
+          "fields"
+        ],
+        "title": "ConnectionCredentialsResponse"
+      },
+      "RevealCredentialsRequest": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "title": "Password",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "RevealCredentialsRequest"
+      },
+      "RevealedSecretsResponse": {
+        "properties": {
+          "secrets": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Secrets"
+          }
+        },
+        "type": "object",
+        "required": [
+          "secrets"
+        ],
+        "title": "RevealedSecretsResponse"
+      },
+      "MetaCredentialField": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "secret": {
+            "type": "boolean",
+            "title": "Secret",
+            "default": false
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured",
+            "default": false
+          },
+          "platform": {
+            "type": "boolean",
+            "title": "Platform",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "label"
+        ],
+        "title": "MetaCredentialField"
+      },
+      "MetaCredentialsResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "meta",
+            "title": "Kind"
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel"
+          },
+          "environment": {
+            "type": "string",
+            "title": "Environment"
+          },
+          "origin": {
+            "type": "string",
+            "title": "Origin"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/MetaCredentialField"
+            },
+            "type": "array",
+            "title": "Fields"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "channel",
+          "environment",
+          "origin",
+          "fields"
+        ],
+        "title": "MetaCredentialsResponse"
+      },
+      "MetaRevealRequest": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "title": "Password",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "MetaRevealRequest"
+      },
+      "MetaRevealedSecrets": {
+        "properties": {
+          "secrets": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Secrets"
+          }
+        },
+        "type": "object",
+        "required": [
+          "secrets"
+        ],
+        "title": "MetaRevealedSecrets"
       },
       "InstagramAccountOut": {
         "properties": {
