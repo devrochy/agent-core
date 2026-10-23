@@ -2,7 +2,7 @@
 
 Aporta las columnas de Agenda (próxima cita, última cita, conteos y tipo frecuente) y las
 citas del cliente en su línea de tiempo. No edita datos del cliente: las citas se gestionan
-en Agenda; el contacto es del perfil del core (ADR-0151).
+en Agenda; el contacto es del perfil del core (ADR-0153).
 """
 
 from __future__ import annotations

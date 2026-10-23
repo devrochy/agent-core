@@ -1,6 +1,6 @@
 """Geocodificación de la dirección del cliente con un proveedor externo.
 
-El proveedor por defecto es LocationIQ (ADR-0152): permite almacenar la respuesta, tiene
+El proveedor por defecto es LocationIQ (ADR-0154): permite almacenar la respuesta, tiene
 5.000 llamadas/día gratis y cubre LatAm con OpenStreetMap. La API key es de la plataforma y
 los negocios no la ven. El servicio **solo** envía dirección, municipio, departamento y país;
 nunca nombre, teléfono, correo ni documento. Los logs no llevan la dirección.

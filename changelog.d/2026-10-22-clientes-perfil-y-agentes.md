@@ -1,4 +1,4 @@
-## Clientes: perfil base y agentes en la ficha (tanda 1A, ADR-0151)
+## Clientes: perfil base y agentes en la ficha (tanda 1A, ADR-0153)
 
 - `core/memory/perfil.py` define el perfil canónico del cliente (`name`, `apellido`, `alias`,
   teléfono en E.164, correo, documento, dirección, municipio, departamento, país, coordenadas y
@@ -18,9 +18,9 @@
   ubicación, iconos por agente y acciones; ficha con pestañas General y de cada agente, edición
   estructurada y «otros datos».
 - Tests: unitarios de perfil/teléfono, integración de API (perfil, agentes, CSV, aislamiento) y
-  helpers del panel. ADR-0151.
+  helpers del panel. ADR-0153.
 
-## Geocodificación de la dirección (ADR-0152)
+## Geocodificación de la dirección (ADR-0154)
 
 - `core/geocoding` con LocationIQ detrás de `GEOCODING_PROVIDER`; la API key es de la plataforma.
 - `POST /api/v1/admin/leads/{id}/geocodificar` guarda latitud, longitud, dirección normalizada,

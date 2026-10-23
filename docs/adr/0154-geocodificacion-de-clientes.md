@@ -1,9 +1,9 @@
-# ADR-0153 — Geocodificación de la dirección del cliente con LocationIQ
+# ADR-0154 — Geocodificación de la dirección del cliente con LocationIQ
 
 - **Estado:** propuesto (falta que lo acepte el dueño).
 - **Fecha:** 2026-10-22
 - **Contexto:** SPEC-33 «CRM», tanda 1B. **Usa:** ADR-0114 (la dirección y las coordenadas son hechos
-  `perfil`), ADR-0152 (perfil canónico) y ADR-0053 (PII, retención y purga).
+  `perfil`), ADR-0153 (perfil canónico) y ADR-0053 (PII, retención y purga).
 
 ## Contexto
 

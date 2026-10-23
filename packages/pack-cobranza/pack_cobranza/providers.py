@@ -6,7 +6,7 @@ promesa y último pago) al lead global del core. La data se agrupa por cliente d
 
 Desde la ficha se editan el riesgo, el tope de deuda y el estatus del cliente de cartera
 (`LeadEdicion`, ADR-0149), con una fila de auditoría por cambio. El resto de los datos de
-contacto son del perfil del core (ADR-0151).
+contacto son del perfil del core (ADR-0153).
 """
 
 from __future__ import annotations

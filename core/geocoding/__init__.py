@@ -1,4 +1,4 @@
-"""Geocodificación de direcciones de clientes (HU-CRM-08, ADR-0152)."""
+"""Geocodificación de direcciones de clientes (HU-CRM-08, ADR-0154)."""
 
 from core.geocoding.service import (
     GeocodingError,

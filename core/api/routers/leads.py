@@ -772,7 +772,7 @@ async def geocodificar_lead(
     """Convierte la dirección del cliente en coordenadas y las guarda en el perfil.
 
     El proveedor recibe solo la dirección compuesta (dirección, municipio, departamento y
-    país). La plataforma paga la llamada y hay topes global y por negocio (ADR-0153).
+    país). La plataforma paga la llamada y hay topes global y por negocio (ADR-0154).
     """
     if not geocoding_disponible():
         raise ApiError(503, "geocoding_no_configurado", "La geocodificación no está configurada.")

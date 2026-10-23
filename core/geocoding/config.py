@@ -1,4 +1,4 @@
-"""Configuración de la geocodificación (HU-CRM-08, ADR-0152).
+"""Configuración de la geocodificación (HU-CRM-08, ADR-0154).
 
 Vive aparte de `core.config.Settings` porque es una integración opcional: no cambia el
 contrato del core ni el `repr` de la configuración principal.
