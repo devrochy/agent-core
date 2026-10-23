@@ -106,6 +106,10 @@ class WhatsAppMetaInbound(InboundAdapter):
                 message = event.get("message")
                 if not message:
                     continue  # delivery/read receipts, postbacks sin texto: no soportados aún
+                if message.get("is_echo"):
+                    # Lo envió la propia Página o cuenta y Meta lo devuelve (`message_echoes`): no es del
+                    # cliente. Sin este descarte el asistente se respondería a sí mismo.
+                    continue
                 sender_id = event.get("sender", {}).get("id", "")
                 media: list[dict[str, str]] = [
                     {"type": att.get("type", ""), "id": "", "url": att.get("payload", {}).get("url", "")}

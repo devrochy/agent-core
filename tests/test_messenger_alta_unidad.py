@@ -70,10 +70,11 @@ def test_la_configuracion_propia_de_messenger_gana_sobre_la_de_whatsapp():
     assert faltan_para_messenger(s) == []
 
 
-def test_sin_configuracion_propia_usa_la_de_la_plataforma():
+def test_sin_configuracion_propia_no_usa_la_de_whatsapp():
+    # La de Embedded Signup abriría el registro de WhatsApp y no concede los permisos de Páginas.
     s = _settings(meta_config_id="whatsapp")
-    assert config_id_de_messenger(s) == "whatsapp"
-    assert faltan_para_messenger(s) == []
+    assert config_id_de_messenger(s) == ""
+    assert faltan_para_messenger(s) == ["META_MESSENGER_CONFIG_ID"]
 
 
 def test_dice_exactamente_que_variables_faltan():

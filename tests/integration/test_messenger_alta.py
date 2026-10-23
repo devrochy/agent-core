@@ -60,7 +60,7 @@ def meta(monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "meta_app_id", APP_ID_PLATAFORMA)
     monkeypatch.setattr(settings, "meta_app_secret", "platform-secret-test")
-    monkeypatch.setattr(settings, "meta_config_id", "platform-config")
+    monkeypatch.setattr(settings, "meta_messenger_config_id", "platform-config")
 
     async def canje(version, params, settings_, *, redirect_path="/x"):
         assert redirect_path == "/admin/conexiones/wizard/messenger"
@@ -214,7 +214,7 @@ async def test_sin_la_app_de_la_plataforma_no_hay_alta(meta, monkeypatch) -> Non
 
     tid, admin = await _new_tenant("alta-sin-app"), await _admin_id()
     meta([])
-    monkeypatch.setattr(get_settings(), "meta_config_id", "")
+    monkeypatch.setattr(get_settings(), "meta_messenger_config_id", "")
     with pytest.raises(alta.MessengerAltaError) as exc:
         await _descubrir(tid, admin)
     assert (exc.value.code, exc.value.status) == ("platform_app_not_configured", 409)

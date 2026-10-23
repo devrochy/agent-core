@@ -115,3 +115,20 @@ def test_webchat_es_conversacional_y_no_aparece_en_el_selector():
     assert webchat.external_id_key == ""  # la clave la genera el servidor, no el formulario
     en_selector = {t.id for grupo in types_by_category() for t in grupo["items"]}
     assert "webchat" not in en_selector and "whatsapp_meta" in en_selector
+
+
+def test_messenger_esta_disponible_e_instagram_todavia_no():
+    # Messenger tiene alta (HU-CHAN-01); Instagram no tiene adaptador ni alta (HU-CHAN-04).
+    messenger = get_connection_type("messenger_meta")
+    assert messenger is not None and messenger.available is True
+    instagram = get_connection_type("instagram_meta")
+    assert instagram is not None and instagram.available is False
+
+
+def test_todo_canal_de_mensajeria_de_meta_disponible_tiene_adaptador_de_salida():
+    """Un tipo disponible sin adaptador crearía conexiones que no pueden responder."""
+    from core.gateway.channels.registry import CANALES_DE_MENSAJERIA_META, outbound_adapter_for
+
+    for tipo in CONNECTION_TYPES:
+        if tipo.available and tipo.provider == "meta" and tipo.channel in CANALES_DE_MENSAJERIA_META:
+            assert outbound_adapter_for(tipo.provider, tipo.channel) is not None, tipo.id
