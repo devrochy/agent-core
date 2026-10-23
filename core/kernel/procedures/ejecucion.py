@@ -213,6 +213,41 @@ def _fresca(peticion: Evento | None, respondido: Any) -> bool:
     return peticion is not None and respondido is not None and peticion.created_at > respondido
 
 
+async def _ultimo_inbound(session: AsyncSession, tenant_id: uuid.UUID, conversation_id: uuid.UUID) -> Any:
+    return (
+        await session.execute(
+            text(
+                "SELECT max(created_at) FROM messages WHERE tenant_id = :t AND conversation_id = :c "
+                "AND deleted_at IS NULL AND direction = 'inbound'"
+            ),
+            {"t": tenant_id, "c": conversation_id},
+        )
+    ).scalar_one_or_none()
+
+
+async def _renovar_peticion(
+    session: AsyncSession, foco: _Foco, peticion: Evento | None, pendiente: Mapping[str, Any]
+) -> bool:
+    """Un toque del botón de confirmar que no se aceptó (el título del botón llega como mensaje del
+    cliente) no puede vencer la petición que el aviso siguiente le pide contestar: sin esto, el mensaje del
+    toque era posterior al resumen y el «Sí, confirmo» que pedía el propio aviso salía vencido, otra
+    vez el resumen y otro toque (ciclo visto en test, 2026-10-23). Se vuelve a registrar la MISMA
+    petición (mismo hash y huella: el resumen que el cliente ya vio) solo si seguía vigente, o sea,
+    si era la del turno inmediatamente anterior, y si hay un mensaje suyo posterior que la vencería.
+    Una petición que ya estaba vencida no se revive. Bajo el lock."""
+    if peticion is None or pendiente.get("kind") == "slot":
+        return False
+    tenant_id, conversation_id = foco.fila.tenant_id, foco.fila.conversation_id
+    if not _fresca(peticion, await _ultimo_inbound_respondido(session, tenant_id, conversation_id)):
+        return False
+    ultimo = await _ultimo_inbound(session, tenant_id, conversation_id)
+    if ultimo is None or peticion.created_at >= ultimo:
+        return False
+    await _registrar(session, foco.fila, "confirmation_requested", {**_datos_de_peticion(peticion, pendiente), "renovada": True}, "kernel")
+    log.info("motor_confirmacion_renovada", task_id=str(foco.fila.id), kind=pendiente.get("kind"))
+    return True
+
+
 async def _contesta_el_mensaje_del_kernel(
     session: AsyncSession, tenant_id: uuid.UUID, conversation_id: uuid.UUID, peticion: Evento | None
 ) -> bool:
@@ -478,6 +513,7 @@ class ContextoMotor:
         tarjeta: str = "",
         foco: _Foco | None = None,
         texto_cliente: str = "",
+        por_boton: bool = False,
         seq_al_empezar: dict[uuid.UUID, int] | None = None,
         permitidos: frozenset[str] = frozenset(),
         confirmar_tambien: frozenset[str] = frozenset(),
@@ -499,6 +535,8 @@ class ContextoMotor:
         self._confirmar_tambien = confirmar_tambien
         self.tarjeta = tarjeta
         self.texto_cliente = texto_cliente
+        # El mensaje del turno fue el toque de un botón: su título no es un sí escrito.
+        self.por_boton = por_boton
         self.ejecutor: Ejecutor | None = None
         # Datos de la tarea en foco que el motor fijó en ESTE turno por `actualizar_tarea` (todo o
         # nada: solo los aceptados). Evidencia del verificador para "anoté tu dirección" (ADR-0119).
@@ -1426,7 +1464,13 @@ class ContextoMotor:
                 del_turno_anterior = del_turno_anterior and await _contesta_el_mensaje_del_kernel(
                     s, self.tenant_id, self.conversation_id, peticion
                 )
-            if pedida_en_este_turno or not suficiente:
+            if pedida_en_este_turno:
+                return ResultadoComando(False, [mensaje("falta_confirmacion")], list(foco.stage.actions))
+            if not suficiente:
+                if self.por_boton:
+                    # El toque de un botón que no se aceptó no vence la petición que el aviso le
+                    # pide contestar. Un "sí" a secas, en cambio, sigue venciéndola (adenda de ADR-0113).
+                    await _renovar_peticion(s, foco, peticion, pendiente)
                 return ResultadoComando(False, [mensaje("falta_confirmacion")], list(foco.stage.actions))
             if not del_turno_anterior:
                 # El cliente quiere confirmar, pero la petición venció: se vuelve a pedir y sale el
@@ -1488,6 +1532,8 @@ class ContextoMotor:
                 if not seq or seq <= self._seq_al_empezar.get(foco.fila.id, 0):
                     return None
                 peticion = _evento_por_seq(await _eventos(s, foco), seq)
+                if peticion is not None and peticion.data.get("renovada"):
+                    return None  # el cliente ya vio el resumen: se renovó su vigencia, no se pide otra vez
         except Exception as exc:
             log.warning("motor_confirmacion_del_turno_fallo", error=type(exc).__name__)
             if pedida is not None:
@@ -2004,11 +2050,12 @@ async def contexto_del_motor(
             foco = await _foco(session, tenant_id, conversation_id, comunes["permitidos"])
     if banderas.procedimientos:
         # Si el inbound fue un botón, su título no es un sí escrito: el turno no confirma por texto.
-        if await _tomar_marca_interactivo(tenant_id, conversation_id):
+        por_boton = await _tomar_marca_interactivo(tenant_id, conversation_id)
+        if por_boton:
             texto_cliente = ""
         return ContextoMotor(
             modo="activo", procedimientos=registro.disponibles(enabled, disabled), tarjeta=tarjeta,
-            foco=foco, texto_cliente=texto_cliente, seq_al_empezar={f.id: f.last_seq for f in filas},
+            foco=foco, texto_cliente=texto_cliente, por_boton=por_boton, seq_al_empezar={f.id: f.last_seq for f in filas},
             confirmar_tambien=confirmar_tambien, abiertas=frozenset(f.procedure_id for f in filas),
             sin_gobierno=_sin_gobierno(filas, foco), **comunes,
         )
@@ -2090,7 +2137,18 @@ async def _entrada_sin_llm(conversation: Any, interactivo: str, media: list[Any]
                 ):
                     await _confirmar_pendiente(s, foco)
                 else:
-                    log.info("motor_boton_confirmar_vencido", task_id=str(foco.fila.id))
+                    # Sin motivo en el log, un toque que no confirma era invisible (ciclo de test
+                    # del 2026-10-23). Solo ids y banderas, nunca la firma ni el secreto.
+                    log.warning(
+                        "motor_boton_confirmar_rechazado",
+                        task_id=str(foco.fila.id),
+                        misma_tarea=boton.task_id == str(foco.fila.id),
+                        seq_boton=boton.seq,
+                        seq_pendiente=pendiente.get("seq"),
+                        hay_peticion=peticion is not None,
+                    )
+                    if boton.task_id == str(foco.fila.id):
+                        await _renovar_peticion(s, foco, peticion, pendiente)
                 return
             par = motor.dato_de_boton(foco.proc, interactivo)
             if par is not None:
