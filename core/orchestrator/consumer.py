@@ -419,8 +419,49 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
         )
         return
 
+    # Media entrante (SPEC-04, ADR-0151): descarga, guarda, transcribe/describe antes
+    # de persistir. Un fallo transitorio se propaga para que el consumer reintente.
+    from core.media.ingesta import procesar_media_entrante
+
+    # Si el bot está pausado o la conversación escalada, no se gasta en descargar ni
+    # transcribir: se persiste el marcador y `politicas_de_entrada` cierra el turno.
+    pausado = bool(
+        (app_settings.bot_paused if app_settings else False)
+        or customer.bot_paused
+        or conversation.bot_paused
+        or conversation.status == "escalated"
+    )
+    if pausado:
+        from core.media.ingesta import MediaOutcome
+
+        media_outcome = MediaOutcome.skipped()
+    else:
+        media_outcome = await procesar_media_entrante(fields, conversation, app_settings)
+    if media_outcome.handled:
+        content = media_outcome.content or content
+        effective_message = media_outcome.effective_message or content
+        log.info(
+            "media_procesada",
+            conversation_id=str(conversation.id),
+            decision=media_outcome.decision,
+            media_type=media_outcome.media_type,
+        )
+    elif fields.get("media") and fields.get("media") != "[]" and not effective_message:
+        # Canal aún no soportado (Messenger/Instagram/waweb): el mensaje no queda vacío.
+        effective_message = "[El cliente envió un archivo multimedia que no puedo procesar]"
+
     # Persistir SIEMPRE el inbound (historial completo aunque el bot esté pausado)
-    persisted = await _persist_inbound(conversation.id, fields, effective_message)
+    persisted = await _persist_inbound(
+        conversation.id,
+        fields,
+        effective_message,
+        content=media_outcome.content if media_outcome.handled else None,
+        media_type=media_outcome.media_type if media_outcome.handled else None,
+        media_key=media_outcome.media_key if media_outcome.handled else None,
+        media_transcription=(
+            media_outcome.media_transcription if media_outcome.handled else None
+        ),
+    )
     if not persisted:
         return  # duplicado (Capa 3 de idempotencia: UNIQUE en Postgres)
     anotar_entrada(persisted)
@@ -435,7 +476,24 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
 
     # Políticas de entrada del kernel (HU-AOS-10), en orden fijo y sin LLM: conexión pausada
     # (ADR-0122), kill-switch o conversación escalada, palabras de escalamiento y horario.
+    # Van ANTES de la respuesta fija de media: si el bot está pausado, no contesta.
     if await politicas_de_entrada(conversation, customer, app_settings, effective_message):
+        return
+
+    # Audio ilegible / imagen no identificada / proveedor sin configurar: se responde
+    # el texto configurado y NO se gasta LLM ni se sigue el turno.
+    if media_outcome.handled and media_outcome.reply:
+        from core.gateway.sender import send_to_conversation
+
+        try:
+            await send_to_conversation(conversation.id, media_outcome.reply)
+        except Exception:
+            log.warning(
+                "media_reply_send_failed",
+                conversation_id=str(conversation.id),
+                reply_key=media_outcome.reply_key,
+                exc_info=True,
+            )
         return
 
     # ---------------- datos sin LLM (HU-AOS-05): botón, fila de lista o contenido que llena un
@@ -624,10 +682,25 @@ async def _baja_de_promociones(conversation: Any, customer: Any, app_settings: A
 
 
 async def _persist_inbound(
-    conversation_id: uuid.UUID, fields: dict[str, str], effective_message: str
+    conversation_id: uuid.UUID,
+    fields: dict[str, str],
+    effective_message: str,
+    *,
+    content: str | None = None,
+    media_type: str | None = None,
+    media_key: str | None = None,
+    media_transcription: str | None = None,
 ) -> uuid.UUID | None:
-    """Guarda el inbound y devuelve su id (None si es un duplicado)."""
+    """Guarda el inbound y devuelve su id (None si es un duplicado).
+
+    Los cuatro overrides los usa la ingesta de media (ADR-0151): `content` es el
+    caption/placeholder visible en la bandeja, `media_type`/`media_key` salen de
+    la descarga y `media_transcription` es la transcripción/descripción.
+    """
     media: list[dict[str, Any]] = json.loads(fields.get("media", "[]") or "[]")
+    tipo_media = media_type or (
+        str(media[0]["type"]).split(";")[0].strip() if media and media[0].get("type") else None
+    )
     message_id = uuid.uuid4()
     try:
         async with get_session() as session:
@@ -638,10 +711,14 @@ async def _persist_inbound(
                     conversation_id=conversation_id,
                     direction="inbound",
                     sender_type="customer",
-                    content=effective_message,
-                    media_type=media[0]["type"] if media else None,
-                    media_url=media[0].get("url") if media else None,
-                    media_transcription=fields.get("media_context") or None,
+                    content=effective_message if content is None else content,
+                    media_type=tipo_media,
+                    media_url=media_key or (media[0].get("url") if media else None),
+                    media_transcription=(
+                        media_transcription
+                        if media_transcription is not None
+                        else (fields.get("media_context") or None)
+                    ),
                     idempotency_key=fields.get("external_message_id") or None,
                 )
             )

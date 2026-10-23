@@ -847,12 +847,14 @@ def _media_metric(message: Any) -> str | None:
 
 
 async def _try_process_media(message: Any) -> Any:
-    """Si mod-media-processor está activo, transforma audio/imagen a texto ANTES de encolar.
+    """Cuota de media en el webhook; el procesamiento real vive en el consumer.
+
+    Descargar/transcribir aquí expondría el webhook a los timeouts de Meta. Esta
+    función solo aplica el bloqueo duro de cuota (ADR-0045) y deja el mensaje
+    intacto; el consumer lo descarga, guarda y entiende (SPEC-04, ADR-0151).
 
     Devuelve None si la cuota de audio/OCR del plan está agotada: el mensaje se
-    descarta (bloqueo duro, ADR-0045) y no se encola.
-
-    Llamada de función Python en el mismo proceso — cero red (docs/MONOLITH-MODEL.md).
+    descarta y no se encola.
     """
     metric = _media_metric(message)
     tenant_id = get_current_tenant_id()
@@ -862,23 +864,7 @@ async def _try_process_media(message: Any) -> Any:
         if not await check_metric(tenant_id, metric):
             log.warning("media_quota_exceeded", tenant_id=str(tenant_id), metric=metric)
             return None
-
-    from core.plugin_manager import plugin_manager
-
-    module = plugin_manager.get("mod_media_processor")
-    if module is None or not plugin_manager.is_active("mod_media_processor"):
-        if not message.content:
-            message.content = "[El cliente envió un archivo multimedia que no puedo procesar]"
-        return message
-    try:
-        processed = await module.process_media(message)  # type: ignore[attr-defined]
-        return processed
-    except Exception as exc:
-        log.exception("media_processing_failed")
-        # Acotado al tenant de este webhook (ADR-0024): no apaga el
-        # procesador de medios para los demás tenants.
-        await plugin_manager.auto_disable_for_tenant(get_current_tenant_id(), "mod_media_processor", str(exc))
-        return message
+    return message
 
 
 # ---------------------------------------------------------------- webhook de billing (ADR-0046)
