@@ -261,6 +261,8 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
 BY_ID: dict[str, ConnectionType] = {t.id: t for t in CONNECTION_TYPES}
 
 WHATSAPP_META = "whatsapp_meta"
+MESSENGER_META = "messenger_meta"
+INSTAGRAM_META = "instagram_meta"
 WEBCHAT = "webchat"
 
 

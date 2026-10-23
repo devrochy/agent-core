@@ -14,6 +14,7 @@ from typing import Any
 from core.config import get_settings
 from core.gateway.channels.base import InboundAdapter, OutboundAdapter
 from core.gateway.channels.email import EmailSmtpOutbound
+from core.gateway.channels.messenger.outbound import MessengerMetaOutbound
 from core.gateway.channels.whatsapp.inbound import WhatsAppMetaInbound
 from core.gateway.channels.whatsapp.outbound import WhatsAppMetaOutbound
 from core.shared.logger import get_logger
@@ -29,6 +30,15 @@ _OUTBOUND: dict[str, OutboundAdapter] = {
     "meta": WhatsAppMetaOutbound(),
     "smtp": EmailSmtpOutbound(),  # correo saliente (ADR-0071)
 }
+
+# Adaptadores de salida por (proveedor, canal): Messenger e Instagram comparten el proveedor `meta`
+# con WhatsApp y se distinguen por canal (ADR-0152). Sin entrada para el canal, rige el de proveedor.
+_OUTBOUND_BY_CHANNEL: dict[tuple[str, str], OutboundAdapter] = {
+    ("meta", "messenger"): MessengerMetaOutbound(),
+}
+
+# Canales de mensajería de Meta que NO usan el adaptador de WhatsApp aunque compartan proveedor.
+CANALES_DE_MENSAJERIA_META = frozenset({"messenger", "instagram"})
 
 _scanned = False
 
@@ -105,7 +115,9 @@ def inbound_adapter_for(provider: str) -> InboundAdapter:
     return adapter
 
 
-def outbound_adapter_for(provider: str) -> OutboundAdapter:
+def outbound_adapter_for(provider: str, channel: str | None = None) -> OutboundAdapter:
+    """El adaptador de salida del proveedor; con `channel`, el específico de ese canal si existe
+    (`("meta", "messenger")`) y, si no, el del proveedor (WhatsApp para `meta`)."""
     scan()
     settings = get_settings()
     if settings.demo_mode:
@@ -113,7 +125,12 @@ def outbound_adapter_for(provider: str) -> OutboundAdapter:
             raise ValueError("DEMO_MODE solo está permitido en APP_ENV=development")
         log.warning("outbound_noop", note="DEMO_MODE: envío de canal no-op (dev)")
         return NoopOutboundAdapter()
-    adapter = _OUTBOUND.get(provider)
+    adapter = _OUTBOUND_BY_CHANNEL.get((provider, channel or ""))
+    if adapter is None and channel in CANALES_DE_MENSAJERIA_META:
+        # Sin adaptador propio (Instagram, hasta HU-CHAN-04) NO se cae al de WhatsApp: mandaría un
+        # identificador de cliente de otro canal como si fuera un teléfono.
+        raise KeyError(f"Sin adaptador de salida para {provider}/{channel}")
+    adapter = adapter or _OUTBOUND.get(provider)
     if adapter is None:
         raise KeyError(f"Proveedor de salida desconocido: {provider}")
     return adapter

@@ -699,7 +699,13 @@ async def exchange_code(
     return view
 
 
-async def _fetch_exchange_token(version: str, params: dict[str, str], settings: Any) -> tuple[str, bool]:
+async def _fetch_exchange_token(
+    version: str,
+    params: dict[str, str],
+    settings: Any,
+    *,
+    redirect_path: str = "/admin/conexiones/wizard/whatsapp",
+) -> tuple[str, bool]:
     async def _call(extra_params: dict[str, str]) -> httpx.Response:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
             return await client.get(f"{GRAPH_BASE}/{version}/oauth/access_token", params={**params, **extra_params})
@@ -720,7 +726,7 @@ async def _fetch_exchange_token(version: str, params: dict[str, str], settings: 
             # Hallazgo documentado (no confirmado contra doc primaria, ver
             # docstring del módulo): en al menos algún caso real Meta exigió
             # redirect_uri incluso en el flujo de popup. Se reintenta UNA vez.
-            redirect_uri = f"{settings.public_base_url.rstrip('/')}/admin/conexiones/wizard/whatsapp"
+            redirect_uri = f"{settings.public_base_url.rstrip('/')}{redirect_path}"
             try:
                 response2 = await _call({"redirect_uri": redirect_uri})
             except httpx.HTTPError as exc:

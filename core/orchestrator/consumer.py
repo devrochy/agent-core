@@ -737,10 +737,10 @@ async def _persist_inbound(
                     idempotency_key=fields.get("external_message_id") or None,
                 )
             )
-            # Ventana de 24h de WhatsApp: cada inbound la refresca --
-            # validada por `sender.py::validate_service_window` antes de
-            # encolar un envío libre.
-            if fields.get("provider") == "meta" and fields.get("channel") == "whatsapp":
+            # Ventana de 24h de Meta (WhatsApp, Messenger e Instagram): cada inbound la refresca --
+            # validada por `sender.py::validate_service_window` antes de encolar un envío libre.
+            # Sin esto, una conversación de Messenger o Instagram nunca vencería para el validador.
+            if fields.get("provider") == "meta" and fields.get("channel") in ("whatsapp", "messenger", "instagram"):
                 conversation = await session.get(Conversation, conversation_id)
                 if conversation is not None:
                     conversation.service_window_expires_at = utcnow() + timedelta(hours=_SERVICE_WINDOW_HOURS)

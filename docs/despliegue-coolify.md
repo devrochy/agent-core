@@ -204,6 +204,7 @@ Columnas A/W/B: la variable va en la API, el worker o el beat. Fuente de verdad 
 | `WEBHOOK_ALLOW_UNSIGNED` | ✓ | ✓ | ✓ | fijo: `false` (`core/config.py:128-131`) |
 | `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | ✓ | ✓ | ✓ | heredada, solo si la heredada los tiene (las conexiones viven cifradas en la BD) |
 | `META_APP_ID`, `META_APP_SECRET`, `META_CONFIG_ID`, `META_GRAPH_VERSION` | ✓ | ✓ | ✓ | proveedor: la app de Meta **de producción**, nunca la de test (HU-ARCH-02) |
+| `META_MESSENGER_CONFIG_ID` | opcional | opcional | — | proveedor: Login Configuration de Facebook Login for Business con los permisos de Páginas (`pages_messaging`, `pages_show_list`, `pages_manage_metadata`) para conectar Messenger (ADR-0152). Distinta de `META_CONFIG_ID` (Embedded Signup de WhatsApp); si falta se usa esa |
 | `DEV_APP_SECRET_HASH` | ✓ | — | — | generar: sha256 del App Secret de desarrollo (check `prod_secret_differs_from_dev`) |
 | `META_SERVICE_MESSAGE_ALLOWANCE_HYPOTHESIS_ENABLED` | ✓ | ✓ | ✓ | heredada (por defecto `false`) |
 | `WAWEB_ENABLED` | ✓ | ✓ | ✓ | fijo: `false` (P-08; no hay recurso conector) |
