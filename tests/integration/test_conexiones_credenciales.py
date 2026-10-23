@@ -231,8 +231,12 @@ async def test_credenciales_meta_byok_y_eliminar(app_client):
 
     from test_kernel_ingress import _filas
 
+    # La fila canónica sigue viva (sin estado propio), pero la consola ya no la lista.
     (fila,) = await _filas(tid, "SELECT deleted_at FROM channel_connections WHERE id = :c", c=canal)
-    assert fila["deleted_at"] is not None
+    assert fila["deleted_at"] is None
+    consola = await app_client.get("/api/v1/admin/connections/console", headers=h)
+    assert consola.status_code == 200, consola.text
+    assert canal not in {i["id"] for i in consola.json()["items"]}
 
 
 async def test_meta_no_revela_los_secretos_de_la_plataforma(app_client, monkeypatch):

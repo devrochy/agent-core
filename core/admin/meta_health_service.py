@@ -552,7 +552,7 @@ async def soft_delete_connection(tenant_id: uuid.UUID, connection_id: str) -> st
     """
     from sqlalchemy import update
 
-    from core.db.models import ChannelConnection, PhoneNumber, WabaAccount
+    from core.db.models import PhoneNumber, WabaAccount
     from core.gateway import meta_token_store
     from core.gateway.meta_credentials import CredentialsUnavailable, credentials_for
 
@@ -597,17 +597,6 @@ async def soft_delete_connection(tenant_id: uuid.UUID, connection_id: str) -> st
             )
             .scalars()
             .all()
-        )
-        # La conexión canónica del número (la que lista la consola) también se archiva.
-        # Reconectar el mismo número la revive, como a las WABAs y los números.
-        await session.execute(
-            update(ChannelConnection)
-            .where(
-                ChannelConnection.tenant_id == tenant_id,
-                ChannelConnection.meta_connection_id == cid,
-                ChannelConnection.deleted_at.is_(None),
-            )
-            .values(deleted_at=now)
         )
         await session.execute(
             update(PhoneNumber)
