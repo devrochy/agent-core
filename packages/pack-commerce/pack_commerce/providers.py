@@ -143,17 +143,60 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
             row.customer_id: row
             for row in (await session.execute(select(ultimo).where(ultimo.c.customer_id.in_(customer_ids)))).all()
         }
+        pedidos = {
+            row.customer_id: row
+            for row in (
+                await session.execute(
+                    select(
+                        Order.customer_id,
+                        func.count(Order.id).label("n"),
+                        func.coalesce(func.sum(Order.total), 0).label("total"),
+                        func.max(Order.created_at).label("ultimo"),
+                    )
+                    .where(
+                        Order.tenant_id == tid,
+                        Order.customer_id.in_(customer_ids),
+                        Order.status != "expirado",
+                    )
+                    .group_by(Order.customer_id)
+                )
+            ).all()
+        }
+        cotizaciones = dict(
+            (
+                await session.execute(
+                    select(Quote.customer_id, func.count(Quote.id))
+                    .where(
+                        Quote.tenant_id == tid,
+                        Quote.customer_id.in_(customer_ids),
+                        Quote.status.in_(("draft", "aceptada")),
+                    )
+                    .group_by(Quote.customer_id)
+                )
+            )
+            .tuples()
+            .all()
+        )
     # Las columnas muestran etiquetas; los filtros usan los códigos (`filters[].options`).
     etiquetas = dict(SEGMENTOS)
     estados = dict(ESTADOS_LEAD)
     out: dict[uuid.UUID, dict[str, Any]] = {}
     for cid in customer_ids:
         lead = leads.get(cid)
+        compras = pedidos.get(cid)
+        n = int(getattr(compras, "n", 0) or 0)
+        total = float(getattr(compras, "total", 0) or 0)
+        ultimo = getattr(compras, "ultimo", None)
         out[cid] = {
             "clasificacion": etiquetas[segmentos.get(cid, "nuevo")],
             "estado_lead": estados.get(lead.status, lead.status) if lead else None,
             "puntaje": lead.score if lead else None,
             "interes": (lead.interest or None) if lead else None,
+            "pedidos": n,
+            "total_compras": total,
+            "ticket_promedio": round(total / n, 2) if n else 0.0,
+            "ultimo_pedido": ultimo.strftime("%Y-%m-%d") if ultimo else None,
+            "cotizaciones_abiertas": int(cotizaciones.get(cid, 0) or 0),
         }
     return out
 
@@ -293,6 +336,11 @@ lead_registry.register(
         LeadColumn(key="estado_lead", label="Estado del lead"),
         LeadColumn(key="puntaje", label="Puntaje"),
         LeadColumn(key="interes", label="Interés"),
+        LeadColumn(key="pedidos", label="Pedidos"),
+        LeadColumn(key="total_compras", label="Total comprado"),
+        LeadColumn(key="ticket_promedio", label="Ticket promedio"),
+        LeadColumn(key="ultimo_pedido", label="Último pedido"),
+        LeadColumn(key="cotizaciones_abiertas", label="Cotizaciones abiertas"),
     ],
     resolver=_resolver,
     filters=[
@@ -309,4 +357,7 @@ lead_registry.register(
         leer=_leer_lead,
         escribir=_escribir_lead,
     ),
+    agent_key="ventas",
+    agent_name="Ventas",
+    icon="shopping-cart",
 )

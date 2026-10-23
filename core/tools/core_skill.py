@@ -24,6 +24,7 @@ from core.db.models import Conversation, UsageLedger
 from core.db.session import get_session
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
+from core.memory import perfil as perfil_cliente
 from core.memory import vector as vector_memory
 from core.memory.facts import HechoInvalido, NamespaceNoConcedido
 from core.orchestrator.escalation import escalate
@@ -62,7 +63,12 @@ class CoreSkill(BaseSkill):
 
     async def _get_customer_profile(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         profile = await entity_memory.get_profile(ctx.customer_id)
-        return {"profile": profile}
+        normalizado = perfil_cliente.leer_perfil(
+            profile,
+            telefono=profile.get("contact_phone") or profile.get("phone"),
+            nombre_cliente=profile.get("name"),
+        )
+        return {"profile": normalizado}
 
     async def _update_customer_profile(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         attributes = dict(args.get("attributes") or {})

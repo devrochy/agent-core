@@ -190,6 +190,7 @@ async def vista_previa_de_envio(
     q: Annotated[str | None, Query()] = None,
     channel: Annotated[str | None, Query()] = None,
     connection_id: Annotated[uuid.UUID | None, Query()] = None,
+    lead_id: Annotated[uuid.UUID | None, Query(description="Solo este cliente.")] = None,
     filtro: FiltroQuery = None,
 ) -> VistaPreviaOut:
     """Cuántos clientes del filtro recibirían la plantilla y por qué quedan fuera los demás.
@@ -198,7 +199,13 @@ async def vista_previa_de_envio(
     tenant_id = principal.tenant_id
     enabled, _ = await _providers()
     consulta = await _consulta(
-        tenant_id, enabled=enabled, q=q, channel=channel, connection_id=connection_id, filtro=filtro
+        tenant_id,
+        enabled=enabled,
+        q=q,
+        channel=channel,
+        connection_id=connection_id,
+        filtro=filtro,
+        customer_id=lead_id,
     )
     try:
         vista = await envios.vista_previa(
@@ -210,6 +217,7 @@ async def vista_previa_de_envio(
                 "q": q,
                 "channel": channel,
                 "connection_id": str(connection_id) if connection_id else None,
+                "lead_id": str(lead_id) if lead_id else None,
                 "filtro": filtro or [],
             },
             connection_id=body.connection_id,
