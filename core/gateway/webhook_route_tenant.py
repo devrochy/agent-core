@@ -78,6 +78,21 @@ async def _route_by_waba(event: FlattenedEvent) -> EventRoute:
     return EventRoute(tenant_id)
 
 
+async def _route_messaging(
+    tenant_id: uuid.UUID | None, *, page_id: str | None = None, ig_user_id: str | None = None
+) -> EventRoute:
+    """Messenger e Instagram (ADR-0152): como la WABA, el resolvedor da NULL con cero dueños y
+    con dos o más; si lo reclama algún negocio, es un conflicto y el evento no va a ninguno."""
+    if tenant_id is not None:
+        return EventRoute(tenant_id)
+    from core.gateway.meta_asset_claims import messaging_asset_claimed_by_other_tenant
+
+    if await messaging_asset_claimed_by_other_tenant(None, page_id=page_id, ig_user_id=ig_user_id):
+        log.warning("webhook_pagina_o_cuenta_de_varios_negocios", page_id=page_id, ig_user_id=ig_user_id)
+        return EventRoute(None, conflict=True)
+    return EventRoute(None)
+
+
 async def route_event(event: FlattenedEvent) -> EventRoute:
     """Todas las funciones invocadas son SECURITY DEFINER (ADR-0012):
     bootstrap chicken-and-egg, no dependen de RLS/tenant_scope activo."""
@@ -115,10 +130,10 @@ async def route_event(event: FlattenedEvent) -> EventRoute:
         return EventRoute(phone_tenant)
 
     if event.object_type == "page":
-        return EventRoute(await _resolve_tenant_for_page(event.entry_id))
+        return await _route_messaging(await _resolve_tenant_for_page(event.entry_id), page_id=event.entry_id)
 
     if event.object_type == "instagram":
-        return EventRoute(await _resolve_tenant_for_ig_user(event.entry_id))
+        return await _route_messaging(await _resolve_tenant_for_ig_user(event.entry_id), ig_user_id=event.entry_id)
 
     return EventRoute(None)
 
