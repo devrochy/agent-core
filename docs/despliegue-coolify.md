@@ -194,6 +194,9 @@ Columnas A/W/B: la variable va en la API, el worker o el beat. Fuente de verdad 
 | `LLM_PROVIDER`, `LLM_MODEL`, `LLM_MODEL_REASONING`, `LLM_MODEL_FALLBACK`, `LLM_BASE_URL`, `LLM_MAX_TOKENS`, `DIFFICULTY_ROUTING`, `LLM_THINKING_DEFAULT`, `LLM_THINKING_REASONING` | ✓ | ✓ | ✓ | heredada (no son secretos) |
 | `LLM_API_KEY` | ✓ | ✓ | ✓ | proveedor: llave **propia de producción**, con tope de gasto; nunca la de test |
 | `OPENAI_API_KEY` | ✓ | ✓ | ✓ | proveedor: llave de producción (respaldo `gpt-4o-mini` y embeddings `openai`) |
+| `STT_PROVIDER`, `STT_MODEL`, `STT_API_KEY` | ✓ | ✓ | ✓ | audio entrante (SPEC-04, ADR-0151): Groq por defecto; sin llave propia de negocio se usa esta. `STT_API_KEY` es la del proveedor activo |
+| `VISION_PROVIDER`, `VISION_MODEL`, `VISION_API_KEY` | ✓ | ✓ | ✓ | visión de imágenes (SPEC-04, ADR-0151): DeepSeek por defecto; sin llave propia de negocio se usa esta |
+| `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY` | — | ✓ | ✓ | llaves específicas de los proveedores de media si no se usa `STT_API_KEY`/`VISION_API_KEY` |
 | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `MEMORY_RETENTION_DAYS` | ✓ | ✓ | ✓ | heredada: la dimensión tiene que coincidir con los vectores migrados |
 | `KNOWLEDGE_EMBEDDING_PROVIDER` | ✓ | ✓ | ✓ | fijo: `openai` en producción (usa `OPENAI_API_KEY`, `text-embedding-3-small`); sin definir en test, que queda en `hash` (sin red ni costo). Fuera de `APP_ENV=production` siempre es `hash` (ADR-0145 §3) |
 | `WHATSAPP_VERIFY_TOKEN` | ✓ | ✓ | ✓ | heredada: es el que Meta tiene registrado |
@@ -274,7 +277,7 @@ dueño. Si se pierde el Coolify de `prod-app`, se reconstruye con este inventari
 | Clave de `app_runtime` | `ALTER ROLE` con `\password` en `psql` y luego `DATABASE_URL` | api, worker, beat | corte breve |
 | Clave de `agent_core_migrations` | `ALTER ROLE` y `MIGRATIONS_DATABASE_URL` | api | ninguno |
 | Superusuario `postgres` y clave de Redis | en el recurso de Coolify; para Redis, también `REDIS_URL` | api, worker, beat | rotar Redis en una ventana: hay colas en vuelo |
-| `LLM_API_KEY`, `OPENAI_API_KEY` | consola del proveedor | api, worker, beat | ninguno |
+| `LLM_API_KEY`, `OPENAI_API_KEY`, `STT_API_KEY`, `VISION_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY` | consola del proveedor | api, worker, beat | ninguno |
 | `WHATSAPP_APP_SECRET`, `META_APP_SECRET` | app de Meta | api, worker, beat | coordinar con Meta: cambia la firma del webhook |
 | Llaves de Wompi | panel de Wompi | api, worker, beat | ninguno |
 | `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_HEADERS` | consola del proveedor | api, worker, beat | ninguno |
