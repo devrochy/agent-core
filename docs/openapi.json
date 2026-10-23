@@ -860,6 +860,269 @@
             }
           }
         }
+      },
+      "patch": {
+        "tags": [
+          "api",
+          "admin · sesión"
+        ],
+        "summary": "Update Me",
+        "description": "Actualiza el perfil propio (nombre, teléfono y usuario único).",
+        "operationId": "update_me_api_v1_admin_me_patch",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PerfilUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/me/avatar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · sesión"
+        ],
+        "summary": "Upload Avatar",
+        "description": "Sube (o reemplaza) la foto de perfil del usuario.",
+        "operationId": "upload_avatar_api_v1_admin_me_avatar_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_avatar_api_v1_admin_me_avatar_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "api",
+          "admin · sesión"
+        ],
+        "summary": "Delete Avatar",
+        "description": "Quita la foto de perfil del usuario.",
+        "operationId": "delete_avatar_api_v1_admin_me_avatar_delete",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "api",
+          "admin · sesión"
+        ],
+        "summary": "Get Avatar",
+        "description": "Sirve la foto del usuario autenticado (mismo origen para el panel, sin CSP).",
+        "operationId": "get_avatar_api_v1_admin_me_avatar_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/me/password": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · sesión"
+        ],
+        "summary": "Change Password",
+        "description": "Cambia la contraseña propia pidiendo la actual.",
+        "operationId": "change_password_api_v1_admin_me_password_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/me/push-token": {
@@ -21410,6 +21673,421 @@
         }
       }
     },
+    "/api/v1/admin/collaborators/{admin_id}/avatar": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · colaboradores"
+        ],
+        "summary": "Get Collaborator Avatar",
+        "description": "Sirve la foto de un colaborador visible para la sesión (mismo origen para el panel).",
+        "operationId": "get_collaborator_avatar_api_v1_admin_collaborators__admin_id__avatar_get",
+        "parameters": [
+          {
+            "name": "admin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Admin Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/settings/media": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Get Media Settings",
+        "description": "Proveedores de audio/visión del negocio, fallback y catálogo para el panel.",
+        "operationId": "get_media_settings_api_v1_admin_settings_media_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaSettingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/settings/media/audio": {
+      "put": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Save Media Audio",
+        "description": "Proveedor/modelo/llave de transcripción de notas de voz (BYOK opcional).",
+        "operationId": "save_media_audio_api_v1_admin_settings_media_audio_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaAudioUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaAudioSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/settings/media/vision": {
+      "put": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Save Media Vision",
+        "description": "Proveedor/modelo/llave y modo de imagen (`describir` o `sin_descripcion`).",
+        "operationId": "save_media_vision_api_v1_admin_settings_media_vision_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaVisionUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaVisionSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/settings/media/audio/test": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Test Media Audio",
+        "description": "Prueba la combinación contra el proveedor real sin guardarla.",
+        "operationId": "test_media_audio_api_v1_admin_settings_media_audio_test_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaTestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaTestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/settings/media/vision/test": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Test Media Vision",
+        "description": "Prueba la combinación de visión con una imagen mínima, sin guardarla.",
+        "operationId": "test_media_vision_api_v1_admin_settings_media_vision_test_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaTestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaTestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/leads/{lead_id}/geocodificar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Geocodificar Lead",
+        "description": "Convierte la dirección del cliente en coordenadas y las guarda en el perfil.\n\nEl proveedor recibe solo la dirección compuesta (dirección, municipio, departamento y\npaís). La plataforma paga la llamada y hay topes global y por negocio (ADR-0153).",
+        "operationId": "geocodificar_lead_api_v1_admin_leads__lead_id__geocodificar_post",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadGeocodificacion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/leads/{lead_id}/perfil": {
       "patch": {
         "tags": [
@@ -21771,67 +22449,6 @@
                     "type": "string"
                   },
                   "title": "Response Upload Product Image Api V1 Pack Commerce Products Image Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/leads/{lead_id}/geocodificar": {
-      "post": {
-        "tags": [
-          "api",
-          "admin · leads"
-        ],
-        "summary": "Geocodificar Lead",
-        "description": "Convierte la dirección del cliente en coordenadas y las guarda en el perfil.\n\nEl proveedor recibe solo la dirección compuesta (dirección, municipio, departamento y\npaís). La plataforma paga la llamada y hay topes global y por negocio (ADR-0152).",
-        "operationId": "geocodificar_lead_api_v1_admin_leads__lead_id__geocodificar_post",
-        "parameters": [
-          {
-            "name": "lead_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Lead Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LeadGeocodificacion"
                 }
               }
             }
@@ -27356,6 +27973,39 @@
               }
             ],
             "title": "Username"
+          },
+          "nombre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre"
+          },
+          "telefono": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Telefono"
+          },
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Url"
           },
           "role": {
             "type": "string",
@@ -41338,6 +41988,352 @@
         ],
         "title": "UsernameDisponibleResponse"
       },
+      "PerfilUpdate": {
+        "properties": {
+          "nombre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre"
+          },
+          "telefono": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Telefono"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "type": "object",
+        "title": "PerfilUpdate"
+      },
+      "PasswordChange": {
+        "properties": {
+          "actual": {
+            "type": "string",
+            "title": "Actual"
+          },
+          "nueva": {
+            "type": "string",
+            "title": "Nueva"
+          }
+        },
+        "type": "object",
+        "required": [
+          "actual",
+          "nueva"
+        ],
+        "title": "PasswordChange"
+      },
+      "Body_upload_avatar_api_v1_admin_me_avatar_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_avatar_api_v1_admin_me_avatar_post"
+      },
+      "MediaAudioSettings": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "has_api_key": {
+            "type": "boolean",
+            "title": "Has Api Key"
+          },
+          "using_platform_key": {
+            "type": "boolean",
+            "title": "Using Platform Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "provider",
+          "model",
+          "has_api_key",
+          "using_platform_key"
+        ],
+        "title": "MediaAudioSettings"
+      },
+      "MediaAudioUpdate": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "default": ""
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "title": "MediaAudioUpdate"
+      },
+      "MediaCatalog": {
+        "properties": {
+          "audio": {
+            "items": {
+              "$ref": "#/components/schemas/MediaCatalogProvider"
+            },
+            "type": "array",
+            "title": "Audio"
+          },
+          "vision": {
+            "items": {
+              "$ref": "#/components/schemas/MediaCatalogProvider"
+            },
+            "type": "array",
+            "title": "Vision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "audio",
+          "vision"
+        ],
+        "title": "MediaCatalog"
+      },
+      "MediaCatalogModel": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "MediaCatalogModel"
+      },
+      "MediaCatalogProvider": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "default_model": {
+            "type": "string",
+            "title": "Default Model"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/MediaCatalogModel"
+            },
+            "type": "array",
+            "title": "Models"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "default_model",
+          "models"
+        ],
+        "title": "MediaCatalogProvider"
+      },
+      "MediaSettingsResponse": {
+        "properties": {
+          "audio": {
+            "$ref": "#/components/schemas/MediaAudioSettings"
+          },
+          "vision": {
+            "$ref": "#/components/schemas/MediaVisionSettings"
+          },
+          "catalog": {
+            "$ref": "#/components/schemas/MediaCatalog"
+          }
+        },
+        "type": "object",
+        "required": [
+          "audio",
+          "vision",
+          "catalog"
+        ],
+        "title": "MediaSettingsResponse"
+      },
+      "MediaTestRequest": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "default": ""
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "title": "MediaTestRequest"
+      },
+      "MediaTestResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "provider",
+          "model"
+        ],
+        "title": "MediaTestResponse"
+      },
+      "MediaVisionSettings": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "has_api_key": {
+            "type": "boolean",
+            "title": "Has Api Key"
+          },
+          "using_platform_key": {
+            "type": "boolean",
+            "title": "Using Platform Key"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "provider",
+          "model",
+          "has_api_key",
+          "using_platform_key",
+          "mode"
+        ],
+        "title": "MediaVisionSettings"
+      },
+      "MediaVisionUpdate": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "describir",
+              "sin_descripcion"
+            ],
+            "title": "Mode",
+            "default": "describir"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "default": ""
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "title": "MediaVisionUpdate"
+      },
       "Body_upload_product_image_api_v1_pack_commerce_products_image_post": {
         "properties": {
           "archivo": {
@@ -41544,6 +42540,56 @@
           "label"
         ],
         "title": "LeadColumnValue"
+      },
+      "LeadGeocodificacion": {
+        "properties": {
+          "latitud": {
+            "type": "number",
+            "title": "Latitud"
+          },
+          "longitud": {
+            "type": "number",
+            "title": "Longitud"
+          },
+          "direccion_normalizada": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direccion Normalizada"
+          },
+          "precision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precision"
+          },
+          "proveedor": {
+            "type": "string",
+            "title": "Proveedor"
+          },
+          "perfil": {
+            "$ref": "#/components/schemas/LeadPerfilOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "latitud",
+          "longitud",
+          "proveedor",
+          "perfil"
+        ],
+        "title": "LeadGeocodificacion",
+        "description": "Resultado de geocodificar la dirección y el perfil actualizado."
       },
       "LeadPerfilOut": {
         "properties": {
@@ -41942,56 +42988,6 @@
           "permissions"
         ],
         "title": "SetPermissionsRequest"
-      },
-      "LeadGeocodificacion": {
-        "properties": {
-          "latitud": {
-            "type": "number",
-            "title": "Latitud"
-          },
-          "longitud": {
-            "type": "number",
-            "title": "Longitud"
-          },
-          "direccion_normalizada": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Direccion Normalizada"
-          },
-          "precision": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Precision"
-          },
-          "proveedor": {
-            "type": "string",
-            "title": "Proveedor"
-          },
-          "perfil": {
-            "$ref": "#/components/schemas/LeadPerfilOut"
-          }
-        },
-        "type": "object",
-        "required": [
-          "latitud",
-          "longitud",
-          "proveedor",
-          "perfil"
-        ],
-        "title": "LeadGeocodificacion",
-        "description": "Resultado de geocodificar la dirección y el perfil actualizado."
       }
     }
   }

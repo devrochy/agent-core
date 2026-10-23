@@ -216,3 +216,27 @@ def test_escalate_to_human_exitoso_cuenta_como_relevo() -> None:
     assert not journeys.pidio_relevo([{"nombre": "escalate_to_human", "salida": {"error": "no disponible"}}])
     assert not journeys.pidio_relevo([{"nombre": "crear_lead", "salida": {}}])
     assert not journeys.pidio_relevo([])
+
+
+async def test_los_bloqueos_de_guardrails_dejan_el_borrador_en_el_registro(monkeypatch) -> None:
+    # Sin el borrador, un intento que escala por un guardrail no dice qué frase lo bloqueó.
+    from core.mcp.types import GuardrailResult
+    from core.orchestrator import loop
+
+    async def falso(borrador, *args, **kwargs):
+        if "libre" in borrador:
+            return GuardrailResult(passed=False, reason="calendar_completion_check: disponibilidad")
+        return GuardrailResult(passed=True)
+
+    monkeypatch.setattr(loop, "run_guardrails", falso)
+    journeys._BLOQUEADOS.clear()
+    journeys.registrar_bloqueos()
+    assert getattr(loop.run_guardrails, "_registra_bloqueos", False)
+    journeys.registrar_bloqueos()  # idempotente: no envuelve dos veces
+
+    assert (await loop.run_guardrails("ese horario está libre")).passed is False
+    assert (await loop.run_guardrails("hola")).passed is True
+    lineas = journeys.tomar_bloqueados()
+    assert len(lineas) == 1
+    assert "calendar_completion_check" in lineas[0] and "ese horario está libre" in lineas[0]
+    assert journeys.tomar_bloqueados() == []  # se vacía en cada turno

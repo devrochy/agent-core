@@ -103,7 +103,13 @@ class AppSettings(Base):
     """
 
     __tablename__ = "app_settings"
-    __table_args__ = (UniqueConstraint("tenant_id", name="uq_app_settings_tenant"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_app_settings_tenant"),
+        CheckConstraint(
+            "vision_mode in ('describir','sin_descripcion')",
+            name="ck_app_settings_vision_mode",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
@@ -124,6 +130,22 @@ class AppSettings(Base):
     llm_provider: Mapped[str | None] = mapped_column(Text)
     llm_model: Mapped[str | None] = mapped_column(Text)
     llm_api_key_encrypted: Mapped[str | None] = mapped_column(Text)
+
+    # Multimedia entrante (SPEC-04, ADR-0151): proveedor/modelo/llave por negocio
+    # para transcribir notas de voz y describir imágenes. NULL = fallback del .env.
+    # La llave propia se cifra con SecretBox y nunca sale por la API.
+    audio_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    audio_provider: Mapped[str | None] = mapped_column(Text)
+    audio_model: Mapped[str | None] = mapped_column(Text)
+    audio_api_key_encrypted: Mapped[str | None] = mapped_column(Text)
+    vision_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    # describir = se llama al modelo de visión; sin_descripcion = el agente solo acusa recibo.
+    vision_mode: Mapped[str] = mapped_column(
+        Text, default="describir", server_default="describir"
+    )
+    vision_provider: Mapped[str | None] = mapped_column(Text)
+    vision_model: Mapped[str | None] = mapped_column(Text)
+    vision_api_key_encrypted: Mapped[str | None] = mapped_column(Text)
 
     # Comportamiento
     behavior_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)

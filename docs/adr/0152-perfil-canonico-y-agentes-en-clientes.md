@@ -1,4 +1,4 @@
-# ADR-0151 — Perfil canónico del cliente y agentes en la vista de Clientes
+# ADR-0152 — Perfil canónico del cliente y agentes en la vista de Clientes
 
 - **Estado:** propuesto (falta que lo acepte el dueño).
 - **Fecha:** 2026-10-22

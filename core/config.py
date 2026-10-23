@@ -142,6 +142,26 @@ class Settings(BaseSettings):
     llm_max_tokens: int = Field(default=4096, alias="LLM_MAX_TOKENS")
     difficulty_routing: bool = Field(default=True, alias="DIFFICULTY_ROUTING")
 
+    # --- Multimedia entrante (SPEC-04, ADR-0151) ---
+    # Fallback de plataforma; cada negocio puede sobrescribirlo en el panel (BYOK).
+    # Audio (STT): Groq es el default por costo. Visión: DeepSeek por costo.
+    stt_provider: Literal["groq", "openai"] = Field(default="groq", alias="STT_PROVIDER")
+    stt_model: str = Field(default="whisper-large-v3-turbo", alias="STT_MODEL")
+    stt_api_key: str = Field(default="", alias="STT_API_KEY")
+    vision_provider: Literal["deepseek", "anthropic", "openai"] = Field(
+        default="deepseek", alias="VISION_PROVIDER"
+    )
+    vision_model: str = Field(default="deepseek-flash", alias="VISION_MODEL")
+    vision_api_key: str = Field(default="", alias="VISION_API_KEY")
+    groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
+    anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    deepseek_api_key: str = Field(default="", alias="DEEPSEEK_API_KEY")
+    # Límites defensivos de la descarga/procesamiento (HU-MEDIA-02).
+    media_max_bytes: int = Field(default=16 * 1024 * 1024, alias="MEDIA_MAX_BYTES")
+    media_download_timeout_s: float = Field(default=20.0, alias="MEDIA_DOWNLOAD_TIMEOUT_S")
+    stt_timeout_s: float = Field(default=45.0, alias="STT_TIMEOUT_S")
+    vision_timeout_s: float = Field(default=45.0, alias="VISION_TIMEOUT_S")
+
     # --- Embeddings ---
     embedding_provider: Literal["local", "openai", "none"] = Field(
         default="none", alias="EMBEDDING_PROVIDER"

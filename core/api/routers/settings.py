@@ -1101,3 +1101,182 @@ async def save_subscription_provider(
         )
     await guardar_proveedor(tenant_id, provider)
     return await _subscription_provider_out(tenant_id)
+
+
+# ------------------------------------------------- multimedia entrante (SPEC-04, ADR-0151)
+class MediaAudioSettings(BaseModel):
+    enabled: bool
+    provider: str
+    model: str
+    has_api_key: bool
+    using_platform_key: bool
+
+
+class MediaVisionSettings(MediaAudioSettings):
+    mode: str
+
+
+class MediaCatalogModel(BaseModel):
+    id: str
+    label: str
+
+
+class MediaCatalogProvider(BaseModel):
+    key: str
+    label: str
+    default_model: str
+    models: list[MediaCatalogModel]
+
+
+class MediaCatalog(BaseModel):
+    audio: list[MediaCatalogProvider]
+    vision: list[MediaCatalogProvider]
+
+
+class MediaSettingsResponse(BaseModel):
+    audio: MediaAudioSettings
+    vision: MediaVisionSettings
+    catalog: MediaCatalog
+
+
+class MediaAudioUpdate(BaseModel):
+    enabled: bool = True
+    provider: str
+    model: str = ""
+    # Vacío = conservar la llave guardada. La llave nunca se devuelve.
+    api_key: str = ""
+
+
+class MediaVisionUpdate(BaseModel):
+    enabled: bool = True
+    mode: Literal["describir", "sin_descripcion"] = "describir"
+    provider: str
+    model: str = ""
+    api_key: str = ""
+
+
+class MediaTestRequest(BaseModel):
+    provider: str
+    model: str = ""
+    api_key: str = ""
+
+
+class MediaTestResponse(BaseModel):
+    ok: bool
+    provider: str
+    model: str
+
+
+def _tenant_de(principal: Principal) -> Any:
+    if principal.tenant_id is None:
+        raise ApiError.bad_request("Elige un negocio primero.", "sin_negocio")
+    return principal.tenant_id
+
+
+@router.get("/media", response_model=MediaSettingsResponse)
+async def get_media_settings(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> MediaSettingsResponse:
+    """Proveedores de audio/visión del negocio, fallback y catálogo para el panel."""
+    from core.media.config import read_media_config
+
+    return MediaSettingsResponse(**await read_media_config(_tenant_de(principal)))
+
+
+@router.put("/media/audio", response_model=MediaAudioSettings)
+async def save_media_audio(
+    payload: MediaAudioUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> MediaAudioSettings:
+    """Proveedor/modelo/llave de transcripción de notas de voz (BYOK opcional)."""
+    from core.media.config import MediaConfigError, read_media_config, save_audio_config
+
+    try:
+        await save_audio_config(
+            _tenant_de(principal),
+            enabled=payload.enabled,
+            provider=payload.provider,
+            model=payload.model,
+            api_key=payload.api_key,
+        )
+    except MediaConfigError as exc:
+        raise ApiError.bad_request(str(exc), exc.code) from exc
+    data = await read_media_config(_tenant_de(principal))
+    return MediaAudioSettings(**data["audio"])
+
+
+@router.put("/media/vision", response_model=MediaVisionSettings)
+async def save_media_vision(
+    payload: MediaVisionUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> MediaVisionSettings:
+    """Proveedor/modelo/llave y modo de imagen (`describir` o `sin_descripcion`)."""
+    from core.media.config import MediaConfigError, read_media_config, save_vision_config
+
+    try:
+        await save_vision_config(
+            _tenant_de(principal),
+            enabled=payload.enabled,
+            mode=payload.mode,
+            provider=payload.provider,
+            model=payload.model,
+            api_key=payload.api_key,
+        )
+    except MediaConfigError as exc:
+        raise ApiError.bad_request(str(exc), exc.code) from exc
+    data = await read_media_config(_tenant_de(principal))
+    return MediaVisionSettings(**data["vision"])
+
+
+@router.post("/media/audio/test", response_model=MediaTestResponse)
+async def test_media_audio(
+    payload: MediaTestRequest,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> MediaTestResponse:
+    """Prueba la combinación contra el proveedor real sin guardarla."""
+    from core.media.catalog import audio_model_or_default
+    from core.media.config import MediaConfigError, test_audio_config
+    from core.media.errors import MediaProviderError
+
+    try:
+        await test_audio_config(
+            _tenant_de(principal),
+            provider=payload.provider,
+            model=payload.model,
+            api_key=payload.api_key,
+        )
+    except (MediaConfigError, MediaProviderError) as exc:
+        code = getattr(exc, "code", "media_test_failed")
+        raise ApiError(422, code, str(exc)) from exc
+    return MediaTestResponse(
+        ok=True,
+        provider=payload.provider,
+        model=audio_model_or_default(payload.provider, payload.model),  # type: ignore[arg-type]
+    )
+
+
+@router.post("/media/vision/test", response_model=MediaTestResponse)
+async def test_media_vision(
+    payload: MediaTestRequest,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> MediaTestResponse:
+    """Prueba la combinación de visión con una imagen mínima, sin guardarla."""
+    from core.media.catalog import vision_model_or_default
+    from core.media.config import MediaConfigError, test_vision_config
+    from core.media.errors import MediaProviderError
+
+    try:
+        await test_vision_config(
+            _tenant_de(principal),
+            provider=payload.provider,
+            model=payload.model,
+            api_key=payload.api_key,
+        )
+    except (MediaConfigError, MediaProviderError) as exc:
+        code = getattr(exc, "code", "media_test_failed")
+        raise ApiError(422, code, str(exc)) from exc
+    return MediaTestResponse(
+        ok=True,
+        provider=payload.provider,
+        model=vision_model_or_default(payload.provider, payload.model),  # type: ignore[arg-type]
+    )
