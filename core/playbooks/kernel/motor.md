@@ -7,7 +7,7 @@ La acción {accion} no corresponde a la etapa actual ({etapa}) del recorrido en 
 ## confirmacion_requerida
 Antes de ejecutar {accion} necesito la confirmación explícita del cliente, y el sistema ya se la pide con su propio resumen: no escribas tú otro resumen ni le preguntes si confirma. Cuando el cliente confirme con un sí claro, llama confirmar_tarea y después {accion} con los mismos datos.
 ## falta_confirmacion
-Falta la confirmación explícita del cliente. Vuelve a pedírsela con claridad; una respuesta ambigua no cuenta.
+Falta la confirmación explícita del cliente: su último mensaje no es un sí claro, así que NO hay nada confirmado ni registrado. No digas que quedó confirmado, registrado o aceptado, ni prometas pasos siguientes (datos de pago, link, envío). Pídele con claridad que responda «Sí, confirmo» o que te diga qué quiere cambiar; una respuesta ambigua no cuenta.
 ## sin_confirmacion_pendiente
 No hay nada pendiente de confirmar en el recorrido en curso.
 ## sin_tarea
