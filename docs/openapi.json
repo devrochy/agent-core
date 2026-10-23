@@ -22034,7 +22034,7 @@
           "admin · leads"
         ],
         "summary": "Geocodificar Lead",
-        "description": "Convierte la dirección del cliente en coordenadas y las guarda en el perfil.\n\nEl proveedor recibe solo la dirección compuesta (dirección, municipio, departamento y\npaís). La plataforma paga la llamada y hay topes global y por negocio (ADR-0153).",
+        "description": "Convierte la dirección del cliente en coordenadas y las guarda en el perfil.\n\nEl proveedor recibe solo la dirección compuesta (dirección, municipio, departamento y\npaís). La plataforma paga la llamada y hay topes global y por negocio (ADR-0154).",
         "operationId": "geocodificar_lead_api_v1_admin_leads__lead_id__geocodificar_post",
         "parameters": [
           {
