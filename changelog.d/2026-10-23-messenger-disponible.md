@@ -13,3 +13,6 @@
 - Prueba nueva: todo tipo de mensajería de Meta disponible debe tener adaptador de salida.
 - El panel clásico (en retiro) muestra Messenger deshabilitado con «Solo en el panel nuevo»: su alta vive allí y la
   tarjeta no puede llevar a un enlace vacío.
+- **Los ecos del webhook ya no se procesan como mensajes del cliente.** La Página se suscribe a `message_echoes`
+  (lo que la propia Página envía vuelve al webhook con `message.is_echo`) y el parser lo tomaba como un mensaje
+  entrante cuyo remitente es la Página: el asistente se habría respondido a sí mismo. Ahora se descarta.
