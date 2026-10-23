@@ -65,6 +65,11 @@ TAREAS_DE_SUSCRIPCION = frozenset({"MANAGE", "MODERATE", "CREATE_CONTENT"})
 TAREA_DE_MENSAJERIA = "MESSAGING"
 
 
+MENSAJE_CHOQUE_MANUAL = (
+    "Ya hay una conexión manual con este identificador. Elimínala desde Conexiones y vuelve a conectarla con Facebook."
+)
+
+
 class MessengerAltaError(AgentCoreError):
     """El alta no puede seguir. `code` es estable para la API; `status` el HTTP sugerido."""
 
@@ -117,13 +122,17 @@ class ResultadoConexion:
 
 
 # ------------------------------------------------------------------ plan
-def plan_incluye_messenger(plan_id: str | None) -> bool:
-    """¿El plan incluye el canal Messenger? (`features.canales`, decisión del dueño 2026-10-23: todos los
-    planes de pago)."""
+def plan_incluye_canal(plan_id: str | None, canal: str) -> bool:
+    """¿El plan incluye el canal? (`features.canales`, decisión del dueño 2026-10-23: Messenger e Instagram en
+    todos los planes de pago)."""
     from core.billing.plans import get_plan
 
     plan = get_plan(plan_id) if plan_id else None
-    return bool(plan and "messenger" in (plan.features.get("canales") or []))
+    return bool(plan and canal in (plan.features.get("canales") or []))
+
+
+def plan_incluye_messenger(plan_id: str | None) -> bool:
+    return plan_incluye_canal(plan_id, "messenger")
 
 
 async def exigir_plan(tenant_id: uuid.UUID) -> None:
@@ -139,21 +148,22 @@ async def exigir_plan(tenant_id: uuid.UUID) -> None:
 
 
 # ------------------------------------------------------------------ paso 1: el intento
-def _clave_intento(tenant_id: uuid.UUID, intento: str) -> str:
-    return f"messenger_attempt:{tenant_id}:{hashlib.sha256(intento.encode()).hexdigest()}"
+def _clave_intento(tenant_id: uuid.UUID, intento: str, canal: str = "messenger") -> str:
+    # Cada canal tiene su espacio: un intento de Instagram no sirve para conectar Páginas de Messenger.
+    return f"{canal}_attempt:{tenant_id}:{hashlib.sha256(intento.encode()).hexdigest()}"
 
 
-async def iniciar_intento(tenant_id: uuid.UUID, admin_id: uuid.UUID) -> str:
+async def iniciar_intento(tenant_id: uuid.UUID, admin_id: uuid.UUID, canal: str = "messenger") -> str:
     """Abre un intento de popup. Solo se guarda su hash (con el admin que lo pidió), vence a los 15 min y es de
     un solo uso."""
     from core.memory.working import get_redis
 
     intento = secrets.token_urlsafe(24)
-    await get_redis().set(_clave_intento(tenant_id, intento), str(admin_id), ex=INTENTO_TTL_S)
+    await get_redis().set(_clave_intento(tenant_id, intento, canal), str(admin_id), ex=INTENTO_TTL_S)
     return intento
 
 
-async def _consumir_intento(tenant_id: uuid.UUID, admin_id: uuid.UUID, intento: str) -> None:
+async def _consumir_intento(tenant_id: uuid.UUID, admin_id: uuid.UUID, intento: str, canal: str = "messenger") -> None:
     from core.memory.working import get_redis
 
     invalido = MessengerAltaError(
@@ -163,7 +173,7 @@ async def _consumir_intento(tenant_id: uuid.UUID, admin_id: uuid.UUID, intento: 
     )
     if not intento:
         raise invalido
-    guardado = await get_redis().getdel(_clave_intento(tenant_id, intento))  # un solo uso, aunque falle lo que sigue
+    guardado = await get_redis().getdel(_clave_intento(tenant_id, intento, canal))  # un solo uso, aunque falle lo que sigue
     if guardado is None:
         raise invalido
     guardado = guardado.decode() if isinstance(guardado, bytes) else str(guardado)
@@ -223,23 +233,30 @@ async def _listar_paginas(
     return candidatas
 
 
-async def _suscribir_y_verificar(
-    page_id: str, page_token: str, app_secret: str, version: str, connection_id: uuid.UUID
-) -> tuple[bool, tuple[str, ...]]:
-    """`POST /{page}/subscribed_apps` con el token de la PÁGINA y, enseguida, un GET: lo que se guarda son los
-    campos que Meta confirma, no los pedidos."""
-    await graph_fetch(
-        f"/{page_id}/subscribed_apps", method="POST", token=page_token, app_secret=app_secret,
-        query={"subscribed_fields": PAGE_SUBSCRIBED_FIELDS}, version=version, connection_id=connection_id,
-    )
-    verificacion = await graph_fetch(
-        f"/{page_id}/subscribed_apps", token=page_token, app_secret=app_secret,
-        version=version, connection_id=connection_id,
-    )
-    entradas = (verificacion or {}).get("data", [])
+def _campos_de_la_app(entradas: list[dict[str, Any]], app_id: str) -> set[str]:
+    """Campos suscritos por NUESTRA app (la respuesta puede traer otras apps de la Página)."""
     campos: set[str] = set()
     for entrada in entradas:
-        campos.update(str(c) for c in entrada.get("subscribed_fields", []))
+        if str(entrada.get("id") or app_id) == app_id:
+            campos.update(str(c) for c in entrada.get("subscribed_fields", []))
+    return campos
+
+
+async def _suscribir_y_verificar(
+    page_id: str, page_token: str, app_id: str, app_secret: str, version: str, connection_id: uuid.UUID
+) -> tuple[bool, tuple[str, ...]]:
+    """`POST /{page}/subscribed_apps` con el token de la PÁGINA y, enseguida, un GET: lo que se guarda son los
+    campos que Meta confirma, no los pedidos. `POST subscribed_fields` REEMPLAZA la lista: si la Página ya tiene
+    campos (p. ej. los de la cuenta de Instagram vinculada) se piden la unión, para no quitárselos."""
+    kwargs = {"token": page_token, "app_secret": app_secret, "version": version, "connection_id": connection_id}
+    actuales = await graph_fetch(f"/{page_id}/subscribed_apps", **kwargs)
+    pedidos = set(PAGE_SUBSCRIBED_FIELDS.split(",")) | _campos_de_la_app((actuales or {}).get("data", []), app_id)
+    await graph_fetch(
+        f"/{page_id}/subscribed_apps", method="POST", query={"subscribed_fields": ",".join(sorted(pedidos))}, **kwargs
+    )
+    verificacion = await graph_fetch(f"/{page_id}/subscribed_apps", **kwargs)
+    entradas = (verificacion or {}).get("data", [])
+    campos = _campos_de_la_app(entradas, app_id)
     return bool(entradas), tuple(sorted(campos))
 
 
@@ -407,7 +424,7 @@ async def conectar_paginas(
             continue
         try:
             suscrita, campos = await _suscribir_y_verificar(
-                page_id, candidata.access_token, settings.meta_app_secret, version, connection_id
+                page_id, candidata.access_token, settings.meta_app_id, settings.meta_app_secret, version, connection_id
             )
         except GraphError as exc:
             log.warning("messenger_suscripcion_fallo", page_id=page_id, code=exc.code)
@@ -423,52 +440,53 @@ async def conectar_paginas(
 async def _guardar_pagina(
     tenant_id: uuid.UUID, admin_id: uuid.UUID, connection_id: uuid.UUID, pagina: PaginaCandidata
 ) -> uuid.UUID:
-    """Reclama la Página y escribe todo lo suyo en UNA transacción. El token de la Página se guarda antes (su
-    fila no depende de las demás) y se revoca si el reclamo falla."""
+    """Reclama la Página y escribe todo lo suyo en UNA transacción; el token de la Página se guarda DESPUÉS de que
+    confirme. Así un alta que falla no toca el token de una Página que ya funcionaba ni deja uno vivo en una
+    conexión que se eliminó mientras tanto."""
     assert pagina.access_token is not None
+    async with get_session() as session:
+        await claim_messaging_assets(session, tenant_id, page_id=pagina.page_id)
+        cuenta = await session.get(MetaConnection, connection_id)
+        if cuenta is None or cuenta.deleted_at is not None:
+            raise MetaAssetError(
+                "La conexión se eliminó mientras se completaba el alta: empieza de nuevo.",
+                code="connection_deleted",
+            )
+        fila = (
+            await session.execute(
+                select(FbPage).where(
+                    FbPage.tenant_id == tenant_id, FbPage.connection_id == connection_id,
+                    FbPage.page_id == pagina.page_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if fila is None:
+            session.add(
+                FbPage(
+                    tenant_id=tenant_id, connection_id=connection_id, page_id=pagina.page_id,
+                    name=pagina.name, category=pagina.category,
+                )
+            )
+        else:
+            fila.name, fila.category = pagina.name, pagina.category
+        # Sale de `draft` en la misma transacción que escribe el primer activo.
+        if cuenta.status == "draft":
+            cuenta.status = "pending"
+            cuenta.connected_by = admin_id
+        await session.flush()
+        canonica_id, resultado = await asegurar_conexion_de_pagina(
+            session, tenant_id, pagina.page_id, connection_id, nombre=pagina.name
+        )
+        if resultado == "choque_manual":
+            # Ya hay una conexión manual con este identificador y credenciales propias: respondería por ella, no
+            # por la Página. Se deshace todo y se explica.
+            raise MetaAssetError(MENSAJE_CHOQUE_MANUAL, code="manual_connection_conflict")
+        from core.agents.instancias import instancias_de_conexion_nueva
+
+        await instancias_de_conexion_nueva(session, tenant_id, canonica_id)
     await meta_token_store.put_token(
         connection_id, PAGE_TOKEN_KIND, pagina.page_id, pagina.access_token, tenant_id=tenant_id
     )
-    try:
-        async with get_session() as session:
-            await claim_messaging_assets(session, tenant_id, page_id=pagina.page_id)
-            cuenta = await session.get(MetaConnection, connection_id)
-            if cuenta is None or cuenta.deleted_at is not None:
-                raise MetaAssetError(
-                    "La conexión se eliminó mientras se completaba el alta: empieza de nuevo.",
-                    code="connection_deleted",
-                )
-            fila = (
-                await session.execute(
-                    select(FbPage).where(
-                        FbPage.tenant_id == tenant_id, FbPage.connection_id == connection_id,
-                        FbPage.page_id == pagina.page_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if fila is None:
-                session.add(
-                    FbPage(
-                        tenant_id=tenant_id, connection_id=connection_id, page_id=pagina.page_id,
-                        name=pagina.name, category=pagina.category,
-                    )
-                )
-            else:
-                fila.name, fila.category = pagina.name, pagina.category
-            # Sale de `draft` en la misma transacción que escribe el primer activo.
-            if cuenta.status == "draft":
-                cuenta.status = "pending"
-                cuenta.connected_by = admin_id
-            await session.flush()
-            canonica_id, _ = await asegurar_conexion_de_pagina(
-                session, tenant_id, pagina.page_id, connection_id, nombre=pagina.name
-            )
-            from core.agents.instancias import instancias_de_conexion_nueva
-
-            await instancias_de_conexion_nueva(session, tenant_id, canonica_id)
-    except Exception:
-        await meta_token_store.revoke_token(connection_id, PAGE_TOKEN_KIND, pagina.page_id, tenant_id=tenant_id)
-        raise
     return canonica_id
 
 

@@ -5,19 +5,17 @@ hay credenciales de firma distintas por producto).
 Verificación: HMAC-SHA256 del body crudo con el App Secret (X-Hub-Signature-256).
 Identidad canónica del cliente: "whatsapp:+E164" (el wa_id de Meta llega en
 dígitos pelados; se normaliza aquí — ADR-033 de agent-sale). Para Messenger/
-Instagram: "messenger:<PSID>" / "instagram:<IGSID>" (mismo criterio de
+Instagram: "messenger:<PSID>" / "instagram:<ig_user_id>:<IGSID>" (mismo criterio de
 prefijo por canal).
 
 Medios: se toleran sin romper (se capturan id/tipo). El plugin
 mod-media-processor los descarga y transcribe/analiza antes del orchestrator.
 
-Messenger/Instagram son SOLO de entrada en esta tanda: no hay
-`OutboundAdapter` para esos canales todavía (`core/gateway/channels/registry.py`
-indexa por `provider`, no por canal). Una conversación de esos canales se
-crea y persiste normal; el intento de RESPONDER usa el adapter de WhatsApp
-por compartir `provider="meta"`, falla con `ChannelError` (endpoint/formato
-de id equivocado), y `core/gateway/sender.py` ya captura esa excepción hoy
-(marca el mensaje `failed`, no rompe el turno) -- degradado, no un crash.
+Messenger/Instagram (ADR-0152): la salida va por `channels/messenger` y `channels/instagram`.
+Un eco (`message.is_echo`) es lo que la propia Página o cuenta envió y Meta devuelve al webhook:
+NO es del cliente y se descarta (si no, el asistente se respondería a sí mismo). La clave del
+cliente de Instagram lleva la cuenta (`instagram:<ig_user_id>:<IGSID>`): el mismo identificador en
+dos cuentas profesionales del negocio son dos clientes distintos y sus conversaciones no se mezclan.
 """
 
 from __future__ import annotations
@@ -107,9 +105,7 @@ class WhatsAppMetaInbound(InboundAdapter):
                 if not message:
                     continue  # delivery/read receipts, postbacks sin texto: no soportados aún
                 if message.get("is_echo"):
-                    # Lo envió la propia Página o cuenta y Meta lo devuelve (`message_echoes`): no es del
-                    # cliente. Sin este descarte el asistente se respondería a sí mismo.
-                    continue
+                    continue  # lo envió la propia Página o cuenta: no es un mensaje del cliente
                 sender_id = event.get("sender", {}).get("id", "")
                 media: list[dict[str, str]] = [
                     {"type": att.get("type", ""), "id": "", "url": att.get("payload", {}).get("url", "")}
@@ -120,7 +116,9 @@ class WhatsAppMetaInbound(InboundAdapter):
                         provider=self.provider,
                         channel=channel,
                         external_message_id=message.get("mid", ""),
-                        customer_external_id=f"{id_prefix}:{sender_id}",
+                        customer_external_id=(
+                            f"{id_prefix}:{entry_id}:{sender_id}" if channel == "instagram" else f"{id_prefix}:{sender_id}"
+                        ),
                         customer_name=None,
                         content=message.get("text", ""),
                         connection_external_id=entry_id,

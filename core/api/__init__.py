@@ -35,6 +35,7 @@ from core.api.routers import (
     leads,
     leads_acciones,
     me,
+    meta_instagram,
     meta_mensaje_prueba,
     meta_messenger,
     meta_ops,
@@ -89,6 +90,7 @@ api_router.include_router(connection_releases.router)
 api_router.include_router(meta_ops.router)
 api_router.include_router(meta_wizard.router)
 api_router.include_router(meta_messenger.router)
+api_router.include_router(meta_instagram.router)
 api_router.include_router(meta_promocion.router)
 api_router.include_router(meta_mensaje_prueba.router)
 api_router.include_router(collaborators.router)

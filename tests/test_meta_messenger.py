@@ -194,7 +194,10 @@ def test_meta_messenger_usa_su_adaptador_y_meta_whatsapp_el_de_siempre():
     assert isinstance(outbound_adapter_for("meta"), WhatsAppMetaOutbound)
 
 
-def test_instagram_sin_adaptador_no_cae_al_de_whatsapp():
-    # Mandaría el identificador del cliente de Instagram como si fuera un teléfono.
+def test_un_canal_de_mensajeria_sin_adaptador_no_cae_al_de_whatsapp(monkeypatch):
+    # Mandaría el identificador del cliente (un IGSID, un PSID) como si fuera un teléfono.
+    import core.gateway.channels.registry as registro
+
+    monkeypatch.delitem(registro._OUTBOUND_BY_CHANNEL, ("meta", "instagram"))
     with pytest.raises(KeyError, match="meta/instagram"):
         outbound_adapter_for("meta", "instagram")

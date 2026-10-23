@@ -118,8 +118,10 @@ async def test_el_alta_deja_la_pagina_conectada_de_punta_a_punta(meta) -> None:
     assert [(p.page_id, p.suscrita) for p in resultado.conectadas] == [(page, True)]
     assert resultado.conectadas[0].campos == ("messages", "messaging_postbacks")
     assert resultado.omitidas == []
-    # La suscripción se hizo con el token de la PÁGINA, no con el del usuario.
-    assert [t for m, p, t in simulado.llamadas if p.endswith("/subscribed_apps")] == [f"tok-{page}"] * 2
+    # La suscripción se hizo con el token de la PÁGINA, no con el del usuario: GET (lo que ya tenía), POST y GET.
+    assert [(m, t) for m, p, t in simulado.llamadas if p.endswith("/subscribed_apps")] == [
+        ("GET", f"tok-{page}"), ("POST", f"tok-{page}"), ("GET", f"tok-{page}"),
+    ]
 
     async with tenant_scope(tid):
         async with get_session() as session:
@@ -335,3 +337,46 @@ async def test_una_cuenta_de_otro_negocio_no_se_puede_usar(meta) -> None:
     with pytest.raises(alta.MessengerAltaError) as exc:
         await _conectar(b, admin, de_a.connection_id, ["123"])
     assert (exc.value.code, exc.value.status) == ("not_found", 404)
+
+
+# ------------------------------------------------------------------ conflicto con una conexión manual y campos de Instagram
+async def test_una_conexion_manual_con_el_mismo_id_de_pagina_se_omite_y_no_deja_nada(meta) -> None:
+    from core.db.models import ChannelConnection, FbPage
+    from core.db.session import get_session
+    from core.gateway import meta_token_store
+    from core.shared.tenant import tenant_scope
+
+    tid, admin, page = await _new_tenant("alta-manual"), await _admin_id(), uniq("page")
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            session.add(
+                ChannelConnection(
+                    tenant_id=tid, channel="messenger", provider="meta", type_id="messenger_meta",
+                    category="communication", label="manual", external_id=page, credentials_encrypted="x",
+                )
+            )
+    meta([_pagina(page)])
+    descubrimiento = await _descubrir(tid, admin)
+
+    resultado = await _conectar(tid, admin, descubrimiento.connection_id, [page])
+
+    assert resultado.conectadas == []
+    assert [(o.page_id, o.code) for o in resultado.omitidas] == [(page, "manual_connection_conflict")]
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            assert (await session.execute(select(FbPage).where(FbPage.page_id == page))).first() is None
+        assert await meta_token_store.get_token(descubrimiento.connection_id, "page_access", page, tenant_id=tid) is None
+
+
+async def test_conectar_messenger_no_quita_los_campos_de_instagram_de_la_pagina(meta) -> None:
+    """`POST subscribed_fields` reemplaza la lista: la Página ya suscrita por su cuenta de Instagram conserva los suyos."""
+    tid, admin, page = await _new_tenant("alta-union"), await _admin_id(), uniq("page")
+    simulado = meta([_pagina(page)], campos_previos={page: ["messages", "messaging_seen", "message_reactions"]})
+    descubrimiento = await _descubrir(tid, admin)
+
+    resultado = await _conectar(tid, admin, descubrimiento.connection_id, [page])
+
+    pedidos = set(simulado.pedidos[0].split(","))
+    assert {"messaging_seen", "message_reactions"} <= pedidos  # los de Instagram
+    assert {"message_echoes", "messaging_handovers"} <= pedidos  # los de Messenger
+    assert resultado.conectadas[0].suscrita is True

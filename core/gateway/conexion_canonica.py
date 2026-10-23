@@ -27,7 +27,12 @@ from typing import Any, Literal
 from sqlalchemy import select
 
 from core.db.models import ChannelConnection, utcnow
-from core.gateway.connection_types import MESSENGER_META, WHATSAPP_META, get_connection_type
+from core.gateway.connection_types import (
+    INSTAGRAM_META,
+    MESSENGER_META,
+    WHATSAPP_META,
+    get_connection_type,
+)
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
@@ -112,6 +117,62 @@ async def asegurar_conexion_del_numero(
     return "creada"
 
 
+async def _asegurar_conexion_de_activo(
+    session: Any,
+    tenant_id: uuid.UUID,
+    external_id: str,
+    meta_connection_id: uuid.UUID,
+    *,
+    tipo_id: str,
+    channel: str,
+    nombre: str,
+) -> tuple[uuid.UUID, Resultado]:
+    tipo = get_connection_type(tipo_id)
+    if tipo is None:  # el catálogo es código: no pasa salvo que alguien borre el tipo
+        raise RuntimeError(f"Falta el tipo de conexión {tipo_id} en el catálogo")
+    viva = (
+        await session.execute(
+            select(ChannelConnection)
+            .where(
+                ChannelConnection.tenant_id == tenant_id,
+                ChannelConnection.provider == PROVEEDOR,
+                ChannelConnection.channel == channel,
+                ChannelConnection.external_id == external_id,
+                ChannelConnection.deleted_at.is_(None),
+            )
+            .order_by(ChannelConnection.created_at)
+            .limit(1)
+        )
+    ).scalars().first()
+    if viva is not None:
+        if viva.meta_connection_id is None:
+            log.warning("conexion_canonica_choca_con_manual", tenant_id=str(tenant_id), external_id=external_id)
+            return viva.id, "choque_manual"
+        if viva.meta_connection_id == meta_connection_id:
+            return viva.id, "ya_estaba"
+        viva.meta_connection_id = meta_connection_id
+        viva.updated_at = utcnow()
+        await session.flush()
+        return viva.id, "religada"
+    conexion = ChannelConnection(
+        tenant_id=tenant_id,
+        channel=channel,
+        provider=PROVEEDOR,
+        type_id=tipo.id,
+        category=tipo.category,
+        label=nombre[:120],
+        active=True,
+        is_primary=False,
+        external_id=external_id,
+        credentials_encrypted=None,
+        meta_connection_id=meta_connection_id,
+    )
+    session.add(conexion)
+    await session.flush()
+    log.info("conexion_canonica_de_activo_creada", tenant_id=str(tenant_id), channel=channel, external_id=external_id)
+    return conexion.id, "creada"
+
+
 async def asegurar_conexion_de_pagina(
     session: Any,
     tenant_id: uuid.UUID,
@@ -126,46 +187,21 @@ async def asegurar_conexion_de_pagina(
     con otra cuenta de Meta), se religa a la nueva; si es una conexión manual sin cuenta, no se
     toca (`choque_manual`). Va en la MISMA sesión que el alta, después de `claim_messaging_assets`
     (que serializa por Página)."""
-    tipo = get_connection_type(MESSENGER_META)
-    if tipo is None:  # el catálogo es código: no pasa salvo que alguien borre el tipo
-        raise RuntimeError(f"Falta el tipo de conexión {MESSENGER_META} en el catálogo")
-    viva = (
-        await session.execute(
-            select(ChannelConnection)
-            .where(
-                ChannelConnection.tenant_id == tenant_id,
-                ChannelConnection.provider == PROVEEDOR,
-                ChannelConnection.external_id == page_id,
-                ChannelConnection.deleted_at.is_(None),
-            )
-            .order_by(ChannelConnection.created_at)
-            .limit(1)
-        )
-    ).scalars().first()
-    if viva is not None:
-        if viva.meta_connection_id is None:
-            log.warning("conexion_canonica_choca_con_manual", tenant_id=str(tenant_id), page_id=page_id)
-            return viva.id, "choque_manual"
-        if viva.meta_connection_id == meta_connection_id:
-            return viva.id, "ya_estaba"
-        viva.meta_connection_id = meta_connection_id
-        viva.updated_at = utcnow()
-        await session.flush()
-        return viva.id, "religada"
-    conexion = ChannelConnection(
-        tenant_id=tenant_id,
-        channel="messenger",
-        provider=PROVEEDOR,
-        type_id=tipo.id,
-        category=tipo.category,
-        label=nombre[:120],
-        active=True,
-        is_primary=False,
-        external_id=page_id,
-        credentials_encrypted=None,
-        meta_connection_id=meta_connection_id,
+    return await _asegurar_conexion_de_activo(
+        session, tenant_id, page_id, meta_connection_id, tipo_id=MESSENGER_META, channel="messenger", nombre=nombre
     )
-    session.add(conexion)
-    await session.flush()
-    log.info("conexion_canonica_de_pagina_creada", tenant_id=str(tenant_id), page_id=page_id)
-    return conexion.id, "creada"
+
+
+async def asegurar_conexion_de_cuenta_ig(
+    session: Any,
+    tenant_id: uuid.UUID,
+    ig_user_id: str,
+    meta_connection_id: uuid.UUID,
+    *,
+    nombre: str = "",
+) -> tuple[uuid.UUID, Resultado]:
+    """Lo mismo que `asegurar_conexion_de_pagina` para una cuenta profesional de Instagram (HU-CHAN-04): su
+    `external_id` es el `ig_user_id`, que es el `entry.id` con el que Meta entrega sus mensajes."""
+    return await _asegurar_conexion_de_activo(
+        session, tenant_id, ig_user_id, meta_connection_id, tipo_id=INSTAGRAM_META, channel="instagram", nombre=nombre
+    )

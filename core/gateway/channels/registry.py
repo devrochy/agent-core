@@ -14,6 +14,7 @@ from typing import Any
 from core.config import get_settings
 from core.gateway.channels.base import InboundAdapter, OutboundAdapter
 from core.gateway.channels.email import EmailSmtpOutbound
+from core.gateway.channels.instagram.outbound import InstagramMetaOutbound
 from core.gateway.channels.messenger.outbound import MessengerMetaOutbound
 from core.gateway.channels.whatsapp.inbound import WhatsAppMetaInbound
 from core.gateway.channels.whatsapp.outbound import WhatsAppMetaOutbound
@@ -35,6 +36,7 @@ _OUTBOUND: dict[str, OutboundAdapter] = {
 # con WhatsApp y se distinguen por canal (ADR-0152). Sin entrada para el canal, rige el de proveedor.
 _OUTBOUND_BY_CHANNEL: dict[tuple[str, str], OutboundAdapter] = {
     ("meta", "messenger"): MessengerMetaOutbound(),
+    ("meta", "instagram"): InstagramMetaOutbound(),
 }
 
 # Canales de mensajería de Meta que NO usan el adaptador de WhatsApp aunque compartan proveedor.

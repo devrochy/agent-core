@@ -162,7 +162,7 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         description="Mensajes directos vía Meta",
         external_id_key="account_id",
         produces_conversations=True,
-        available=False,
+        available=True,
         setup_kind=SETUP_WIZARD,
         sort_order=20,
     ),

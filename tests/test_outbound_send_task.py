@@ -469,7 +469,7 @@ async def test_send_one_de_whatsapp_no_agrega_datos_de_messenger(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_send_one_de_un_canal_sin_adaptador_falla_permanente_y_libera_el_claim(monkeypatch):
-    """Instagram, hasta HU-CHAN-04: no cae al adaptador de WhatsApp ni reintenta."""
+    """Un canal de mensajería de Meta sin adaptador no cae al de WhatsApp ni reintenta."""
     import core.tasks.outbound_send as mod
     from core.gateway.meta_errors import GraphError
 
