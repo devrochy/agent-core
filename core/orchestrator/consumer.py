@@ -522,6 +522,21 @@ async def _resolve_conversation(
         elif name and not customer.name:
             customer.name = name
 
+        # El nombre que manda el canal es el alias: si después el agente aprende el
+        # nombre real, `name` cambia pero el alias queda para no perder cómo escribe
+        # la persona en WhatsApp.
+        if name and not (customer.attributes or {}).get("alias"):
+            from core.memory import facts
+
+            await facts.escribir_hechos(
+                session,
+                tenant_id=tenant_id,
+                customer_id=customer.id,
+                namespace=facts.PERFIL,
+                valores={"alias": name},
+                source="import",
+            )
+
         connection = (
             await session.execute(
                 select(ChannelConnection)

@@ -190,7 +190,17 @@ def test_lead_provider_registra_columnas() -> None:
     from core.admin.lead_registry import lead_registry
 
     cols = [c.key for c in lead_registry.columns_for({"pack_cobranza"})]
-    assert cols == ["saldo", "mora", "riesgo"]
+    assert cols == [
+        "cartera",
+        "saldo",
+        "mora",
+        "riesgo",
+        "estatus",
+        "cuotas_vencidas",
+        "proxima_cuota",
+        "promesa",
+        "ultimo_pago",
+    ]
 
 
 def test_api_gestor_rutas_f1() -> None:
