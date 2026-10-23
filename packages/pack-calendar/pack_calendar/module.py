@@ -72,6 +72,32 @@ _AGENDA = (
 _MISMA_ORACION = r"[^.!?\n]{0,120}?"
 
 
+# Un paso futuro o condicionado no es una afirmación: "cuando confirmes el resumen, la cita queda
+# agendada" o "ahí queda agendada" explican qué pasará, no que ya pasó. Con el motor de
+# procedimientos el asistente describe la confirmación antes de que exista la cita, y la regla de
+# "quedó/queda agendada" lo escalaba (pass^4 de los procedimientos, 2026-10-23). "Si" no cuenta:
+# "si todo está bien, tu cita quedó agendada" sí afirma.
+_PROSPECTIVO = re.compile(
+    r"\b(?:cuando|una\s+vez(?:\s+que)?|en\s+cuanto|apenas|luego\s+de|despu[eé]s\s+de|"
+    r"al\s+(?:confirmar|aceptar|elegir)|para\s+que|ah[ií]|all[ií])\b",
+    re.IGNORECASE,
+)
+_ORACION = re.compile(r"[^.!?\n]+[.!?\n]?")
+# Solo las frases con "quedó/queda": el resto de los verbos ("moví", "cancelé") ya es pasado.
+_CON_QUEDAR = frozenset({"agendada", "reagendada", "cancelada"})
+
+
+def _sin_pasos_futuros(text: str, affirm: re.Pattern[str]) -> str:
+    """Quita las oraciones donde un marcador de futuro precede a la afirmación."""
+    conservadas: list[str] = []
+    for oracion in _ORACION.findall(text):
+        coincidencia = affirm.search(oracion)
+        if coincidencia and _PROSPECTIVO.search(oracion[: coincidencia.start()]):
+            continue
+        conservadas.append(oracion)
+    return "".join(conservadas)
+
+
 @dataclass(frozen=True)
 class _Claim:
     tools: frozenset[str]
@@ -261,6 +287,8 @@ def _builtin_verdict(label: str, text: str, results: list[dict[str, Any]]) -> Gu
             ),
         )
     affirm_text = claim.deny.sub(" ", text) if claim.deny is not None else text
+    if label in _CON_QUEDAR:
+        affirm_text = _sin_pasos_futuros(affirm_text, claim.affirm)
     if not claim.affirm.search(affirm_text) or _affirmation_backed(label, results):
         return None
 

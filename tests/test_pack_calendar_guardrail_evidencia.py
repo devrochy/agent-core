@@ -356,3 +356,50 @@ async def test_disponibilidad_generica_con_dato_de_agenda_bloquea(texto: str):
     verdict = await _check(texto)
     assert not verdict.passed, texto
     assert "disponibilidad" in verdict.reason
+
+
+# ---------------------------------------------------------------- pasos futuros (pass^4, 2026-10-23)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        # Borradores reales que escalaron `agendar-una-demo`: el motor aún pide la confirmación.
+        "Listo, martes 27 de octubre a las 10:00 con tu correo. El sistema te muestra el resumen "
+        "para que lo confirmes y ahí queda agendada.",
+        "Perfecto, martes 27 de octubre a las 10:00 con tu correo. Cuando confirmes el resumen que te "
+        "aparece en pantalla, la cita queda agendada y te llega la confirmación por correo.",
+        "Una vez que confirmes, tu demo queda agendada.",
+    ],
+)
+async def test_describir_lo_que_pasara_al_confirmar_no_afirma_que_ya_quedo(texto: str):
+    verdict = await _check(texto)
+    assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Tu cita quedó agendada para el martes a las 10:00.",
+        "Listo, tu demo queda agendada para el martes.",
+        # "si" no es un marcador de futuro: aquí afirma que ya se creó.
+        "Si todo está bien, tu cita quedó agendada.",
+        # El marcador viene DESPUÉS de la afirmación: no la excusa.
+        "Tu demo quedó agendada y cuando llegue el día te recordamos.",
+    ],
+)
+async def test_una_afirmacion_real_sin_tool_sigue_bloqueando(texto: str):
+    verdict = await _check(texto)
+    assert not verdict.passed
+    assert "agendada" in verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_pasos_futuros_con_la_cita_creada_en_el_turno_siguen_pasando():
+    verdict = await _check(
+        "Cuando confirmes, la cita queda agendada. Ya quedó agendada para el martes.",
+        _r("create_calendar_event", status="created", event_id="a-1"),
+    )
+    assert verdict.passed, verdict.reason
