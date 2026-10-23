@@ -10996,6 +10996,190 @@
             }
           }
         }
+      },
+      "get": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Listar Suscripciones",
+        "description": "Suscripciones del negocio con cliente, plan, estado, próximo cargo y deuda (HU-SUB-08).",
+        "operationId": "listar_suscripciones_api_v1_pack_pack_subscriptions_suscripciones_get",
+        "parameters": [
+          {
+            "name": "estado",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "trialing",
+                    "activa",
+                    "pausada",
+                    "vencida",
+                    "cancelada"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Estado"
+            }
+          },
+          {
+            "name": "variante_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plan (variante de commerce).",
+              "title": "Variante Id"
+            },
+            "description": "Plan (variante de commerce)."
+          },
+          {
+            "name": "periodicidad",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "mensual",
+                    "trimestral",
+                    "anual"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Periodicidad"
+            }
+          },
+          {
+            "name": "con_mora",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Solo con algún cargo vencido sin pagar.",
+              "default": false,
+              "title": "Con Mora"
+            },
+            "description": "Solo con algún cargo vencido sin pagar."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Nombre o teléfono del cliente, o plan.",
+              "title": "Q"
+            },
+            "description": "Nombre o teléfono del cliente, o plan."
+          },
+          {
+            "name": "cliente_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Solo las de este cliente.",
+              "title": "Cliente Id"
+            },
+            "description": "Solo las de este cliente."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_SuscripcionItem_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/pack/pack_subscriptions/cargos/{charge_id}/avisos": {
@@ -11045,6 +11229,700 @@
                     "$ref": "#/components/schemas/AvisoOut"
                   },
                   "title": "Response Avisos Del Cargo Api V1 Pack Pack Subscriptions Cargos  Charge Id  Avisos Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_subscriptions/suscripciones/{subscription_id}": {
+      "get": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Detalle Suscripcion",
+        "description": "Detalle: cargos, cambio programado, historial de cambios de estado y acciones válidas.",
+        "operationId": "detalle_suscripcion_api_v1_pack_pack_subscriptions_suscripciones__subscription_id__get",
+        "parameters": [
+          {
+            "name": "subscription_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Subscription Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuscripcionDetalle"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_subscriptions/cargos": {
+      "get": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Listar Cargos",
+        "description": "Pagos de suscripción: los cargos con su estado, vencimiento y mora (HU-SUB-20).",
+        "operationId": "listar_cargos_api_v1_pack_pack_subscriptions_cargos_get",
+        "parameters": [
+          {
+            "name": "estado",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pendiente",
+                    "pagado",
+                    "anulado"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Estado"
+            }
+          },
+          {
+            "name": "tipo",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "periodo",
+                    "cambio_plan"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tipo"
+            }
+          },
+          {
+            "name": "suscripcion_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Suscripcion Id"
+            }
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Vencimiento desde (incluido).",
+              "title": "Desde"
+            },
+            "description": "Vencimiento desde (incluido)."
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Vencimiento hasta (incluido).",
+              "title": "Hasta"
+            },
+            "description": "Vencimiento hasta (incluido)."
+          },
+          {
+            "name": "vencidos",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Solo pendientes con vencimiento cumplido.",
+              "default": false,
+              "title": "Vencidos"
+            },
+            "description": "Solo pendientes con vencimiento cumplido."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_CargoItem_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_subscriptions/clientes": {
+      "get": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Listar Clientes",
+        "description": "Clientes con suscripción: cuántas, qué planes, lo que deben y su último período pagado (HU-SUB-19).",
+        "operationId": "listar_clientes_api_v1_pack_pack_subscriptions_clientes_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "con_mora",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Con Mora"
+            }
+          },
+          {
+            "name": "incluir_canceladas",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Incluye a quien solo tiene suscripciones canceladas.",
+              "default": false,
+              "title": "Incluir Canceladas"
+            },
+            "description": "Incluye a quien solo tiene suscripciones canceladas."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ClienteConSuscripcion_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_subscriptions/metricas": {
+      "get": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Metricas",
+        "description": "MRR, altas, bajas, churn, mora por antigüedad y cohortes por plan (HU-SUB-16).",
+        "operationId": "metricas_api_v1_pack_pack_subscriptions_metricas_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Metricas"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_subscriptions/suscripciones/{subscription_id}/pausar": {
+      "post": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Pausar Suscripcion",
+        "description": "Suspende los cobros (pausa pedida por el negocio: `motivo_pausa = cliente`). Auditada.",
+        "operationId": "pausar_suscripcion_api_v1_pack_pack_subscriptions_suscripciones__subscription_id__pausar_post",
+        "parameters": [
+          {
+            "name": "subscription_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Subscription Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/MotivoBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_subscriptions/suscripciones/{subscription_id}/reanudar": {
+      "post": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Reanudar Suscripcion",
+        "description": "Vuelve a `activa` y calcula el próximo cargo desde hoy. Auditada.",
+        "operationId": "reanudar_suscripcion_api_v1_pack_pack_subscriptions_suscripciones__subscription_id__reanudar_post",
+        "parameters": [
+          {
+            "name": "subscription_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Subscription Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_subscriptions/suscripciones/{subscription_id}/cancelar": {
+      "post": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Cancelar Suscripcion",
+        "description": "Termina la suscripción (no se puede reanudar) y deja de generar cargos. Auditada.",
+        "operationId": "cancelar_suscripcion_api_v1_pack_pack_subscriptions_suscripciones__subscription_id__cancelar_post",
+        "parameters": [
+          {
+            "name": "subscription_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Subscription Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/MotivoBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_subscriptions/cargos/{charge_id}/reenviar-link": {
+      "post": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Reenviar Link De Cargo",
+        "description": "Reenvía al cliente el link de pago de un cargo pendiente, por WhatsApp (outbox, ADR-0107).\n\nReusa el link del cargo (o lo crea si falta, sin duplicar el cargo). Si el cliente no tiene\nuna conversación de WhatsApp no se envía nada y se devuelve el link para copiarlo.",
+        "operationId": "reenviar_link_de_cargo_api_v1_pack_pack_subscriptions_cargos__charge_id__reenviar_link_post",
+        "parameters": [
+          {
+            "name": "charge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Charge Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReenvioOut"
                 }
               }
             }
@@ -45020,6 +45898,971 @@
         ],
         "title": "InstagramLoginStartOut",
         "description": "Dirección de autorización de Instagram a la que el panel manda el navegador."
+      },
+      "AccionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "motivo_pausa": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Pausa"
+          },
+          "proximo_cargo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proximo Cargo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "estado"
+        ],
+        "title": "AccionOut"
+      },
+      "CargoItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "suscripcion_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Suscripcion Id"
+          },
+          "cliente": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClienteRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
+          },
+          "periodo": {
+            "type": "string",
+            "title": "Periodo"
+          },
+          "tipo": {
+            "type": "string",
+            "title": "Tipo"
+          },
+          "monto": {
+            "type": "number",
+            "title": "Monto"
+          },
+          "moneda": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Moneda"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "fecha_vencimiento": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fecha Vencimiento"
+          },
+          "dias_mora": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dias Mora"
+          },
+          "link_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link Url"
+          },
+          "pago_externo": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pago Externo"
+          },
+          "creado": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Creado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "suscripcion_id",
+          "periodo",
+          "tipo",
+          "monto",
+          "estado",
+          "creado"
+        ],
+        "title": "CargoItem"
+      },
+      "ClienteConSuscripcion": {
+        "properties": {
+          "cliente": {
+            "$ref": "#/components/schemas/ClienteRef"
+          },
+          "suscripciones": {
+            "type": "integer",
+            "title": "Suscripciones"
+          },
+          "vivas": {
+            "type": "integer",
+            "title": "Vivas",
+            "description": "Suscripciones en prueba, activas, pausadas o vencidas (no canceladas)."
+          },
+          "planes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Planes"
+          },
+          "deuda": {
+            "type": "number",
+            "title": "Deuda"
+          },
+          "en_mora": {
+            "type": "number",
+            "title": "En Mora"
+          },
+          "dias_mora": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dias Mora"
+          },
+          "ultimo_periodo_pagado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ultimo Periodo Pagado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cliente",
+          "suscripciones",
+          "vivas",
+          "planes",
+          "deuda",
+          "en_mora"
+        ],
+        "title": "ClienteConSuscripcion"
+      },
+      "ClienteRef": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "nombre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre"
+          },
+          "telefono": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Telefono"
+          },
+          "canal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canal"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "ClienteRef",
+        "description": "El `Customer` del core al que pertenece la suscripción (sin email: el core no lo guarda)."
+      },
+      "CohorteFila": {
+        "properties": {
+          "cohorte": {
+            "type": "string",
+            "title": "Cohorte"
+          },
+          "plan": {
+            "type": "string",
+            "title": "Plan"
+          },
+          "altas": {
+            "type": "integer",
+            "title": "Altas"
+          },
+          "vigentes": {
+            "type": "integer",
+            "title": "Vigentes",
+            "description": "De esas altas, cuántas no están canceladas hoy."
+          }
+        },
+        "type": "object",
+        "required": [
+          "cohorte",
+          "plan",
+          "altas",
+          "vigentes"
+        ],
+        "title": "CohorteFila"
+      },
+      "HistorialItem": {
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "accion": {
+            "type": "string",
+            "title": "Accion"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "detalle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detalle"
+          }
+        },
+        "type": "object",
+        "required": [
+          "at",
+          "accion",
+          "actor"
+        ],
+        "title": "HistorialItem"
+      },
+      "Metricas": {
+        "properties": {
+          "moneda": {
+            "type": "string",
+            "title": "Moneda"
+          },
+          "otras_monedas": {
+            "type": "integer",
+            "title": "Otras Monedas",
+            "description": "Suscripciones activas en otra moneda, fuera de estas cifras."
+          },
+          "mrr": {
+            "type": "number",
+            "title": "Mrr",
+            "description": "Ingreso recurrente mensual: activas de pago, trimestral ÷ 3 y anual ÷ 12."
+          },
+          "mrr_mes_anterior": {
+            "type": "number",
+            "title": "Mrr Mes Anterior",
+            "description": "Aproximado: suscripciones vivas al cierre del mes anterior, a su precio actual."
+          },
+          "activas": {
+            "type": "integer",
+            "title": "Activas"
+          },
+          "en_prueba": {
+            "type": "integer",
+            "title": "En Prueba"
+          },
+          "pausadas": {
+            "type": "integer",
+            "title": "Pausadas"
+          },
+          "vencidas": {
+            "type": "integer",
+            "title": "Vencidas"
+          },
+          "canceladas": {
+            "type": "integer",
+            "title": "Canceladas"
+          },
+          "altas_mes": {
+            "type": "integer",
+            "title": "Altas Mes"
+          },
+          "altas_mes_anterior": {
+            "type": "integer",
+            "title": "Altas Mes Anterior"
+          },
+          "bajas_mes": {
+            "type": "integer",
+            "title": "Bajas Mes"
+          },
+          "bajas_mes_anterior": {
+            "type": "integer",
+            "title": "Bajas Mes Anterior"
+          },
+          "churn_mes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Churn Mes",
+            "description": "Bajas del mes ÷ suscripciones vivas al inicio del mes (0–1)."
+          },
+          "mora": {
+            "$ref": "#/components/schemas/MoraResumen"
+          },
+          "cohortes": {
+            "items": {
+              "$ref": "#/components/schemas/CohorteFila"
+            },
+            "type": "array",
+            "title": "Cohortes"
+          },
+          "desde": {
+            "type": "string",
+            "format": "date",
+            "title": "Desde",
+            "description": "Primer día del mes en curso (UTC)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "moneda",
+          "otras_monedas",
+          "mrr",
+          "mrr_mes_anterior",
+          "activas",
+          "en_prueba",
+          "pausadas",
+          "vencidas",
+          "canceladas",
+          "altas_mes",
+          "altas_mes_anterior",
+          "bajas_mes",
+          "bajas_mes_anterior",
+          "mora",
+          "cohortes",
+          "desde"
+        ],
+        "title": "Metricas"
+      },
+      "MoraResumen": {
+        "properties": {
+          "cargos": {
+            "type": "integer",
+            "title": "Cargos"
+          },
+          "monto": {
+            "type": "number",
+            "title": "Monto"
+          },
+          "tramos": {
+            "items": {
+              "$ref": "#/components/schemas/TramoDeMora"
+            },
+            "type": "array",
+            "title": "Tramos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cargos",
+          "monto",
+          "tramos"
+        ],
+        "title": "MoraResumen"
+      },
+      "MotivoBody": {
+        "properties": {
+          "motivo": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Motivo",
+            "description": "Opcional; queda en la auditoría.",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "MotivoBody"
+      },
+      "Page_CargoItem_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CargoItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "has_more"
+        ],
+        "title": "Page[CargoItem]"
+      },
+      "Page_ClienteConSuscripcion_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ClienteConSuscripcion"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "has_more"
+        ],
+        "title": "Page[ClienteConSuscripcion]"
+      },
+      "Page_SuscripcionItem_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SuscripcionItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "has_more"
+        ],
+        "title": "Page[SuscripcionItem]"
+      },
+      "ReenvioOut": {
+        "properties": {
+          "enviado": {
+            "type": "boolean",
+            "title": "Enviado"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo",
+            "description": "Por qué no se envió (`sin_conversacion_whatsapp`): el link igual se devuelve para copiarlo."
+          }
+        },
+        "type": "object",
+        "required": [
+          "enviado"
+        ],
+        "title": "ReenvioOut"
+      },
+      "SuscripcionDetalle": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cliente": {
+            "$ref": "#/components/schemas/ClienteRef"
+          },
+          "plan": {
+            "type": "string",
+            "title": "Plan"
+          },
+          "variante_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variante Id"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "motivo_pausa": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Pausa"
+          },
+          "periodicidad": {
+            "type": "string",
+            "title": "Periodicidad"
+          },
+          "valor_periodo": {
+            "type": "number",
+            "title": "Valor Periodo"
+          },
+          "moneda": {
+            "type": "string",
+            "title": "Moneda"
+          },
+          "proximo_cargo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proximo Cargo"
+          },
+          "trial_termina": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trial Termina"
+          },
+          "fecha_alta": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fecha Alta"
+          },
+          "deuda": {
+            "type": "number",
+            "title": "Deuda",
+            "description": "Suma de los cargos de período pendientes (vencidos o por vencer)."
+          },
+          "cargos_pendientes": {
+            "type": "integer",
+            "title": "Cargos Pendientes"
+          },
+          "en_mora": {
+            "type": "number",
+            "title": "En Mora",
+            "description": "Parte de la deuda con vencimiento ya cumplido."
+          },
+          "dias_mora": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dias Mora",
+            "description": "Días del cargo vencido más viejo; None si no hay mora."
+          },
+          "fecha_cancelacion": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fecha Cancelacion"
+          },
+          "cambio_programado": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cambio Programado"
+          },
+          "cargos": {
+            "items": {
+              "$ref": "#/components/schemas/CargoItem"
+            },
+            "type": "array",
+            "title": "Cargos"
+          },
+          "historial": {
+            "items": {
+              "$ref": "#/components/schemas/HistorialItem"
+            },
+            "type": "array",
+            "title": "Historial"
+          },
+          "acciones": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Acciones",
+            "description": "Acciones válidas en el estado actual: pausar, reanudar, cancelar."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "cliente",
+          "plan",
+          "estado",
+          "periodicidad",
+          "valor_periodo",
+          "moneda",
+          "deuda",
+          "cargos_pendientes",
+          "en_mora",
+          "cargos",
+          "historial",
+          "acciones"
+        ],
+        "title": "SuscripcionDetalle"
+      },
+      "SuscripcionItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cliente": {
+            "$ref": "#/components/schemas/ClienteRef"
+          },
+          "plan": {
+            "type": "string",
+            "title": "Plan"
+          },
+          "variante_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variante Id"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "motivo_pausa": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Pausa"
+          },
+          "periodicidad": {
+            "type": "string",
+            "title": "Periodicidad"
+          },
+          "valor_periodo": {
+            "type": "number",
+            "title": "Valor Periodo"
+          },
+          "moneda": {
+            "type": "string",
+            "title": "Moneda"
+          },
+          "proximo_cargo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proximo Cargo"
+          },
+          "trial_termina": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trial Termina"
+          },
+          "fecha_alta": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fecha Alta"
+          },
+          "deuda": {
+            "type": "number",
+            "title": "Deuda",
+            "description": "Suma de los cargos de período pendientes (vencidos o por vencer)."
+          },
+          "cargos_pendientes": {
+            "type": "integer",
+            "title": "Cargos Pendientes"
+          },
+          "en_mora": {
+            "type": "number",
+            "title": "En Mora",
+            "description": "Parte de la deuda con vencimiento ya cumplido."
+          },
+          "dias_mora": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dias Mora",
+            "description": "Días del cargo vencido más viejo; None si no hay mora."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "cliente",
+          "plan",
+          "estado",
+          "periodicidad",
+          "valor_periodo",
+          "moneda",
+          "deuda",
+          "cargos_pendientes",
+          "en_mora"
+        ],
+        "title": "SuscripcionItem"
+      },
+      "TramoDeMora": {
+        "properties": {
+          "etiqueta": {
+            "type": "string",
+            "title": "Etiqueta"
+          },
+          "cargos": {
+            "type": "integer",
+            "title": "Cargos"
+          },
+          "monto": {
+            "type": "number",
+            "title": "Monto"
+          }
+        },
+        "type": "object",
+        "required": [
+          "etiqueta",
+          "cargos",
+          "monto"
+        ],
+        "title": "TramoDeMora"
       }
     }
   }

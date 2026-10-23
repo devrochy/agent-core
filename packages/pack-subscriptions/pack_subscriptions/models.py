@@ -44,6 +44,8 @@ class Subscription(Base):
     __table_args__ = (
         Index("ix_pack_subscriptions_subs_tenant_customer", "tenant_id", "customer_id"),
         Index("ix_pack_subscriptions_subs_tenant_proximo", "tenant_id", "proximo_cargo"),
+        # SPEC-35 (migración 0008): la lista del panel filtra por estado.
+        Index("ix_pack_subscriptions_subs_tenant_estado", "tenant_id", "estado"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -78,6 +80,8 @@ class SubscriptionCharge(Base):
     __tablename__ = "pack_subscriptions_charges"
     __table_args__ = (
         Index("ix_pack_subscriptions_charges_tenant_sub", "tenant_id", "subscription_id"),
+        # SPEC-35 (migración 0008): pagos y mora filtran por estado y vencimiento.
+        Index("ix_pack_subscriptions_charges_tenant_estado_vence", "tenant_id", "estado", "fecha_vencimiento"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -85,7 +89,7 @@ class SubscriptionCharge(Base):
     subscription_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica
     periodo: Mapped[str] = mapped_column(Text, nullable=False)  # YYYY-MM
     monto: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
-    estado: Mapped[str] = mapped_column(Text, nullable=False, default="pendiente")  # pendiente|pagado|rechazado
+    estado: Mapped[str] = mapped_column(Text, nullable=False, default="pendiente")  # pendiente|pagado|anulado (`rechazado` no se escribe)
     referencia: Mapped[str | None] = mapped_column(Text, default=None)
     link_url: Mapped[str | None] = mapped_column(Text, default=None)  # HU-SUB-05
     # HU-SUB-07 (ADR-0111): `periodo` | `cambio_plan` (diferencia prorrateada de un upgrade).

@@ -19,6 +19,7 @@ from typing import Any
 
 from sqlalchemy import and_, or_, select
 
+from core.db.models import AuditLog
 from core.db.session import get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -76,6 +77,33 @@ def _view(sub: Subscription, cargos: list[SubscriptionCharge] | None = None) -> 
         "cambio_programado": sub.cambio_programado,
     }
 
+
+
+def _auditar(
+    session,  # type: ignore[no-untyped-def]
+    *,
+    actor: str,
+    accion: str,
+    sub: Subscription,
+    antes: str,
+    motivo: str = "",
+) -> None:
+    """Fila de `audit_log` del cambio de estado, en la MISMA transacción que el cambio (SPEC-35).
+
+    Solo si el que actúa es una persona del panel (`actor` = `admin:<correo>`): las tools del
+    LLM no pasan `actor` y el host de tools ya audita lo que hicieron, así no se duplica.
+    """
+    if not actor:
+        return
+    session.add(
+        AuditLog(
+            tenant_id=sub.tenant_id,
+            actor=actor,
+            action=accion,
+            input={"subscription_id": str(sub.id), "motivo": motivo or None},
+            output={"estado_antes": antes, "estado": sub.estado, "motivo_pausa": sub.motivo_pausa},
+        )
+    )
 
 # Referencias que no vienen de un pedido: no se guardan como `referencia_origen`.
 _REFERENCIAS_INTERNAS = {"", "admin-manual", "journey"}
@@ -464,20 +492,24 @@ class SubscriptionCapabilityImpl:
     ) -> SubscriptionView:
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
+            antes = sub.estado
             sub.estado = "pausada"
             sub.motivo_pausa = "cliente"
             sub.proximo_cargo = None
+            _auditar(session, actor=actor, accion="subs_pausada", sub=sub, antes=antes, motivo=reason)
             await session.flush()
             return _view(sub)
 
     async def resume(self, subscription_id: uuid.UUID, *, actor: str = "") -> SubscriptionView:
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
+            antes = sub.estado
             sub.estado = "activa"
             sub.motivo_pausa = None
             sub.fecha_cancelacion = None
             if sub.proximo_cargo is None:
                 sub.proximo_cargo = sumar_periodo(datetime.now(UTC), sub.periodicidad, sub.dia_ancla)
+            _auditar(session, actor=actor, accion="subs_reanudada", sub=sub, antes=antes)
             await session.flush()
             return _view(sub)
 
@@ -486,9 +518,11 @@ class SubscriptionCapabilityImpl:
     ) -> SubscriptionView:
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
+            antes = sub.estado
             sub.estado = "cancelada"
             sub.fecha_cancelacion = datetime.now(UTC)
             sub.proximo_cargo = None
+            _auditar(session, actor=actor, accion="subs_cancelada", sub=sub, antes=antes, motivo=reason)
             await session.flush()
             return _view(sub)
 
