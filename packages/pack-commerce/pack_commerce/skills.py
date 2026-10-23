@@ -1972,12 +1972,11 @@ class OrderSkill(BaseSkill):
             await entity_memory.upsert_attributes(
                 context.customer_id,
                 {
-                    "full_name": customer_data.get("full_name"),
+                    "name": customer_data.get("full_name"),
                     "id_document": customer_data.get("id_document"),
                     "address": customer_data.get("address"),
-                    "municipality": customer_data.get("municipality"),
-                    "city": customer_data.get("city"),
-                    "contact_phone": customer_data.get("phone"),
+                    "municipio": customer_data.get("municipality") or customer_data.get("city"),
+                    "phone": customer_data.get("phone"),
                     "email": customer_data.get("email"),
                 },
             )

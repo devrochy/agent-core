@@ -32,9 +32,21 @@ from core.agents.spec import enabled_packs, load_active_spec
 from core.api.deps import Principal, es_owner_o_master, require
 from core.api.errors import ApiError
 from core.api.pagination import PageParams, page_params
-from core.db.models import ChannelConnection, Conversation, Customer, CustomerNote, MemoryFact
+from core.db.models import (
+    AgentRecord,
+    ChannelConnection,
+    Conversation,
+    Customer,
+    CustomerNote,
+    MemoryFact,
+)
 from core.db.session import get_session
+from core.geocoding import GeocodingError
+from core.geocoding import consumir_cuota as consumir_cuota_geocoding
+from core.geocoding import disponible as geocoding_disponible
+from core.geocoding import geocodificar as geocodificar_direccion
 from core.memory import facts
+from core.memory import perfil as perfil_cliente
 from core.shared.logger import get_logger
 from core.shared.test_mode import TEST_CHANNEL
 
@@ -64,6 +76,48 @@ class LeadFilter(BaseModel):
     options: list[LeadFilterOption]
 
 
+class LeadPerfilOut(BaseModel):
+    """Datos base del cliente. Las claves son las canónicas de `core.memory.perfil`."""
+
+    name: str | None = None
+    apellido: str | None = None
+    alias: str | None = None
+    avatar_url: str | None = None
+    nombre_visible: str
+    phone: str | None = None
+    phone_e164: str | None = None
+    phone_indicativo: str | None = None
+    phone_local: str | None = None
+    pais_telefono: str | None = None
+    email: str | None = None
+    tipo_documento: str | None = None
+    id_document: str | None = None
+    address: str | None = None
+    municipio: str | None = None
+    departamento: str | None = None
+    pais: str | None = None
+    latitud: float | None = None
+    longitud: float | None = None
+    direccion_completa: str | None = None
+    direccion_normalizada: str | None = None
+    geocodificado_en: str | None = None
+    geocodificacion_precision: str | None = None
+    geocodificacion_proveedor: str | None = None
+    mapa_url: str | None = None
+    clasificacion: str | None = None
+    clasificacion_label: str | None = None
+
+
+class LeadAgentOut(BaseModel):
+    """Un agente del negocio y las columnas que aporta a la lista de clientes."""
+
+    key: str
+    name: str
+    icon: str | None = None
+    pack_id: str | None = None
+    columns: list[LeadColumn]
+
+
 class LeadRow(BaseModel):
     id: uuid.UUID
     cliente: str
@@ -72,11 +126,14 @@ class LeadRow(BaseModel):
     bot_paused: bool = False
     alta: str
     extras: dict[str, Any]
+    perfil: LeadPerfilOut
+    agentes: list[str]
 
 
 class LeadsResponse(BaseModel):
     columns: list[LeadColumn]
     filters: list[LeadFilter] = Field(default_factory=list)
+    agents: list[LeadAgentOut]
     items: list[LeadRow]
     total: int
     page: int
@@ -111,6 +168,36 @@ class LeadEditable(BaseModel):
     value: str | None = None
 
 
+class LeadCampoPerfil(BaseModel):
+    """Metadatos de un campo editable del perfil (los comparte la ficha y la API)."""
+
+    key: str
+    label: str
+    tipo: Literal["texto", "email", "telefono", "opciones", "numero", "url"]
+    max_length: int
+    options: list[LeadFilterOption]
+    group: str
+    help: str | None = None
+    required: bool = False
+
+
+class LeadColumnValue(BaseModel):
+    key: str
+    label: str
+    value: Any = None
+
+
+class LeadAgentData(BaseModel):
+    """La data de un agente para la ficha: columnas con su valor y campos editables."""
+
+    key: str
+    name: str
+    icon: str | None = None
+    pack_id: str | None = None
+    columns: list[LeadColumnValue]
+    editables: list[LeadEditable]
+
+
 class LeadDetail(BaseModel):
     id: uuid.UUID
     cliente: str
@@ -125,13 +212,38 @@ class LeadDetail(BaseModel):
     datos: list[LeadFact]
     extras: dict[str, Any]
     columns: list[LeadColumn]
-    editables: list[LeadEditable] = Field(default_factory=list)
+    perfil: LeadPerfilOut
+    agentes: list[LeadAgentData]
+    campos_perfil: list[LeadCampoPerfil]
+    editables: list[LeadEditable]
 
 
 class LeadUpdate(BaseModel):
     """Datos del perfil a corregir. `name` también cambia el nombre visible del cliente."""
 
     datos: dict[str, str | int | float | bool] = Field(default_factory=dict)
+
+
+class LeadGeocodificacion(BaseModel):
+    """Resultado de geocodificar la dirección y el perfil actualizado."""
+
+    latitud: float
+    longitud: float
+    direccion_normalizada: str | None = None
+    precision: str | None = None
+    proveedor: str
+    perfil: LeadPerfilOut
+
+
+class LeadPerfilUpdate(BaseModel):
+    """Campos canónicos del perfil que se cambian desde la pestaña General.
+
+    `otros` conserva la posibilidad de guardar un dato libre (una preferencia, por ejemplo)
+    sin saltarse las reglas de `facts.py`: no admite claves del sistema ni datos sensibles.
+    """
+
+    valores: dict[str, Any] = Field(default_factory=dict)
+    otros: dict[str, str] = Field(default_factory=dict)
 
 
 class LeadPackUpdate(BaseModel):
@@ -155,6 +267,120 @@ async def _providers() -> tuple[set[str], list[LeadProvider]]:
     return enabled, lead_registry.providers_for(enabled)
 
 
+def _perfil_de(cliente: Customer) -> LeadPerfilOut:
+    return LeadPerfilOut(
+        **perfil_cliente.leer_perfil(
+            cliente.attributes or {},
+            telefono=cliente.contact_phone,
+            nombre_cliente=cliente.name,
+            external_id=cliente.external_id,
+        )
+    )
+
+
+async def _registros_de_agentes(tenant_id: uuid.UUID) -> list[AgentRecord]:
+    async with get_session() as session:
+        return list(
+            (
+                await session.execute(
+                    select(AgentRecord)
+                    .where(
+                        AgentRecord.tenant_id == tenant_id,
+                        AgentRecord.deleted_at.is_(None),
+                        AgentRecord.kind != "core",
+                    )
+                    .order_by(AgentRecord.created_at, AgentRecord.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+
+def _clave_de_agente(provider: LeadProvider) -> str:
+    return provider.agent_key or provider.plugin_id
+
+
+def _meta_de_agentes(providers: list[LeadProvider], registros: list[AgentRecord]) -> list[LeadAgentOut]:
+    """Agentes publicados + los que aportan data, agrupados por clave (General primero)."""
+    por_key: dict[str, LeadAgentOut] = {}
+    general = next((r for r in registros if r.key == "general"), None)
+    por_key["general"] = LeadAgentOut(
+        key="general",
+        name=general.name if general is not None else "General",
+        icon="bot",
+        columns=[],
+    )
+    for provider in providers:
+        key = _clave_de_agente(provider)
+        agente = next((r for r in registros if r.key == key), None)
+        item = por_key.get(key)
+        if item is None:
+            item = LeadAgentOut(
+                key=key,
+                name=provider.agent_name or (agente.name if agente is not None else key.replace("_", " ").title()),
+                icon=provider.icon or "bot",
+                pack_id=provider.plugin_id,
+                columns=[],
+            )
+            por_key[key] = item
+        item.columns.extend(LeadColumn(key=c.key, label=c.label) for c in provider.columns)
+    for registro in registros:
+        if registro.key == "coordinador" or registro.key in por_key:
+            continue
+        por_key[registro.key] = LeadAgentOut(key=registro.key, name=registro.name, icon="bot", columns=[])
+    return list(por_key.values())
+
+
+def _agentes_de_la_fila(
+    providers: list[LeadProvider], extras: dict[str, Any], meta: list[LeadAgentOut]
+) -> list[str]:
+    """Claves de los agentes que tienen algún dato de este cliente (General siempre)."""
+    presentes = {"general"}
+    for provider in providers:
+        if any(extras.get(c.key) not in (None, "", [], {}) for c in provider.columns):
+            presentes.add(_clave_de_agente(provider))
+    return [a.key for a in meta if a.key in presentes]
+
+
+def _agentes_data(
+    providers: list[LeadProvider],
+    extras: dict[str, Any],
+    editables: list[LeadEditable],
+    meta: list[LeadAgentOut],
+) -> list[LeadAgentData]:
+    """Data de cada agente para las pestañas de la ficha. General va en `perfil`."""
+    salida: list[LeadAgentData] = []
+    for agente in meta:
+        if agente.key == "general":
+            continue
+        propios = [p for p in providers if _clave_de_agente(p) == agente.key]
+        columnas = [
+            LeadColumnValue(key=c.key, label=c.label, value=extras.get(c.key))
+            for p in propios
+            for c in p.columns
+        ]
+        plugin_ids = {p.plugin_id for p in propios}
+        campos = [e for e in editables if e.plugin_id in plugin_ids]
+        salida.append(
+            LeadAgentData(
+                key=agente.key,
+                name=agente.name,
+                icon=agente.icon,
+                pack_id=agente.pack_id,
+                columns=columnas,
+                editables=campos,
+            )
+        )
+    return salida
+
+
+def _etiqueta_opcion(clave: str, valor: Any) -> str:
+    if valor in (None, ""):
+        return ""
+    return dict(perfil_cliente.opciones(clave)).get(str(valor), str(valor))
+
+
 def _filtros_de(providers: list[LeadProvider]) -> list[LeadFilter]:
     return [
         LeadFilter(
@@ -176,6 +402,7 @@ async def _consulta(
     channel: str | None,
     connection_id: uuid.UUID | None,
     filtro: list[str] | None,
+    customer_id: uuid.UUID | None = None,
 ) -> Select[Any]:
     query = select(Customer).where(
         Customer.tenant_id == tenant_id,
@@ -189,6 +416,8 @@ async def _consulta(
         )
     if channel:
         query = query.where(Customer.channel == channel)
+    if customer_id is not None:
+        query = query.where(Customer.id == customer_id)
     if connection_id is not None:
         query = query.where(
             exists().where(
@@ -321,21 +550,28 @@ async def list_leads(
         )
 
     pack_values = await _valores_de_packs(providers, [c.id for c in customers])
-    items = [
-        LeadRow(
-            id=c.id,
-            cliente=c.name or c.external_id,
-            canal=c.channel,
-            telefono=c.contact_phone,
-            bot_paused=bool(c.bot_paused),
-            alta=c.created_at.strftime("%Y-%m-%d") if c.created_at else "—",
-            extras=pack_values.get(c.id, {}),
+    meta = _meta_de_agentes(providers, await _registros_de_agentes(tenant_id))
+    items = []
+    for cliente in customers:
+        extras = pack_values.get(cliente.id, {})
+        perfil_cliente_ = _perfil_de(cliente)
+        items.append(
+            LeadRow(
+                id=cliente.id,
+                cliente=perfil_cliente_.nombre_visible,
+                canal=cliente.channel,
+                telefono=perfil_cliente_.phone,
+                bot_paused=bool(cliente.bot_paused),
+                alta=cliente.created_at.strftime("%Y-%m-%d") if cliente.created_at else "—",
+                extras=extras,
+                perfil=perfil_cliente_,
+                agentes=_agentes_de_la_fila(providers, extras, meta),
+            )
         )
-        for c in customers
-    ]
     return LeadsResponse(
         columns=_columnas(providers),
         filters=_filtros_de(providers),
+        agents=meta,
         items=items,
         total=int(total),
         page=params.page,
@@ -366,17 +602,60 @@ async def export_leads_csv(
         )
     pack_values = await _valores_de_packs(providers, [c.id for c in customers])
     columnas = _columnas(providers)
+    meta = _meta_de_agentes(providers, await _registros_de_agentes(tenant_id))
+    nombre_agente = {a.key: a.name for a in meta}
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["Cliente", "Canal", "Teléfono", "Agente", "Alta", *[c.label for c in columnas]])
+    writer.writerow(
+        [
+            "Cliente",
+            "Nombre",
+            "Apellido",
+            "Alias",
+            "Canal",
+            "Clasificación",
+            "Teléfono",
+            "Indicativo",
+            "Correo",
+            "Tipo documento",
+            "Documento",
+            "Dirección",
+            "Municipio",
+            "Departamento",
+            "País",
+            "Latitud",
+            "Longitud",
+            "Agentes",
+            "Estado del agente",
+            "Alta",
+            *[c.label for c in columnas],
+        ]
+    )
     for c in customers:
         extras = pack_values.get(c.id, {})
+        p = _perfil_de(c)
+        agentes = _agentes_de_la_fila(providers, extras, meta)
         writer.writerow(
             [
-                _celda(c.name or c.external_id),
+                _celda(p.nombre_visible),
+                _celda(p.name or ""),
+                _celda(p.apellido or ""),
+                _celda(p.alias or ""),
                 c.channel,
-                _celda(c.contact_phone or ""),
+                _celda(p.clasificacion_label or p.clasificacion or ""),
+                _celda(p.phone_e164 or p.phone or ""),
+                _celda(p.phone_indicativo or ""),
+                _celda(p.email or ""),
+                _celda(_etiqueta_opcion("tipo_documento", p.tipo_documento)),
+                _celda(p.id_document or ""),
+                _celda(p.address or ""),
+                _celda(p.municipio or ""),
+                _celda(p.departamento or ""),
+                _celda(p.pais or ""),
+                _celda(p.latitud if p.latitud is not None else ""),
+                _celda(p.longitud if p.longitud is not None else ""),
+                _celda(", ".join(nombre_agente.get(k, k) for k in agentes)),
                 "pausado" if c.bot_paused else "activo",
                 c.created_at.strftime("%Y-%m-%d") if c.created_at else "",
                 *[_celda(extras.get(col.key)) for col in columnas],
@@ -451,13 +730,16 @@ async def get_lead(
 
     _enabled, providers = await _providers()
     extras = (await _valores_de_packs(providers, [cliente.id])).get(cliente.id, {})
+    meta = _meta_de_agentes(providers, await _registros_de_agentes(tenant_id))
+    editables = await _editables(providers, cliente.id)
+    perfil_out = _perfil_de(cliente)
     return LeadDetail(
         id=cliente.id,
-        cliente=cliente.name or cliente.external_id,
-        nombre=cliente.name,
+        cliente=perfil_out.nombre_visible,
+        nombre=perfil_out.name,
         canal=cliente.channel,
         identificador=cliente.external_id,
-        telefono=cliente.contact_phone,
+        telefono=perfil_out.phone,
         bot_paused=bool(cliente.bot_paused),
         alta=cliente.created_at,
         conexiones=[LeadConnection(id=cid, label=label or channel, channel=channel) for cid, label, channel in conexiones],
@@ -475,8 +757,145 @@ async def get_lead(
         ],
         extras=extras,
         columns=_columnas(providers),
-        editables=await _editables(providers, cliente.id),
+        perfil=perfil_out,
+        agentes=_agentes_data(providers, extras, editables, meta),
+        campos_perfil=[LeadCampoPerfil(**campo) for campo in perfil_cliente.campos_editables()],
+        editables=editables,
     )
+
+
+@router.post("/{lead_id}/geocodificar", response_model=LeadGeocodificacion)
+async def geocodificar_lead(
+    lead_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("leads", write=True))],
+) -> LeadGeocodificacion:
+    """Convierte la dirección del cliente en coordenadas y las guarda en el perfil.
+
+    El proveedor recibe solo la dirección compuesta (dirección, municipio, departamento y
+    país). La plataforma paga la llamada y hay topes global y por negocio (ADR-0154).
+    """
+    if not geocoding_disponible():
+        raise ApiError(503, "geocoding_no_configurado", "La geocodificación no está configurada.")
+    tenant_id = principal.tenant_id
+    async with get_session() as session:
+        cliente = await _cliente(session, tenant_id, lead_id)
+        perfil = perfil_cliente.leer_perfil(
+            cliente.attributes or {},
+            telefono=cliente.contact_phone,
+            nombre_cliente=cliente.name,
+            external_id=cliente.external_id,
+        )
+    direccion = perfil.get("direccion_completa")
+    if not direccion:
+        raise ApiError.bad_request(
+            "Escribe la dirección, el municipio o el departamento antes de geocodificar.",
+            code="geocoding_direccion_vacia",
+        )
+
+    await consumir_cuota_geocoding(tenant_id)
+    try:
+        resultado = await geocodificar_direccion(direccion)
+    except GeocodingError as exc:
+        raise ApiError(exc.status, exc.code, exc.message) from exc
+
+    valores = {
+        "latitud": resultado.latitud,
+        "longitud": resultado.longitud,
+        "direccion_normalizada": resultado.direccion_normalizada,
+        "geocodificado_en": datetime.now().astimezone().isoformat(),
+        "geocodificacion_precision": resultado.precision,
+        "geocodificacion_proveedor": resultado.proveedor,
+    }
+    try:
+        async with get_session() as session:
+            await _cliente(session, tenant_id, lead_id)
+            await facts.escribir_hechos(
+                session,
+                tenant_id=tenant_id,
+                customer_id=lead_id,
+                namespace=facts.PERFIL,
+                valores={k: v for k, v in valores.items() if v is not None},
+                source="human",
+            )
+    except facts.HechoInvalido as exc:
+        raise ApiError(400, "geocoding_datos_invalidos", "No se pudo guardar la geocodificación.") from exc
+
+    async with get_session() as session:
+        cliente = await _cliente(session, tenant_id, lead_id)
+        perfil_actualizado = _perfil_de(cliente)
+    log.info(
+        "lead_geocodificado",
+        customer_id=str(lead_id),
+        provider=resultado.proveedor,
+        precision=resultado.precision,
+        admin_id=str(principal.admin.id),
+    )
+    return LeadGeocodificacion(
+        latitud=resultado.latitud,
+        longitud=resultado.longitud,
+        direccion_normalizada=resultado.direccion_normalizada,
+        precision=resultado.precision,
+        proveedor=resultado.proveedor,
+        perfil=perfil_actualizado,
+    )
+
+
+@router.patch("/{lead_id}/perfil", response_model=LeadDetail)
+async def update_lead_perfil(
+    lead_id: uuid.UUID,
+    body: LeadPerfilUpdate,
+    principal: Annotated[Principal, Depends(require("leads", write=True))],
+) -> LeadDetail:
+    """Corrige los datos base del cliente desde la pestaña General.
+
+    Solo acepta las claves canónicas de `core.memory.perfil`; escribe por
+    `core/memory/facts.py` con `source="human"` para que el agente lo use desde la
+    siguiente conversación y quede la procedencia en la ficha.
+    """
+    if not body.valores and not body.otros:
+        raise ApiError.bad_request("No hay datos para guardar.")
+    valores, errores = perfil_cliente.validar_perfil(body.valores)
+    otros = {k.strip(): str(v).strip() for k, v in body.otros.items()}
+    if len(otros) > _MAX_CLAVES:
+        raise ApiError.bad_request(f"Máximo {_MAX_CLAVES} datos por vez.")
+    for clave, valor in otros.items():
+        if not clave or len(clave) > 80:
+            errores[clave or "(vacía)"] = "La clave debe tener entre 1 y 80 caracteres."
+        elif perfil_cliente.es_campo_canonico(clave):
+            errores[clave] = "Este dato se edita en los campos del perfil."
+        elif clave in facts.CLAVES_DEL_SISTEMA:
+            errores[clave] = "Este dato lo administra el sistema."
+        elif facts.clasificar(facts.PERFIL, clave) == "sensitive":
+            errores[clave] = "Este tipo de dato no se guarda en la ficha del cliente."
+        elif len(valor) > _MAX_VALOR:
+            errores[clave] = f"Máximo {_MAX_VALOR} caracteres."
+    if errores:
+        raise ApiError.bad_request("Revisa los datos.", code="datos_invalidos", fields=errores)
+    valores = {**valores, **{k: v for k, v in otros.items() if v}}
+    if not valores:
+        raise ApiError.bad_request("No hay datos para guardar.")
+
+    tenant_id = principal.tenant_id
+    try:
+        async with get_session() as session:
+            await _cliente(session, tenant_id, lead_id)
+            await facts.escribir_hechos(
+                session,
+                tenant_id=tenant_id,
+                customer_id=lead_id,
+                namespace=facts.PERFIL,
+                valores=valores,
+                source="human",
+            )
+    except facts.HechoInvalido as exc:
+        raise ApiError.bad_request("No se pudo guardar el perfil.", code="datos_invalidos") from exc
+    log.info(
+        "lead_perfil_actualizado",
+        customer_id=str(lead_id),
+        claves=sorted(valores),
+        admin_id=str(principal.admin.id),
+    )
+    return await get_lead(lead_id, principal)
 
 
 @router.patch("/{lead_id}", response_model=LeadDetail)
@@ -556,7 +975,10 @@ async def update_lead_pack(
     async with get_session() as session:
         await _cliente(session, principal.tenant_id, lead_id)
     # Fuera de la sesión de la validación: el pack abre la suya (como la línea de tiempo).
-    await provider.edicion.escribir(lead_id, valores)
+    try:
+        await provider.edicion.escribir(lead_id, valores)
+    except ValueError as exc:
+        raise ApiError.bad_request(str(exc), code="datos_invalidos") from exc
     log.info(
         "lead_pack_editado",
         customer_id=str(lead_id),
