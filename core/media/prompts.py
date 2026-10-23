@@ -9,11 +9,11 @@ from __future__ import annotations
 from core.agents.playbooks import load_core_playbook
 
 PLAYBOOK = "media"
+PLAYBOOK_RESPUESTAS = "media_respuestas"
 
 
-def prompt_de_media(seccion: str, **variables: str) -> str | None:
-    """Devuelve la sección pedida con `{variables}` reemplazadas; `None` si no existe."""
-    contenido = load_core_playbook(PLAYBOOK).strip()
+def _seccion(playbook: str, seccion: str, variables: dict[str, str]) -> str | None:
+    contenido = load_core_playbook(playbook).strip()
     if contenido.startswith("## "):
         contenido = contenido[3:]
     for bloque in contenido.split("\n## "):
@@ -27,4 +27,14 @@ def prompt_de_media(seccion: str, **variables: str) -> str | None:
     return None
 
 
-__all__ = ["prompt_de_media"]
+def prompt_de_media(seccion: str, **variables: str) -> str | None:
+    """Devuelve la sección de prompt pedida; `None` si no existe."""
+    return _seccion(PLAYBOOK, seccion, variables)
+
+
+def respuesta_de_media(key: str) -> str | None:
+    """Texto fijo de media (fuera del system prompt: no invalida las grabaciones)."""
+    return _seccion(PLAYBOOK_RESPUESTAS, key, {})
+
+
+__all__ = ["prompt_de_media", "respuesta_de_media"]

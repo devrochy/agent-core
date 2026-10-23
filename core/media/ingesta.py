@@ -19,8 +19,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-from core.agents.responses import load_response
-from core.agents.spec import load_active_spec
 from core.almacenamiento import StorageInvalido, guardar
 from core.billing.tarifario import TARIFARIO_VIGENTE, trm_vigente
 from core.db.models import UsageLedger
@@ -32,7 +30,7 @@ from core.media.config import (
 )
 from core.media.errors import MediaProviderError
 from core.media.meta_media import descargar_media
-from core.media.prompts import prompt_de_media
+from core.media.prompts import prompt_de_media, respuesta_de_media
 from core.media.stt import transcribir_audio
 from core.media.vision import describir_imagen
 from core.memory.working import get_redis
@@ -173,8 +171,7 @@ async def _guardar(contenido: bytes, mime_type: str, external_message_id: str) -
 
 async def _respuesta(key: str) -> str:
     try:
-        spec = await load_active_spec()
-        texto = await load_response(spec, key)
+        texto = respuesta_de_media(key)
     except Exception:
         texto = None
     return (texto or RESPUESTAS_FALLBACK.get(key) or "").strip()
