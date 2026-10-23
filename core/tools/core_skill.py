@@ -71,12 +71,7 @@ class CoreSkill(BaseSkill):
         return {"profile": normalizado}
 
     async def _update_customer_profile(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-        # Las tools viejas y los playbooks usan `full_name`, `contact_phone`, `cedula`…
-        # Se guardan con la clave canónica del perfil para que la ficha los muestre igual.
-        attributes = {
-            perfil_cliente.normalizar_clave(str(k)): v
-            for k, v in dict(args.get("attributes") or {}).items()
-        }
+        attributes = dict(args.get("attributes") or {})
         if not attributes:
             return {"error": "attributes vacío: no hay nada que actualizar"}
         try:

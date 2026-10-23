@@ -238,7 +238,8 @@ async def test_exporta_csv_filtrado(app_client) -> None:
     assert r.status_code == 200, r.text
     assert r.headers["content-type"].startswith("text/csv")
     filas = list(csv.reader(io.StringIO(r.text.lstrip("﻿"))))
-    assert filas[0][:5] == ["Cliente", "Canal", "Teléfono", "Agente", "Alta"]
+    assert filas[0][:5] == ["Cliente", "Nombre", "Apellido", "Alias", "Canal"]
+    assert "Teléfono" in filas[0] and "Agentes" in filas[0] and "Alta" in filas[0]
     assert [f[0] for f in filas[1:]] == ["'=HYPERLINK(\"x\")"]
 
 
