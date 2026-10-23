@@ -24,6 +24,9 @@ from core.mcp.types import BaseModule, GuardrailResult
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
 from core.subscriptions import subscription_registry
+from pack_subscriptions import (
+    providers as _lead_provider,  # noqa: F401  # vista de Clientes (SPEC-35, ADR-0056)
+)
 from pack_subscriptions.admin_api import router as subscriptions_admin_api_router
 from pack_subscriptions.capability import (
     SubscriptionCapabilityImpl,
@@ -65,7 +68,7 @@ class SubscriptionsModule(BaseModule):
     config_schema = SubscriptionConfig
     declared_skills: list[type] = []  # noqa: RUF012 -- las tools sub_* viven en el core (ADR-0106)
     admin_menu: list[dict[str, str]] = [  # noqa: RUF012
-        {"label": "Suscripciones", "path": "/subscriptions/lista", "section": "Operación", "section_key": "pack_subscriptions:suscripciones"},
+        {"label": "Suscripciones", "path": "/suscripciones", "section": "Operación", "section_key": "pack_subscriptions:suscripciones"},
     ]
 
     def on_activate(self, host: MCPHost) -> None:

@@ -75,6 +75,8 @@ def notice_key_for(topic: str, payload: dict[str, Any]) -> str:
     """Clave estable del aviso: un reintento del evento no lo duplica (ADR-0108)."""
     cargo = payload.get("charge_id")
     if topic == ON_SUBSCRIPTION_CHARGE_REMINDER:
+        if payload.get("reenvio"):  # reenvío manual desde el panel (SPEC-35): no se funde con el del cron
+            return f"sub_resend:{cargo}:{payload['reenvio']}"
         return f"sub_reminder:{cargo}:{payload.get('dias')}"
     if topic == ON_SUBSCRIPTION_PAUSED:
         return f"sub_paused:{payload.get('subscription_id')}:{cargo}"

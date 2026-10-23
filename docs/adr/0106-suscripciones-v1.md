@@ -82,3 +82,29 @@ métricas de MRR/churn (HU-SUB-16).
 - `packages/pack-commerce/pack_commerce/module.py`: activación por `capability_for_tenant`.
 - Tests: `tests/test_subscriptions_registry.py`, `tests/test_subscriptions_core_tools.py`; actualizados los que
   citaban las tools del pack.
+
+## Enmienda 2026-10-23 · API de administración (SPEC-35, D-43)
+
+La habilidad suma una API admin de **lectura y acciones** en `/api/v1/pack/pack_subscriptions`, para el panel
+(entrada «Suscripciones»). No cambia el contrato `SubscriptionCapability`: las acciones reusan sus operaciones.
+
+- **Lectura** (`require("pack_subscriptions:suscripciones")`, `Page[T]`): `GET /suscripciones` (filtros `estado`,
+  `variante_id`, `periodicidad`, `con_mora`, `q`, `cliente_id`), `GET /suscripciones/{id}` (cargos, cambio
+  programado, historial desde `audit_log` y acciones válidas por estado), `GET /cargos` (los «pagos» de la
+  suscripción; filtros `estado`, `tipo`, `vencidos`, `desde`/`hasta`), `GET /clientes` y `GET /metricas`.
+  Pagos = cargos: no se consulta `pack_payments` (los packs no se importan). Estados reales del cargo:
+  `pendiente|pagado|anulado`.
+- **Acciones** (`write=True`): `POST /suscripciones/{id}/pausar|reanudar|cancelar` y
+  `POST /cargos/{id}/reenviar-link`. El panel solo ofrece las válidas para el estado; el servidor responde 409
+  `transicion_invalida` si no lo son. Pausar, reanudar y cancelar escriben una fila de `audit_log` **en la misma
+  transacción** (`actor = admin:<correo>`, `subs_pausada|subs_reanudada|subs_cancelada`); solo si hay `actor`,
+  así las tools del LLM no duplican la auditoría que ya hace el host. `reanudar` vuelve siempre a `activa`.
+- **Reenviar link:** reusa el link del cargo (o lo crea sin duplicar el cargo) y encola `subscription.charge_reminder`
+  por el outbox con `reenvio` en el payload, cuya clave de aviso (`sub_resend:<cargo>:<sello>`) no se funde con el
+  recordatorio del cron. Sin conversación de WhatsApp no se envía nada y se devuelve el link para copiarlo.
+- **Clientes:** `pack_subscriptions` registra un `LeadProvider` (columnas `sub_*`, filtro `suscripcion:<estado|mora|ninguna>`
+  y eventos de alta, cobro y baja en la línea de tiempo). Agente `suscripciones` en la ficha.
+- **Datos:** migración `0008` con índices `(tenant_id, estado)` y `(tenant_id, estado, fecha_vencimiento)`.
+- **Métricas:** solo `pack_subscriptions` (no cobranza, HU-SUB-15), una moneda (la de más suscripciones vivas), meses en
+  UTC; MRR = activas de pago normalizadas por periodicidad; el MRR del mes anterior es aproximado (vivas entonces, a su
+  precio de hoy).
