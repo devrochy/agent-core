@@ -420,6 +420,38 @@ async def nuevo_cliente(tenant_id: uuid.UUID, nombre: str) -> tuple[uuid.UUID, u
 
 
 # ------------------------------------------------------------------ pasos
+# Borradores que un guardrail o el verificador bloquearon en el turno (solo evals). En producción
+# el texto no se registra (puede traer datos del cliente); en un journey es de un cliente simulado,
+# y sin él un intento que escala no dice QUÉ frase lo bloqueó.
+_BLOQUEADOS: list[tuple[str, str]] = []
+
+
+def registrar_bloqueos() -> None:
+    """Envuelve `run_guardrails` del loop (una sola vez) para anotar el borrador y el motivo de
+    cada bloqueo. No cambia el resultado: solo observa."""
+    from core.orchestrator import loop
+
+    original = loop.run_guardrails
+    if getattr(original, "_registra_bloqueos", False):
+        return
+
+    async def observado(borrador: str, *args: Any, **kwargs: Any) -> Any:
+        veredicto = await original(borrador, *args, **kwargs)
+        if not veredicto.passed:
+            _BLOQUEADOS.append((borrador, str(veredicto.reason)))
+        return veredicto
+
+    observado._registra_bloqueos = True  # type: ignore[attr-defined]
+    loop.run_guardrails = observado
+
+
+def tomar_bloqueados() -> list[str]:
+    """Líneas del registro con los bloqueos del último turno; vacía la lista."""
+    lineas = [f"    borrador bloqueado ({motivo.split(':', 1)[0][:60]}): {texto!r}" for texto, motivo in _BLOQUEADOS]
+    _BLOQUEADOS.clear()
+    return lineas
+
+
 async def _turno(ctx: Contexto, mensaje: str) -> Any:
     """Un turno del cliente como en producción: el consumidor guarda el mensaje entrante, corre
     el loop y el envío guarda la respuesta. Sin esos mensajes en la base, lo que depende de ellos
@@ -744,6 +776,7 @@ async def paso_simulado(ctx: Contexto, paso: dict[str, Any], registro: list[str]
             break
         cliente.anotar("asistente", resultado.text)
         registro.append(f"    cliente: {mensaje}\n    asistente: {resultado.text}")
+        registro.extend(tomar_bloqueados())
         if resultado.escalated or pidio_relevo(await _herramientas_desde(ctx, inicio_turno)):
             fin = "relevo"
             break
@@ -974,6 +1007,7 @@ async def _preparar_proceso() -> None:
     # Handlers del core del outbox (alta automática, cobro de plataforma): el paso
     # `outbox` los necesita como el despachador del worker.
     ensure_core_handlers()
+    registrar_bloqueos()
 
 
 async def main(argv: list[str] | None = None) -> int:

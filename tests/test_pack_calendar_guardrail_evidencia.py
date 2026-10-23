@@ -356,3 +356,97 @@ async def test_disponibilidad_generica_con_dato_de_agenda_bloquea(texto: str):
     verdict = await _check(texto)
     assert not verdict.passed, texto
     assert "disponibilidad" in verdict.reason
+
+
+# ---------------------------------------------------------------- pasos futuros (pass^4, 2026-10-23)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        # Borradores reales que escalaron `agendar-una-demo`: el motor aún pide la confirmación.
+        "Listo, martes 27 de octubre a las 10:00 con tu correo. El sistema te muestra el resumen "
+        "para que lo confirmes y ahí queda agendada.",
+        "Perfecto, martes 27 de octubre a las 10:00 con tu correo. Cuando confirmes el resumen que te "
+        "aparece en pantalla, la cita queda agendada y te llega la confirmación por correo.",
+        "Una vez que confirmes, tu demo queda agendada.",
+    ],
+)
+async def test_describir_lo_que_pasara_al_confirmar_no_afirma_que_ya_quedo(texto: str):
+    verdict = await _check(texto)
+    assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Tu cita quedó agendada para el martes a las 10:00.",
+        "Listo, tu demo queda agendada para el martes.",
+        # "si" no es un marcador de futuro: aquí afirma que ya se creó.
+        "Si todo está bien, tu cita quedó agendada.",
+        # El marcador viene DESPUÉS de la afirmación: no la excusa.
+        "Tu demo quedó agendada y cuando llegue el día te recordamos.",
+    ],
+)
+async def test_una_afirmacion_real_sin_tool_sigue_bloqueando(texto: str):
+    verdict = await _check(texto)
+    assert not verdict.passed
+    assert "agendada" in verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_pasos_futuros_con_la_cita_creada_en_el_turno_siguen_pasando():
+    verdict = await _check(
+        "Cuando confirmes, la cita queda agendada. Ya quedó agendada para el martes.",
+        _r("create_calendar_event", status="created", event_id="a-1"),
+    )
+    assert verdict.passed, verdict.reason
+
+
+# ---------------------------------------------------------------- promesas de consultar (pass^4, 2026-10-23)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        # Borradores reales que escalaron `agendar-una-demo` sin el motor.
+        "Lo que sí puedo ofrecerte es agendar una demo con un asesor. ¿Te gustaría que te la agende?\n\n"
+        "Si me dices qué día te queda cómodo, reviso los horarios libres.",
+        "Si me dices qué día te queda cómodo, reviso los horarios disponibles.",
+        "Dime el día y consulto los horarios libres.",
+        "Voy a ver los horarios libres de la próxima semana.",
+    ],
+)
+async def test_prometer_consultar_los_horarios_no_afirma_disponibilidad(texto: str):
+    verdict = await _check(texto)
+    assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Los horarios libres son el martes a las 10:00 y el miércoles a las 3:00 pm.",
+        # Con una hora concreta ya dice cuál está libre, aunque anuncie que revisa.
+        "Reviso y los horarios libres son a las 10:00 y a las 11:00.",
+        # Pasado: afirma haber consultado, y sin la tool no hay respaldo.
+        "Revisé los horarios libres y mañana hay varios.",
+        "Tenemos horarios libres el martes.",
+    ],
+)
+async def test_afirmar_disponibilidad_sin_consultar_sigue_bloqueando(texto: str):
+    verdict = await _check(texto)
+    assert not verdict.passed
+    assert "disponibilidad" in verdict.reason
+
+
+@pytest.mark.asyncio
+async def test_prometer_consultar_con_la_consulta_hecha_pasa():
+    verdict = await _check(
+        "Reviso los horarios libres: el martes a las 10:00.",
+        _r("check_availability", slots=["2026-10-27T10:00"]),
+    )
+    assert verdict.passed, verdict.reason
