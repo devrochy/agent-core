@@ -90,7 +90,9 @@ async def test_send_one_no_op_si_mensaje_no_esta_en_queued(monkeypatch):
     assert result is None
 
 
-def _send_one_fixture(monkeypatch, *, earliest=True, claim=True, adapter=None):
+def _send_one_fixture(
+    monkeypatch, *, earliest=True, claim=True, adapter=None, channel="whatsapp", sender_type="agent", window=None
+):
     """Monta el FakeSession y mocks para `_send_one`; devuelve (msg, mocks)."""
     import uuid
     from datetime import datetime
@@ -105,9 +107,11 @@ def _send_one_fixture(monkeypatch, *, earliest=True, claim=True, adapter=None):
         conversation_id=uuid.uuid4(), created_at=datetime.now(UTC),
         media_type=None, media_url=None, content="hola",
         template_name=None, template_language=None, template_components=None, interactive=None,
+        sender_type=sender_type,
     )
     conv = SimpleNamespace(
-        connection_id=None, meta_connection_id=None, customer_id=uuid.uuid4(), channel="whatsapp"
+        connection_id=None, meta_connection_id=None, customer_id=uuid.uuid4(), channel=channel,
+        service_window_expires_at=window,
     )
     cust = SimpleNamespace(external_id="whatsapp:+573001234567")
 
@@ -157,7 +161,7 @@ def _send_one_fixture(monkeypatch, *, earliest=True, claim=True, adapter=None):
     monkeypatch.setattr(mod, "_release_claim", fake_release)
     monkeypatch.setattr(mod, "_enqueue_next", fake_next)
     monkeypatch.setattr(mod, "resolve_credentials", fake_credentials)
-    monkeypatch.setattr(mod, "outbound_adapter_for", lambda provider: adapter)
+    monkeypatch.setattr(mod, "outbound_adapter_for", lambda provider, channel=None: adapter)
 
     return msg, tenant_id, calls
 
@@ -415,3 +419,69 @@ async def test_send_one_plantilla_usa_send_template(monkeypatch):
     assert enviados == [
         ("whatsapp:+573001234567", "aviso_cobro", "es", msg.template_components)
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sender_type", "humano"), [("agent", "false"), ("human", "true")])
+async def test_send_one_de_messenger_pasa_ventana_y_autoria_al_adaptador(monkeypatch, sender_type, humano):
+    """Messenger decide `RESPONSE` o `HUMAN_AGENT` con la ventana y la autoría del mensaje (ADR-0152);
+    el adaptador no ve la conversación ni el mensaje, así que viajan en las credenciales."""
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from core.tasks.outbound_send import _send_one
+
+    vence = datetime.now(UTC) - timedelta(days=1)
+    visto = {}
+
+    async def send_text(credentials, external_id, content):
+        visto.update(credentials)
+        return "mid-1"
+
+    adapter = SimpleNamespace(send_text=send_text)
+    msg, tenant_id, _calls = _send_one_fixture(
+        monkeypatch, adapter=adapter, channel="messenger", sender_type=sender_type, window=vence
+    )
+
+    assert await _send_one(msg.id, tenant_id) is None
+    assert visto["service_window_expires_at"] == vence.isoformat()
+    assert visto["human"] == humano
+    assert visto["access_token"] == "tok"  # lo demás de las credenciales no se pierde
+
+
+@pytest.mark.asyncio
+async def test_send_one_de_whatsapp_no_agrega_datos_de_messenger(monkeypatch):
+    from types import SimpleNamespace
+
+    from core.tasks.outbound_send import _send_one
+
+    visto = {}
+
+    async def send_text(credentials, external_id, content):
+        visto.update(credentials)
+        return "wamid-1"
+
+    msg, tenant_id, _calls = _send_one_fixture(monkeypatch, adapter=SimpleNamespace(send_text=send_text))
+
+    assert await _send_one(msg.id, tenant_id) is None
+    assert "human" not in visto and "service_window_expires_at" not in visto
+
+
+@pytest.mark.asyncio
+async def test_send_one_de_un_canal_sin_adaptador_falla_permanente_y_libera_el_claim(monkeypatch):
+    """Instagram, hasta HU-CHAN-04: no cae al adaptador de WhatsApp ni reintenta."""
+    import core.tasks.outbound_send as mod
+    from core.gateway.meta_errors import GraphError
+
+    msg, tenant_id, calls = _send_one_fixture(monkeypatch, channel="instagram")
+
+    def sin_adaptador(provider, channel=None):
+        raise KeyError(f"Sin adaptador de salida para {provider}/{channel}")
+
+    monkeypatch.setattr(mod, "outbound_adapter_for", sin_adaptador)
+
+    result = await mod._send_one(msg.id, tenant_id)
+
+    assert isinstance(result, GraphError) and result.category == "PERMANENT"
+    assert "meta/instagram" in str(result)
+    assert calls["release"] == 1 and calls["next"] == []
