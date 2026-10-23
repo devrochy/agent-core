@@ -85,6 +85,35 @@ conflictos en 9 de 11, todos en el camino caliente: `registry.py`, `sender.py`, 
 11. **Producción depende de Meta.** Los permisos de mensajería de Páginas y de Instagram exigen App Review y acceso de
     Tech Provider (trámite C del dueño). Mientras tanto se prueba con roles de desarrollo de la app en test.
 
+## Adenda del 2026-10-23: el alta de Messenger (entrega 3)
+
+Decisiones tomadas al construir `core/gateway/meta_messenger_alta.py` y `core/api/routers/meta_messenger.py`:
+
+1. **El negocio elige las Páginas.** El código viejo conectaba todas las que el usuario administraba. Cada Página es
+   una conexión canónica y consume plan, así que el alta es en tres llamadas: `attempt` (un valor de un solo uso,
+   atado al negocio y al admin, de 15 min), `discover` (canjea el `code` y lista las Páginas con su elegibilidad;
+   **los tokens de las Páginas nunca salen del servidor**) y `connect` (las elegidas).
+2. **El token del usuario es de una hora y se revoca al terminar.** Se guarda cifrado (`user_access`) solo porque el
+   paso 3 lo necesita; el de cada Página queda en la custodia de la conexión (`page_access`, ADR-0094).
+3. **Una Página que el usuario no administra no se conecta aunque conozca su ID**: `connect` vuelve a pedir
+   `/me/accounts` y solo conecta lo que aparece ahí.
+4. **Roles.** `subscribed_apps` pide `CREATE_CONTENT`, `MANAGE` o `MODERATE`; la Messenger Platform pide `MESSAGING`.
+   Las dos páginas de Meta discrepan (2026-10-23): se exigen `MESSAGING` **y** uno de los otros tres. Un administrador
+   de la Página los tiene todos. **A validar con una Página real** en test.
+5. **Configuración propia: `META_MESSENGER_CONFIG_ID`.** La Login Configuration de Embedded Signup de WhatsApp
+   (`META_CONFIG_ID`) no concede `pages_messaging` ni `pages_manage_metadata`; Messenger necesita la suya. Sin ella se
+   usa `META_CONFIG_ID` (en dev), pero en producción hay que crearla en Meta.
+6. **Plan (decisión del dueño, 2026-10-23).** Messenger **e Instagram** quedan en todos los planes de pago (Basic,
+   Premium y Empresarial); Free solo WhatsApp. Se aplica con `features.canales` de `plans.py` y el alta responde
+   `409 plan_channel_not_included`. Basic hoy prometía solo WhatsApp: cambia lo que promete ese plan, a reflejar en
+   `modelo-de-precios.md` y en la landing.
+7. **Atomicidad.** La cuenta de Meta nace en `draft` y sale de ahí en la misma transacción que escribe la primera
+   Página; la Página, su conexión canónica y sus instancias de agentes se escriben juntas, después del reclamo con
+   candado por activo. Si Meta no confirma la suscripción, la Página queda guardada con `subscribed = false` y la
+   cuenta en `pending`: no se da por conectada una cuenta sin ninguna Página suscrita.
+8. **El tipo `messenger_meta` sigue `available = false`** hasta que exista la UI en el panel (siguiente entrega): sin
+   ella, el listado ofrecería un botón que no lleva a ningún lado.
+
 ## Alternativas descartadas
 
 | Alternativa | Por qué no |

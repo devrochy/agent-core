@@ -6811,6 +6811,230 @@
         }
       }
     },
+    "/api/v1/admin/meta/messenger": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · messenger"
+        ],
+        "summary": "Messenger State",
+        "description": "Si el alta puede completarse aquí (app de Meta configurada y plan que incluye Messenger).",
+        "operationId": "messenger_state_api_v1_admin_meta_messenger_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessengerState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/messenger/attempt": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · messenger"
+        ],
+        "summary": "Messenger Attempt",
+        "description": "Abre un intento de popup de Facebook (un solo uso, vence a los 15 minutos).",
+        "operationId": "messenger_attempt_api_v1_admin_meta_messenger_attempt_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttemptOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/messenger/discover": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · messenger"
+        ],
+        "summary": "Messenger Discover",
+        "description": "Canjea el `code` del popup y lista las Páginas que el usuario administra, con cuáles pueden conectarse.\nLos tokens de las Páginas no salen del servidor.",
+        "operationId": "messenger_discover_api_v1_admin_meta_messenger_discover_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoverIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoverOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/messenger/connect": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · messenger"
+        ],
+        "summary": "Messenger Connect",
+        "description": "Conecta las Páginas elegidas: reclama cada una (un solo dueño), guarda su token, crea su conexión y\nsuscribe y verifica el webhook. Una Página que falla no impide las demás: va en `skipped`.",
+        "operationId": "messenger_connect_api_v1_admin_meta_messenger_connect_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/collaborators/pack-roles": {
       "get": {
         "tags": [
@@ -23412,6 +23636,25 @@
         ],
         "title": "AsistenciaIn"
       },
+      "AttemptOut": {
+        "properties": {
+          "attempt": {
+            "type": "string",
+            "title": "Attempt"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attempt",
+          "expires_in"
+        ],
+        "title": "AttemptOut",
+        "description": "Valor de un solo uso que el panel devuelve con el `code` del popup."
+      },
       "AttemptRow": {
         "properties": {
           "resultado": {
@@ -26096,6 +26339,50 @@
         ],
         "title": "Devices"
       },
+      "DiscoverIn": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "format": "password",
+            "title": "Code",
+            "writeOnly": true
+          },
+          "attempt": {
+            "type": "string",
+            "format": "password",
+            "title": "Attempt",
+            "writeOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "attempt"
+        ],
+        "title": "DiscoverIn"
+      },
+      "DiscoverOut": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/PageOut"
+            },
+            "type": "array",
+            "title": "Pages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "pages"
+        ],
+        "title": "DiscoverOut"
+      },
       "DlqEntry": {
         "properties": {
           "entry_id": {
@@ -28239,6 +28526,48 @@
         ],
         "title": "MessagesSince"
       },
+      "MessengerState": {
+        "properties": {
+          "meta_configured": {
+            "type": "boolean",
+            "title": "Meta Configured"
+          },
+          "app_id": {
+            "type": "string",
+            "title": "App Id"
+          },
+          "config_id": {
+            "type": "string",
+            "title": "Config Id"
+          },
+          "graph_api_version": {
+            "type": "string",
+            "title": "Graph Api Version"
+          },
+          "missing_settings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Settings",
+            "default": []
+          },
+          "plan_includes": {
+            "type": "boolean",
+            "title": "Plan Includes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "meta_configured",
+          "app_id",
+          "config_id",
+          "graph_api_version",
+          "plan_includes"
+        ],
+        "title": "MessengerState",
+        "description": "Qué puede ofrecer el alta en este entorno. `app_id` y `config_id` son públicos (los usa el SDK de\nFacebook en el navegador); el App Secret nunca sale del servidor. `plan_includes`: el plan del negocio\nincluye el canal."
+      },
       "MetaCategoryCost": {
         "properties": {
           "category": {
@@ -29207,6 +29536,56 @@
           "label"
         ],
         "title": "PackRole"
+      },
+      "PageOut": {
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "title": "Page Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "eligible": {
+            "type": "boolean",
+            "title": "Eligible"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "already_connected": {
+            "type": "boolean",
+            "title": "Already Connected",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "page_id",
+          "name",
+          "eligible"
+        ],
+        "title": "PageOut"
       },
       "Page_ConversationSummary_": {
         "properties": {
@@ -33529,6 +33908,29 @@
         ],
         "title": "SkillsUpdate"
       },
+      "SkippedPageOut": {
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "title": "Page Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "page_id",
+          "code",
+          "message"
+        ],
+        "title": "SkippedPageOut"
+      },
       "SpecPayload": {
         "properties": {
           "spec": {
@@ -37183,6 +37585,93 @@
           "domains"
         ],
         "title": "ConfiguredSecret"
+      },
+      "ConnectIn": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "page_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Page Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "page_ids"
+        ],
+        "title": "ConnectIn"
+      },
+      "ConnectOut": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "connected": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectedPageOut"
+            },
+            "type": "array",
+            "title": "Connected"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/SkippedPageOut"
+            },
+            "type": "array",
+            "title": "Skipped"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "connected",
+          "skipped"
+        ],
+        "title": "ConnectOut",
+        "description": "`connected` incluye las Páginas guardadas aunque Meta no haya confirmado la suscripción\n(`subscribed = false`): no reciben mensajes hasta reintentar. `skipped`: no se conectaron."
+      },
+      "ConnectedPageOut": {
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "title": "Page Id"
+          },
+          "channel_connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Channel Connection Id"
+          },
+          "subscribed": {
+            "type": "boolean",
+            "title": "Subscribed"
+          },
+          "subscribed_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Subscribed Fields",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "page_id",
+          "channel_connection_id",
+          "subscribed"
+        ],
+        "title": "ConnectedPageOut"
       },
       "DeclarativeToolsOut": {
         "properties": {

@@ -204,6 +204,10 @@ class Settings(BaseSettings):
     meta_app_id: str = Field(default="", alias="META_APP_ID")
     meta_app_secret: str = Field(default="", alias="META_APP_SECRET")
     meta_config_id: str = Field(default="", alias="META_CONFIG_ID")
+    # Configuración de Facebook Login for Business de Messenger (permisos de Páginas: `pages_messaging`,
+    # `pages_show_list`, `pages_manage_metadata`; ADR-0152). Es DISTINTA de `META_CONFIG_ID`, que es la de
+    # Embedded Signup de WhatsApp y no concede esos permisos. Sin ella, Messenger usa `META_CONFIG_ID`.
+    meta_messenger_config_id: str = Field(default="", alias="META_MESSENGER_CONFIG_ID")
     # Versión de Graph API usada SOLO por el módulo de preflight (core/gateway/
     # meta_preflight.py) -- no toca los v21.0 hardcodeados en outbound.py ni en
     # connections.py::verify_meta_credentials (envío de mensajes en producción).
