@@ -22689,6 +22689,230 @@
           }
         }
       }
+    },
+    "/api/v1/admin/meta/instagram": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · instagram"
+        ],
+        "summary": "Instagram State",
+        "description": "Si el alta puede completarse aquí (app de Meta configurada y plan que incluye Instagram).",
+        "operationId": "instagram_state_api_v1_admin_meta_instagram_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstagramState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/instagram/attempt": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · instagram"
+        ],
+        "summary": "Instagram Attempt",
+        "description": "Abre un intento de popup de Facebook (un solo uso, vence a los 15 minutos).",
+        "operationId": "instagram_attempt_api_v1_admin_meta_instagram_attempt_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstagramAttemptOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/instagram/discover": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · instagram"
+        ],
+        "summary": "Instagram Discover",
+        "description": "Canjea el `code` del popup y lista las cuentas de Instagram vinculadas a las Páginas que el usuario\nadministra, con cuáles pueden conectarse. Los tokens de las Páginas no salen del servidor.",
+        "operationId": "instagram_discover_api_v1_admin_meta_instagram_discover_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstagramDiscoverIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstagramDiscoverOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/meta/instagram/connect": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · instagram"
+        ],
+        "summary": "Instagram Connect",
+        "description": "Conecta las cuentas elegidas: reclama cada una (un solo dueño), guarda el token de su Página vinculada,\ncrea su conexión y suscribe y verifica el webhook. Una cuenta que falla no impide las demás: va en `skipped`.",
+        "operationId": "instagram_connect_api_v1_admin_meta_instagram_connect_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstagramConnectIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstagramConnectOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -43477,6 +43701,281 @@
           "permissions"
         ],
         "title": "SetPermissionsRequest"
+      },
+      "InstagramAccountOut": {
+        "properties": {
+          "ig_user_id": {
+            "type": "string",
+            "title": "Ig User Id"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          },
+          "page_id": {
+            "type": "string",
+            "title": "Page Id"
+          },
+          "page_name": {
+            "type": "string",
+            "title": "Page Name"
+          },
+          "eligible": {
+            "type": "boolean",
+            "title": "Eligible"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "already_connected": {
+            "type": "boolean",
+            "title": "Already Connected",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "ig_user_id",
+          "page_id",
+          "page_name",
+          "eligible"
+        ],
+        "title": "InstagramAccountOut"
+      },
+      "InstagramAttemptOut": {
+        "properties": {
+          "attempt": {
+            "type": "string",
+            "title": "Attempt"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attempt",
+          "expires_in"
+        ],
+        "title": "InstagramAttemptOut",
+        "description": "Valor de un solo uso que el panel devuelve con el `code` del popup."
+      },
+      "InstagramConnectIn": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "ig_user_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Ig User Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "ig_user_ids"
+        ],
+        "title": "InstagramConnectIn"
+      },
+      "InstagramConnectOut": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "connected": {
+            "items": {
+              "$ref": "#/components/schemas/InstagramConnectedOut"
+            },
+            "type": "array",
+            "title": "Connected"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/InstagramSkippedOut"
+            },
+            "type": "array",
+            "title": "Skipped"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "connected",
+          "skipped"
+        ],
+        "title": "InstagramConnectOut",
+        "description": "`connected` incluye las cuentas guardadas aunque Meta no haya confirmado la suscripción\n(`subscribed = false`): no reciben mensajes hasta reintentar. `skipped`: no se conectaron."
+      },
+      "InstagramConnectedOut": {
+        "properties": {
+          "ig_user_id": {
+            "type": "string",
+            "title": "Ig User Id"
+          },
+          "channel_connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Channel Connection Id"
+          },
+          "subscribed": {
+            "type": "boolean",
+            "title": "Subscribed"
+          },
+          "subscribed_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Subscribed Fields",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "ig_user_id",
+          "channel_connection_id",
+          "subscribed"
+        ],
+        "title": "InstagramConnectedOut"
+      },
+      "InstagramDiscoverIn": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "format": "password",
+            "title": "Code",
+            "writeOnly": true
+          },
+          "attempt": {
+            "type": "string",
+            "format": "password",
+            "title": "Attempt",
+            "writeOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "attempt"
+        ],
+        "title": "InstagramDiscoverIn"
+      },
+      "InstagramDiscoverOut": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/InstagramAccountOut"
+            },
+            "type": "array",
+            "title": "Accounts"
+          },
+          "pages_without_instagram": {
+            "type": "integer",
+            "title": "Pages Without Instagram"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "accounts",
+          "pages_without_instagram"
+        ],
+        "title": "InstagramDiscoverOut"
+      },
+      "InstagramSkippedOut": {
+        "properties": {
+          "ig_user_id": {
+            "type": "string",
+            "title": "Ig User Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ig_user_id",
+          "code",
+          "message"
+        ],
+        "title": "InstagramSkippedOut"
+      },
+      "InstagramState": {
+        "properties": {
+          "meta_configured": {
+            "type": "boolean",
+            "title": "Meta Configured"
+          },
+          "app_id": {
+            "type": "string",
+            "title": "App Id"
+          },
+          "config_id": {
+            "type": "string",
+            "title": "Config Id"
+          },
+          "graph_api_version": {
+            "type": "string",
+            "title": "Graph Api Version"
+          },
+          "missing_settings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Settings",
+            "default": []
+          },
+          "plan_includes": {
+            "type": "boolean",
+            "title": "Plan Includes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "meta_configured",
+          "app_id",
+          "config_id",
+          "graph_api_version",
+          "plan_includes"
+        ],
+        "title": "InstagramState",
+        "description": "Qué puede ofrecer el alta en este entorno. `app_id` y `config_id` son públicos (los usa el SDK de\nFacebook en el navegador); el App Secret nunca sale del servidor. `plan_includes`: el plan del negocio\nincluye el canal."
       }
     }
   }

@@ -114,6 +114,52 @@ Decisiones tomadas al construir `core/gateway/meta_messenger_alta.py` y `core/ap
 8. **El tipo `messenger_meta` sigue `available = false`** hasta que exista la UI en el panel (siguiente entrega): sin
    ella, el listado ofrecería un botón que no lleva a ningún lado.
 
+## Adenda del 2026-10-23: Instagram con Facebook Login (entrega 4a)
+
+Decisiones al construir `core/gateway/meta_instagram_alta.py`, `channels/instagram/` y `core/api/routers/meta_instagram.py`:
+
+1. **Esta entrega es la ruta (a), Facebook Login.** La cuenta profesional está vinculada a una Página y se escribe con
+   el token de esa Página (`POST /{page_id}/messages`, destinatario = IGSID). La ruta (b), Instagram Login (otra app de
+   Meta, otros permisos y un token de 60 días que hay que refrescar), queda para una entrega 4b: usa credenciales
+   distintas que **nunca se mezclan** con las de Facebook Login en el mismo diálogo, y su forma de envío no está
+   verificada contra la documentación primaria.
+2. **El activo es la cuenta, no la Página.** La conexión canónica `instagram_meta` tiene `external_id = ig_user_id`
+   (el `entry.id` con el que Meta entrega los mensajes); la fila es `ig_accounts` (`linked_page_id`,
+   `login_route = ig_facebook_login`). No se escribe `fb_pages`: la Página es solo el medio (su token y su
+   suscripción). La cuenta de Meta del negocio es otra (`channel = instagram`) y su token de Página va en
+   `meta_tokens` con el `kind` `page_access` (AAD tenant + cuenta + kind), como en Messenger.
+3. **Una cuenta, un dueño** con el mismo candado que Messenger (`claim_messaging_assets(ig_user_id=…)`, migración
+   0104): otro negocio que la intente conectar queda omitido con `asset_claimed`, sin saber de quién es, y no se queda
+   con el token de la Página.
+4. **Los clientes se separan por cuenta.** La clave del cliente es `instagram:<ig_user_id>:<IGSID>`: el mismo IGSID
+   en dos cuentas del negocio son dos clientes y dos conversaciones, cada una con la conexión (y la Página) de su
+   cuenta. El envío toma el IGSID del último componente.
+5. **Los ecos no son del cliente.** Lo que la propia Página o cuenta envía vuelve al webhook con `message.is_echo`;
+   se descarta en el parser para los dos canales (sin esto el asistente se respondería a sí mismo).
+6. **Las suscripciones no se pisan entre canales.** `POST subscribed_apps` reemplaza la lista de campos: Instagram **y
+   Messenger** piden la unión de los que la Página ya tiene y los suyos, y solo se da por suscrita si Meta confirma
+   `messages` en un GET (los campos de otras apps de la Página no cuentan).
+   **La Página es el medio de la cuenta, no un activo reclamado:** no se escribe `fb_pages` ni se reclama su
+   `page_id` en el alta de Instagram, así que una agencia que administra la misma Página para dos negocios puede usarla
+   como medio de la cuenta de uno y como Página de Messenger del otro. El ruteo entrante no se mezcla (Messenger rutea
+   por `page_id`, Instagram por `ig_user_id`); el costo es que cada uno puede recortar campos *opcionales* del otro, que
+   es lo que la unión evita mientras ambos se reconecten con este código. Auditoría 2026-10-23: sin hallazgos altos.
+6b. **El token se guarda después del reclamo, y un identificador con conexión manual no se pisa.** En Messenger y en
+   Instagram el token de la Página solo se escribe cuando la transacción del reclamo confirmó: un alta que falla no
+   revoca el token de una cuenta que ya funcionaba ni deja uno vivo en una conexión eliminada. Si el negocio ya tiene
+   una conexión manual (con credenciales propias) con ese identificador, la Página o cuenta se omite con
+   `manual_connection_conflict` y se deshace todo: respondería por la manual, no por la Página.
+7. **Configuración propia: `META_INSTAGRAM_CONFIG_ID`.** Sin respaldo en `META_MESSENGER_CONFIG_ID` ni en
+   `META_CONFIG_ID`: son otros permisos y no se mezclan en un diálogo.
+8. **Límites propios de Instagram** (antes de llamar a Meta): texto de hasta 1000 **bytes** UTF-8 y sin mensaje vacío;
+   sin imágenes todavía; sin contacto en frío (la conversación nace cuando el cliente escribe). La ventana de 24 h y
+   `HUMAN_AGENT` (7 días, solo una persona) son las de Messenger.
+9. **A validar con una cuenta real en test** (no pude consultar la documentación de Meta desde el entorno de
+   desarrollo; los datos vienen de los resultados de búsqueda de Meta y del código viejo): el envío por
+   `/{page_id}/messages` con el IGSID, la suscripción de la Página para el objeto `instagram` y el nombre de los
+   permisos de la Login Configuration. El interruptor «Permitir acceso a los mensajes» de Instagram, si está apagado,
+   no lo reporta Meta como error: la prueba de humo con diagnóstico va en la entrega 4b.
+
 ## Alternativas descartadas
 
 | Alternativa | Por qué no |

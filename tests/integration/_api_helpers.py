@@ -80,10 +80,19 @@ APP_ID_PLATAFORMA = "platform-app-test"
 class MetaSimulado:
     """Meta simulado para las altas de Messenger: las Páginas del usuario y qué responde cada suscripción."""
 
-    def __init__(self, paginas: list[dict], *, suscripcion_falla: set[str] | None = None):
+    def __init__(
+        self,
+        paginas: list[dict],
+        *,
+        suscripcion_falla: set[str] | None = None,
+        campos_previos: dict[str, list[str]] | None = None,
+    ):
         self.paginas = paginas
         self.suscripcion_falla = suscripcion_falla or set()
         self.llamadas: list[tuple[str, str, str]] = []
+        # Con `campos_previos` la suscripción tiene estado (como Meta): el POST REEMPLAZA la lista de la Página.
+        self.suscritos: dict[str, list[str]] | None = None if campos_previos is None else dict(campos_previos)
+        self.pedidos: list[str] = []
 
     async def graph_fetch(self, path, *, token, app_secret, method="GET", body=None, query=None, **_kw):
         from core.gateway.meta_errors import GraphError
@@ -97,7 +106,13 @@ class MetaSimulado:
                 raise GraphError("(#200) Permissions error", category="PERMANENT", code=200)
             if method == "POST":
                 assert "subscribed_fields" in (query or {})  # el nombre correcto del parámetro
+                self.pedidos.append(query["subscribed_fields"])
+                if self.suscritos is not None:
+                    self.suscritos[page_id] = query["subscribed_fields"].split(",")
                 return {"success": True}
+            if self.suscritos is not None:
+                campos = self.suscritos.get(page_id)
+                return {"data": [{"id": APP_ID_PLATAFORMA, "subscribed_fields": campos}] if campos else []}
             return {"data": [{"id": APP_ID_PLATAFORMA, "subscribed_fields": ["messages", "messaging_postbacks"]}]}
         raise AssertionError(f"llamada inesperada a Graph: {method} {path}")
 
@@ -108,3 +123,12 @@ def pagina_de_meta(page_id: str, *, tasks=("MESSAGING", "MANAGE"), token: str | 
         "id": page_id, "name": f"Página {page_id}", "category": "Tienda",
         "tasks": list(tasks), "access_token": token or f"tok-{page_id}",
     }
+
+
+def pagina_con_instagram(
+    page_id: str, ig_user_id: str, *, username: str | None = None, tasks=("MESSAGING", "MANAGE"), token: str | None = None
+) -> dict:
+    """Una Página con su cuenta de Instagram vinculada, como la devuelve `GET /me/accounts`."""
+    pagina = pagina_de_meta(page_id, tasks=tasks, token=token)
+    pagina["instagram_business_account"] = {"id": ig_user_id, "username": username or f"cuenta_{ig_user_id}"}
+    return pagina

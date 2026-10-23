@@ -117,12 +117,11 @@ def test_webchat_es_conversacional_y_no_aparece_en_el_selector():
     assert "webchat" not in en_selector and "whatsapp_meta" in en_selector
 
 
-def test_messenger_esta_disponible_e_instagram_todavia_no():
-    # Messenger tiene alta (HU-CHAN-01); Instagram no tiene adaptador ni alta (HU-CHAN-04).
-    messenger = get_connection_type("messenger_meta")
-    assert messenger is not None and messenger.available is True
-    instagram = get_connection_type("instagram_meta")
-    assert instagram is not None and instagram.available is False
+def test_messenger_e_instagram_estan_disponibles():
+    # Messenger (HU-CHAN-01) e Instagram con Facebook Login (HU-CHAN-04) tienen alta y salida.
+    for tipo_id in ("messenger_meta", "instagram_meta"):
+        tipo = get_connection_type(tipo_id)
+        assert tipo is not None and tipo.available is True, tipo_id
 
 
 def test_todo_canal_de_mensajeria_de_meta_disponible_tiene_adaptador_de_salida():

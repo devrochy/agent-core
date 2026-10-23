@@ -1,4 +1,4 @@
-"""Envío por Messenger (Send API) con la ventana de servicio y las etiquetas de mensajería.
+"""Envío por Messenger e Instagram (Send API) con la ventana de servicio y las etiquetas de mensajería.
 
 Reglas verificadas contra la referencia de Send API de Meta el 2026-10-23 (ADR-0152 §7):
 
@@ -30,6 +30,9 @@ ALLOWED_MESSAGE_TAGS = frozenset({HUMAN_AGENT_TAG})
 
 PAGE_TOKEN_KIND = "page_access"
 
+# Nombre de cada canal en los mensajes que ve el usuario (las reglas de ventana son las mismas).
+_NOMBRE_DE_CANAL = {"messenger": "Messenger", "instagram": "Instagram"}
+
 
 class MessengerSendError(AgentCoreError):
     """Envío bloqueado antes de llamar a Meta: fuera de la ventana y sin derecho a `HUMAN_AGENT`."""
@@ -48,25 +51,28 @@ def plan_de_envio(
     service_window_expires_at: datetime | None,
     humano: bool,
     ahora: datetime | None = None,
+    canal: str = "messenger",
 ) -> PlanDeEnvio:
     """Decide el tipo de mensaje o lanza `MessengerSendError`.
 
     `service_window_expires_at`: fin de la ventana de 24 h, que cada mensaje del cliente renueva
     (`last_inbound + 24 h`). `None` es una conversación sin ventana registrada: se responde como
     dentro de la ventana, igual que WhatsApp (`validate_service_window`).
-    `humano`: lo envía una persona desde la bandeja, nunca el asistente."""
+    `humano`: lo envía una persona desde la bandeja, nunca el asistente.
+    `canal`: `messenger` o `instagram`, solo para nombrarlo en el error."""
     ahora = ahora or datetime.now(UTC)
+    nombre = _NOMBRE_DE_CANAL.get(canal, "Messenger")
     if service_window_expires_at is None or service_window_expires_at >= ahora:
         return PlanDeEnvio("RESPONSE")
     # `HUMAN_AGENT` cubre 7 días desde el último mensaje del cliente: la ventana ya contó 1 de ellos.
     limite = service_window_expires_at - timedelta(hours=SERVICE_WINDOW_HOURS) + timedelta(days=HUMAN_AGENT_DAYS)
     if not humano:
         raise MessengerSendError(
-            "La ventana de 24 h de Messenger venció: el asistente no puede escribir. "
+            f"La ventana de 24 h de {nombre} venció: el asistente no puede escribir. "
             "Solo una persona puede responder hasta 7 días después del último mensaje del cliente."
         )
     if ahora > limite:
         raise MessengerSendError(
-            "Pasaron más de 7 días desde el último mensaje del cliente: Messenger ya no permite responderle."
+            f"Pasaron más de 7 días desde el último mensaje del cliente: {nombre} ya no permite responderle."
         )
     return PlanDeEnvio("MESSAGE_TAG", HUMAN_AGENT_TAG)

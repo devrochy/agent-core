@@ -107,6 +107,46 @@ async def _resolve_meta_connection_credentials(
     return {"phone_number_id": phone.phone_number_id, "access_token": token}
 
 
+def _cuenta_utilizable(
+    connection: MetaConnection | None, meta_connection_id: uuid.UUID, expected_tenant_id: uuid.UUID | None
+) -> MetaConnection | None:
+    """La cuenta de Meta si puede enviar: existe, no está pausada ni eliminada (ADR-0122) y es del negocio
+    esperado (tenant explícito además de RLS). `None` en cualquier otro caso."""
+    from core.gateway.meta_connection_state import motivo_pausa
+
+    if connection is None:
+        return None
+    if (motivo := motivo_pausa(connection)) is not None:
+        log.warning("meta_connection_no_utilizable", meta_connection_id=str(meta_connection_id), motivo=motivo)
+        return None
+    if expected_tenant_id is not None and connection.tenant_id != expected_tenant_id:
+        log.error(
+            "meta_connection_tenant_mismatch",
+            meta_connection_id=str(meta_connection_id),
+            connection_tenant_id=str(connection.tenant_id),
+            expected_tenant_id=str(expected_tenant_id),
+        )
+        return None
+    return connection
+
+
+async def _credenciales_de_pagina(connection: MetaConnection, page_id: str) -> dict[str, str] | None:
+    """El token de la PROPIA Página (no el de la cuenta) y los datos para firmar el envío."""
+    from core.gateway import meta_token_store
+    from core.gateway.meta_credentials import CredentialsUnavailable, app_credentials_for
+    from core.gateway.meta_messenger import PAGE_TOKEN_KIND
+
+    token = await meta_token_store.get_token(connection.id, PAGE_TOKEN_KIND, page_id, tenant_id=connection.tenant_id)
+    if not token:
+        return None
+    credentials = {"page_id": page_id, "access_token": token, "graph_api_version": connection.graph_api_version or ""}
+    try:
+        credentials["app_secret"] = (await app_credentials_for(connection)).app_secret
+    except CredentialsUnavailable:
+        pass  # sin `appsecret_proof`: Meta lo exige solo si la app lo tiene activado
+    return credentials
+
+
 async def _resolve_messenger_credentials(
     meta_connection_id: uuid.UUID, page_id: str, expected_tenant_id: uuid.UUID | None
 ) -> dict[str, str] | None:
@@ -115,25 +155,10 @@ async def _resolve_messenger_credentials(
     `_resolve_meta_connection_credentials`: pausa o borrado (ADR-0122), tenant explícito además de
     RLS y sin respaldo silencioso a otra Página, a WhatsApp ni al `.env`."""
     from core.db.models import FbPage
-    from core.gateway import meta_token_store
-    from core.gateway.meta_connection_state import motivo_pausa
-    from core.gateway.meta_credentials import CredentialsUnavailable, app_credentials_for
-    from core.gateway.meta_messenger import PAGE_TOKEN_KIND
 
     async with get_session() as session:
-        connection = await session.get(MetaConnection, meta_connection_id)
+        connection = _cuenta_utilizable(await session.get(MetaConnection, meta_connection_id), meta_connection_id, expected_tenant_id)
         if connection is None:
-            return None
-        if (motivo := motivo_pausa(connection)) is not None:
-            log.warning("meta_connection_no_utilizable", meta_connection_id=str(meta_connection_id), motivo=motivo)
-            return None
-        if expected_tenant_id is not None and connection.tenant_id != expected_tenant_id:
-            log.error(
-                "meta_connection_tenant_mismatch",
-                meta_connection_id=str(meta_connection_id),
-                connection_tenant_id=str(connection.tenant_id),
-                expected_tenant_id=str(expected_tenant_id),
-            )
             return None
         pagina = (
             await session.execute(
@@ -146,17 +171,34 @@ async def _resolve_messenger_credentials(
         ).scalars().first()
     if pagina is None:
         return None
-    token = await meta_token_store.get_token(
-        meta_connection_id, PAGE_TOKEN_KIND, page_id, tenant_id=connection.tenant_id
-    )
-    if not token:
+    return await _credenciales_de_pagina(connection, page_id)
+
+
+async def _resolve_instagram_credentials(
+    meta_connection_id: uuid.UUID, ig_user_id: str, expected_tenant_id: uuid.UUID | None
+) -> dict[str, str] | None:
+    """Credenciales de una cuenta de Instagram con Facebook Login (ADR-0152, HU-CHAN-04): se escribe con el
+    token de la Página vinculada a esa cuenta. Solo si la cuenta es viva, de esta conexión y de esta ruta de
+    login, con las mismas defensas que Messenger y sin respaldo a otra cuenta ni al `.env`."""
+    from core.db.models import IgAccount
+    from core.gateway.meta_instagram import LOGIN_ROUTE_FACEBOOK
+
+    async with get_session() as session:
+        connection = _cuenta_utilizable(await session.get(MetaConnection, meta_connection_id), meta_connection_id, expected_tenant_id)
+        if connection is None:
+            return None
+        cuenta = (
+            await session.execute(
+                select(IgAccount).where(
+                    IgAccount.connection_id == meta_connection_id,
+                    IgAccount.tenant_id == connection.tenant_id,
+                    IgAccount.ig_user_id == ig_user_id,
+                )
+            )
+        ).scalars().first()
+    if cuenta is None or cuenta.login_route != LOGIN_ROUTE_FACEBOOK or not cuenta.linked_page_id:
         return None
-    credentials = {"page_id": page_id, "access_token": token, "graph_api_version": connection.graph_api_version or ""}
-    try:
-        credentials["app_secret"] = (await app_credentials_for(connection)).app_secret
-    except CredentialsUnavailable:
-        pass  # sin `appsecret_proof`: Meta lo exige solo si la app lo tiene activado
-    return credentials
+    return await _credenciales_de_pagina(connection, cuenta.linked_page_id)
 
 
 async def resolve_credentials(
@@ -207,6 +249,12 @@ async def resolve_credentials(
         if connection.meta_connection_id is not None and connection.channel == "messenger":
             # Página de Messenger (ADR-0152): su token es el de la Página. Sin respaldo silencioso.
             creds = await _resolve_messenger_credentials(
+                connection.meta_connection_id, connection.external_id or "", expected_tenant_id
+            )
+            return "meta", creds or {}
+        if connection.meta_connection_id is not None and connection.channel == "instagram":
+            # Cuenta de Instagram (ADR-0152, HU-CHAN-04): se escribe con el token de su Página vinculada.
+            creds = await _resolve_instagram_credentials(
                 connection.meta_connection_id, connection.external_id or "", expected_tenant_id
             )
             return "meta", creds or {}
@@ -301,7 +349,10 @@ def validate_service_window(conversation: Conversation, *, is_template: bool, se
         from core.gateway.meta_messenger import MessengerSendError, plan_de_envio
 
         try:
-            plan_de_envio(service_window_expires_at=expires_at, humano=sender_type == "human", ahora=utcnow())
+            plan_de_envio(
+                service_window_expires_at=expires_at, humano=sender_type == "human", ahora=utcnow(),
+                canal=conversation.channel,
+            )
         except MessengerSendError as exc:
             raise OutboundWindowExpiredError(str(exc)) from exc
         return
