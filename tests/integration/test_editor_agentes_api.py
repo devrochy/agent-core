@@ -317,3 +317,43 @@ async def test_catalogo_de_modelos_con_costo_estimado_del_consumo_real(app_clien
     otro, _ = await _negocio()
     r = await app_client.get("/api/v1/admin/agent-models", headers=await _dueno(app_client, otro))
     assert r.json()["sample_turns"] == 0
+
+
+async def test_superpoderes_por_enfoque(app_client) -> None:
+    """Un agente de Ventas solo ve y solo publica lo de Ventas, aunque el negocio tenga Agenda."""
+    tid, cid = await _negocio()
+    h = await _dueno(app_client, tid)
+
+    r = await app_client.get("/api/v1/admin/agent-superpowers", headers=h)
+    assert r.status_code == 200, r.text
+    todos = {s["id"] for s in r.json()["items"]}
+    assert "pack_calendar.agendar_cita" in todos and "pack_commerce.tomar_pedido" in todos
+
+    r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
+    assert r.status_code == 201, r.text
+    aid = r.json()["agent"]["id"]
+
+    r = await app_client.get(f"/api/v1/admin/agent-superpowers?agent_id={aid}", headers=h)
+    assert r.status_code == 200, r.text
+    assert {s["id"] for s in r.json()["items"]} == {"pack_commerce.tomar_pedido", "pack_commerce.contratar_plan"}
+
+    # Marcar un superpoder de otro enfoque: el borrador lo guarda, publicar lo rechaza junto al campo.
+    borrador = (await app_client.get(f"/api/v1/admin/agents/{aid}/draft", headers=h)).json()
+    nuevo = borrador["content"]
+    ajeno = {**nuevo["procedures"][0], "id": "pack_calendar.agendar_cita"}
+    nuevo["procedures"].append(ajeno)
+    r = await app_client.put(
+        f"/api/v1/admin/agents/{aid}/draft", headers=h, json={"content": nuevo, "lock_version": borrador["lock_version"]}
+    )
+    assert r.status_code == 200, r.text
+    r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
+    assert r.status_code == 422, r.text
+    campos = r.json()["error"]["fields"]
+    assert "procedures[2].id" in campos and "enfoque" in campos["procedures[2].id"]
+    assert await _sql(tid, "select 1 from agent_versions where agent_id = :a", a=uuid.UUID(aid)) == []
+
+    # Aislamiento: el agente de un negocio no se consulta desde otro.
+    otro, _ = await _negocio()
+    h_otro = await _dueno(app_client, otro)
+    r = await app_client.get(f"/api/v1/admin/agent-superpowers?agent_id={aid}", headers=h_otro)
+    assert r.status_code == 404, r.text

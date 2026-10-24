@@ -8,7 +8,8 @@ el editor del panel necesita y no existía:
 - `POST /api/v1/admin/agent-templates/{key}/agents` — `{name?}` → especialista con la key de la
   plantilla y su borrador derivado (sin publicar). 409 `key_taken` (con `fields.agent_id`) si
   ya existe; 409 `template_unavailable` si faltan habilidades.
-- `GET  /api/v1/admin/agent-superpowers` — superpoderes que ofrece el negocio con sus frases.
+- `GET  /api/v1/admin/agent-superpowers` — superpoderes que ofrece el negocio con sus frases;
+  con `?agent_id=` solo los del enfoque de ese agente (404 si no es del negocio).
 - `GET  /api/v1/admin/agent-models` — modelos de la tabla de precios del core, cuáles sirve el
   proveedor del negocio, si hay un modelo BYOK que manda y el costo estimado por 1.000 turnos
   con el promedio real de tokens por turno del negocio (30 días); sin historial (o sin acceso a
@@ -33,7 +34,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, status
+from fastapi import APIRouter, Depends, Path, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.admin.permissions import effective_access
@@ -215,9 +216,22 @@ async def create_from_template(
 
 @router.get("/agent-superpowers", response_model=Page[Superpower])
 async def list_superpowers(
-    principal: Annotated[Principal, Depends(require("settings"))], params: Paginados
+    principal: Annotated[Principal, Depends(require("settings"))],
+    params: Paginados,
+    agent_id: Annotated[
+        uuid.UUID | None,
+        Query(description="Con el agente, solo los superpoderes de su enfoque (su plantilla)."),
+    ] = None,
 ) -> Page[Superpower]:
-    items = [_superpower(s) for s in svc.superpoderes(await svc.habilitados_del_negocio(_tenant(principal)))]
+    tid = _tenant(principal)
+    if agent_id is None:
+        poderes = svc.superpoderes(await svc.habilitados_del_negocio(tid))
+    else:
+        try:
+            poderes = await svc.superpoderes_del_agente(tid, agent_id)
+        except versiones.AgenteNoEncontrado:
+            raise ApiError.not_found("Agente no encontrado.") from None
+    items = [_superpower(s) for s in poderes]
     return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
 
 
