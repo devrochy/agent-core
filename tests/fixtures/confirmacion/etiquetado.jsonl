@@ -224,3 +224,17 @@
 {"texto": "no confirmo, mandame el link", "confirma": false}
 {"texto": "adelante, pasame el link", "confirma": true}
 {"texto": "sí por favor, pasame el link", "confirma": false}
+{"texto": "Sí, confirmo. Todo bien.", "confirma": true}
+{"texto": "confirmo, todo bien", "confirma": true}
+{"texto": "sí, todo correcto, bien", "confirma": true}
+{"texto": "acepto, todo bien, gracias", "confirma": true}
+{"texto": "Confirmo. Todo bien, gracias.", "confirma": true}
+{"texto": "bien", "confirma": false}
+{"texto": "sí, bien", "confirma": false}
+{"texto": "bien, gracias", "confirma": false}
+{"texto": "todo bien, gracias", "confirma": false}
+{"texto": "sí, todo bien, gracias", "confirma": false}
+{"texto": "confirmo pero no todo bien", "confirma": false}
+{"texto": "confirmo, algo no está bien", "confirma": false}
+{"texto": "¿todo bien? confirmo", "confirma": false}
+{"texto": "confirmo, bien mal", "confirma": false}

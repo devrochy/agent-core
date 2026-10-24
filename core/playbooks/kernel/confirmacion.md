@@ -1,6 +1,6 @@
 ---
 name: confirmacion
-description: Léxico del clasificador de confirmación escrita del motor (HU-AOS-05 y HU-AOS-09, core/kernel/procedures/clasificador.py). Confirma una frase exacta de `si` o, sin signos de pregunta y con 8 palabras o menos, una frase hecha SOLO de `nucleo`, `prefijos` y `cortesia`, con al menos una de `nucleo` y ninguna de `negaciones`. Lo ambiguo ("sí", "dale", "ok", "listo" solos) no confirma. También confirma una frase exacta de `si` con `cortesia` intercalada. Para confirmar un DATO (no una acción ni una etapa) basta un asentimiento: `prefijos`, `nucleo` o `asiente_dato`, con `objetos_de_dato` y `cortesia` alrededor, sin negaciones; esas dos secciones nunca cuentan para una acción. Se compara sin tildes, mayúsculas ni signos. Cambiar este léxico exige correr el set etiquetado (tests/fixtures/confirmacion/etiquetado.jsonl) con precisión 1.0.
+description: Léxico del clasificador de confirmación escrita del motor (HU-AOS-05 y HU-AOS-09, core/kernel/procedures/clasificador.py). Confirma una frase exacta de `si` o, sin signos de pregunta y con 8 palabras o menos, una frase hecha SOLO de `nucleo`, `prefijos` y `cortesia`, con al menos una de `nucleo` y ninguna de `negaciones`. Lo ambiguo ("sí", "dale", "ok", "listo" solos, "todo bien" sin una marca de confirmación) no confirma; "bien" solo acompaña a una de `nucleo` ("confirmo, todo bien"). También confirma una frase exacta de `si` con `cortesia` intercalada. Para confirmar un DATO (no una acción ni una etapa) basta un asentimiento: `prefijos`, `nucleo` o `asiente_dato`, con `objetos_de_dato` y `cortesia` alrededor, sin negaciones; esas dos secciones nunca cuentan para una acción. Se compara sin tildes, mayúsculas ni signos. Cambiar este léxico exige correr el set etiquetado (tests/fixtures/confirmacion/etiquetado.jsonl) con precisión 1.0.
 ---
 ## si
 si confirmo
@@ -53,6 +53,7 @@ bueno
 de acuerdo
 esta bien
 ## cortesia
+bien
 gracias
 muchas gracias
 mil gracias

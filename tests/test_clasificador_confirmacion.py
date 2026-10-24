@@ -98,3 +98,31 @@ def test_confirmo_y_pedir_el_link_confirma(texto: str) -> None:
 )
 def test_pedir_el_link_sin_confirmar_no_confirma(texto: str) -> None:
     assert not clasificador.es_confirmacion(texto), texto
+
+
+@pytest.mark.parametrize(
+    "texto",
+    ["Sí, confirmo. Todo bien.", "confirmo, todo bien", "sí, todo correcto, bien", "acepto, todo bien, gracias"],
+)
+def test_confirmar_y_agregar_que_todo_esta_bien_sigue_confirmando(texto: str) -> None:
+    """Medición pass^4 del 2026-10-23: el cliente simulado escribió «Sí, confirmo. Todo bien.», el motor no lo tomó
+    por confirmación, el modelo dijo que quedó registrada y nunca se creó el pedido. «bien» acompaña a una marca de
+    confirmación; solo, sigue sin confirmar."""
+    assert clasificador.es_confirmacion(texto) is True
+
+
+@pytest.mark.parametrize(
+    "texto",
+    ["todo bien", "sí, todo bien", "bien", "bien, gracias", "confirmo pero no todo bien", "¿todo bien? confirmo"],
+)
+def test_bien_solo_no_confirma_y_una_reserva_o_pregunta_tampoco(texto: str) -> None:
+    assert clasificador.es_confirmacion(texto) is False
+
+
+def test_el_mensaje_al_modelo_sin_confirmacion_le_prohibe_darla_por_hecha() -> None:
+    """El modelo recibió «falta confirmación» tres veces y aun así dijo «ya quedó registrada tu confirmación»."""
+    from core.kernel.procedures.textos import mensaje
+
+    texto = mensaje("falta_confirmacion")
+    assert "NO hay nada confirmado" in texto and "No digas que quedó confirmado" in texto
+    assert "«Sí, confirmo»" in texto
