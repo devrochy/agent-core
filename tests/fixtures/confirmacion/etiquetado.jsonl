@@ -238,3 +238,5 @@
 {"texto": "confirmo, algo no está bien", "confirma": false}
 {"texto": "¿todo bien? confirmo", "confirma": false}
 {"texto": "confirmo, bien mal", "confirma": false}
+{"texto": "confirmo el mensual", "confirma": false}
+{"texto": "todo bien con el anual", "confirma": false}

@@ -275,6 +275,30 @@ async def _contesta_el_mensaje_del_kernel(
     return bool(fila.entrada > fila.salida)
 
 
+async def _texto_del_mensaje_del_kernel(
+    session: AsyncSession, tenant_id: uuid.UUID, conversation_id: uuid.UUID, peticion: Evento | None
+) -> str:
+    """El texto del ÚNICO mensaje que salió al cliente después de la petición (el resumen que el
+    kernel le mostró y que el cliente contesta), o "" si no hay uno claro. Sirve de eco para el
+    clasificador: «Sí, confirmo. Todo bien con el anual» solo confirma si el resumen decía «anual»
+    (adenda 2026-10-24 de ADR-0113). Con dos mensajes de salida o ninguno no se arriesga nada."""
+    if peticion is None:
+        return ""
+    filas = (
+        await session.execute(
+            text(
+                "SELECT content FROM messages WHERE tenant_id = :t AND conversation_id = :c "
+                "AND deleted_at IS NULL AND direction = 'outbound' AND status <> 'failed' "
+                "AND created_at > :p ORDER BY created_at LIMIT 2"
+            ),
+            {"t": tenant_id, "c": conversation_id, "p": peticion.created_at},
+        )
+    ).all()
+    if len(filas) != 1 or not filas[0].content:
+        return ""
+    return str(filas[0].content)
+
+
 def _datos_de_peticion(peticion: Evento | None, pendiente: Mapping[str, Any]) -> dict[str, Any]:
     """Los datos para volver a pedir la MISMA confirmación (target, hash de args y huella)."""
     data: dict[str, Any] = {"target": {"kind": pendiente.get("kind"), "name": pendiente.get("name")}}
@@ -1456,9 +1480,14 @@ class ContextoMotor:
             # Un dato acepta un asentimiento; una acción o una etapa, solo el sí explícito
             # (adenda 2026-10-12 de ADR-0113, el mismo criterio que al empezar el turno).
             # Un dato que ya no está en el procedimiento cuenta como de pago: criterio estricto.
-            suficiente = confirmacion_suficiente(
-                self.texto_cliente, kind=kind, data_class=slot.dataClass if slot is not None else "payment"
+            clase = slot.dataClass if slot is not None else "payment"
+            # El eco solo ayuda a la confirmación de una acción o una etapa (no a un dato pii).
+            eco = (
+                ""
+                if kind == "slot" and clase == "pii"
+                else await _texto_del_mensaje_del_kernel(s, self.tenant_id, self.conversation_id, peticion)
             )
+            suficiente = confirmacion_suficiente(self.texto_cliente, kind=kind, data_class=clase, eco=eco)
             if kind == "slot" and slot is not None and slot.dataClass == "pii":
                 # El sí a secas de un dato contesta solo el mensaje que llevó la petición.
                 del_turno_anterior = del_turno_anterior and await _contesta_el_mensaje_del_kernel(

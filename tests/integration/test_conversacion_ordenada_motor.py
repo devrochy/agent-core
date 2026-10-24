@@ -430,3 +430,45 @@ async def test_un_si_a_sin_resumen_no_confirma_ni_acepta_terminos(negocios, monk
     assert resultado.confirmacion is not None and "https://solvershub.test/legal/dpa" in resultado.text
     assert await _filas(a, "select id from pack_commerce_orders where tenant_id = :t and customer_id = :c",
                         c=ctx.customer_id) == []
+
+
+async def test_confirmar_nombrando_el_plan_del_resumen_crea_el_pedido(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Medición pass^4 del 2026-10-24: «Sí, confirmo. Todo bien con el anual.» no confirmaba (la palabra
+    «anual» no está en el léxico), el modelo dijo que quedó registrada y nunca se creó el pedido. Las
+    palabras del resumen que el cliente vio acompañan a la marca de confirmación."""
+    a, _b, pagos = negocios
+    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset({a}))
+    ctx = await _cliente(a, pagos)
+    datos = {**journeys.datos_unicos(ctx.customer_id), "correo": f"rob+{ctx.customer_id.hex[:8]}@tienda.co"}
+    await _hasta_el_resumen(ctx, monkeypatch, datos)
+
+    resultado, guion = await _turno(ctx, monkeypatch, "Sí, confirmo. Todo bien con el mensual.", [
+        ("confirmar_tarea", {}),
+        ("confirmar_cotizacion", {}),
+        ("crear_pedido", {"payment_method": "pago_en_linea", "customer_data": {}}),
+        ("confirmar_pago_pedido", {}),
+        lambda resultados: f"¡Listo! Tu pedido quedó creado. Paga aquí: {json.loads(resultados[-1])['link']}",
+    ])
+    assert "falta_confirmacion" not in "".join(guion.resultados) and "Falta la confirmación" not in "".join(guion.resultados)
+    assert len(await _filas(a, "select id from pack_commerce_orders where tenant_id = :t and customer_id = :c",
+                            c=ctx.customer_id)) == 1
+    assert resultado.confirmacion is None
+
+
+async def test_nombrar_otro_plan_que_el_del_resumen_no_confirma(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """«Confirmo, todo bien con el anual» ante un resumen del mensual no confirma: el cliente nombra lo que NO
+    se le mostró. No se crea el pedido y el kernel sigue pidiendo la confirmación."""
+    a, _b, pagos = negocios
+    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset({a}))
+    ctx = await _cliente(a, pagos)
+    datos = {**journeys.datos_unicos(ctx.customer_id), "correo": f"rob+{ctx.customer_id.hex[:8]}@tienda.co"}
+    await _hasta_el_resumen(ctx, monkeypatch, datos)
+
+    _, guion = await _turno(ctx, monkeypatch, "Sí, confirmo. Todo bien con el anual.", [
+        ("confirmar_tarea", {}),
+        "Falta tu confirmación.",
+    ])
+    assert "Falta la confirmación" in "".join(guion.resultados), guion.resultados
+    assert await _filas(a, "select id from pack_commerce_orders where tenant_id = :t and customer_id = :c",
+                        c=ctx.customer_id) == []
+    assert (await _tarea(ctx)).stage == "confirmar"

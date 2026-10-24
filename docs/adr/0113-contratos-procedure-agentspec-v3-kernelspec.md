@@ -1129,3 +1129,25 @@ conversaciones `e3c24103…` demo, `78df50bb…` contratar Premium y `7e301ee3�
   ADR-0107 no cambia: no es un evento de dinero y va con `host.subscribe`. El payload lleva datos
   personales: el bus no lo escribe en logs.
 - **Sin cambio:** bandera apagada, sombra, contratos, esquema y la confirmación estricta de acciones.
+
+### Adenda 2026-10-24 · Confirmación con el eco del resumen y afirmaciones de `contratar_plan` 1.3.0 (HU-AOS-15)
+
+Segunda medición pass^4 (corrida #10): `cambia-de-plan-antes-de-confirmar` 3/4 con motor. El cliente simulado escribió «Sí, confirmo.
+Todo bien con el anual.»; el clasificador (precisión antes que cobertura) no lo confirmó y el modelo afirmó «ya quedó registrada tu
+confirmación» sin que existiera el pedido.
+
+- **Decisión (dueño, 2026-10-24): hacer las dos cosas.**
+- **1. Eco del resumen.** `es_confirmacion(texto, lex, eco="")`. `eco` es el texto del único mensaje de salida (no fallido) posterior
+  a la petición de confirmación, es decir lo que el kernel le mostró al cliente (`ejecucion._texto_del_mensaje_del_kernel`; con dos
+  mensajes o ninguno, `""`). Sus palabras, menos las que el léxico trata como negación, cuentan como `cortesia` (nunca como
+  `nucleo`): la marca de confirmación sigue siendo obligatoria y el resto de las reglas (pregunta, símbolos, 8 palabras, negaciones)
+  no cambia. **Por qué con contexto y no con «anual»/«mensual» en el léxico:** un léxico sin contexto confirmaría «confirmo el
+  mensual» ante un resumen del anual; con el eco solo vale lo que el cliente vio. Solo en la vía estricta (acción o etapa); el
+  asentimiento de un dato personal no lo usa. Léxico: `con`, `el`, `la` en `cortesia`.
+- **2. Afirmaciones.** `contratar_plan` 1.3.0 (pack-commerce 2.4.0) suma a `claims[status]` las frases «registrada tu confirmación»,
+  «tu confirmación quedó registrada», «confirmación registrada», «registrado tu pedido» y «pedido registrado», con `requires:
+  slot:order_id`. **Costo del cambio de versión:** los agentes con release fijan 1.2.0 hasta republicar; las tareas abiertas de 1.2.0
+  que no estén en una release quedan fuera del binario (flujo v2 de respaldo).
+- **Riesgo aceptado y medido:** el eco ensancha una confirmación de acción con palabras del propio resumen (nombre, plan, forma de
+  pago). No confirma nada que el cliente no haya visto, y el hash de la petición sigue atando la acción a los argumentos mostrados.
+
