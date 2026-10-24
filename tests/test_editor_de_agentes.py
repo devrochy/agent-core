@@ -53,6 +53,43 @@ def test_las_frases_de_la_habilidad_cuentan_sin_overrides() -> None:
     assert editor.problemas_de_superpoderes(_con({"id": poder.id, "version": "^1.0"}), {poder.id: poder}) == []
 
 
+def test_superpoder_de_otro_enfoque_no_se_publica() -> None:
+    """Cobranza con «tomar un pedido»: existe en el negocio pero no es de su enfoque."""
+    poder = Superpoder("pack_commerce.tomar_pedido", "1.1.0", "pack_commerce", "Tomar un pedido", "", ("a", "b", "c"))
+    permitidos = editor.procedimientos_del_enfoque("cobranza")
+    assert permitidos == {"pack_cobranza.promesa_de_pago"}
+    [issue] = editor.problemas_de_superpoderes(
+        _con({"id": poder.id, "version": "^1.0"}), {poder.id: poder}, permitidos
+    )
+    assert issue.code == "superpoder_fuera_de_enfoque"
+    assert issue.path == "procedures[0].id"
+    assert "Tomar un pedido" in issue.message
+
+
+def test_superpoder_del_enfoque_pasa() -> None:
+    poder = Superpoder("pack_commerce.tomar_pedido", "1.1.0", "pack_commerce", "Tomar un pedido", "", ("a", "b", "c"))
+    permitidos = editor.procedimientos_del_enfoque("ventas")
+    assert poder.id in permitidos
+    assert editor.problemas_de_superpoderes(_con({"id": poder.id, "version": "^1.0"}), {poder.id: poder}, permitidos) == []
+
+
+def test_key_que_no_es_de_plantilla_no_restringe() -> None:
+    """`general`, `coordinador` y especialistas por API: catálogo completo, sin fuera de enfoque."""
+    for key in ("general", "coordinador", "especialista_a_mano"):
+        assert editor.procedimientos_del_enfoque(key) is None
+    poder = _poder(("a", "b", "c"))
+    assert editor.problemas_de_superpoderes(_con({"id": poder.id, "version": "^1.0"}), {poder.id: poder}, None) == []
+
+
+def test_cada_plantilla_solo_reclama_sus_procedimientos() -> None:
+    """Ningún procedimiento está en dos enfoques: es lo que hace que el filtro segmente."""
+    vistos: dict[str, str] = {}
+    for key in editor.keys_de_plantillas():
+        for proc in editor.procedimientos_del_enfoque(key) or ():
+            assert proc not in vistos, f"{proc} está en {vistos[proc]} y en {key}"
+            vistos[proc] = key
+
+
 def test_modelo_de_otro_proveedor_o_retirado() -> None:
     def problema(modelo: str, proveedor: str) -> str | None:
         issue = editor.problema_de_modelo({"model": {"primary": modelo}}, proveedor)

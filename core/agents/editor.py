@@ -33,7 +33,7 @@ límite de agentes del plan Free queda pendiente: no hay métrica de agentes en
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -160,6 +160,30 @@ def plantillas(habilitados: Iterable[str]) -> list[PlantillaVista]:
     return salida
 
 
+def procedimientos_del_enfoque(key: str) -> frozenset[str] | None:
+    """Ids de procedimiento que le tocan al agente con esa key, o `None` si la key no es de una
+    plantilla (`general`, `coordinador`, especialistas por API o presets v1): sin restricción.
+    Una plantilla rota tampoco restringe (se registra en `plantillas`)."""
+    from core.presets import PresetError, load_plantilla
+
+    try:
+        return frozenset(load_plantilla(key).procedimientos)
+    except PresetError:
+        return None
+
+
+async def superpoderes_del_agente(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> list[Superpoder]:
+    """Los superpoderes del negocio que le corresponden al enfoque de ese agente. `AgenteNoEncontrado`
+    si el agente no es del negocio."""
+    from core.agents import versiones
+
+    _exigir_scope(tenant_id)
+    agente = await versiones.obtener_agente(tenant_id, agent_id)
+    todos = superpoderes(await habilitados_del_negocio(tenant_id))
+    permitidos = procedimientos_del_enfoque(agente.key)
+    return todos if permitidos is None else [s for s in todos if s.id in permitidos]
+
+
 async def habilitados_del_negocio(tenant_id: uuid.UUID) -> set[str]:
     """Packs de negocio habilitados (la única lectura de la habilitación, ADR-0118 adenda)."""
     from core.agents.spec import enabled_business_packs, leer_spec_activo
@@ -275,8 +299,13 @@ def _normalizada(frase: str) -> str:
     return normalizar(frase)
 
 
-def problemas_de_superpoderes(contenido: Mapping[str, Any], disponibles: Mapping[str, Superpoder]) -> list[Issue]:
-    """Al menos un superpoder; cada uno disponible y con `MIN_FRASES` frases distintas."""
+def problemas_de_superpoderes(
+    contenido: Mapping[str, Any],
+    disponibles: Mapping[str, Superpoder],
+    permitidos: Collection[str] | None = None,
+) -> list[Issue]:
+    """Al menos un superpoder; cada uno disponible, del enfoque del agente (`permitidos`; `None` =
+    sin restricción) y con `MIN_FRASES` frases distintas."""
     refs = contenido.get("procedures")
     if not isinstance(refs, list) or not refs:
         return [Issue("sin_superpoderes", "procedures", "Marca al menos un superpoder para este agente.")]
@@ -291,6 +320,15 @@ def problemas_de_superpoderes(contenido: Mapping[str, Any], disponibles: Mapping
                     "superpoder_no_disponible",
                     f"procedures[{i}].id",
                     "Este superpoder no está disponible con las habilidades activas de tu negocio.",
+                )
+            )
+            continue
+        if permitidos is not None and poder.id not in permitidos:
+            issues.append(
+                Issue(
+                    "superpoder_fuera_de_enfoque",
+                    f"procedures[{i}].id",
+                    f"«{poder.title}» no es parte del enfoque de este agente. Quítalo para poder publicar.",
                 )
             )
             continue
@@ -592,7 +630,9 @@ async def publicar_en_conexiones(
         )
     contenido: dict[str, Any] = dict(borrador.content)
     habilitados = await habilitados_del_negocio(tenant_id)
-    issues = problemas_de_superpoderes(contenido, {s.id: s for s in superpoderes(habilitados)})
+    issues = problemas_de_superpoderes(
+        contenido, {s.id: s for s in superpoderes(habilitados)}, procedimientos_del_enfoque(agente.key)
+    )
     contexto = await contexto_de_modelos(tenant_id)
     modelo = problema_de_modelo(contenido, contexto.provider)
     if modelo is not None:
@@ -691,8 +731,10 @@ __all__ = [
     "plantillas",
     "problema_de_modelo",
     "problemas_de_superpoderes",
+    "procedimientos_del_enfoque",
     "publicar_en_conexiones",
     "sirve",
     "superpoderes",
+    "superpoderes_del_agente",
     "tabla_de_precios",
 ]

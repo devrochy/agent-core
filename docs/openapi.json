@@ -21162,6 +21162,25 @@
         "operationId": "list_superpowers_api_v1_admin_agent_superpowers_get",
         "parameters": [
           {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Con el agente, solo los superpoderes de su enfoque (su plantilla).",
+              "title": "Agent Id"
+            },
+            "description": "Con el agente, solo los superpoderes de su enfoque (su plantilla)."
+          },
+          {
             "name": "page",
             "in": "query",
             "required": false,
