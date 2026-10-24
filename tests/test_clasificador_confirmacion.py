@@ -126,3 +126,77 @@ def test_el_mensaje_al_modelo_sin_confirmacion_le_prohibe_darla_por_hecha() -> N
     texto = mensaje("falta_confirmacion")
     assert "NO hay nada confirmado" in texto and "No digas que quedó confirmado" in texto
     assert "«Sí, confirmo»" in texto
+
+
+_RESUMEN = (
+    "Antes de seguir, revisa que todo esté bien:\n• Plan: Premium anual\n• Total: $6.000.000\n"
+    "• Nombre completo: Ana Gómez\n• Documento: 6002271728\n• Forma de pago: Transferencia\n\n"
+    "Si todo está bien, responde *Sí, confirmo*; si algo no, escríbeme qué cambiar."
+)
+
+
+@pytest.mark.parametrize(
+    "texto",
+    ["Sí, confirmo. Todo bien con el anual.", "Sí, confirmo el anual", "confirmo con el plan premium",
+     "Confirmo, todo bien con la transferencia"],
+)
+def test_confirmar_nombrando_lo_que_dice_el_resumen_confirma(texto: str) -> None:
+    """Medición pass^4 del 2026-10-24: «Sí, confirmo. Todo bien con el anual.» no confirmaba y el modelo
+    dijo que quedó registrada. Las palabras del resumen que el cliente VIO acompañan a la marca."""
+    assert clasificador.es_confirmacion(texto, eco=_RESUMEN) is True
+    assert clasificador.es_confirmacion(texto) is False  # sin el resumen, el léxico no alcanza
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Sí, confirmo. Todo bien con el mensual.",  # otro plan: no es lo que se le mostró
+        "confirmo el básico",
+        "todo bien con el anual",  # sin marca de confirmación
+        "sí, el anual",
+        "el anual",
+        "confirmo pero cambia el anual",  # una reserva
+        "confirmo, no es el anual",  # una negación
+        "¿confirmo el anual?",  # una pregunta
+        "confirmo el anual mañana",
+    ],
+)
+def test_el_resumen_no_confirma_solo_ni_valida_lo_que_no_dice(texto: str) -> None:
+    assert clasificador.es_confirmacion(texto, eco=_RESUMEN) is False
+
+
+def test_las_negaciones_del_resumen_nunca_se_vuelven_eco() -> None:
+    """Si el resumen trae «cambiar» o «no» (la instrucción final), el cliente no los gana como palabras."""
+    assert clasificador.es_confirmacion("confirmo cambiar", eco=_RESUMEN) is False
+    assert clasificador.es_confirmacion("confirmo no", eco=_RESUMEN) is False
+    assert clasificador.es_confirmacion("confirmo algo", eco="no hay nada") is False
+
+
+def test_el_eco_no_reemplaza_a_la_marca_de_confirmacion() -> None:
+    for texto in ("anual", "sí, anual", "ok, premium anual", "bien con el anual", "dale, con el plan"):
+        assert clasificador.es_confirmacion(texto, eco=_RESUMEN) is False, texto
+
+
+def test_el_eco_no_cambia_lo_que_ya_confirmaba_ni_lo_que_no() -> None:
+    for texto in ("Sí, confirmo", "confirmo, todo bien", "acepto"):
+        assert clasificador.es_confirmacion(texto, eco=_RESUMEN) is True
+    for texto in ("sí", "ok", "listo", "dale", "no confirmo", "¿confirmo?"):
+        assert clasificador.es_confirmacion(texto, eco=_RESUMEN) is False, texto
+
+
+def test_confirmacion_suficiente_pasa_el_eco_solo_a_la_via_estricta() -> None:
+    from core.kernel.procedures.textos import confirmacion_suficiente
+
+    texto = "Sí, confirmo. Todo bien con el anual."
+    assert confirmacion_suficiente(texto, kind="action", data_class="payment", eco=_RESUMEN) is True
+    assert confirmacion_suficiente(texto, kind="action", data_class="payment") is False
+    # Un dato personal usa el asentimiento: el eco no lo ayuda.
+    assert confirmacion_suficiente(texto, kind="slot", data_class="pii", eco=_RESUMEN) is False
+
+
+def test_las_palabras_que_invierten_el_sentido_no_se_vuelven_eco() -> None:
+    """Revisión del auditor: «sin», «salvo», «solo», «anular»… son negaciones aunque el resumen las traiga."""
+    resumen = "Plan: Premium anual, sin días de prueba. Solo se anula con aviso."
+    for texto in ("confirmo sin días", "confirmo salvo el anual", "confirmo solo el anual", "confirmo anular"):
+        assert clasificador.es_confirmacion(texto, eco=resumen) is False, texto
+    assert clasificador.es_confirmacion("Sí, confirmo el anual", eco=resumen) is True

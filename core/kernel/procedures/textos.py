@@ -158,20 +158,23 @@ def secciones(contenido: str) -> dict[str, list[str]]:
     return _secciones(contenido)
 
 
-def confirmacion_alta(texto: str, lexico: frozenset[str] | None = None) -> bool:
+def confirmacion_alta(texto: str, lexico: frozenset[str] | None = None, eco: str = "") -> bool:
     """¿El texto del cliente es un "sí" explícito con confianza alta?
 
     Con `lexico`, solo la coincidencia exacta con esas frases. Sin él, el clasificador
     conservador de HU-AOS-09 (`clasificador.es_confirmacion`), que incluye las frases exactas de
-    `## si` y nunca acepta un "sí" a secas."""
+    `## si` y nunca acepta un "sí" a secas. `eco` es el mensaje del kernel que el cliente contesta
+    (sus palabras acompañan a la marca de confirmación: «confirmo, todo bien con el anual»)."""
     if lexico is not None:
         return normalizar(texto) in lexico
     from core.kernel.procedures.clasificador import es_confirmacion
 
-    return es_confirmacion(texto)
+    return es_confirmacion(texto, eco=eco)
 
 
-def confirmacion_suficiente(texto: str, *, kind: str | None, data_class: str | None = None) -> bool:
+def confirmacion_suficiente(
+    texto: str, *, kind: str | None, data_class: str | None = None, eco: str = ""
+) -> bool:
     """¿El texto del cliente basta para confirmar lo pendiente? Un único criterio para el kernel al
     empezar el turno y para `confirmar_tarea` (adenda 2026-10-12 de ADR-0113):
 
@@ -180,9 +183,10 @@ def confirmacion_suficiente(texto: str, *, kind: str | None, data_class: str | N
       compromete nada y el cliente acaba de verlo;
     - cualquier otra cosa (una acción o una etapa, un dato `public` que puede llevar monto o
       efecto, un dato `payment`): solo la confirmación explícita de HU-AOS-09. Lista permitida, no
-      exclusión (revisión de seguridad)."""
+      exclusión (revisión de seguridad). `eco` (el mensaje del kernel que contesta) solo ayuda a
+      esta vía: el asentimiento de un dato no lo usa."""
     if kind == "slot" and data_class == "pii":
         from core.kernel.procedures.clasificador import es_asentimiento
 
         return es_asentimiento(texto)
-    return confirmacion_alta(texto)
+    return confirmacion_alta(texto, eco=eco)

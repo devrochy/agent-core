@@ -1,7 +1,7 @@
 {
   "contract": "procedure/1",
   "id": "pack_commerce.contratar_plan",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "title": "Contratar un plan",
   "triggers": {
     "description": "El cliente quiere comprar, contratar o pagar un plan o suscripción del negocio.",
@@ -302,7 +302,12 @@
         "pedido creado",
         "pedido quedó creado",
         "pedido quedó confirmado",
-        "quedó registrado tu pedido"
+        "quedó registrado tu pedido",
+        "registrada tu confirmación",
+        "registrado tu pedido",
+        "tu confirmación quedó registrada",
+        "confirmación registrada",
+        "pedido registrado"
       ],
       "requires": "slot:order_id"
     }

@@ -22,6 +22,12 @@ que el asistente vuelva a pedir la confirmación. Reglas, en orden:
 Así "sí", "dale", "ok" o "listo" solos no confirman, porque no traen núcleo (decisión del dueño),
 y cualquier palabra fuera del léxico tampoco ("sí, pero cambia el correo", "confirmo mañana").
 
+   **Eco del resumen** (adenda 2026-10-24 de ADR-0113): con el texto del mensaje del kernel que el
+   cliente está contestando (`eco`), las palabras de ese mensaje cuentan como `cortesia` (nunca como
+   núcleo): «Sí, confirmo. Todo bien con el anual» confirma cuando el resumen decía «Premium anual».
+   Solo vale lo que el cliente VIO: «confirmo el mensual» ante un resumen del anual sigue sin
+   confirmar (la palabra no está en el eco). Las negaciones del léxico nunca se vuelven eco.
+
 4. (Adenda 2026-10-12) Una frase exacta de `## si` con frases de `cortesia` intercaladas también
    confirma ("sí, está bien, gracias" → "si esta bien"), con las mismas guardas: todo en el
    léxico y ninguna negación. La cortesía nunca suma núcleo: "sí, gracias" sigue sin confirmar.
@@ -162,6 +168,22 @@ def _normalizado_seguro(texto: str) -> str | None:
     return norm
 
 
+# Tope de palabras del eco: es el resumen de un solo mensaje, no una conversación.
+_MAX_PALABRAS_ECO = 120
+
+
+def _palabras_del_eco(eco: str, lx: Lexico) -> frozenset[str]:
+    """Las palabras del mensaje que el cliente contesta, sin las que el léxico trata como negación
+    (ni sueltas ni dentro de una frase negada de varias palabras)."""
+    from core.kernel.procedures.textos import normalizar
+
+    if not eco:
+        return frozenset()
+    norm = normalizar(unicodedata.normalize("NFKC", eco))
+    prohibidas = {palabra for frase in lx.negaciones for palabra in frase.split()}
+    return frozenset(p for p in norm.split()[:_MAX_PALABRAS_ECO] if p not in prohibidas)
+
+
 def _frases_sin_negacion(norm: str, conocidas: frozenset[str], lx: Lexico) -> list[str] | None:
     """Las frases del léxico del texto, o None si es largo, trae una palabra fuera del léxico o
     una negación (en cualquier parte descarta)."""
@@ -174,15 +196,18 @@ def _frases_sin_negacion(norm: str, conocidas: frozenset[str], lx: Lexico) -> li
     return frases
 
 
-def es_confirmacion(texto: str, lex: Lexico | None = None) -> bool:
-    """¿El texto es una confirmación explícita, con confianza alta? (acciones, etapas y datos)"""
+def es_confirmacion(texto: str, lex: Lexico | None = None, eco: str = "") -> bool:
+    """¿El texto es una confirmación explícita, con confianza alta? (acciones, etapas y datos)
+
+    `eco`: el mensaje del kernel que el cliente contesta; sus palabras acompañan a una marca de
+    confirmación (ver "Eco del resumen" arriba) pero nunca la reemplazan."""
     lx = lex if lex is not None else lexico()
     norm = _normalizado_seguro(texto)
     if norm is None:
         return False
     if norm in lx.exactas:
         return True
-    frases = _frases_sin_negacion(norm, lx.permitidas, lx)
+    frases = _frases_sin_negacion(norm, lx.permitidas | _palabras_del_eco(eco, lx), lx)
     if frases is None:
         return False
     if any(f in lx.nucleo for f in frases):

@@ -275,6 +275,34 @@ async def _contesta_el_mensaje_del_kernel(
     return bool(fila.entrada > fila.salida)
 
 
+async def _texto_del_mensaje_del_kernel(
+    session: AsyncSession, tenant_id: uuid.UUID, conversation_id: uuid.UUID, peticion: Evento | None
+) -> str:
+    """El texto del ÚNICO mensaje que salió al cliente después de la petición y que el último mensaje
+    del cliente contesta (es posterior a él), o "" si no hay uno claro. Sirve de eco para el
+    clasificador: «Sí, confirmo. Todo bien con el anual» solo confirma si el resumen decía «anual»
+    (adenda 2026-10-24 de ADR-0113). Con dos mensajes de salida, ninguno o un «sí» escrito antes de
+    ver el resumen, no se arriesga nada. Solo se leen los primeros 2000 caracteres."""
+    if peticion is None:
+        return ""
+    filas = (
+        await session.execute(
+            text(
+                "SELECT left(content, 2000) AS content, created_at, "
+                "(SELECT max(i.created_at) FROM messages i WHERE i.tenant_id = :t AND i.conversation_id = :c "
+                " AND i.deleted_at IS NULL AND i.direction = 'inbound' AND i.created_at > :p) AS entrada "
+                "FROM messages WHERE tenant_id = :t AND conversation_id = :c "
+                "AND deleted_at IS NULL AND direction = 'outbound' AND status <> 'failed' "
+                "AND created_at > :p ORDER BY created_at LIMIT 2"
+            ),
+            {"t": tenant_id, "c": conversation_id, "p": peticion.created_at},
+        )
+    ).all()
+    if len(filas) != 1 or not filas[0].content or filas[0].entrada is None:
+        return ""
+    return str(filas[0].content) if filas[0].entrada > filas[0].created_at else ""
+
+
 def _datos_de_peticion(peticion: Evento | None, pendiente: Mapping[str, Any]) -> dict[str, Any]:
     """Los datos para volver a pedir la MISMA confirmación (target, hash de args y huella)."""
     data: dict[str, Any] = {"target": {"kind": pendiente.get("kind"), "name": pendiente.get("name")}}
@@ -1456,9 +1484,15 @@ class ContextoMotor:
             # Un dato acepta un asentimiento; una acción o una etapa, solo el sí explícito
             # (adenda 2026-10-12 de ADR-0113, el mismo criterio que al empezar el turno).
             # Un dato que ya no está en el procedimiento cuenta como de pago: criterio estricto.
-            suficiente = confirmacion_suficiente(
-                self.texto_cliente, kind=kind, data_class=slot.dataClass if slot is not None else "payment"
+            clase = slot.dataClass if slot is not None else "payment"
+            # El eco solo ayuda a la confirmación de una acción o una etapa (no a un dato pii), y no
+            # hace falta si la petición es de este turno (sale `falta_confirmacion` de todos modos).
+            eco = (
+                ""
+                if pedida_en_este_turno or (kind == "slot" and clase == "pii")
+                else await _texto_del_mensaje_del_kernel(s, self.tenant_id, self.conversation_id, peticion)
             )
+            suficiente = confirmacion_suficiente(self.texto_cliente, kind=kind, data_class=clase, eco=eco)
             if kind == "slot" and slot is not None and slot.dataClass == "pii":
                 # El sí a secas de un dato contesta solo el mensaje que llevó la petición.
                 del_turno_anterior = del_turno_anterior and await _contesta_el_mensaje_del_kernel(

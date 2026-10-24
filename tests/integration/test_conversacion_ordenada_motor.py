@@ -430,3 +430,94 @@ async def test_un_si_a_sin_resumen_no_confirma_ni_acepta_terminos(negocios, monk
     assert resultado.confirmacion is not None and "https://solvershub.test/legal/dpa" in resultado.text
     assert await _filas(a, "select id from pack_commerce_orders where tenant_id = :t and customer_id = :c",
                         c=ctx.customer_id) == []
+
+
+async def test_confirmar_nombrando_el_plan_del_resumen_crea_el_pedido(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Medición pass^4 del 2026-10-24: «Sí, confirmo. Todo bien con el anual.» no confirmaba (la palabra
+    «anual» no está en el léxico), el modelo dijo que quedó registrada y nunca se creó el pedido. Las
+    palabras del resumen que el cliente vio acompañan a la marca de confirmación."""
+    a, _b, pagos = negocios
+    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset({a}))
+    ctx = await _cliente(a, pagos)
+    datos = {**journeys.datos_unicos(ctx.customer_id), "correo": f"rob+{ctx.customer_id.hex[:8]}@tienda.co"}
+    await _hasta_el_resumen(ctx, monkeypatch, datos)
+
+    resultado, guion = await _turno(ctx, monkeypatch, "Sí, confirmo. Todo bien con el mensual.", [
+        ("confirmar_tarea", {}),
+        ("confirmar_cotizacion", {}),
+        ("crear_pedido", {"payment_method": "pago_en_linea", "customer_data": {}}),
+        ("confirmar_pago_pedido", {}),
+        lambda resultados: f"¡Listo! Tu pedido quedó creado. Paga aquí: {json.loads(resultados[-1])['link']}",
+    ])
+    assert "falta_confirmacion" not in "".join(guion.resultados) and "Falta la confirmación" not in "".join(guion.resultados)
+    assert len(await _filas(a, "select id from pack_commerce_orders where tenant_id = :t and customer_id = :c",
+                            c=ctx.customer_id)) == 1
+    assert resultado.confirmacion is None
+
+
+async def test_nombrar_otro_plan_que_el_del_resumen_no_confirma(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """«Confirmo, todo bien con el anual» ante un resumen del mensual no confirma: el cliente nombra lo que NO
+    se le mostró. No se crea el pedido y el kernel sigue pidiendo la confirmación."""
+    a, _b, pagos = negocios
+    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset({a}))
+    ctx = await _cliente(a, pagos)
+    datos = {**journeys.datos_unicos(ctx.customer_id), "correo": f"rob+{ctx.customer_id.hex[:8]}@tienda.co"}
+    await _hasta_el_resumen(ctx, monkeypatch, datos)
+
+    _, guion = await _turno(ctx, monkeypatch, "Sí, confirmo. Todo bien con el anual.", [
+        ("confirmar_tarea", {}),
+        "Falta tu confirmación.",
+    ])
+    assert "Falta la confirmación" in "".join(guion.resultados), guion.resultados
+    assert await _filas(a, "select id from pack_commerce_orders where tenant_id = :t and customer_id = :c",
+                        c=ctx.customer_id) == []
+    assert (await _tarea(ctx)).stage == "confirmar"
+
+
+async def test_el_eco_es_solo_el_unico_mensaje_de_salida_que_el_cliente_contesta(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Revisión del auditor: con otro mensaje de salida en medio (un aviso, una persona del equipo) o sin
+    mensaje, el eco queda vacío y «Todo bien con el mensual» ya no confirma."""
+    from core.db.session import get_session
+    from core.kernel.procedures.ejecucion import (
+        _evento_por_seq,
+        _eventos,
+        _foco,
+        _texto_del_mensaje_del_kernel,
+    )
+    from core.kernel.procedures.registro import packs_permitidos
+    from core.shared.tenant import tenant_scope
+
+    a, _b, pagos = negocios
+    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset({a}))
+    ctx = await _cliente(a, pagos)
+    datos = {**journeys.datos_unicos(ctx.customer_id), "correo": f"rob+{ctx.customer_id.hex[:8]}@tienda.co"}
+    await _hasta_el_resumen(ctx, monkeypatch, datos)
+
+    async def _eco(tenant: uuid.UUID, conversacion: uuid.UUID) -> str:
+        async with tenant_scope(tenant):
+            async with get_session() as s:
+                foco = await _foco(s, tenant, conversacion, await packs_permitidos(tenant))
+                peticion = _evento_por_seq(await _eventos(s, foco), foco.tarea.pending_confirmation.get("seq"))
+                return await _texto_del_mensaje_del_kernel(s, tenant, conversacion, peticion)
+
+    # Sin respuesta del cliente posterior al resumen, el eco no se usa.
+    async def _insertar(direccion: str, estado: str | None, contenido: str) -> None:
+        async with tenant_scope(a):
+            async with get_session() as s:
+                await s.execute(
+                    text(
+                        "insert into messages (id, tenant_id, conversation_id, direction, sender_type, content, status) "
+                        "values (:i, :t, :c, :d, :s, :x, :e)"
+                    ),
+                    {"i": uuid.uuid4(), "t": a, "c": ctx.conversation_id, "d": direccion,
+                     "s": "customer" if direccion == "inbound" else "bot", "x": contenido, "e": estado},
+                )
+
+    assert await _eco(a, ctx.conversation_id) == ""
+    await _insertar("inbound", "delivered", "Sí, confirmo. Todo bien con el mensual.")
+    eco = await _eco(a, ctx.conversation_id)
+    assert "Premium mensual" in eco and "Sí, confirmo" in eco
+    await _insertar("outbound", "failed", "no entregado")  # un mensaje fallido no cuenta
+    assert await _eco(a, ctx.conversation_id) == eco
+    await _insertar("outbound", "sent", "Aviso de una persona del equipo")  # dos salidas: no se arriesga nada
+    assert await _eco(a, ctx.conversation_id) == ""
