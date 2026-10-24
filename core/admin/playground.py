@@ -25,6 +25,7 @@ from sqlalchemy import select
 
 from core.db.models import Conversation, Customer, utcnow
 from core.db.session import get_session
+from core.gateway.conexion_pruebas import asegurar_conexion_de_pruebas
 from core.shared.logger import get_logger
 from core.shared.test_mode import TEST_CHANNEL
 
@@ -85,6 +86,9 @@ async def get_or_create_test_conversation(tenant_id: uuid.UUID) -> Conversation:
                 .order_by(Conversation.started_at.desc())
             )
         ).scalars().first()
+        # El contract del Agent OS vuelve `connection_id` obligatorio: la conversación de prueba
+        # también va por la conexión interna del negocio (la liga si es una de antes).
+        conexion_id = await asegurar_conexion_de_pruebas(session, tenant_id)
         if conversation is None:
             conversation = Conversation(
                 tenant_id=tenant_id,
@@ -92,8 +96,12 @@ async def get_or_create_test_conversation(tenant_id: uuid.UUID) -> Conversation:
                 channel=TEST_CHANNEL,
                 status="open",
                 state={"is_test": True},
+                connection_id=conexion_id,
             )
             session.add(conversation)
+            await session.flush()
+        elif conversation.connection_id is None:
+            conversation.connection_id = conexion_id
             await session.flush()
         return conversation
 

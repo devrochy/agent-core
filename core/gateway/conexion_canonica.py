@@ -24,7 +24,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from core.db.models import ChannelConnection, utcnow
 from core.gateway.connection_types import (
@@ -115,6 +115,37 @@ async def asegurar_conexion_del_numero(
         await session.flush()
         log.info("conexion_canonica_creada", tenant_id=str(tenant_id), phone_number_id=phone_number_id)
     return "creada"
+
+
+async def asegurar_conexion_en_vuelo(
+    session: Any, tenant_id: uuid.UUID, phone_number_id: str, meta_connection_id: uuid.UUID
+) -> ChannelConnection | None:
+    """La conexión canónica de un número que llegó sin ella (la crea al recibir el primer mensaje).
+
+    Es el caso de un número de la cuenta que se conectó por un camino que no creó su fila: el
+    consumer lo asegura antes de abrir la conversación para que nazca con `connection_id`. Toma el
+    mismo candado por número que `claim_assets` y el backfill, así que no se duplica con un alta o
+    con otro mensaje a la vez. None si hay un choque con una conexión manual (esa gana, pero
+    entonces el consumer ya la habría encontrado) o si no se pudo crear."""
+    await session.execute(
+        text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"meta_asset:phone:{phone_number_id}"}
+    )
+    resultado = await asegurar_conexion_del_numero(session, tenant_id, phone_number_id, meta_connection_id)
+    if resultado == "choque_manual":
+        return None
+    return (
+        await session.execute(
+            select(ChannelConnection)
+            .where(
+                ChannelConnection.tenant_id == tenant_id,
+                ChannelConnection.provider == PROVEEDOR,
+                ChannelConnection.external_id == phone_number_id,
+                ChannelConnection.deleted_at.is_(None),
+            )
+            .order_by(ChannelConnection.created_at)
+            .limit(1)
+        )
+    ).scalars().first()
 
 
 async def _asegurar_conexion_de_activo(

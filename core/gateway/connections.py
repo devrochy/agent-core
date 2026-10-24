@@ -23,6 +23,7 @@ from core.db.models import ChannelConnection, utcnow
 from core.db.session import get_session
 from core.gateway.connection_types import (
     CATEGORY_COMMUNICATION,
+    PLAYGROUND,
     WEBCHAT,
     WHATSAPP_META,
     external_id_for,
@@ -32,19 +33,19 @@ from core.gateway.connection_types import (
 from core.shared.crypto import get_secret_box
 from core.shared.tenant import get_current_tenant_id
 
-# Conexión sin cuenta de Meta y que no es el chat web: manual, `waweb`, correo, calendario
-# (ADR-0115). `type_id` NULL (filas legacy) cuenta como manual.
+# Conexión sin cuenta de Meta y que no es el chat web ni la interna del Centro de pruebas: manual,
+# `waweb`, correo, calendario (ADR-0115). `type_id` NULL (filas legacy) cuenta como manual.
 ES_MANUAL = and_(
     ChannelConnection.meta_connection_id.is_(None),
-    or_(ChannelConnection.type_id.is_(None), ChannelConnection.type_id != WEBCHAT),
+    or_(ChannelConnection.type_id.is_(None), ChannelConnection.type_id.not_in((WEBCHAT, PLAYGROUND))),
 )
 
 
 def administrada_aparte(connection: ChannelConnection) -> bool:
-    """La conexión no es manual: la canónica de un número de Meta (la administra su cuenta) o
-    el chat web (Configuración → Chat web). La API y el panel de conexiones manuales responden
-    404 para ellas."""
-    return connection.meta_connection_id is not None or connection.type_id == WEBCHAT
+    """La conexión no es manual: la canónica de un número de Meta (la administra su cuenta), el
+    chat web (Configuración → Chat web) o la interna del Centro de pruebas. La API y el panel de
+    conexiones manuales responden 404 para ellas."""
+    return connection.meta_connection_id is not None or connection.type_id in (WEBCHAT, PLAYGROUND)
 
 
 async def list_connections() -> list[ChannelConnection]:

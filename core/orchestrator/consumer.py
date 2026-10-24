@@ -38,6 +38,7 @@ from core.db.models import (
     utcnow,
 )
 from core.db.session import get_session
+from core.gateway.conexion_canonica import asegurar_conexion_en_vuelo
 from core.gateway.webhooks import INBOUND_STREAM
 from core.kernel.decisions import anotar_entrada, en_turno
 from core.kernel.egress import entregar
@@ -627,6 +628,13 @@ async def _resolve_conversation(
             )
         ).scalars().first()
         meta_connection_id = meta_phone.connection_id if meta_phone else None
+        if connection is None and meta_phone is not None and ruteo_por_conexion():
+            # Un número de la cuenta sin su fila canónica (se conectó fuera de los caminos de alta
+            # que la crean): se asegura aquí, con el mismo candado por número, para que la
+            # conversación nazca con conexión (el contract la exige, ADR-0115 adenda 2026-10-24).
+            connection = await asegurar_conexion_en_vuelo(
+                session, tenant_id, connection_external_id, meta_phone.connection_id
+            )
 
         # Ráfaga del mismo cliente procesada en paralelo (una tarea por entrada del
         # batch): sin candado, cada tarea que no ve conversación abierta crearía la suya
@@ -648,6 +656,15 @@ async def _resolve_conversation(
             # las conversaciones ya abiertas siguen respondiendo. Sesión abierta
             # reutilizada (mismo criterio que el gate de clientes).
             await enforce_metric(tenant_id, "conversaciones", session=session)
+            if connection is None:
+                # Hasta el contract se permite (número de la plataforma, canal sin fila); después el
+                # NOT NULL la rechaza. Este aviso lista los caminos que quedan antes de aplicarlo.
+                log.warning(
+                    "conversacion_sin_conexion",
+                    tenant_id=str(tenant_id),
+                    channel=channel,
+                    connection_external_id=connection_external_id,
+                )
             conversation = Conversation(
                 tenant_id=tenant_id,
                 customer_id=customer.id,
