@@ -221,3 +221,96 @@ async def test_con_el_ruteo_apagado_el_consumer_no_crea_conexiones(monkeypatch) 
     conversacion = await _entrada(tid, uniq("cli"), phone)
     assert await _sql(tid, "select 1 from channel_connections where external_id = :p", p=phone) == []
     assert conversacion.connection_id is None
+
+
+# ---------------------------------------------------------------- revisión del auditor
+async def test_en_vuelo_una_fila_viva_de_otra_alta_gana_y_no_se_religa() -> None:
+    """Una alta concurrente ya dejó la fila viva con la cuenta nueva: el consumer, con el dato
+    viejo, la devuelve tal cual (religar es de las altas, no del consumer)."""
+    from test_conexion_canonica import _alta_numero, _otra_cuenta
+
+    from core.db.session import get_session
+    from core.gateway.conexion_canonica import asegurar_conexion_en_vuelo
+    from core.shared.tenant import tenant_scope
+
+    tid, cuenta, _waba, _phone = await _negocio_con_byok()
+    numero = uniq("ph-race")
+    nueva = await _otra_cuenta(tid)
+    await _alta_numero(tid, nueva, numero)  # la alta ganó la carrera
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            conexion = await asegurar_conexion_en_vuelo(session, tid, numero, cuenta)  # dato viejo
+    assert conexion is not None and conexion.meta_connection_id == nueva
+
+
+async def test_en_vuelo_no_se_crea_para_un_numero_liberado_ni_de_una_cuenta_dada_de_baja() -> None:
+    from core.db.session import get_session
+    from core.gateway.conexion_canonica import asegurar_conexion_en_vuelo
+    from core.shared.tenant import tenant_scope
+
+    tid, cuenta, _waba, phone = await _negocio_con_byok()
+    await _sql(
+        tid, "update phone_numbers set deleted_at = now() where tenant_id = :t and phone_number_id = :p", t=tid, p=phone
+    )
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            assert await asegurar_conexion_en_vuelo(session, tid, phone, cuenta) is None
+    assert await _sql(tid, "select 1 from channel_connections where external_id = :p", p=phone) == []
+
+    tid2, cuenta2, _w, phone2 = await _negocio_con_byok()
+    await _sql(tid2, "update meta_connections set deleted_at = now() where id = :c", c=cuenta2)
+    async with tenant_scope(tid2):
+        async with get_session() as session:
+            assert await asegurar_conexion_en_vuelo(session, tid2, phone2, cuenta2) is None
+    assert await _sql(tid2, "select 1 from channel_connections where external_id = :p", p=phone2) == []
+
+
+async def test_en_vuelo_solo_para_whatsapp(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from core.config import get_settings
+    from core.orchestrator import consumer
+    from core.shared.tenant import tenant_scope
+
+    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
+    tid, _cuenta, _waba, phone = await _negocio_con_byok()
+    async with tenant_scope(tid):
+        conversacion, _, _ = await consumer._resolve_conversation(
+            {"channel": "messenger", "customer_external_id": uniq("psid"), "connection_external_id": phone}
+        )
+    assert conversacion.connection_id is None
+    assert await _sql(tid, "select 1 from channel_connections where external_id = :p", p=phone) == []
+
+
+async def test_el_turno_de_prueba_no_es_un_release_missing_en_un_negocio_v3(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from _api_helpers import banderas_como_dueno
+
+    from core.config import get_settings
+    from core.kernel import release_del_turno
+    from core.shared import release_vigente
+    from core.shared.tenant import tenant_scope
+
+    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
+    tid = await _negocio()
+    conversacion = await _conversacion_de_prueba(tid)
+    await banderas_como_dueno(tid, aos_runtime="v3")
+    token = release_vigente.abrir()
+    try:
+        async with tenant_scope(tid):
+            assert await release_del_turno.fijar_release_del_turno(conversacion) is None
+            # No se marca «v3 sin release»: eso dejaría el turno de prueba sin escrituras de memoria.
+            assert release_vigente.write_namespaces_del_turno() is None
+    finally:
+        release_vigente.cerrar(token)
+
+
+async def test_la_conexion_de_pruebas_no_se_guarda_a_mano_ni_envia_por_nadie() -> None:
+    from core.gateway.connections import save_connection
+    from core.gateway.sender import resolve_credentials
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    conversacion = await _conversacion_de_prueba(tid)
+    async with tenant_scope(tid):
+        with pytest.raises(ValueError, match="Centro de pruebas"):
+            await save_connection("x", {}, type_id="playground")
+        # Sin credenciales: no cae a la primaria ni al `.env`.
+        assert await resolve_credentials(conversacion.connection_id, None, tid) == ("internal", {})

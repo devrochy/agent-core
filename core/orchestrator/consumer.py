@@ -628,7 +628,7 @@ async def _resolve_conversation(
             )
         ).scalars().first()
         meta_connection_id = meta_phone.connection_id if meta_phone else None
-        if connection is None and meta_phone is not None and ruteo_por_conexion():
+        if connection is None and meta_phone is not None and channel == "whatsapp" and ruteo_por_conexion():
             # Un número de la cuenta sin su fila canónica (se conectó fuera de los caminos de alta
             # que la crean): se asegura aquí, con el mismo candado por número, para que la
             # conversación nazca con conexión (el contract la exige, ADR-0115 adenda 2026-10-24).

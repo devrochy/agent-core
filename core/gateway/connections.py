@@ -278,6 +278,8 @@ async def save_connection(
     ctype = get_connection_type(type_id)
     if ctype is None:
         raise ValueError(f"Tipo de conexión desconocido: {type_id}")
+    if type_id == PLAYGROUND:
+        raise ValueError("La conexión del Centro de pruebas la crea el propio Centro de pruebas.")
     if type_id == WEBCHAT:
         # El chat web no es una conexión manual: lo crea Configuración → Chat web con su clave
         # generada por el servidor (`chat_web_conexion`, ADR-0115 §4).

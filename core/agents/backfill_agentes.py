@@ -348,6 +348,8 @@ async def _instancias(
                         ChannelConnection.tenant_id == tenant_id,
                         ChannelConnection.deleted_at.is_(None),
                         ConnectionTypeRecord.produces_conversations.is_not(True),
+                        # La interna del Centro de pruebas no es un canal: no cuenta.
+                        ChannelConnection.type_id.is_distinct_from("playground"),
                     )
                 )
             ).scalar_one()

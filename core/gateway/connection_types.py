@@ -439,6 +439,7 @@ __all__ = [
     "CATEGORY_LABELS",
     "CATEGORY_ORDER",
     "CONNECTION_TYPES",
+    "PLAYGROUND",
     "SETUP_MANUAL",
     "SETUP_WIZARD",
     "WEBCHAT",
