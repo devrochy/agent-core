@@ -131,3 +131,12 @@ def test_todo_canal_de_mensajeria_de_meta_disponible_tiene_adaptador_de_salida()
     for tipo in CONNECTION_TYPES:
         if tipo.available and tipo.provider == "meta" and tipo.channel in CANALES_DE_MENSAJERIA_META:
             assert outbound_adapter_for(tipo.provider, tipo.channel) is not None, tipo.id
+
+
+def test_playground_es_interna_no_conversacional_y_fuera_del_selector():
+    tipo = get_connection_type("playground")
+    assert tipo is not None
+    # No es un canal de clientes: no entra en backfills, releases ni migración a v3.
+    assert tipo.produces_conversations is False
+    assert tipo.en_selector is False and tipo.credentials_schema == {}
+    assert tipo.id not in {t.id for g in types_by_category() for t in g["items"] if t.en_selector}

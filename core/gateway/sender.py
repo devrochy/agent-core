@@ -291,6 +291,10 @@ async def resolve_credentials(
                 meta_connection_id=str(connection.meta_connection_id),
             )
             return "meta", {}
+        if connection.provider == "internal":
+            # Conexión interna del Centro de pruebas: no envía por ningún proveedor ni cae a la
+            # primaria o al `.env` (nunca se debe llegar aquí: el canal de prueba no envía).
+            return "internal", {}
         if connection.provider == "web":
             # Chat web como conexión (ADR-0115 §4): sin proveedor externo. Sus credenciales son el
             # secreto de Turnstile del widget, que el envío no necesita: no se descifra.

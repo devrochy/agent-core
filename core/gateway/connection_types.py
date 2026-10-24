@@ -226,6 +226,25 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         en_selector=False,
     ),
     ConnectionType(
+        # Conexión interna del Centro de pruebas (ADR-0115, adenda 2026-10-24): cada negocio tiene
+        # una, creada al primer uso, para que la conversación de prueba también tenga
+        # `connection_id` (el contract lo vuelve obligatorio). No es un canal: no produce
+        # conversaciones de clientes (no entra en backfills, releases ni migración a v3), no tiene
+        # credenciales ni se ve en el panel de conexiones.
+        id="playground",
+        category=CATEGORY_COMMUNICATION,
+        channel="test",
+        label="Centro de pruebas",
+        provider="internal",
+        icon="bi-bug",
+        description="Conexión interna del Centro de pruebas",
+        produces_conversations=False,
+        available=True,
+        setup_kind=SETUP_WIZARD,
+        sort_order=36,
+        en_selector=False,
+    ),
+    ConnectionType(
         id="email_smtp",
         category=CATEGORY_EMAIL,
         channel="email",
@@ -264,6 +283,7 @@ WHATSAPP_META = "whatsapp_meta"
 MESSENGER_META = "messenger_meta"
 INSTAGRAM_META = "instagram_meta"
 WEBCHAT = "webchat"
+PLAYGROUND = "playground"
 
 
 def get_connection_type(type_id: str) -> ConnectionType | None:
@@ -419,6 +439,7 @@ __all__ = [
     "CATEGORY_LABELS",
     "CATEGORY_ORDER",
     "CONNECTION_TYPES",
+    "PLAYGROUND",
     "SETUP_MANUAL",
     "SETUP_WIZARD",
     "WEBCHAT",

@@ -19,6 +19,9 @@ Cubre lo que existía antes del despliegue; desde ahí cada alta crea su conexi�
    como antes). Incluye conversaciones cerradas y borradas: el *contract* exige
    `connection_id` en todas.
 
+5. **Centro de pruebas**: las conversaciones de prueba (`channel == 'test'`, de cualquier estado) sin
+   conexión pasan a la conexión interna `playground` del negocio, que se crea si hace falta.
+
 4. **Chat web** (segunda parte): la configuración del widget en `app_settings.web_chat_config`
    queda como conexión `webchat` (`chat_web_conexion.sincronizar`: la crea o la pone al día,
    porque hasta el *contract* `app_settings` es la fuente de verdad), y las conversaciones del
@@ -41,9 +44,11 @@ from core.db.models import AppSettings, ChannelConnection, Conversation, PhoneNu
 from core.db.session import get_session
 from core.gateway import chat_web_conexion
 from core.gateway.conexion_canonica import PROVEEDOR, asegurar_conexion_del_numero
+from core.gateway.conexion_pruebas import asegurar_conexion_de_pruebas
 from core.gateway.connection_types import CONNECTION_TYPES, WEBCHAT
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
+from core.shared.test_mode import TEST_CHANNEL
 
 log = get_logger(__name__)
 
@@ -75,6 +80,8 @@ class ReporteBackfill:
     chat_web: Counter[str] = field(default_factory=Counter)
     conversaciones_web_ligadas: int = 0
     conversaciones_web_sin_conexion: int = 0
+    # Centro de pruebas: las conversaciones de prueba sin conexión pasan a la conexión interna.
+    conversaciones_prueba_ligadas: int = 0
 
 
 def _tipo_por_canal_y_proveedor() -> dict[tuple[str, str], tuple[str, str]]:
@@ -317,6 +324,56 @@ async def _chat_web(tenant_id: uuid.UUID, reporte: ReporteBackfill, lote: int) -
             return
 
 
+async def _pruebas(tenant_id: uuid.UUID, reporte: ReporteBackfill, lote: int) -> None:
+    """Paso 5: las conversaciones del Centro de pruebas (`channel == 'test'`) sin conexión pasan a la
+    conexión interna del negocio, que se crea si hace falta (adenda 2026-10-24 de ADR-0115): el
+    *contract* exige `connection_id` en todas, también en las de prueba y en las cerradas."""
+    async with get_session() as session:
+        cuantas = int(
+            (
+                await session.execute(
+                    select(func.count()).where(
+                        Conversation.tenant_id == tenant_id,
+                        Conversation.channel == TEST_CHANNEL,
+                        Conversation.connection_id.is_(None),
+                    )
+                )
+            ).scalar_one()
+        )
+        if not cuantas:
+            return
+        if reporte.dry_run:
+            reporte.conversaciones_prueba_ligadas += cuantas
+            return
+        conexion = await asegurar_conexion_de_pruebas(session, tenant_id)
+    while True:
+        async with get_session() as session:
+            ids = (
+                select(Conversation.id)
+                .where(
+                    Conversation.tenant_id == tenant_id,
+                    Conversation.channel == TEST_CHANNEL,
+                    Conversation.connection_id.is_(None),
+                )
+                .limit(lote)
+            )
+            resultado = await session.execute(
+                update(Conversation)
+                .where(
+                    Conversation.tenant_id == tenant_id,
+                    Conversation.id.in_(ids.scalar_subquery()),
+                    Conversation.channel == TEST_CHANNEL,
+                    Conversation.connection_id.is_(None),
+                )
+                .values(connection_id=conexion)
+                .execution_options(synchronize_session=False)
+            )
+            ligadas = int(getattr(resultado, "rowcount", 0) or 0)
+        reporte.conversaciones_prueba_ligadas += ligadas
+        if ligadas < lote:
+            return
+
+
 async def backfill_conexiones(
     *, dry_run: bool, tenant_id: uuid.UUID | None = None, lote: int = LOTE_POR_DEFECTO
 ) -> ReporteBackfill:
@@ -339,6 +396,7 @@ async def backfill_conexiones(
             planeadas = await _conexiones_por_numero(negocio, reporte, lote)
             await _ligar_conversaciones(negocio, planeadas, reporte, lote)
             await _chat_web(negocio, reporte, lote)
+            await _pruebas(negocio, reporte, lote)
         reporte.negocios += 1
     log.info(
         "backfill_conexiones",
@@ -353,5 +411,6 @@ async def backfill_conexiones(
         chat_web=dict(reporte.chat_web),
         conversaciones_web_ligadas=reporte.conversaciones_web_ligadas,
         conversaciones_web_sin_conexion=reporte.conversaciones_web_sin_conexion,
+        conversaciones_prueba_ligadas=reporte.conversaciones_prueba_ligadas,
     )
     return reporte

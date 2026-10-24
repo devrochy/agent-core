@@ -168,6 +168,7 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                         "LEFT JOIN meta_connections mc "
                         "  ON mc.tenant_id = cc.tenant_id AND mc.id = cc.meta_connection_id AND mc.deleted_at IS NULL "
                         "WHERE cc.tenant_id = :t AND cc.deleted_at IS NULL "
+                        "  AND cc.type_id IS DISTINCT FROM 'playground' "
                         "  AND (cc.meta_connection_id IS NULL OR mc.id IS NOT NULL)"
                     ),
                     {"t": tenant_id},
@@ -185,6 +186,7 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                     "LEFT JOIN meta_connections mc "
                     "  ON mc.tenant_id = cc.tenant_id AND mc.id = cc.meta_connection_id AND mc.deleted_at IS NULL "
                     "WHERE cc.tenant_id = :t AND cc.deleted_at IS NULL "
+                    "  AND cc.type_id IS DISTINCT FROM 'playground' "
                     "  AND (cc.meta_connection_id IS NULL OR mc.id IS NOT NULL) "
                     "ORDER BY coalesce(ct.produces_conversations, true) DESC, cc.created_at, cc.id "
                     "OFFSET :o LIMIT :l"

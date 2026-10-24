@@ -460,6 +460,20 @@ async def _enrutar(
     return modo, ruta
 
 
+async def _es_conexion_de_pruebas(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> bool:
+    from core.db.session import get_session
+    from core.gateway.connection_types import PLAYGROUND
+
+    async with get_session() as session:
+        tipo = (
+            await session.execute(
+                text("SELECT type_id FROM channel_connections WHERE tenant_id = :t AND id = :c"),
+                {"t": tenant_id, "c": connection_id},
+            )
+        ).scalar_one_or_none()
+    return tipo == PLAYGROUND
+
+
 async def fijar_release_del_turno(conversation: Any, texto: str = "") -> Asignacion | None:
     """Punto de enganche del loop. None (sin consultas) con `AOS_CONNECTION_ROUTING` apagada;
     None con `aos_runtime = 'legacy'`, sin conexión o sin release activa (el turno sigue como
@@ -496,6 +510,11 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "") -> Asignac
             connection_id=connection_id,
             ruteo=ruteo,
         )
+    if resultado is None and await _es_conexion_de_pruebas(tenant_id, connection_id):
+        # El Centro de pruebas va por su conexión interna, que no tiene release (ni la necesita): el
+        # turno sigue por el camino de siempre y no es un `release_missing`. (Un journey de evals
+        # sobre una conexión real, aunque sea del canal de prueba, sí exige su release.)
+        return None
     if resultado is None:
         # v3 sin release activa: el turno sigue con el v2 (legacy silencioso). Pendiente con
         # dueño (adenda HU-AOS-15 de ADR-0117): release al alta de la conexión.

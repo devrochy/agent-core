@@ -77,6 +77,7 @@ def backfill_conexiones(
         *((f"Chat web: {k}", v) for k, v in sorted(reporte.chat_web.items())),
         ("Conversaciones web ligadas a su widget", reporte.conversaciones_web_ligadas),
         ("Conversaciones web sin conexión (sin widget o con varios)", reporte.conversaciones_web_sin_conexion),
+        ("Conversaciones de prueba ligadas a la conexión interna", reporte.conversaciones_prueba_ligadas),
         ("Abiertas que quedan sin conexión (revisar antes de AOS_CONNECTION_ROUTING)", reporte.abiertas_sin_ligar),
     ]
     for concepto, cantidad in filas:
