@@ -1150,4 +1150,11 @@ confirmación» sin que existiera el pedido.
   que no estén en una release quedan fuera del binario (flujo v2 de respaldo).
 - **Riesgo aceptado y medido:** el eco ensancha una confirmación de acción con palabras del propio resumen (nombre, plan, forma de
   pago). No confirma nada que el cliente no haya visto, y el hash de la petición sigue atando la acción a los argumentos mostrados.
+- **Revisión de seguridad (auditor-multitenant, 2026-10-24):** sin fuga entre negocios ni conversaciones (consulta con `tenant_id` y
+  `conversation_id`, RLS forzada). Ajustes: el eco solo existe si el último mensaje del cliente es POSTERIOR al único mensaje de salida
+  (un «sí» escrito antes de ver el resumen no usa eco); se leen 2000 caracteres como máximo y no se consulta si la petición es de este
+  turno; `## negaciones` suma `sin`, `salvo`, `solo`, `rechazo`, `rechazar`, `anular`, `anulo` (palabras que invierten el sentido y
+  podían entrar como eco). **Riesgo residual aceptado:** el eco es una bolsa de palabras; si un resumen mostrara a la vez un valor viejo
+  y uno nuevo, el cliente podría nombrar el viejo. Hoy cada línea del resumen único lleva un solo valor; si eso cambia, el eco debe
+  salir de los valores estructurados de la tarea y no del texto.
 

@@ -192,3 +192,11 @@ def test_confirmacion_suficiente_pasa_el_eco_solo_a_la_via_estricta() -> None:
     assert confirmacion_suficiente(texto, kind="action", data_class="payment") is False
     # Un dato personal usa el asentimiento: el eco no lo ayuda.
     assert confirmacion_suficiente(texto, kind="slot", data_class="pii", eco=_RESUMEN) is False
+
+
+def test_las_palabras_que_invierten_el_sentido_no_se_vuelven_eco() -> None:
+    """Revisión del auditor: «sin», «salvo», «solo», «anular»… son negaciones aunque el resumen las traiga."""
+    resumen = "Plan: Premium anual, sin días de prueba. Solo se anula con aviso."
+    for texto in ("confirmo sin días", "confirmo salvo el anual", "confirmo solo el anual", "confirmo anular"):
+        assert clasificador.es_confirmacion(texto, eco=resumen) is False, texto
+    assert clasificador.es_confirmacion("Sí, confirmo el anual", eco=resumen) is True

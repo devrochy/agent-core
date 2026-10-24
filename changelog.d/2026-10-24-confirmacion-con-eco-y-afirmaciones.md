@@ -9,7 +9,8 @@ modelo dijo «Ya quedó registrada tu confirmación del Plan Premium anual…» 
   nunca como núcleo. «Sí, confirmo. Todo bien con el anual» confirma ante un resumen de «Premium anual»; «…con el mensual» ante ese
   mismo resumen NO (el cliente nombra lo que no vio), ni «todo bien con el anual» sin marca, ni una reserva, negación o pregunta.
   Las palabras de negación del léxico nunca se vuelven eco. Solo para acciones y etapas; el dato personal sigue con el asentimiento.
-  Léxico: `con`, `el`, `la` pasan a `cortesia`.
+  Léxico: `con`, `el`, `la` pasan a `cortesia`; `sin`, `salvo`, `solo`, `rechazo`, `rechazar`, `anular`, `anulo` a `negaciones`.
+  El eco exige además que el mensaje del cliente sea posterior al resumen.
 - **Afirmaciones de `contratar_plan` 1.3.0** (pack-commerce 2.4.0): «registrada tu confirmación», «tu confirmación quedó
   registrada», «confirmación registrada», «registrado tu pedido» y «pedido registrado» exigen `crear_pedido` (`slot:order_id`);
   sin él el verificador devuelve `status_sin_evidencia` y el modelo corrige.

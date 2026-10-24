@@ -88,6 +88,13 @@ espero el link
 espero el link de pago
 ## negaciones
 no
+sin
+salvo
+solo
+rechazo
+rechazar
+anular
+anulo
 nop
 nunca
 jamas
