@@ -113,6 +113,9 @@ Se hace **una sola vez**, cuando **todos** los negocios vivos están en `v3` y l
 3. **Ninguna conversación sin `connection_id`**, de cualquier estado y también las de negocios dados de baja (las cubre `backfill-conexiones`; si son de un negocio dado de baja, purga el negocio).
 4. Cada conexión conversacional viva con release activa y **2 releases estables sin rollback**: al menos dos promociones (sin contar las de un rollback) y ningún rollback posterior a la penúltima.
 5. Confirmación explícita (`--confirmo-sin-vuelta-atras`).
+6. **Requisito de código que el comando no puede comprobar:** todo camino que cree una conversación debe asignarle una conexión. Hoy el consumer inserta `connection_id = NULL` con un número de la plataforma sin conexión
+   (`core/orchestrator/consumer.py`) y el Centro de pruebas (`core/admin/playground.py`) siempre; con el NOT NULL esas inserciones fallarían (mensajes perdidos, Centro de pruebas roto). **Corrígelos y despliega antes de aplicar.**
+   El comando lo recuerda como aviso en cada corrida.
 
 ### 5.2 Orden
 
@@ -120,17 +123,19 @@ Se hace **una sola vez**, cuando **todos** los negocios vivos están en `v3` y l
 agent-core db contract-aos                      # en seco: precondiciones, pasos y bloqueos de TODOS los negocios
 agent-core db contract-aos --tenant <slug>      # en seco: ¿este negocio está listo?
 # …arregla los bloqueos, deja pasar la ventana de observación y haz un respaldo de la base…
+# (el rol dueño va por MIGRATIONS_DATABASE_URL del entorno: evita --database-url, que deja la credencial en el historial)
 agent-core db contract-aos --aplicar --confirmo-sin-vuelta-atras
 ```
 
-Qué hace al aplicar (cada paso es idempotente: si se corta, se vuelve a correr el mismo comando):
+Conviene una hora de poco tráfico. Qué hace al aplicar (cada paso es idempotente: si se corta, se vuelve a correr el mismo comando):
 
-1. **Deduplica sin cerrar**: en cada (negocio, conexión, cliente) con más de una conversación abierta (`open`/`escalated`) queda la de `started_at` más reciente; a las otras se les pasan los mensajes y se marcan con `deleted_at`.
-   Sus tareas y `task_events` no se mueven (append-only). No hay borrado físico.
+1. **Deduplica sin cerrar**: en cada (negocio, conexión, cliente) con más de una conversación abierta (`open`/`escalated`) queda primero la **escalada o con el bot pausado** (la atiende una persona) y, entre iguales, la de `started_at` más reciente;
+   a las otras se les pasan los mensajes, se conserva la ventana de servicio más larga y se marcan con `deleted_at`. Se hace con el mismo candado por cliente que el consumer (un mensaje que entra a mitad no se pierde) y se salta el par que cambió desde el cálculo.
+   Sus tareas, `task_events` y el ledger (`turn_id` de los mensajes movidos) no se mueven (append-only). `state` no se copia. No hay borrado físico.
 2. Índice único parcial `uq_conversations_open_per_connection` (`CONCURRENTLY`; si un intento anterior lo dejó inválido, lo rehace).
 3. `conversations.connection_id` **NOT NULL** (CHECK `NOT VALID` → `VALIDATE` → `SET NOT NULL`, sin escaneo bajo bloqueo exclusivo).
 4. `core_decisions`: CHECK `ck_core_decisions_contract` — conexión obligatoria y, si el turno fue `routed`, release obligatoria — **solo para filas posteriores al contract** (el histórico `legacy` no impide validarlo).
-5. `VALIDATE CONSTRAINT` de toda FK y CHECK que el expand dejó `NOT VALID` (bloqueo que no frena las escrituras).
+5. `VALIDATE CONSTRAINT` de toda FK y CHECK `NOT VALID` de `public` (no solo las del Agent OS; el comando las lista en seco como aviso). El bloqueo no frena las escrituras; espera hasta 60 s a otro DDL.
 6. Quita la FK simple `conversations_connection_id_fkey`, que duplica `fk_conv_connection`.
 
 Si un `VALIDATE` falla (filas que violan el constraint), el comando sale con 1 y dice cuál: corrige o purga esas filas y vuelve a correrlo.

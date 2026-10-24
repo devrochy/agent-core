@@ -49,7 +49,6 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
@@ -61,6 +60,11 @@ from core.shared.tenant import tenant_scope
 
 log = get_logger(__name__)
 
+AVISO_CAMINOS = (
+    "antes de aplicar, los caminos que crean conversaciones deben asignar siempre una conexión: el consumer "
+    "con un número de la plataforma sin conexión y el Centro de pruebas (`admin/playground.py`) insertan "
+    "`connection_id = NULL` y fallarían con el NOT NULL (runbook § 5.1)"
+)
 INDICE = "uq_conversations_open_per_connection"
 CHECK_CONEXION = "ck_conv_connection_nn"
 CHECK_DECISIONES = "ck_core_decisions_contract"
@@ -69,6 +73,7 @@ FK_COMPUESTA = "fk_conv_connection"
 COMANDO_CONEXIONES = "agent-core db backfill-conexiones"
 COMANDO_MIGRAR = "agent-core db migrar-a-v3"
 _LOCK_TIMEOUT = "5s"
+_LOCK_VALIDAR = "60s"
 
 
 @dataclass
@@ -158,42 +163,94 @@ async def _problemas_de_releases(tenant_id: uuid.UUID) -> list[str]:
     return problemas
 
 
-async def _duplicadas(tenant_id: uuid.UUID) -> list[tuple[uuid.UUID, uuid.UUID]]:
-    """`(sobrante, la_que_queda)` de cada conversación abierta repetida por (conexión, cliente)."""
+async def _duplicadas(tenant_id: uuid.UUID) -> list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]:
+    """`(sobrante, la_que_queda, cliente)` de cada conversación abierta repetida por (conexión,
+    cliente). Queda primero la escalada o con el bot pausado (una persona la atiende: perderla
+    devolvería el cliente al bot) y, entre iguales, la de `started_at` más reciente (el orden del
+    consumer)."""
     async with get_session() as session:
         filas = (
             await session.execute(
                 text(
                     """
-                    SELECT id, keep FROM (
-                      SELECT id,
+                    SELECT id, keep, customer_id FROM (
+                      SELECT id, customer_id,
                         first_value(id) OVER w AS keep,
                         row_number() OVER w AS rn
                       FROM conversations
                       WHERE tenant_id = :t AND status IN ('open','escalated') AND deleted_at IS NULL
                         AND connection_id IS NOT NULL
-                      WINDOW w AS (PARTITION BY connection_id, customer_id ORDER BY started_at DESC, id DESC)
+                      WINDOW w AS (PARTITION BY connection_id, customer_id
+                                   ORDER BY (status = 'escalated' OR bot_paused) DESC, started_at DESC, id DESC)
                     ) d WHERE rn > 1 ORDER BY id
                     """
                 ),
                 {"t": tenant_id},
             )
         ).all()
-    return [(f[0], f[1]) for f in filas]
+    return [(f[0], f[1], f[2]) for f in filas]
 
 
-async def _deduplicar(tenant_id: uuid.UUID, pares: list[tuple[uuid.UUID, uuid.UUID]]) -> None:
-    """Pasa los mensajes del sobrante a la que queda y lo marca borrado (nunca lo cierra ni lo borra)."""
-    async with get_session() as session:
-        for sobrante, queda in pares:
+async def _deduplicar(tenant_id: uuid.UUID, trios: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]) -> int:
+    """Pasa los mensajes del sobrante a la que queda y lo marca borrado (nunca lo cierra ni lo
+    borra). Una transacción por cliente, con el MISMO candado que el consumer: un mensaje que
+    entra a mitad no se pierde, y si algo cambió desde el cálculo (alguna ya no está abierta) se
+    salta ese par; el siguiente intento lo recalcula. Devuelve cuántas deduplicó."""
+    hechas = 0
+    for sobrante, queda, cliente in trios:
+        async with get_session() as session:
             await session.execute(
-                text("UPDATE messages SET conversation_id = :k WHERE tenant_id = :t AND conversation_id = :s"),
+                text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"conversation:{tenant_id}:{cliente}"}
+            )
+            vigentes = (
+                await session.execute(
+                    text(
+                        "SELECT count(*) FROM conversations WHERE tenant_id = :t AND id IN (:s, :k) "
+                        "AND customer_id = :c AND status IN ('open','escalated') AND deleted_at IS NULL"
+                    ),
+                    {"t": tenant_id, "s": sobrante, "k": queda, "c": cliente},
+                )
+            ).scalar_one()
+            if vigentes != 2:
+                log.warning("contrato_aos_par_cambio", sobrante=str(sobrante))
+                continue
+            await session.execute(
+                text(
+                    "UPDATE messages SET conversation_id = :k WHERE tenant_id = :t AND conversation_id = :s "
+                    "AND EXISTS (SELECT 1 FROM conversations WHERE tenant_id = :t AND id = :k)"
+                ),
+                {"t": tenant_id, "k": queda, "s": sobrante},
+            )
+            # La ventana de servicio de WhatsApp más larga de las dos sigue valiendo.
+            await session.execute(
+                text(
+                    "UPDATE conversations SET service_window_expires_at = greatest(service_window_expires_at, "
+                    "(SELECT service_window_expires_at FROM conversations WHERE tenant_id = :t AND id = :s)) "
+                    "WHERE tenant_id = :t AND id = :k"
+                ),
                 {"t": tenant_id, "k": queda, "s": sobrante},
             )
             await session.execute(
                 text("UPDATE conversations SET deleted_at = now() WHERE tenant_id = :t AND id = :s AND deleted_at IS NULL"),
                 {"t": tenant_id, "s": sobrante},
             )
+            hechas += 1
+    return hechas
+
+
+async def _pendientes_de_validar() -> list[str]:
+    """Constraints `NOT VALID` de `public` (lo que el contract va a validar). Catálogo: sin RLS."""
+    async with get_session() as session:
+        filas = (
+            await session.execute(
+                text(
+                    "SELECT c.conrelid::regclass::text || '.' || c.conname FROM pg_constraint c "
+                    "WHERE NOT c.convalidated AND c.contype IN ('c', 'f') "
+                    "AND c.connamespace = 'public'::regnamespace ORDER BY 1"
+                )
+            )
+        ).all()
+    return [str(f[0]) for f in filas]
 
 
 # ------------------------------------------------------------------ DDL (rol dueño)
@@ -262,7 +319,7 @@ async def _check_de_decisiones(conn: AsyncConnection, esquema: str = "public") -
         return "CHECK de core_decisions ya existía"
     if not existe:
         # El corte deja afuera el histórico (legacy, sin release): solo vale para filas nuevas.
-        corte = datetime.now(UTC).isoformat()
+        corte = (await conn.execute(text("SELECT now()"))).scalar_one().isoformat()
         await conn.exec_driver_sql(
             f"ALTER TABLE {esquema}.core_decisions ADD CONSTRAINT {CHECK_DECISIONES} CHECK "
             f"(created_at < TIMESTAMPTZ '{corte}' OR (connection_id IS NOT NULL "
@@ -313,8 +370,8 @@ async def _aplicar_ddl(reporte: ReporteContrato, database_url: str | None) -> No
             reporte.pasos.append(await _crear_indice(conn))
             reporte.pasos.append(await _connection_id_obligatorio(conn))
             reporte.pasos.append(await _check_de_decisiones(conn))
-            # Validar no frena las escrituras, pero puede tardar: sin lock_timeout para ese paso.
-            await conn.execute(text("SET lock_timeout = 0"))
+            # Validar no frena las escrituras, pero puede tardar y esperar a otro DDL o a un vacuum.
+            await conn.execute(text(f"SET lock_timeout = '{_LOCK_VALIDAR}'"))
             reporte.validadas = await _validar_pendientes(conn)
             reporte.pasos.append(f"{len(reporte.validadas)} constraint(s) NOT VALID validadas")
             await conn.execute(text(f"SET lock_timeout = '{_LOCK_TIMEOUT}'"))
@@ -346,7 +403,7 @@ async def contraer(
 
     negocios = await _negocios(tenant_ids)
     reporte.negocios = len(negocios)
-    pares: dict[uuid.UUID, list[tuple[uuid.UUID, uuid.UUID]]] = {}
+    pares: dict[uuid.UUID, list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]] = {}
     for tenant_id, slug, runtime, vivo in negocios:
         if vivo and runtime != "v3":
             reporte.bloqueos.append(f"{slug}: sigue en aos_runtime = {runtime} (corre `{COMANDO_MIGRAR} --tenant {slug}`)")
@@ -366,6 +423,13 @@ async def contraer(
             pares[tenant_id] = repetidas
             reporte.duplicadas += len(repetidas)
 
+    pendientes = await _pendientes_de_validar()
+    reporte.avisos.append(
+        f"se validarán {len(pendientes)} constraint(s) NOT VALID de `public` (no solo las del Agent OS): " + ", ".join(pendientes)
+        if pendientes
+        else "no hay constraints NOT VALID por validar"
+    )
+    reporte.avisos.append(AVISO_CAMINOS)
     if reporte.duplicadas:
         reporte.pasos.append(f"deduplicar {reporte.duplicadas} conversación(es) abierta(s) repetida(s), sin cerrarlas")
     reporte.pasos.append(f"índice único {INDICE} y conversations.connection_id NOT NULL")
@@ -375,11 +439,12 @@ async def contraer(
     if reporte.bloqueos or dry_run:
         return reporte
 
+    hechas = 0
     for tenant_id, repetidas in pares.items():
         async with tenant_scope(tenant_id):
-            await _deduplicar(tenant_id, repetidas)
+            hechas += await _deduplicar(tenant_id, repetidas)
     # Lo planeado ya no es futuro: de aquí en adelante se informa lo que pasó.
-    reporte.pasos = [f"{reporte.duplicadas} conversación(es) repetida(s) deduplicada(s) sin cerrarlas"]
+    reporte.pasos = [f"{hechas} de {reporte.duplicadas} conversación(es) repetida(s) deduplicada(s) sin cerrarlas"]
     try:
         await _aplicar_ddl(reporte, database_url)
     except Exception as exc:  # fail-closed: se informa dónde quedó; cada paso es re-ejecutable

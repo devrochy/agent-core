@@ -219,30 +219,94 @@ async def test_deduplica_sin_cerrar_conserva_la_mas_reciente_y_pasa_los_mensajes
 
     tid, _slug, cid = await _negocio()
     vieja, cliente = await _conversacion(tid, cid, hace=timedelta(days=2))
-    media, _ = await _conversacion(tid, cid, cliente, hace=timedelta(days=1), estado="escalated")
+    media, _ = await _conversacion(tid, cid, cliente, hace=timedelta(days=1))
     nueva, _ = await _conversacion(tid, cid, cliente)
     otro_cliente, _ = await _conversacion(tid, cid)
     cerrada, _ = await _conversacion(tid, cid, cliente, hace=timedelta(days=9), estado="closed")
     m_vieja, m_media = await _mensaje(tid, vieja), await _mensaje(tid, media)
 
     async with tenant_scope(tid):
-        pares = await _duplicadas(tid)
-    assert sorted(pares) == sorted([(vieja, nueva), (media, nueva)])
+        trios = await _duplicadas(tid)
+    assert sorted(trios) == sorted([(vieja, nueva, cliente), (media, nueva, cliente)])
     assert (await _revisar(tid)).duplicadas == 2
 
     async with tenant_scope(tid):
-        await _deduplicar(tid, pares)
+        assert await _deduplicar(tid, trios) == 2
         assert await _duplicadas(tid) == []
 
     filas = {f[0]: f for f in await _sql(
         tid, "select id, status, deleted_at is not null from conversations where tenant_id = :t", t=tid
     )}
     # No se cierra ninguna: solo se marcan borradas (lógico) las sobrantes.
-    assert filas[vieja][1:] == ("open", True) and filas[media][1:] == ("escalated", True)
+    assert filas[vieja][1:] == ("open", True) and filas[media][1:] == ("open", True)
     assert filas[nueva][1:] == ("open", False) and filas[otro_cliente][1:] == ("open", False)
     assert filas[cerrada][1:] == ("closed", False)
     movidos = {f[0]: f[1] for f in await _sql(tid, "select id, conversation_id from messages where tenant_id = :t", t=tid)}
     assert movidos[m_vieja] == nueva and movidos[m_media] == nueva
+
+
+async def test_la_escalada_o_con_el_bot_pausado_gana_aunque_sea_mas_vieja(ruteo_encendido) -> None:  # type: ignore[no-untyped-def]
+    """Una persona la atiende: perderla devolvería el cliente al bot (hallazgo del auditor)."""
+    from core.releases.contrato import _deduplicar, _duplicadas
+    from core.shared.tenant import tenant_scope
+
+    tid, _slug, cid = await _negocio()
+    escalada, cliente = await _conversacion(tid, cid, hace=timedelta(days=3), estado="escalated")
+    pausada, cli2 = await _conversacion(tid, cid, hace=timedelta(days=3))
+    await _sql(tid, "update conversations set bot_paused = true where id = :i", i=pausada)
+    nueva_1, _ = await _conversacion(tid, cid, cliente)
+    nueva_2, _ = await _conversacion(tid, cid, cli2)
+    await _sql(tid, "update conversations set service_window_expires_at = now() + interval '1 hour' where id = :i", i=nueva_2)
+    await _sql(tid, "update conversations set service_window_expires_at = now() + interval '9 hours' where id = :i", i=pausada)
+
+    async with tenant_scope(tid):
+        trios = await _duplicadas(tid)
+        assert sorted(trios) == sorted([(nueva_1, escalada, cliente), (nueva_2, pausada, cli2)])
+        assert await _deduplicar(tid, trios) == 2
+    filas = {f[0]: f for f in await _sql(
+        tid, "select id, deleted_at is not null, service_window_expires_at - now() > interval '8 hours' "
+             "from conversations where tenant_id = :t", t=tid)}
+    assert filas[escalada][1] is False and filas[nueva_1][1] is True
+    assert filas[pausada][1] is False and filas[nueva_2][1] is True
+    assert filas[pausada][2] is True  # la ventana de servicio más larga se conserva
+
+
+async def test_la_deduplicacion_de_un_negocio_no_toca_a_otro(ruteo_encendido) -> None:  # type: ignore[no-untyped-def]
+    from core.releases.contrato import _deduplicar, _duplicadas
+    from core.shared.tenant import tenant_scope
+
+    a, _sa, ca = await _negocio()
+    b, _sb, cb = await _negocio()
+    va, cli_a = await _conversacion(a, ca, hace=timedelta(days=1))
+    na, _ = await _conversacion(a, ca, cli_a)
+    vb, cli_b = await _conversacion(b, cb, hace=timedelta(days=1))
+    nb, _ = await _conversacion(b, cb, cli_b)
+    mb = await _mensaje(b, vb)
+
+    async with tenant_scope(a):
+        assert await _deduplicar(a, await _duplicadas(a)) == 1
+    # B queda intacto (sus duplicadas siguen ahí y su mensaje no se movió).
+    assert (await _sql(b, "select conversation_id from messages where id = :m", m=mb))[0][0] == vb
+    assert (await _sql(b, "select deleted_at is null from conversations where id = :i", i=vb))[0][0] is True
+    async with tenant_scope(b):
+        assert await _duplicadas(b) == [(vb, nb, cli_b)]
+    assert (await _sql(a, "select deleted_at is not null from conversations where id = :i", i=va))[0][0] is True
+    assert na
+
+
+async def test_un_par_que_cambio_desde_el_calculo_se_salta(ruteo_encendido) -> None:  # type: ignore[no-untyped-def]
+    from core.releases.contrato import _deduplicar, _duplicadas
+    from core.shared.tenant import tenant_scope
+
+    tid, _slug, cid = await _negocio()
+    vieja, cliente = await _conversacion(tid, cid, hace=timedelta(days=1))
+    nueva, _ = await _conversacion(tid, cid, cliente)
+    async with tenant_scope(tid):
+        trios = await _duplicadas(tid)
+    await _sql(tid, "update conversations set status = 'closed' where id = :i", i=nueva)  # a mitad de camino
+    async with tenant_scope(tid):
+        assert await _deduplicar(tid, trios) == 0
+    assert (await _sql(tid, "select deleted_at is null from conversations where id = :i", i=vieja))[0][0] is True
 
 
 async def test_aplicar_exige_confirmacion_y_el_contract_es_global(ruteo_encendido) -> None:  # type: ignore[no-untyped-def]
