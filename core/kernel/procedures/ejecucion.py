@@ -764,8 +764,12 @@ class ContextoMotor:
     def _comandos_aplicables(self) -> list[str]:
         if self.modo != "activo":
             return []
+        from core.kernel import decisions
+
+        # Con un handoff aceptado no se abren tareas nuevas: el destino podría no gobernarlas.
+        candidatos = [] if decisions.handoff_pendiente() else self._candidatos()
         return comandos.aplicables(
-            foco=self._par_en_foco(), candidatos=self._candidatos(), destinos_de_handoff=self._destinos_de_handoff()
+            foco=self._par_en_foco(), candidatos=candidatos, destinos_de_handoff=self._destinos_de_handoff()
         )
 
     def comandos(self) -> list[Any]:
@@ -1319,6 +1323,10 @@ class ContextoMotor:
         return ResultadoComando(True, [], self._acciones(), self.tarjeta)
 
     async def _iniciar(self, procedure_id: str) -> ResultadoComando:
+        from core.kernel import decisions
+
+        if decisions.handoff_pendiente():
+            return ResultadoComando(False, [mensaje("tarea_en_curso")])
         proc = self.procedimientos.get(procedure_id)
         if proc is None or not await self._sigue_sano(proc):
             return ResultadoComando(False, [mensaje("procedimiento_no_disponible")])
@@ -1366,13 +1374,22 @@ class ContextoMotor:
         negado = ResultadoComando(False, [comandos.texto("pasar_negado", agente=escapar(clave))])
         if not decision.permitido:
             return negado
-        a2a.liberar(ctx.estado, decision.call_id)
-        pendiente = handoff.Pendiente(ctx.estado, decision.call_id, desde, destino.instance_id, self.conversation_id)
-        if not decisions.anotar_handoff(pendiente):
+        try:
+            a2a.liberar(ctx.estado, decision.call_id)
+            pendiente = handoff.Pendiente(
+                ctx.estado, decision.call_id, desde, destino.instance_id, self.conversation_id,
+                frozenset(f.id for f in filas),
+            )
+            anotado = decisions.anotar_handoff(pendiente)
+        except Exception as exc:
+            log.warning("motor_handoff_fallo", error=type(exc).__name__)
+            anotado = False
+        if not anotado:
             # Sin turno abierto no hay fase 2: se cancela ya y no se promete nada.
             async with get_session() as s:
                 await a2a.cerrar_handoff(
-                    s, ctx.estado, call_id=decision.call_id, desde=desde, hacia=destino.instance_id, aplicado=False
+                    s, ctx.estado, call_id=decision.call_id, desde=desde, hacia=destino.instance_id, aplicado=False,
+                    razon="error",
                 )
             return negado
         self._cambio = True

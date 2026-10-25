@@ -630,6 +630,7 @@ async def cerrar_handoff(
 ) -> None:
     """Fase 2 del handoff (HU-AOS-19) en la transacción de quien llama: `handoff_applied` o
     `cancelled`, y la conversación A2A queda `completed` o `failed`."""
+    _exigir_scope(estado.tenant_id)
     if estado.a2a_conversation_id is None:
         return
     await _evento(

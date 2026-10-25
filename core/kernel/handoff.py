@@ -46,6 +46,9 @@ class Pendiente:
     desde: uuid.UUID
     hacia: uuid.UUID
     conversation_id: uuid.UUID
+    # Tareas abiertas cuando se aceptó (las que el destino declara). Si en la fase 2 aparece otra,
+    # se cancela: el destino podría no gobernarla.
+    tareas: frozenset[uuid.UUID] = frozenset()
 
 
 @dataclass
@@ -109,11 +112,15 @@ async def cerrar(turno: Any) -> uuid.UUID | None:
     estado: a2a.EstadoDelTurno | None = getattr(turno, "a2a", None)
     if pendiente is None and (estado is None or estado.a2a_conversation_id is None):
         return None
-    if get_current_tenant_id() != turno.tenant_id:
-        log.warning("handoff_fuera_del_negocio")
+    propios = {e.tenant_id for e in (estado, pendiente.estado if pendiente else None) if e is not None}
+    if get_current_tenant_id() != turno.tenant_id or propios - {turno.tenant_id}:
+        log.warning("handoff_fuera_del_negocio", conversation_id=str(turno.conversation_id))
         return None
+    # Un solo presupuesto para toda la fase 2 (aplicar y, si falla, cancelar): corre dentro del
+    # tope del turno, después de la entrega.
+    limite = asyncio.get_running_loop().time() + _TIMEOUT_S
     try:
-        async with asyncio.timeout(_TIMEOUT_S):
+        async with asyncio.timeout_at(limite):
             if pendiente is None:
                 assert estado is not None
                 await a2a.cerrar_turno(estado)
@@ -129,10 +136,12 @@ async def cerrar(turno: Any) -> uuid.UUID | None:
             log.info("handoff_cancelado", status="dueno_cambiado")
             return None
     except Exception as exc:
+        # Si el tope cortó justo después del COMMIT, el dueño quedó cambiado y el ledger dirá
+        # `cancelled` (inconsistencia de auditoría aceptada, adenda HU-AOS-19 §3).
         log.warning("handoff_fallo", error=type(exc).__name__)
         if pendiente is not None:
             try:
-                async with asyncio.timeout(_TIMEOUT_S):
+                async with asyncio.timeout_at(limite):
                     await _cancelar(pendiente, "error")
             except Exception as exc2:
                 log.warning("handoff_cancelar_fallo", error=type(exc2).__name__)
@@ -156,6 +165,11 @@ async def _aplicar(turno: Any, p: Pendiente) -> bool:
         if actual is None or actual[0] != p.desde:
             # Otro turno de la misma conversación ya cambió el dueño (el turn gate es por negocio).
             return False
+        abiertas = await state.tareas_abiertas(s, tenant_id=tid, conversation_id=p.conversation_id)
+        if {f.id for f in abiertas} - p.tareas:
+            # Se abrió una tarea después de aceptar: el destino podría no gobernarla. Antes de
+            # escribir nada (la sesión confirma al salir).
+            return False
         await s.execute(
             text(
                 "UPDATE conversations SET active_agent_instance_id = :to, owner_since = now() "
@@ -163,7 +177,7 @@ async def _aplicar(turno: Any, p: Pendiente) -> bool:
             ),
             {"t": tid, "c": p.conversation_id, "to": p.hacia},
         )
-        for fila in await state.tareas_abiertas(s, tenant_id=tid, conversation_id=p.conversation_id):
+        for fila in abiertas:
             if fila.owner_instance_id == p.hacia:
                 continue
             datos: dict[str, Any] = {"to_instance_id": str(p.hacia)}
@@ -177,7 +191,7 @@ async def _aplicar(turno: Any, p: Pendiente) -> bool:
                 tipo="owner_changed",
                 data=datos,
                 actor="kernel",
-                turn_id=turno.id if turno.decidido else None,
+                turn_id=turno.id if turno._token_vigente is not None else None,
             )
         await a2a.cerrar_handoff(s, p.estado, call_id=p.call_id, desde=p.desde, hacia=p.hacia, aplicado=True)
     return True

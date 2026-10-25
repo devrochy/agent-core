@@ -141,14 +141,15 @@ Los agentes colaboran en el mismo hilo con mecanismos deterministas, permisos ve
      - Con un handoff pendiente, `cerrar_turno` no cierra la conversación A2A: la cierra la fase 2.
    - **Fase 2 (al cerrar el turno):** la llama `_abrir_turno` después del `yield` y antes de escribir `turn_outcomes`, en el `tenant_scope` del turno (comprueba `get_current_tenant_id() == turno.tenant_id`). Es el único punto posterior a la entrega que conoce el status final. Reglas:
      - Solo si el turno terminó `replied` o `silent`. Con `neutral`, el guardrail reemplazó la respuesta y el cliente no vio la despedida.
-     - Tiene tope de tiempo (`_TIMEOUT_ESCRITURA_S`) y **nunca lanza**: si lanzara, el consumer reintentaría el turno y el cliente recibiría la respuesta dos veces. Un fallo queda en el log y como `cancelled` (best-effort).
+     - Tiene un solo presupuesto de tiempo para aplicar y, si falla, cancelar (2 s, como las escrituras del ledger del turno) y **nunca lanza**: si lanzara, el consumer reintentaría el turno y el cliente recibiría la respuesta dos veces. Un fallo queda en el log y como `cancelled` (best-effort).
      - Todo va en una transacción, bajo `FOR UPDATE` de la conversación:
-       1. Comprueba que `active_agent_instance_id` siga siendo el `from`. El turn gate es por negocio, no por conversación, y dos turnos de la misma conversación pueden cruzarse. Si cambió, `cancelled`.
+       1. Comprueba que `active_agent_instance_id` siga siendo el `from` y que no haya tareas abiertas que no estaban al aceptar (el destino podría no gobernarlas; con un handoff pendiente, además, el turno no inicia tareas nuevas). El turn gate es por negocio, no por conversación, y dos turnos de la misma conversación pueden cruzarse. Si cambió, `cancelled`.
        2. `active_agent_instance_id` = destino y `owner_since = now()`.
        3. `owner_changed` (`from_instance_id`, `to_instance_id`, actor `kernel`) en cada tarea de `state.tareas_abiertas`, que excluye las sub-tareas (estas nunca quedan abiertas: se completan en su transacción). Las tareas viajan intactas: misma tarjeta, datos y etapa. Con `aos_routing = active`, el router las sigue con el nuevo dueño (`source = task`); con `off`, el foco es el dueño de la conversación.
        4. Evento A2A `handoff_applied` y cierre de la conversación A2A como `completed`.
      - `turn_outcomes.final_instance_id` = destino, solo si la transacción hizo commit.
    - **Si no se aplica:** con un turno `failed`, `escalated` o `neutral`, o con el dueño cambiado por otro turno, el ledger escribe `cancelled` (con `reason` nulo, o `error` si falló la escritura) y la conversación A2A queda `failed`. Un turno cancelado por `TurnTimeout` (`CancelledError`) no llega a la fase 2: el `accepted` queda sin cierre en el ledger y el dueño no cambia. Lo aceptamos: la proyección queda `open` con `deadline_at` vencido, y eso se puede reconocer.
+   - Si el tope corta justo después del COMMIT, el dueño queda cambiado y el ledger dice `cancelled`. Es una inconsistencia de auditoría aceptada: el dueño real es el de la conversación.
    - **Ping-pong:** la guarda niega con `owner_frozen` cuando los cambios de dueño de las últimas 6 decisiones ya están en `routing.owner.maxOwnerChangesPer6Turns`.
 4. **Encargo (parte 2)**: una sub-tarea completada sin LLM.
    - **Encargable:** el destino lo declara en `exposes.procedures` y lo publica en la release; la definición es la congelada del destino (`procedimientos_por_agente`), no la del registro. Además, el procedimiento **se completa con datos**:

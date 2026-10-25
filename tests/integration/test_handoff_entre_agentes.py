@@ -271,3 +271,24 @@ async def test_fuera_del_negocio_no_aplica(monkeypatch: Any) -> None:
     async with tenant_scope(otro):
         assert await handoff.cerrar(turno) is None
     assert await _dueno(tid, conv) == inst["ventas"]
+
+
+async def test_una_tarea_abierta_despues_de_aceptar_cancela_el_handoff(monkeypatch: Any) -> None:
+    from core.db.session import get_session
+    from core.kernel import handoff, state
+    from core.shared.tenant import tenant_scope
+
+    tid, cid, inst, _ = await _equipo("off", [("ventas", "soporte")])
+    conv = await _conversacion(tid, cid)
+    turno = await _pendiente(tid, cid, conv, inst, "replied")  # aceptado sin tareas abiertas
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            await state.iniciar(
+                s, tenant_id=tid, conversation_id=conv, procedure_id=CITA, procedure_version="1.0.0",
+                stage="inicio", actor="kernel", owner_instance_id=inst["ventas"],
+            )
+        assert await handoff.cerrar(turno) is None
+    assert await _dueno(tid, conv) == inst["ventas"]
+    assert [t for t, _r, _s in await _ledger(tid, conv)] == ["accepted", "cancelled"]
+    tareas = await _sql(tid, "select owner_instance_id from conversation_tasks where conversation_id = :c", c=conv)
+    assert tareas == [(inst["ventas"],)]  # la tarea nueva no cambió de dueño
