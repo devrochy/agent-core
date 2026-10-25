@@ -86,8 +86,20 @@ class CobranzaModule(BaseModule):
 
     def on_activate(self, host: MCPHost) -> None:
         host.register_skill(CobranzaSkill())
-        host.register_guardrail("cob_promesa_check", promesa_guardrail, priority=6)
-        host.register_guardrail("cob_suscripcion_check", suscripcion_guardrail, priority=6)
+        host.register_guardrail(
+            "cob_promesa_check",
+            promesa_guardrail,
+            priority=6,
+            etiqueta="Promesas de pago",
+            explicacion="Evita que el asistente diga que registró una promesa o un acuerdo de pago si no lo guardó de verdad.",
+        )
+        host.register_guardrail(
+            "cob_suscripcion_check",
+            suscripcion_guardrail,
+            priority=6,
+            etiqueta="Suscripción en cobranza",
+            explicacion="Evita que el asistente diga que cambió la suscripción de un cliente si la acción no se hizo.",
+        )
         # Suscripción con tracking del host (ADR-0107): al desactivar el pack,
         # el core lo des-suscribe solo (antes era `event_bus.subscribe` directo).
         from core.shared.events import ON_PAYMENT_CONFIRMED

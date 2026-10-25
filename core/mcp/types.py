@@ -388,6 +388,9 @@ class Guardrail:
     fn: GuardrailFn
     priority: int = 10  # menor = se evalúa primero
     plugin_id: str = ""
+    # Texto para personas en Configuración (SPEC-37): nombre legible y qué evita. No es prompt.
+    etiqueta: str = ""
+    explicacion: str = ""
 
 
 @dataclass(frozen=True)
