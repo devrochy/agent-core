@@ -10041,6 +10041,224 @@
         }
       }
     },
+    "/api/v1/admin/settings/bajas": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Get Bajas",
+        "operationId": "get_bajas_api_v1_admin_settings_bajas_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BajasSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Save Bajas",
+        "description": "Guarda las palabras de baja sin vacíos ni repetidos. Lista vacía = restablecer las de por\ndefecto (se quita la clave). Los textos son dato del dueño, nunca instrucción (invariante 7).",
+        "operationId": "save_bajas_api_v1_admin_settings_bajas_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BajasUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BajasSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/settings/whatsapp-web": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Get Waweb Policy",
+        "operationId": "get_waweb_policy_api_v1_admin_settings_whatsapp_web_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaWebPolicySettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Save Waweb Policy",
+        "description": "Guarda la política del canal. Pasar a `allow_outbound` exige aceptar el aviso de riesgo\nvigente; cada cambio deja una fila en `audit_log` con quién, antes y después.",
+        "operationId": "save_waweb_policy_api_v1_admin_settings_whatsapp_web_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WaWebPolicyUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaWebPolicySettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/settings/bot-paused": {
       "put": {
         "tags": [
@@ -26059,6 +26277,52 @@
         ],
         "title": "AvisoOut"
       },
+      "BajasSettings": {
+        "properties": {
+          "palabras": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Palabras",
+            "description": "Las guardadas por el negocio; vacío = usa las de por defecto."
+          },
+          "por_defecto": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Por Defecto"
+          },
+          "usa_por_defecto": {
+            "type": "boolean",
+            "title": "Usa Por Defecto"
+          }
+        },
+        "type": "object",
+        "required": [
+          "palabras",
+          "por_defecto",
+          "usa_por_defecto"
+        ],
+        "title": "BajasSettings",
+        "description": "Palabras con las que un cliente se da de baja de los envíos a segmentos (ADR-0150)."
+      },
+      "BajasUpdate": {
+        "properties": {
+          "palabras": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Palabras",
+            "default": []
+          }
+        },
+        "type": "object",
+        "title": "BajasUpdate"
+      },
       "BillingRequest": {
         "properties": {
           "manual_status": {
@@ -29901,7 +30165,7 @@
           },
           "auto_escalate_after_turns": {
             "type": "integer",
-            "maximum": 1000.0,
+            "maximum": 20.0,
             "minimum": 0.0,
             "title": "Auto Escalate After Turns",
             "default": 0
@@ -45013,6 +45277,100 @@
           "expira"
         ],
         "title": "VistaPreviaOut"
+      },
+      "WaWebPolicySettings": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "send_min_delay_ms": {
+            "type": "integer",
+            "title": "Send Min Delay Ms"
+          },
+          "send_max_delay_ms": {
+            "type": "integer",
+            "title": "Send Max Delay Ms"
+          },
+          "daily_outbound_cap": {
+            "type": "integer",
+            "title": "Daily Outbound Cap"
+          },
+          "warmup_enabled": {
+            "type": "boolean",
+            "title": "Warmup Enabled"
+          },
+          "risk_version": {
+            "type": "string",
+            "title": "Risk Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "send_min_delay_ms",
+          "send_max_delay_ms",
+          "daily_outbound_cap",
+          "warmup_enabled",
+          "risk_version"
+        ],
+        "title": "WaWebPolicySettings",
+        "description": "Política anti-baneo del canal no oficial. Solo la ve y la edita el master."
+      },
+      "WaWebPolicyUpdate": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "send_min_delay_ms": {
+            "type": "integer",
+            "maximum": 60000.0,
+            "minimum": 0.0,
+            "title": "Send Min Delay Ms"
+          },
+          "send_max_delay_ms": {
+            "type": "integer",
+            "maximum": 120000.0,
+            "minimum": 0.0,
+            "title": "Send Max Delay Ms"
+          },
+          "daily_outbound_cap": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Daily Outbound Cap"
+          },
+          "warmup_enabled": {
+            "type": "boolean",
+            "title": "Warmup Enabled"
+          },
+          "acepta_riesgo": {
+            "type": "boolean",
+            "title": "Acepta Riesgo",
+            "default": false
+          },
+          "risk_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "send_min_delay_ms",
+          "send_max_delay_ms",
+          "daily_outbound_cap",
+          "warmup_enabled"
+        ],
+        "title": "WaWebPolicyUpdate"
       },
       "QaAreaEvo": {
         "properties": {

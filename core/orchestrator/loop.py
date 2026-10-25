@@ -28,6 +28,7 @@ from core.agents.responses import load_response
 from core.agents.spec import enabled_packs, load_active_spec
 from core.agents.spec_de_release import spec_del_turno
 from core.config import get_settings
+from core.config_limites import leer_entero
 from core.db.models import AppSettings, AuditLog, Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
 from core.kernel.decisions import (
@@ -412,18 +413,19 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # incluido un `None` explícito guardado (una key presente pero vacía,
     # distinta de "sin configurar"), que `_clamped_int` trata igual que si
     # faltara del todo.
-    def _clamped_int(key: str, default: int, lo: int, hi: int) -> int:
-        raw = behavior.get(key)
-        return max(lo, min(hi, int(raw if raw is not None else default)))
+    # Los rangos viven en `core/config_limites.py` (SPEC-37, HU-CFG-03): un solo sitio para la API,
+    # el panel SSR y este recorte, que además tolera valores no numéricos.
+    def _clamped_int(key: str, default: int) -> int:
+        return leer_entero(behavior, key, default)
 
     difficulty_long_message_threshold = _clamped_int(
-        "difficulty_long_message_threshold", LONG_MESSAGE_THRESHOLD, 50, 5000
+        "difficulty_long_message_threshold", LONG_MESSAGE_THRESHOLD
     )
     difficulty_turnos_sin_resolver_threshold = _clamped_int(
-        "difficulty_turnos_sin_resolver_threshold", TURNOS_SIN_RESOLVER_THRESHOLD, 1, 20
+        "difficulty_turnos_sin_resolver_threshold", TURNOS_SIN_RESOLVER_THRESHOLD
     )
     difficulty_score_threshold = _clamped_int(
-        "difficulty_score_threshold", DIFFICULTY_SCORE_THRESHOLD, 1, 10
+        "difficulty_score_threshold", DIFFICULTY_SCORE_THRESHOLD
     )
 
     turnos_sin_resolver = int(conversation.state.get("turnos_sin_resolver", 0))
@@ -460,7 +462,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # `auditor-multitenant` sobre el diff de los umbrales de dificultad --
     # un `None` explícito en `behavior_config` para esta key tumbaría el
     # turno con `TypeError` sin este mismo cuidado.
-    guardrail_max_retries = _clamped_int("guardrail_max_retries", MAX_GUARDRAIL_RETRIES, 0, 5)
+    guardrail_max_retries = _clamped_int("guardrail_max_retries", MAX_GUARDRAIL_RETRIES)
     # Qué hacer al agotar los reintentos (ADR-0092): solo "neutral" cambia el
     # comportamiento; cualquier otro valor (o ninguno) escala como siempre.
     guardrail_fail_action = "neutral" if behavior.get("guardrail_fail_action") == "neutral" else "escalate"
@@ -1478,11 +1480,9 @@ async def _close_turn(
     )
     await _write_usage_ledger(conversation_id, spec, usage, turn_span)
     # Autoescalado por turnos sin resolver (ADR-0051, operativo en AppSettings).
-    auto_after = (app_settings.escalation_config or {}).get("auto_escalate_after_turns") if app_settings else None
-    try:
-        threshold = min(20, int(auto_after)) if auto_after else 0
-    except (TypeError, ValueError):
-        threshold = 0
+    threshold = leer_entero(
+        (app_settings.escalation_config or {}) if app_settings else None, "auto_escalate_after_turns", 0
+    )
     if threshold > 0 and unresolved >= threshold:
         await escalate(
             conversation_id, reason="turns_unresolved", summary=f"{unresolved} turnos sin resolver"

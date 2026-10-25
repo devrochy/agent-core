@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
+from core.admin.envios_segmento import PALABRAS_DE_BAJA_POR_DEFECTO, limpiar_palabras_de_baja
 from core.admin.roles import actua_como_master
 from core.admin.settings_service import (
     read_memory,
@@ -36,10 +37,13 @@ from core.agents.spec import (
 )
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
-from core.config import get_settings
+from core.config import DEBOUNCE_DELAY_MS, get_settings
+from core.config_limites import leer_entero, rango
 from core.config_registro import Catalogo, catalogo_para
+from core.config_registro.validar import validar_valor
 from core.db.models import AppSettings, AuditLog
 from core.db.session import get_session
+from core.gateway.message_splitter import CAPS
 from core.kernel.fuera_de_horario import texto_por_defecto
 from core.llm.difficulty_router import (
     DIFFICULTY_SCORE_THRESHOLD,
@@ -50,6 +54,7 @@ from core.llm.prompt_builder import DEFAULT_TIMEZONE
 from core.mcp.host import mcp_host
 from core.orchestrator.verificador import TOGGLES, normalizar_desactivados
 from core.shared.logger import get_logger
+from core.waweb.policy import MODE_ALLOW_OUTBOUND, RISK_ACK_VERSION, policy_from_behavior
 
 router = APIRouter(prefix="/admin/settings", tags=["admin · configuración"])
 log = get_logger(__name__)
@@ -118,27 +123,58 @@ class IdentityUpdate(BaseModel):
     # Rangos explícitos (P0 de pruebas 2026-10-17): un valor fuera de rango responde 422 con
     # el campo marcado, en vez de recortarse en silencio y "guardar con éxito". Son los mismos
     # rangos que aplica `save_identity`.
-    guardrail_max_retries: int = Field(default=1, ge=0, le=5)
+    guardrail_max_retries: int = Field(
+        default=1, ge=rango("guardrail_max_retries").minimo, le=rango("guardrail_max_retries").maximo
+    )
     guardrail_fail_action: GuardrailFailAction | None = None
     disabled_guardrails: list[str] = []
-    difficulty_long_message_threshold: int = Field(default=LONG_MESSAGE_THRESHOLD, ge=50, le=5000)
-    difficulty_turnos_sin_resolver_threshold: int = Field(
-        default=TURNOS_SIN_RESOLVER_THRESHOLD, ge=1, le=20
+    difficulty_long_message_threshold: int = Field(
+        default=LONG_MESSAGE_THRESHOLD,
+        ge=rango("difficulty_long_message_threshold").minimo,
+        le=rango("difficulty_long_message_threshold").maximo,
     )
-    difficulty_score_threshold: int = Field(default=DIFFICULTY_SCORE_THRESHOLD, ge=1, le=10)
+    difficulty_turnos_sin_resolver_threshold: int = Field(
+        default=TURNOS_SIN_RESOLVER_THRESHOLD,
+        ge=rango("difficulty_turnos_sin_resolver_threshold").minimo,
+        le=rango("difficulty_turnos_sin_resolver_threshold").maximo,
+    )
+    difficulty_score_threshold: int = Field(
+        default=DIFFICULTY_SCORE_THRESHOLD,
+        ge=rango("difficulty_score_threshold").minimo,
+        le=rango("difficulty_score_threshold").maximo,
+    )
     escalation_keywords: list[str] = []
     out_of_hours_message: str = ""
-    auto_escalate_after_turns: int = Field(default=0, ge=0, le=1000)
+    auto_escalate_after_turns: int = Field(
+        default=0, ge=rango("auto_escalate_after_turns").minimo, le=rango("auto_escalate_after_turns").maximo
+    )
     persona_tone: str = ""
-    persona_warmth: int = Field(default=3, ge=0, le=5)
+    persona_warmth: int = Field(
+        default=3, ge=rango("persona_warmth").minimo, le=rango("persona_warmth").maximo
+    )
     persona_emojis: str = "sparse"
-    persona_max_length: int = Field(default=500, ge=0, le=10000)
+    persona_max_length: int = Field(
+        default=500, ge=rango("persona_max_length").minimo, le=rango("persona_max_length").maximo
+    )
     persona_forbidden: list[str] = []
     # `None` = no cambiar: la pausa tiene su propio endpoint (`PUT .../bot-paused`) y un
     # formulario abierto desde antes no debe reactivar ni pausar el asistente al guardar.
     bot_paused: bool | None = None
     business_tz: str = ""
     business_ranges: list[dict[str, Any]] = Field(default=[], description=_BUSINESS_RANGES_DESC)
+
+    # Lista cerrada de valores (registro de opciones): un texto desconocido responde 422 con la lista
+    # válida, en vez de guardarse y comportarse como «sin espera» (HU-CFG-03). `persona_*` vacío
+    # significa «no cambiar».
+    @field_validator("debounce_mode", "split_style")
+    @classmethod
+    def _valor_de_la_lista(cls, value: str, info) -> str:
+        return validar_valor(info.field_name, value)
+
+    @field_validator("persona_tone", "persona_emojis")
+    @classmethod
+    def _valor_de_la_lista_o_vacio(cls, value: str, info) -> str:
+        return validar_valor(info.field_name, value) if value else value
 
     @field_validator("timezone")
     @classmethod
@@ -289,6 +325,18 @@ def _web_chat_out(app_settings: AppSettings | None) -> WebChatSettings:
     )
 
 
+def _modo_efectivo(guardado: object, validos: dict, defecto: str, si_desconocido: str) -> str:
+    """El valor que de verdad aplica el runtime, para que el cliente nunca reenvíe uno inválido.
+
+    Ausente = el defecto. Un texto fuera de la lista (fila escrita por un script o anterior a la
+    validación, HU-CFG-03) se muestra como lo trata el runtime: `si_desconocido`. Así el siguiente
+    guardado desde el panel o la APK no responde 422 por algo que el dueño no puede ver ni corregir.
+    """
+    if guardado is None:
+        return defecto
+    return guardado if isinstance(guardado, str) and guardado in validos else si_desconocido
+
+
 def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) -> IdentitySettings:
     behavior = dict((app_settings.behavior_config if app_settings else {}) or {})
     escalation = dict((app_settings.escalation_config if app_settings else {}) or {})
@@ -299,22 +347,22 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
         brand_voice=(app_settings.brand_voice if app_settings else "") or "",
         brand_voice_warning=not bool(((app_settings.brand_voice if app_settings else "") or "").strip()),
         tono=behavior.get("tono", "calido"),
-        debounce_mode=behavior.get("debounce_mode", "natural"),
-        split_style=behavior.get("split_style", "un_mensaje"),
+        debounce_mode=_modo_efectivo(behavior.get("debounce_mode"), DEBOUNCE_DELAY_MS, "natural", "inmediato"),
+        split_style=_modo_efectivo(behavior.get("split_style"), CAPS, "un_mensaje", "pocos_cortos"),
         currency=(app_settings.currency if app_settings and app_settings.currency else "COP"),
         timezone=(app_settings.timezone if app_settings and app_settings.timezone else DEFAULT_TIMEZONE),
-        guardrail_max_retries=int(behavior.get("guardrail_max_retries", 1) or 0),
+        guardrail_max_retries=leer_entero(behavior, "guardrail_max_retries", 1),
         guardrail_fail_action="neutral" if behavior.get("guardrail_fail_action") == "neutral" else "escalate",
         disabled_guardrails=normalizar_desactivados(behavior.get("disabled_guardrails", [])),
         available_guardrails=available,
-        difficulty_long_message_threshold=int(
-            behavior.get("difficulty_long_message_threshold", LONG_MESSAGE_THRESHOLD)
+        difficulty_long_message_threshold=leer_entero(
+            behavior, "difficulty_long_message_threshold", LONG_MESSAGE_THRESHOLD
         ),
-        difficulty_turnos_sin_resolver_threshold=int(
-            behavior.get("difficulty_turnos_sin_resolver_threshold", TURNOS_SIN_RESOLVER_THRESHOLD)
+        difficulty_turnos_sin_resolver_threshold=leer_entero(
+            behavior, "difficulty_turnos_sin_resolver_threshold", TURNOS_SIN_RESOLVER_THRESHOLD
         ),
-        difficulty_score_threshold=int(
-            behavior.get("difficulty_score_threshold", DIFFICULTY_SCORE_THRESHOLD)
+        difficulty_score_threshold=leer_entero(
+            behavior, "difficulty_score_threshold", DIFFICULTY_SCORE_THRESHOLD
         ),
         escalation_keywords=list(escalation.get("keywords", []) or []),
         out_of_hours_message=escalation.get("out_of_hours_message", "") or "",
@@ -322,11 +370,11 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
             app_settings.language if app_settings else None,
             app_settings.assistant_name if app_settings else None,
         ),
-        auto_escalate_after_turns=int(escalation.get("auto_escalate_after_turns", 0) or 0),
+        auto_escalate_after_turns=leer_entero(escalation, "auto_escalate_after_turns", 0),
         persona_tone=persona.get("tone", "") or "",
-        persona_warmth=int(persona.get("warmth", 3) or 3),
+        persona_warmth=rango("persona_warmth").recortar(int(persona.get("warmth", 3) or 0)),
         persona_emojis=persona.get("emojis", "sparse") or "sparse",
-        persona_max_length=int(persona.get("maxLength", 500) or 0),
+        persona_max_length=rango("persona_max_length").recortar(int(persona.get("maxLength", 500) or 0)),
         persona_forbidden=list(persona.get("forbiddenPhrases", []) or []),
         bot_paused=bool(app_settings.bot_paused) if app_settings else False,
         business_tz=str(((escalation.get("business_hours") or {}).get("tz")) or ""),
@@ -409,19 +457,19 @@ async def save_identity(
         behavior = dict(app_settings.behavior_config)
         behavior.update(
             debounce_mode=payload.debounce_mode,
-            split_style=payload.split_style
-            if payload.split_style in ("un_mensaje", "pocos_cortos", "varios_cortos")
-            else "un_mensaje",
-            # Mismo rango que aplica el loop (`core/orchestrator/loop.py`).
-            guardrail_max_retries=max(0, min(5, payload.guardrail_max_retries)),
+            split_style=payload.split_style,
+            # Los rangos ya los validó `IdentityUpdate` (422); se recorta igual con la misma fuente.
+            guardrail_max_retries=rango("guardrail_max_retries").recortar(payload.guardrail_max_retries),
             disabled_guardrails=sorted(set(available) & set(normalizar_desactivados(payload.disabled_guardrails))),
-            difficulty_long_message_threshold=max(
-                50, min(5000, payload.difficulty_long_message_threshold)
+            difficulty_long_message_threshold=rango("difficulty_long_message_threshold").recortar(
+                payload.difficulty_long_message_threshold
             ),
-            difficulty_turnos_sin_resolver_threshold=max(
-                1, min(20, payload.difficulty_turnos_sin_resolver_threshold)
+            difficulty_turnos_sin_resolver_threshold=rango(
+                "difficulty_turnos_sin_resolver_threshold"
+            ).recortar(payload.difficulty_turnos_sin_resolver_threshold),
+            difficulty_score_threshold=rango("difficulty_score_threshold").recortar(
+                payload.difficulty_score_threshold
             ),
-            difficulty_score_threshold=max(1, min(10, payload.difficulty_score_threshold)),
         )
         if payload.guardrail_fail_action is not None:
             behavior["guardrail_fail_action"] = payload.guardrail_fail_action
@@ -434,7 +482,9 @@ async def save_identity(
             **dict(app_settings.escalation_config or {}),
             "keywords": [k.strip() for k in payload.escalation_keywords if k.strip()],
             "out_of_hours_message": payload.out_of_hours_message.strip(),
-            "auto_escalate_after_turns": max(0, payload.auto_escalate_after_turns),
+            "auto_escalate_after_turns": rango("auto_escalate_after_turns").recortar(
+                payload.auto_escalate_after_turns
+            ),
             "business_hours": business_hours,
         }
         if payload.bot_paused is not None:
@@ -444,9 +494,9 @@ async def save_identity(
     persona_data["persona"].update(
         {
             "tone": payload.persona_tone or persona_data["persona"].get("tone", ""),
-            "warmth": max(0, min(5, payload.persona_warmth)),
+            "warmth": rango("persona_warmth").recortar(payload.persona_warmth),
             "emojis": payload.persona_emojis or persona_data["persona"].get("emojis", "sparse"),
-            "maxLength": max(0, payload.persona_max_length),
+            "maxLength": rango("persona_max_length").recortar(payload.persona_max_length),
             "forbiddenPhrases": [p.strip() for p in payload.persona_forbidden if p.strip()],
         }
     )
@@ -454,6 +504,241 @@ async def save_identity(
 
     refreshed = await _load_app_settings(principal.tenant_id)
     return _identity_out(refreshed, spec, available)
+
+
+# ------------------------------------------------------------------ palabras de baja (HU-CFG-05)
+MAX_PALABRAS_DE_BAJA = 50
+MAX_LARGO_PALABRA_DE_BAJA = 60
+
+
+class BajasSettings(BaseModel):
+    """Palabras con las que un cliente se da de baja de los envíos a segmentos (ADR-0150)."""
+
+    palabras: list[str] = Field(description="Las guardadas por el negocio; vacío = usa las de por defecto.")
+    por_defecto: list[str]
+    usa_por_defecto: bool
+
+
+class BajasUpdate(BaseModel):
+    palabras: list[str] = Field(default=[], max_length=MAX_PALABRAS_DE_BAJA)
+
+    @field_validator("palabras")
+    @classmethod
+    def _largo_razonable(cls, value: list[str]) -> list[str]:
+        for palabra in value:
+            if len(palabra.strip()) > MAX_LARGO_PALABRA_DE_BAJA:
+                raise ValueError(f"Cada palabra admite hasta {MAX_LARGO_PALABRA_DE_BAJA} caracteres.")
+        return value
+
+
+def _bajas_out(app_settings: AppSettings | None) -> BajasSettings:
+    behavior = dict((app_settings.behavior_config if app_settings else {}) or {})
+    guardadas = behavior.get("palabras_de_baja")
+    palabras = limpiar_palabras_de_baja(guardadas) if isinstance(guardadas, list) else []
+    return BajasSettings(
+        palabras=palabras,
+        por_defecto=list(PALABRAS_DE_BAJA_POR_DEFECTO),
+        usa_por_defecto=not palabras,
+    )
+
+
+@router.get("/bajas", response_model=BajasSettings)
+async def get_bajas(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> BajasSettings:
+    _exigir_negocio(principal)
+    return _bajas_out(await _load_app_settings(principal.tenant_id))
+
+
+@router.put("/bajas", response_model=BajasSettings)
+async def save_bajas(
+    payload: BajasUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> BajasSettings:
+    """Guarda las palabras de baja sin vacíos ni repetidos. Lista vacía = restablecer las de por
+    defecto (se quita la clave). Los textos son dato del dueño, nunca instrucción (invariante 7)."""
+    _exigir_negocio(principal)
+    palabras = limpiar_palabras_de_baja(payload.palabras)
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == principal.tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+        behavior = dict(app_settings.behavior_config or {})
+        antes = behavior.get("palabras_de_baja")
+        if palabras:
+            behavior["palabras_de_baja"] = palabras
+        else:
+            behavior.pop("palabras_de_baja", None)
+        if behavior != dict(app_settings.behavior_config or {}):
+            app_settings.behavior_config = behavior
+            session.add(
+                AuditLog(
+                    tenant_id=principal.tenant_id,
+                    actor=f"admin:{principal.admin.email}",
+                    action="settings.palabras_de_baja",
+                    input={"antes": antes if isinstance(antes, list) else [], "despues": palabras},
+                )
+            )
+    return _bajas_out(await _load_app_settings(principal.tenant_id))
+
+
+# ------------------------------------------------------------------ política de WhatsApp Web (HU-CFG-05, ADR-0074)
+class WaWebPolicySettings(BaseModel):
+    """Política anti-baneo del canal no oficial. Solo la ve y la edita el master."""
+
+    mode: str
+    send_min_delay_ms: int
+    send_max_delay_ms: int
+    daily_outbound_cap: int
+    warmup_enabled: bool
+    # Versión del aviso de riesgo vigente: para pasar a `allow_outbound` hay que aceptarlo.
+    risk_version: str
+
+
+class WaWebPolicyUpdate(BaseModel):
+    mode: str
+    send_min_delay_ms: int = Field(
+        ge=rango("waweb_send_min_delay_ms").minimo, le=rango("waweb_send_min_delay_ms").maximo
+    )
+    send_max_delay_ms: int = Field(
+        ge=rango("waweb_send_max_delay_ms").minimo, le=rango("waweb_send_max_delay_ms").maximo
+    )
+    daily_outbound_cap: int = Field(
+        ge=rango("waweb_daily_outbound_cap").minimo, le=rango("waweb_daily_outbound_cap").maximo
+    )
+    warmup_enabled: bool
+    # Confirmación explícita del aviso de riesgo al pasar a `allow_outbound`: `acepta_riesgo` y la
+    # versión del aviso que la persona vio (`risk_version` de la lectura), para no aceptar uno viejo.
+    acepta_riesgo: bool = False
+    risk_version: str | None = None
+
+    @field_validator("mode")
+    @classmethod
+    def _modo_conocido(cls, value: str) -> str:
+        return validar_valor("waweb_mode", value)
+
+    @field_validator("send_max_delay_ms")
+    @classmethod
+    def _maximo_no_menor_que_el_minimo(cls, value: int, info) -> int:
+        minimo = info.data.get("send_min_delay_ms")
+        if minimo is not None and value < minimo:
+            raise ValueError("La pausa máxima no puede ser menor que la mínima.")
+        return value
+
+
+def _exigir_master(principal: Principal) -> None:
+    if not actua_como_master(principal.admin):
+        raise ApiError.forbidden("La política de WhatsApp Web la decide el equipo de SolversHub.")
+
+
+def _solo_master(*, write: bool):
+    """Dependencia: sección Configuración y además master. Como es dependencia, el 403 sale antes
+    de validar el cuerpo: un dueño no se entera de los modos ni rangos válidos con un 422."""
+    base = require("settings", write=write)
+
+    # `Depends` va como valor por defecto: con `from __future__ import annotations`, FastAPI no
+    # resolvería `base` (variable local) dentro de un `Annotated[...]` en texto.
+    async def dependency(principal: Principal = Depends(base)) -> Principal:  # noqa: B008
+        _exigir_master(principal)
+        return principal
+
+    return dependency
+
+
+def _exigir_negocio(principal: Principal) -> None:
+    if principal.tenant_id is None:
+        raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
+
+
+def _waweb_out(app_settings: AppSettings | None) -> WaWebPolicySettings:
+    politica = policy_from_behavior(dict((app_settings.behavior_config if app_settings else {}) or {}))
+    return WaWebPolicySettings(
+        mode=politica.mode,
+        send_min_delay_ms=politica.send_min_delay_ms,
+        send_max_delay_ms=politica.send_max_delay_ms,
+        daily_outbound_cap=politica.daily_outbound_cap,
+        warmup_enabled=politica.warmup_enabled,
+        risk_version=RISK_ACK_VERSION,
+    )
+
+
+@router.get("/whatsapp-web", response_model=WaWebPolicySettings)
+async def get_waweb_policy(
+    principal: Annotated[Principal, Depends(_solo_master(write=False))],
+) -> WaWebPolicySettings:
+    _exigir_negocio(principal)
+    return _waweb_out(await _load_app_settings(principal.tenant_id))
+
+
+@router.put("/whatsapp-web", response_model=WaWebPolicySettings)
+async def save_waweb_policy(
+    payload: WaWebPolicyUpdate,
+    principal: Annotated[Principal, Depends(_solo_master(write=True))],
+) -> WaWebPolicySettings:
+    """Guarda la política del canal. Pasar a `allow_outbound` exige aceptar el aviso de riesgo
+    vigente; cada cambio deja una fila en `audit_log` con quién, antes y después."""
+    _exigir_negocio(principal)
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == principal.tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+        antes = _waweb_out(app_settings)
+        abre_envio = payload.mode == MODE_ALLOW_OUTBOUND and antes.mode != MODE_ALLOW_OUTBOUND
+        if abre_envio and not payload.acepta_riesgo:
+            raise ApiError(
+                422,
+                "validation_error",
+                "Revisa los campos marcados.",
+                fields={"acepta_riesgo": "Acepta el aviso de riesgo para permitir envíos no solicitados."},
+            )
+        if abre_envio and payload.risk_version != RISK_ACK_VERSION:
+            raise ApiError(
+                422,
+                "validation_error",
+                "Revisa los campos marcados.",
+                fields={"risk_version": "El aviso de riesgo cambió: vuelve a leerlo y acéptalo."},
+            )
+        behavior = dict(app_settings.behavior_config or {})
+        behavior.update(
+            waweb_mode=payload.mode,
+            waweb_send_min_delay_ms=payload.send_min_delay_ms,
+            waweb_send_max_delay_ms=payload.send_max_delay_ms,
+            waweb_daily_outbound_cap=payload.daily_outbound_cap,
+            waweb_warmup_enabled=payload.warmup_enabled,
+        )
+        despues = payload.model_dump(exclude={"acepta_riesgo", "risk_version"})
+        if despues != antes.model_dump(exclude={"risk_version"}):
+            app_settings.behavior_config = behavior
+            session.add(
+                AuditLog(
+                    tenant_id=principal.tenant_id,
+                    actor=f"admin:{principal.admin.email}",
+                    action="settings.waweb_allow_outbound" if abre_envio else "settings.waweb_policy",
+                    input={
+                        "antes": antes.model_dump(exclude={"risk_version"}),
+                        "despues": despues,
+                        "riesgo_aceptado": payload.acepta_riesgo if abre_envio else None,
+                        "risk_version": RISK_ACK_VERSION,
+                    },
+                )
+            )
+    return _waweb_out(await _load_app_settings(principal.tenant_id))
 
 
 @router.put("/bot-paused", response_model=BotPausedState)
