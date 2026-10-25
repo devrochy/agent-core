@@ -79,8 +79,9 @@ async def test_en_rango_y_valor_valido_guardan_y_son_por_negocio(app_client) -> 
     assert await _identidad(app_client, hb) == antes_b
 
 
-async def test_lectura_tolerante_con_una_fila_vieja_fuera_de_rango(app_client) -> None:
-    """Un `behavior_config` escrito por un script con valores absurdos no tumba la lectura de la API."""
+async def test_una_fila_vieja_fuera_de_rango_se_lee_normalizada_y_se_puede_guardar(app_client) -> None:
+    """Un `behavior_config`/`escalation_config` escrito por un script con valores raros no deja al dueño sin
+    poder guardar: la lectura devuelve lo que aplica el runtime y reenviarlo no da 422."""
     from sqlalchemy import select
 
     from core.db.models import AppSettings
@@ -90,7 +91,21 @@ async def test_lectura_tolerante_con_una_fila_vieja_fuera_de_rango(app_client) -
     tid = await _negocio()
     async with tenant_scope(tid), get_session() as s:
         fila = (await s.execute(select(AppSettings).where(AppSettings.tenant_id == tid))).scalar_one()
-        fila.behavior_config = {**dict(fila.behavior_config or {}), "difficulty_score_threshold": 999}
+        fila.behavior_config = {
+            **dict(fila.behavior_config or {}),
+            "difficulty_score_threshold": 999,
+            "guardrail_max_retries": "abc",
+            "debounce_mode": "xyz",
+            "split_style": "zzz",
+        }
+        fila.escalation_config = {**dict(fila.escalation_config or {}), "auto_escalate_after_turns": 500}
     headers = await api_headers(app_client, tid)
-    r = await app_client.get(URL, headers=headers)
+    leida = await _identidad(app_client, headers)
+    assert leida["difficulty_score_threshold"] == 10
+    assert leida["guardrail_max_retries"] == 1
+    assert leida["auto_escalate_after_turns"] == 20
+    # El runtime trata lo desconocido como «sin espera» y 3 burbujas: eso es lo que se muestra.
+    assert (leida["debounce_mode"], leida["split_style"]) == ("inmediato", "pocos_cortos")
+
+    r = await app_client.put(f"{URL}/identity", headers=headers, json=leida)
     assert r.status_code == 200, r.text

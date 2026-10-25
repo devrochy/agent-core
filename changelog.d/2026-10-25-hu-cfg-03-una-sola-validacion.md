@@ -11,3 +11,7 @@
 - La lectura del runtime sigue siendo tolerante: un valor guardado fuera de rango, no numérico o `null` se recorta o cae al
   defecto en vez de tumbar el turno (`leer_entero`).
 - Un preset con una clave de `app_settings` desconocida o un `split_style` inválido falla al cargar nombrando el valor.
+- `GET /api/v1/admin/settings` devuelve los valores como los aplica el runtime: una fila vieja fuera de rango se recorta (umbrales,
+  reintentos, `auto_escalate_after_turns`, calidez, longitud) y un `debounce_mode` o `split_style` desconocido se muestra como lo trata el
+  runtime (`inmediato` y `pocos_cortos`). Así el panel y la APK, que reenvían lo que leyeron, nunca dejan al dueño sin poder guardar
+  por un 422 que no puede ver ni corregir. La calidez 0 ya no se muestra como 3.
