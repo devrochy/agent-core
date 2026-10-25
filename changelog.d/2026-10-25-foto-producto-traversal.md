@@ -14,4 +14,7 @@
 - Sin migración de datos. Para detectar filas ya contaminadas:
   `SELECT id, tenant_id, image_key FROM pack_commerce_products WHERE image_key IS NOT NULL AND image_key !~ '^[a-z0-9][a-z0-9-]*/productos/[A-Za-z0-9_-]+\.[A-Za-z0-9]+$';`
   (con un rol que salte la RLS; las fotos legítimas son `<slug>/productos/<uuid>.<ext>`).
+  Y las que tienen una key bien formada pero de otro negocio (solo posible por escritura directa en la base;
+  `url_foto` valida solo la forma, el slug se exige al guardar y en `borrar`):
+  `SELECT p.id, p.tenant_id, p.image_key FROM pack_commerce_products p JOIN tenants t ON t.id = p.tenant_id WHERE p.image_key IS NOT NULL AND split_part(p.image_key, '/', 1) <> t.slug;`
 - Tests: `tests/test_storage_key_traversal.py` y `tests/integration/test_pack_commerce_foto_traversal.py`.
