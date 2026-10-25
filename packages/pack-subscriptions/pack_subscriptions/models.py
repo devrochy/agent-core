@@ -37,6 +37,11 @@ class Base(DeclarativeBase):
     pass
 
 
+# HU-SUB-26: canal de `pago_externo` cuando el dueño registra una transferencia del cliente. A diferencia
+# de otro canal de cobro (el panel de la plataforma), el pack SIGUE cobrando el período siguiente.
+CANAL_TRANSFERENCIA = "transferencia"
+
+
 class Subscription(Base):
     """Suscripción de un `Customer` a un plan (producto de commerce con recurrencia)."""
 

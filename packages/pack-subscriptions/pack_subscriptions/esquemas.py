@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -143,3 +143,21 @@ class Metricas(BaseModel):
     mora: MoraResumen
     cohortes: list[CohorteFila]
     desde: date = Field(description="Primer día del mes en curso (UTC).")
+
+
+class RegistrarPagoBody(BaseModel):
+    referencia: str = Field(
+        ...,
+        min_length=3,
+        max_length=120,
+        description="Número del comprobante o texto que identifica la transferencia (para conciliar con el extracto).",
+    )
+
+
+class PagoRegistradoOut(BaseModel):
+    estado: Literal["registrado", "ya_registrado"]
+    charge_id: uuid.UUID
+    periodo: str
+    suscripcion_estado: str
+    proximo_cargo: datetime | None = None
+

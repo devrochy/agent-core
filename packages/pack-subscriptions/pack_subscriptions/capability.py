@@ -763,11 +763,16 @@ class SubscriptionCapabilityImpl:
         fin: datetime,
         referencia: str,
         canal: str,
+        emitir_pago: bool = False,
     ) -> dict[str, Any]:
         """Operación opcional del contrato (HU-SH-04, ADR-0123): el período que empieza en
         `inicio` lo pagó OTRO canal (p. ej. el panel de la plataforma). Su cargo queda pagado
         (se crea si todavía no existía) y la suscripción se reactiva como con un pago propio:
         el asistente no lo vuelve a cobrar ni a recordar. Idempotente por `referencia`.
+
+        `emitir_pago` (HU-SUB-26): además emite `subscription.charge_paid`, como un pago con el link
+        del pack, para que el core aplique el período al plan de un negocio aprovisionado. Lo pide el
+        registro que hace el negocio; el cobro de la plataforma ya aplicó su período y no lo pide.
 
         Devuelve `{"estado", "periodo", "charge_id"}`. `estado`: `registrado`, `ya_registrado`
         o `duplicado` (el cargo ya estaba pagado por el link del pack u otro pago).
@@ -799,5 +804,9 @@ class SubscriptionCapabilityImpl:
             await session.flush()
             reactivar_por_pago(sub, cargo, fin=fin)
             await session.flush()
+            if emitir_pago:
+                from pack_subscriptions.module import _emitir_cargo_pagado
+
+                await _emitir_cargo_pagado(session, cargo, sub, referencia, duplicado=False)
             log.info("subs_pago_externo_registrado", subscription_id=str(sub.id), periodo=periodo, canal=canal)
             return {"estado": "registrado", "periodo": periodo, "charge_id": str(cargo.id)}
