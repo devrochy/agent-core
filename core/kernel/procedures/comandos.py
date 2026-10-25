@@ -19,6 +19,9 @@ y el motor (`ejecucion.ContextoMotor.aplicar_comando`) los aplica. Este módulo 
   que el grafo A2A congelado deja alcanzar con `handoff` y que declaran las tareas abiertas;
   `agente` es un enum de sus keys (el modelo nunca ve ids). El cambio de dueño se aplica al cerrar
   el turno; en el turno solo se acepta o se niega.
+- `encargar(agente, procedimiento, entradas)` (con tarea en foco) y `consultar(agente, consulta,
+  parametros)` (HU-AOS-19 parte 2): a los destinos con enlace `delegate`/`query` que exponen
+  procedimientos que se completan con datos o consultas con acción; enums de keys e ids.
 - Sin `task_id` ni `motivo` (adenda de ADR-0113): actúan sobre la tarea en foco, porque el
   modelo no ve UUIDs y no hay dos tareas abiertas del mismo procedimiento; un motivo libre sería
   PII en `task_events`, que no se puede redactar. Pausar y retomar quedan para HU-AOS-20.
@@ -49,9 +52,11 @@ ACTUALIZAR = "actualizar_tarea"
 CONFIRMAR = "confirmar_tarea"
 CANCELAR = "cancelar_tarea"
 PASAR = "pasar_a_agente"
+ENCARGAR = "encargar"
+CONSULTAR = "consultar"
 # Nombres reservados: ninguna acción del binario puede llamarse así (lo cubre un test) y una
 # tool declarativa del negocio con ese nombre no se ofrece mientras el motor esté activo.
-NOMBRES = frozenset({INICIAR, ACTUALIZAR, CONFIRMAR, CANCELAR, PASAR})
+NOMBRES = frozenset({INICIAR, ACTUALIZAR, CONFIRMAR, CANCELAR, PASAR, ENCARGAR, CONSULTAR})
 # Argumentos de primer nivel de cada comando (`additionalProperties: false`).
 _ARGUMENTOS: dict[str, frozenset[str]] = {
     INICIAR: frozenset({"procedure_id"}),
@@ -59,6 +64,8 @@ _ARGUMENTOS: dict[str, frozenset[str]] = {
     CONFIRMAR: frozenset(),
     CANCELAR: frozenset(),
     PASAR: frozenset({"agente"}),
+    ENCARGAR: frozenset({"agente", "procedimiento", "entradas"}),
+    CONSULTAR: frozenset({"agente", "consulta", "parametros"}),
 }
 # Tipos que el modelo no escribe: los llena el contenido que envía el cliente (ADR-0113 §1).
 _TIPOS_SIN_LLM = frozenset({"location", "media"})
@@ -80,6 +87,23 @@ TEXTOS = {
     "destino": ("agente",),
     "pasar_aceptado": ("agente",),
     "pasar_negado": ("agente",),
+    ENCARGAR: (),
+    "encargar_agente": (),
+    "encargar_procedimiento": (),
+    "encargar_entradas": (),
+    "encargos": (),
+    "encargo": ("agente", "id", "titulo"),
+    "encargo_listo": ("agente",),
+    "encargo_incompleto": ("faltan",),
+    CONSULTAR: (),
+    "consultar_agente": (),
+    "consultar_consulta": (),
+    "consultar_parametros": (),
+    "consultas": (),
+    "consulta": ("agente", "id", "descripcion"),
+    "consulta_lista": ("agente",),
+    "consulta_fallida": ("agente",),
+    "colaboracion_negada": ("agente",),
     "comando_no_disponible": ("comando",),
     "argumentos_invalidos": ("comando",),
 }
@@ -152,9 +176,11 @@ def aplicables(
     foco: tuple[Proyeccion, Procedure] | None,
     candidatos: Sequence[Procedure],
     destinos_de_handoff: Sequence[str] = (),
+    encargos: bool = False,
+    consultas: bool = False,
 ) -> list[str]:
     """Comandos que aplican al estado, en un orden fijo (determinista para el prompt). Los de
-    colaboración van al final y no dependen del foco."""
+    colaboración van al final; `encargar` solo con tarea en foco (la sub-tarea cuelga de ella)."""
     salida: list[str] = []
     if foco is None:
         if candidatos:
@@ -168,6 +194,10 @@ def aplicables(
         salida.append(CANCELAR)
     if destinos_de_handoff:
         salida.append(PASAR)
+    if encargos and foco is not None:
+        salida.append(ENCARGAR)
+    if consultas:
+        salida.append(CONSULTAR)
     return salida
 
 
@@ -223,6 +253,8 @@ def herramientas(
     foco: tuple[Proyeccion, Procedure] | None,
     candidatos: Sequence[Procedure],
     destinos_de_handoff: Sequence[str] = (),
+    oferta_encargos: Sequence[tuple[str, Procedure]] = (),
+    oferta_consultas: Sequence[tuple[str, Any]] = (),
 ) -> list[MCPTool]:
     """Los `MCPTool` de los comandos `nombres` (salida de `aplicables`)."""
     salida: list[MCPTool] = []
@@ -260,7 +292,62 @@ def herramientas(
                 {"agente": {"type": "string", "enum": claves, "description": texto("pasar_a_agente_agente")}},
                 ["agente"],
             ))
+        elif nombre == ENCARGAR and oferta_encargos:
+            salida.append(_tool_encargar(oferta_encargos))
+        elif nombre == CONSULTAR and oferta_consultas:
+            salida.append(_tool_consultar(oferta_consultas))
     return salida
+
+
+def _tool_encargar(oferta: Sequence[tuple[str, Procedure]]) -> MCPTool:
+    """Un enum de agentes, otro de procedimientos y `entradas` con la unión de sus datos
+    escribibles (el motor valida contra el procedimiento elegido)."""
+    lineas = [texto(ENCARGAR), texto("encargos")]
+    datos: dict[str, Any] = {}
+    for agente, proc in oferta:
+        lineas.append(texto("encargo", agente=escapar(agente), id=proc.id, titulo=escapar(proc.title)))
+        for n, slot in escribibles(proc).items():
+            datos.setdefault(n, schema_de_dato(slot))
+    entradas = {
+        "type": "object",
+        "description": texto("encargar_entradas"),
+        "properties": dict(sorted(datos.items())),
+        "additionalProperties": False,
+    }
+    return _tool(
+        ENCARGAR,
+        "\n".join(lineas),
+        {
+            "agente": {"type": "string", "enum": sorted({a for a, _p in oferta}), "description": texto("encargar_agente")},
+            "procedimiento": {
+                "type": "string",
+                "enum": sorted({p.id for _a, p in oferta}),
+                "description": texto("encargar_procedimiento"),
+            },
+            "entradas": entradas,
+        },
+        ["agente", "procedimiento", "entradas"],
+    )
+
+
+def _tool_consultar(oferta: Sequence[tuple[str, Any]]) -> MCPTool:
+    lineas = [texto(CONSULTAR), texto("consultas")]
+    for agente, consulta in oferta:
+        lineas.append(texto("consulta", agente=escapar(agente), id=consulta.id, descripcion=escapar(consulta.descripcion)))
+    return _tool(
+        CONSULTAR,
+        "\n".join(lineas),
+        {
+            "agente": {"type": "string", "enum": sorted({a for a, _c in oferta}), "description": texto("consultar_agente")},
+            "consulta": {
+                "type": "string",
+                "enum": sorted({c.id for _a, c in oferta}),
+                "description": texto("consultar_consulta"),
+            },
+            "parametros": {"type": "object", "description": texto("consultar_parametros")},
+        },
+        ["agente", "consulta"],
+    )
 
 
 def argumentos_invalidos(nombre: str, args: Mapping[str, Any]) -> str | None:
@@ -272,6 +359,18 @@ def argumentos_invalidos(nombre: str, args: Mapping[str, Any]) -> str | None:
     if nombre == ACTUALIZAR and not isinstance(args.get("slots"), Mapping):
         return texto("argumentos_invalidos", comando=nombre)
     if nombre == PASAR and not isinstance(args.get("agente"), str):
+        return texto("argumentos_invalidos", comando=nombre)
+    if nombre == ENCARGAR and not (
+        isinstance(args.get("agente"), str)
+        and isinstance(args.get("procedimiento"), str)
+        and isinstance(args.get("entradas"), Mapping)
+    ):
+        return texto("argumentos_invalidos", comando=nombre)
+    if nombre == CONSULTAR and not (
+        isinstance(args.get("agente"), str)
+        and isinstance(args.get("consulta"), str)
+        and isinstance(args.get("parametros", {}), Mapping)
+    ):
         return texto("argumentos_invalidos", comando=nombre)
     return None
 

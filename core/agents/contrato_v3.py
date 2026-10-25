@@ -217,6 +217,31 @@ def lint_agentspec(spec: AgentSpecV3, catalogo: Catalogo) -> list[Issue]:
             )
     for nombre in _repetidos([c.id for c in spec.exposes.consultas]):
         issues.append(Issue("consulta_repetida", "exposes.consultas", f"La consulta '{nombre}' está repetida."))
+    # 3.2.0 (adenda HU-AOS-19 de ADR-0113): una consulta con `action` la ejecuta el propio agente
+    # y su salida la valida el kernel con un subconjunto de JSON Schema.
+    propias = {t.tool for t in spec.tools if t.enabled}
+    for i, consulta in enumerate(spec.exposes.consultas):
+        if consulta.action is None:
+            continue
+        if consulta.action not in propias:
+            issues.append(
+                Issue(
+                    "consulta_sin_accion_del_agente",
+                    f"exposes.consultas[{i}].action",
+                    f"'{consulta.action}' no está entre las tools habilitadas del agente: no puede exponer lo que no ejecuta.",
+                )
+            )
+        from core.kernel.esquema_salida import no_soportadas
+
+        problemas = no_soportadas(consulta.outputSchema)
+        if problemas:
+            issues.append(
+                Issue(
+                    "schema_de_salida_no_soportado",
+                    f"exposes.consultas[{i}].outputSchema",
+                    f"El schema de salida usa algo que el kernel no valida: {', '.join(problemas[:5])}.",
+                )
+            )
     return issues
 
 
