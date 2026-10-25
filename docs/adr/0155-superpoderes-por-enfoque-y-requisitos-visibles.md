@@ -46,6 +46,12 @@ existentes). Un agente con un superpoder fuera de su enfoque sigue funcionando h
 fallará con `superpoder_fuera_de_enfoque` hasta que el dueño lo quite. Una limpieza automática exigiría derogar
 esa adenda y se decide solo después de medir cuántos agentes están afectados.
 
+**Medición (2026-10-25, solo lectura, entorno de test):** de 8 especialistas, 5 tienen la `key` de una plantilla y
+ninguno declara un procedimiento fuera de su enfoque, ni en la última versión ni en el borrador. **Decisión: no hay
+limpieza automática ni migración**; la adenda de ADR-0139 del 2026-10-19 sigue vigente. Producción no se midió: si
+allí aparece un agente afectado, lo corrige el dueño al siguiente publish (el 422 se lo pide) y no se revisa esta
+decisión.
+
 ## Requisitos visibles (entrega 2)
 
 6. **Un aviso, no una puerta.** `core/agents/requisitos.py` calcula, para cada plantilla y negocio, lo que falta
