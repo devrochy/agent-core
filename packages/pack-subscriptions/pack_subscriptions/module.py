@@ -72,7 +72,13 @@ class SubscriptionsModule(BaseModule):
     ]
 
     def on_activate(self, host: MCPHost) -> None:
-        host.register_guardrail("subs_completion_check", self._completion_guardrail, priority=6)
+        host.register_guardrail(
+            "subs_completion_check",
+            self._completion_guardrail,
+            priority=6,
+            etiqueta="Cambios de suscripción",
+            explicacion="Evita que el asistente diga que cambió, pausó o canceló una suscripción si la acción no se hizo.",
+        )
         subscription_registry.register(PLUGIN_ID, SubscriptionCapabilityImpl())
         host.subscribe("payment.confirmed", self._on_payment_confirmed)
         # HU-AOS-08: procedimiento `cambiar_plan` y su resolver (solo los usa el motor, detrás de

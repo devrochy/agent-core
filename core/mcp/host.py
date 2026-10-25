@@ -86,7 +86,15 @@ class MCPHost:
         log.info("skill_registered", skill=skill.name, plugin=plugin_id,
                  tools=[t.name for t in skill.get_tools()])
 
-    def register_guardrail(self, name: str, fn: GuardrailFn, priority: int = 10) -> None:
+    def register_guardrail(
+        self,
+        name: str,
+        fn: GuardrailFn,
+        priority: int = 10,
+        *,
+        etiqueta: str = "",
+        explicacion: str = "",
+    ) -> None:
         # Unicidad de `name`, mismo criterio que `register_skill`/tools de
         # arriba: el toggle individual por tenant (ADR de parametrización,
         # `AppSettings.behavior_config["disabled_guardrails"]`) filtra por
@@ -102,7 +110,14 @@ class MCPHost:
         if name in TOGGLES or name in ALIAS:
             raise PluginError(self._active_plugin, f"Nombre de guardrail reservado: {name}")
         self._guardrails.append(
-            Guardrail(name=name, fn=fn, priority=priority, plugin_id=self._active_plugin)
+            Guardrail(
+                name=name,
+                fn=fn,
+                priority=priority,
+                plugin_id=self._active_plugin,
+                etiqueta=etiqueta,
+                explicacion=explicacion,
+            )
         )
         self._guardrails.sort(key=lambda g: g.priority)
 

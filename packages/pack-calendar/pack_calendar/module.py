@@ -435,7 +435,13 @@ class GoogleCalendarModule(BaseModule):
 
             raise PluginConfigError(PLUGIN_ID, "Config inválida o ausente")
         host.register_skill(CalendarSkill())
-        host.register_guardrail("calendar_completion_check", self._completion_guardrail, priority=6)
+        host.register_guardrail(
+            "calendar_completion_check",
+            self._completion_guardrail,
+            priority=6,
+            etiqueta="Citas confirmadas",
+            explicacion="Evita que el asistente diga que agendó, movió o canceló una cita si la acción no se hizo.",
+        )
         # HU-SH-02: el equipo se entera de cada cita nueva, reagendada o cancelada.
         from core.shared.events import ON_APPOINTMENT_CHANGED
 

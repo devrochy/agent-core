@@ -424,6 +424,7 @@ async def get_catalog_api(
     return catalogo_para(
         es_master=actua_como_master(principal.admin),
         guardrails_disponibles=_available_guardrails(spec),
+        guardrails_info={g.name: (g.etiqueta, g.explicacion) for g in mcp_host.get_guardrails()},
     )
 
 
