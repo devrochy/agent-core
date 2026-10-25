@@ -21,6 +21,7 @@ from typing import Any, Literal
 
 from sqlalchemy import func, select
 
+from core.billing.tipos_de_uso import NO_SON_TURNOS
 from core.db.models import (
     AppSettings,
     ChannelConnection,
@@ -164,7 +165,7 @@ async def _primer_turno(session, tenant_id: uuid.UUID) -> datetime | None:  # ty
         await session.execute(
             select(UsageLedger.created_at)
             # Subir un documento (fila `embedding`, ADR-0145 §3) no es responder un turno.
-            .where(UsageLedger.tenant_id == tenant_id, UsageLedger.kind.not_in(("embedding", "generacion")))
+            .where(UsageLedger.tenant_id == tenant_id, UsageLedger.kind.not_in(NO_SON_TURNOS))
             .order_by(UsageLedger.created_at)
             .limit(1)
         )

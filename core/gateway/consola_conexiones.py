@@ -336,6 +336,7 @@ async def _consumo(
                 "  coalesce(sum(input_tokens), 0), coalesce(sum(output_tokens), 0), coalesce(sum(cost_usd), 0) "
                 "FROM usage_ledger "
                 "WHERE tenant_id = :t AND connection_id IS NOT NULL AND connection_id IN :ids AND created_at >= :desde "
+                "  AND kind <> 'eval' "
                 "GROUP BY connection_id"
             ).bindparams(bindparam("ids", expanding=True)),
             {"t": tenant_id, "ids": ids, "desde": utcnow() - VENTANA_CONSUMO},

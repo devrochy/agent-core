@@ -21,6 +21,7 @@ from core.admin.meta_costs_service import (
     verify_credits,
 )
 from core.api.deps import Principal, require
+from core.billing.tipos_de_uso import EVAL, NO_SON_TURNOS
 from core.db.models import UsageLedger
 from core.db.session import get_session
 
@@ -92,21 +93,21 @@ async def get_costs(
         today_cost = (
             await session.execute(
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
-                    by_tenant, UsageLedger.created_at >= today_start
+                    by_tenant, UsageLedger.created_at >= today_start, UsageLedger.kind != EVAL
                 )
             )
         ).scalar() or 0
         month_cost = (
             await session.execute(
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
-                    by_tenant, UsageLedger.created_at >= month_ago
+                    by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind != EVAL
                 )
             )
         ).scalar() or 0
         # Las filas `embedding` (ingesta del pack de conocimiento, ADR-0145 §3) no son turnos.
         total_turns = (
             await session.execute(
-                select(func.count(UsageLedger.id)).where(by_tenant, UsageLedger.kind.not_in(("embedding", "generacion")))
+                select(func.count(UsageLedger.id)).where(by_tenant, UsageLedger.kind.not_in(NO_SON_TURNOS))
             )
         ).scalar() or 0
         by_model_rows = (
@@ -119,7 +120,7 @@ async def get_costs(
                     func.avg(UsageLedger.latency_ms),
                     func.sum(UsageLedger.cost_usd),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago)
+                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind != EVAL)
                 .group_by(UsageLedger.model)
             )
         ).all()
@@ -131,7 +132,7 @@ async def get_costs(
                     func.sum(UsageLedger.cost_usd),
                     func.max(UsageLedger.created_at),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind.not_in(("embedding", "generacion")))
+                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind.not_in(NO_SON_TURNOS))
                 .group_by(UsageLedger.conversation_id)
                 .order_by(func.sum(UsageLedger.cost_usd).desc())
                 .limit(20)

@@ -19,6 +19,7 @@ from core.admin.plan_view import dashboard_billing_summary
 from core.agents.spec import count_tenant_packs, load_active_spec
 from core.api.deps import Principal, require
 from core.api.schemas import UsageMetric
+from core.billing.tipos_de_uso import EVAL
 from core.config import get_settings
 from core.db.models import (
     AppSettings,
@@ -113,6 +114,7 @@ async def get_dashboard(
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
                     UsageLedger.tenant_id == tenant_id,
                     UsageLedger.created_at >= month_ago,
+                    UsageLedger.kind != EVAL,
                 )
             )
         ).scalar() or 0

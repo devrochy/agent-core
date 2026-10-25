@@ -18,6 +18,7 @@ from typing import Literal
 
 from sqlalchemy import func, select
 
+from core.billing.tipos_de_uso import EVAL
 from core.db.models import (
     Admin,
     AgentInstanceRecord,
@@ -312,8 +313,9 @@ async def _count_cost(session, tenant_id: uuid.UUID, period_start) -> float:
 
     from core.db.models import UsageLedger
 
+    # El gate de pass^k lo paga la plataforma (HU-AOS-21): no consume la cuota del cliente.
     query = select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
-        UsageLedger.tenant_id == tenant_id
+        UsageLedger.tenant_id == tenant_id, UsageLedger.kind != EVAL
     )
     # El playground gasta tokens reales, pero es una prueba del panel: no debe
     # consumir la cuota de costo del cliente. Se excluyen las filas atadas a una

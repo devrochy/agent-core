@@ -7,7 +7,9 @@
 - `GET  /api/v1/admin/connections/{id}/releases/{rid}` — detalle: el manifiesto **sin textos**
   (hashes y tamaños) y sus eventos.
 - `POST /api/v1/admin/connections/{id}/releases/{rid}/promote` — la activa (promoción total;
-  el gate de pass^k llega con HU-AOS-21 y el canary con HU-AOS-32).
+  el canary llega con HU-AOS-32). Pasa por el gate de pass^k (HU-AOS-21): un veredicto
+  rechazado contra la activa de ahora da 409 `gate_rechazado`; solo el master lo salta con
+  `forzar` y `motivo_forzado`, que quedan en el evento y en la auditoría.
 - `POST /api/v1/admin/connections/{id}/rollback` — vuelve a la anterior (o a `to_release_id`).
   Efecto en el siguiente turno de cada conversación.
 
@@ -31,7 +33,7 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import DBAPIError
 
-from core.admin.roles import actua_como_master
+from core.admin.roles import actua_como_master, es_master
 from core.agents.versiones import escritura_habilitada
 from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
@@ -101,6 +103,9 @@ class PromoteIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(default="manual", pattern=r"^[a-z_]{1,40}$")
+    # HU-AOS-21: solo el master puede saltar el gate de pass^k, con un motivo escrito.
+    forzar: bool = False
+    motivo_forzado: str | None = Field(default=None, max_length=200)
 
     @field_validator("reason")
     @classmethod
@@ -245,9 +250,21 @@ async def promote_release(
 ) -> ReleaseChange:
     require_owner_or_master(principal)
     tid = await _puede_escribir(principal)
+    forzado: str | None = None
+    if payload.forzar:
+        if not es_master(principal.admin):
+            raise ApiError(403, "solo_master", "Solo el master puede saltar el gate de pass^k.")
+        forzado = (payload.motivo_forzado or "").strip()
+        if not forzado:
+            raise ApiError(422, "motivo_requerido", "Para saltar el gate hay que escribir el motivo.")
     try:
         cambio = await svc.promover(
-            tid, connection_id, release_id, actor=_actor(principal), motivo=payload.reason
+            tid,
+            connection_id,
+            release_id,
+            actor=_actor(principal),
+            motivo=payload.reason,
+            forzado_por_master=forzado,
         )
     except LookupError as exc:
         raise _no_encontrada(exc) from None
@@ -255,6 +272,14 @@ async def promote_release(
         raise _error_de_base(exc, "release") from None
     except svc.ConflictoDeRelease as exc:
         raise ApiError(409, exc.codigo, str(exc)) from None
+    if forzado:
+        from core.shared.audit import record_audit
+
+        await record_audit(
+            actor=_actor(principal),
+            action="release_gate_forzado",
+            input_data={"connection_id": str(connection_id), "release_id": str(release_id), "motivo": forzado},
+        )
     return ReleaseChange(
         connection_id=cambio.connection_id,
         from_release_id=cambio.from_release_id,
