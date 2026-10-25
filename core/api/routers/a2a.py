@@ -8,6 +8,9 @@
   `enlace_repetido`, `agente_desconocido` o `enlace_invalido`.
 - `GET /api/v1/admin/a2a/graph/versions` — historial.
 - `GET /api/v1/admin/a2a/calls?connection_id=` — una fila por llamada (`call_id`), sin payload.
+- `POST /api/v1/admin/a2a/route-preview` — qué agente y procedimiento atenderían una frase con la
+  release activa de una conexión, y por qué (HU-AOS-26). Sin LLM y sin escribir nada. 409
+  `sin_release_activa` si la conexión no tiene release activa (404 si no es del negocio).
 
 Permisos: la sección `settings`, como los agentes. Publicar no llega a clientes reales hasta que se
 promueve una release (que pide propietario o master); mientras el negocio esté en `legacy`, las
@@ -71,6 +74,35 @@ class GraphIn(BaseModel):
 
 class GraphOut(Graph):
     created: bool
+
+
+class RoutePreviewIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connection_id: uuid.UUID
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class RouteCandidate(BaseModel):
+    procedure_id: str
+    title: str | None = Field(default=None, description="Título del procedimiento (dato de la habilidad).")
+    owner: str = Field(description="Key del agente que declara el procedimiento.")
+    score: float
+
+
+class RoutePreview(BaseModel):
+    mode: str = Field(description="`off`, `shadow` o `active`: si hoy el router decide en esta conexión.")
+    source: str = Field(description="`rule`, `trigger` o `default`.")
+    agent_key: str
+    agent_id: uuid.UUID
+    procedure_id: str | None
+    procedure_title: str | None = None
+    rule_id: str | None
+    confidence: float | None
+    candidates: list[RouteCandidate]
+    not_evaluated_rules: list[str] = Field(
+        description="Reglas por datos del cliente, etapa u horario: sin conversación no se evalúan."
+    )
 
 
 class Call(BaseModel):
@@ -192,3 +224,41 @@ async def list_calls(
             )
         ).mappings()
         return [Call(**{**f, "tokens": int(f["tokens"] or 0), "cost_usd": float(f["cost_usd"] or 0)}) for f in filas]
+
+
+@router.post("/route-preview", response_model=RoutePreview)
+async def route_preview(
+    payload: RoutePreviewIn, principal: Annotated[Principal, Depends(require("settings"))]
+) -> RoutePreview:
+    from core.kernel import probar_frase
+
+    tid = _tenant(principal)
+    try:
+        prueba = await probar_frase.probar(tid, payload.connection_id, payload.text)
+    except probar_frase.ConexionNoEncontrada:
+        raise ApiError.not_found("Conexión no encontrada.") from None
+    except probar_frase.SinReleaseActiva:
+        raise ApiError(
+            409, "sin_release_activa", "Esta conexión todavía no tiene una versión activa: publica una para probar."
+        ) from None
+    return RoutePreview(
+        mode=prueba.modo,
+        source=prueba.source,
+        agent_key=prueba.agent_key,
+        agent_id=prueba.agent_id,
+        procedure_id=prueba.procedure_id,
+        procedure_title=prueba.titulos.get(prueba.procedure_id) if prueba.procedure_id else None,
+        rule_id=prueba.rule_id,
+        confidence=prueba.confidence,
+        candidates=[
+            RouteCandidate(
+                procedure_id=str(c["procedure_id"]),
+                title=prueba.titulos.get(str(c["procedure_id"])),
+                owner=str(c.get("owner") or ""),
+                score=float(c["score"]),
+            )
+            for c in prueba.candidates
+        ],
+        not_evaluated_rules=list(prueba.no_evaluadas),
+    )
+

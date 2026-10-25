@@ -4285,6 +4285,66 @@
         }
       }
     },
+    "/api/v1/admin/a2a/route-preview": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · colaboración entre agentes"
+        ],
+        "summary": "Route Preview",
+        "operationId": "route_preview_api_v1_admin_a2a_route_preview_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoutePreviewIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutePreview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/connections/{connection_id}/agents/{instance_id}": {
       "patch": {
         "tags": [
@@ -36686,6 +36746,123 @@
         ],
         "title": "RoutePlan"
       },
+      "RoutePreview": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "description": "`off`, `shadow` o `active`: si hoy el router decide en esta conexión."
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "`rule`, `trigger` o `default`."
+          },
+          "agent_key": {
+            "type": "string",
+            "title": "Agent Key"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "procedure_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Id"
+          },
+          "procedure_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Title"
+          },
+          "rule_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Id"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/RouteCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "not_evaluated_rules": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Not Evaluated Rules",
+            "description": "Reglas por datos del cliente, etapa u horario: sin conversación no se evalúan."
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "source",
+          "agent_key",
+          "agent_id",
+          "procedure_id",
+          "rule_id",
+          "confidence",
+          "candidates",
+          "not_evaluated_rules"
+        ],
+        "title": "RoutePreview"
+      },
+      "RoutePreviewIn": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "connection_id",
+          "text"
+        ],
+        "title": "RoutePreviewIn"
+      },
       "Rules": {
         "properties": {
           "max_dias_prorroga": {
@@ -41208,6 +41385,42 @@
         "additionalProperties": false,
         "type": "object",
         "title": "RollbackIn"
+      },
+      "RouteCandidate": {
+        "properties": {
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title",
+            "description": "Título del procedimiento (dato de la habilidad)."
+          },
+          "owner": {
+            "type": "string",
+            "title": "Owner",
+            "description": "Key del agente que declara el procedimiento."
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "procedure_id",
+          "owner",
+          "score"
+        ],
+        "title": "RouteCandidate"
       },
       "ConnectionAgentCreate": {
         "properties": {
