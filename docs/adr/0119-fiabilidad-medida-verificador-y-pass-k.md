@@ -240,3 +240,7 @@ le pasé tu caso a una persona del equipo… En cuanto se conecte, te escribe po
 - **Sin cambio:** la respuesta neutral de ADR-0092 («Dejame verificar eso y te confirmo») sigue igual;
   en el smoke salió por un falso positivo de `cob_suscripcion_check`, corregido en la adenda 2026-10-20
   de ADR-0113.
+
+## Adenda propuesta (2026-10-25, HU-AOS-21): k = 4 en el gate de release
+
+Decisión del dueño del 2026-10-25: el gate de promoción de releases (ADR-0117, adenda HU-AOS-21) usa **k = 4**, no k = 8, por costo. El umbral sigue en pass^4 ≥ 0,85 por procedimiento tocado y sin regresión frente a la release activa. Se revisa con la primera medición del gate.
