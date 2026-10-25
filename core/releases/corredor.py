@@ -244,8 +244,8 @@ def validar_salida(
         {pid: veredicto.Medicion(pid, tuple(lista), "") for pid, lista in por_pid.items()},
         float(costo),
         modelo,
-        int(tin),
-        int(tout),
+        int(tin or 0),
+        int(tout or 0),
     )
 
 
@@ -279,7 +279,7 @@ async def _cerrar_fallida(
         if costo_f > 0 or tin or tout:
             session.add(
                 veredicto._fila_de_gasto(
-                    tenant_id, connection_id, release_id, costo_f, str(modelo)[:80], int(tin), int(tout), None, "gate_fallido"
+                    tenant_id, connection_id, release_id, costo_f, str(modelo)[:80], int(tin or 0), int(tout or 0), None, "gate_fallido"
                 )
             )
         await _evento_fallida(
