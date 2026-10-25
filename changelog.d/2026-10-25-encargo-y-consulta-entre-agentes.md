@@ -13,4 +13,10 @@ Cierra HU-AOS-19 con la parte 2. El diseño está en la adenda HU-AOS-19 de ADR-
   - La acción corre con el spec y la identidad del destino, sin escribir memoria, con auditoría y una clave idempotente.
   - La salida se valida contra el schema y entra como dato.
   - No se puede consultar una acción que aparece en alguna etapa de la release ni una que pide confirmación.
+- **Solo lectura, fail-closed:** una consulta solo puede usar una acción marcada `MCPTool.solo_lectura` que no crea registros. Hoy la única marcada es `sub_consultar`; el linter avisa con `consulta_con_accion_que_escribe`.
+- **Límites del resultado de una consulta:**
+  - solo vuelven las propiedades que declara el schema;
+  - un schema abierto exige que el enlace permita `pii`;
+  - la acción tiene el tope de tiempo del enlace;
+  - se audita como `query:` y no cuenta como evidencia de que el agente del turno llamó la tool.
 - **`_execute_tool_safely`** acepta `identidad` y `solo_lectura`.

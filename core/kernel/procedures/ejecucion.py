@@ -78,6 +78,32 @@ _MAX_AVANCES = 31  # una vuelta por etapa (el contrato admite hasta 30)
 VUELTAS_LIBRES_DE_COMANDOS = 3
 
 
+async def _liquidar_seguro(estado: Any, call_id: uuid.UUID, **kw: Any) -> None:
+    """Cierre del ledger A2A que no tapa un resultado ya confirmado (HU-AOS-19)."""
+    from core.kernel import a2a
+
+    try:
+        await a2a.liquidar(estado, call_id, **kw)
+    except Exception as exc:
+        log.warning("motor_a2a_liquidar_fallo", error=type(exc).__name__)
+
+
+def _es_lectura(accion: str) -> bool:
+    """La acción está marcada como de solo lectura y no crea registros (fail-closed)."""
+    from core.mcp.host import mcp_host
+
+    tool = mcp_host.get_tool(accion)
+    return tool is not None and bool(getattr(tool, "solo_lectura", False)) and getattr(tool, "crea_registro", None) is None
+
+
+def _proyectar(resultado: Mapping[str, Any], esquema: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Solo las propiedades que declara el `outputSchema` (lo demás no entra como dato)."""
+    propiedades = esquema.get("properties")
+    if not isinstance(propiedades, Mapping):
+        return dict(resultado)
+    return {k: v for k, v in resultado.items() if k in propiedades}
+
+
 class _EncargoIncompleto(Exception):
     """A la sub-tarea de un encargo le faltan datos: se deshace la transacción (HU-AOS-19)."""
 
@@ -514,11 +540,15 @@ async def _validar_dato(
     return (veredicto.value if veredicto.value is not None else v), None
 
 
-def _contexto_de_herramienta(conversation_id: uuid.UUID, customer_id: uuid.UUID, channel: str, clave: str) -> Any:
+def _contexto_de_herramienta(
+    conversation_id: uuid.UUID, customer_id: uuid.UUID, channel: str, clave: str, identidad: Any = None
+) -> Any:
+    """`identidad` (HU-AOS-19): el agente destino de un encargo; sus resolvers corren con su
+    identidad y sin escribir memoria."""
     from core.mcp.host import new_tool_context
     from core.shared import release_vigente
 
-    agente = release_vigente.agente_del_turno()
+    agente = identidad or release_vigente.agente_del_turno()
     conocimiento = agente.content.get("knowledge") if agente is not None else None
     return new_tool_context(
         conversation_id=conversation_id,
@@ -526,7 +556,7 @@ def _contexto_de_herramienta(conversation_id: uuid.UUID, customer_id: uuid.UUID,
         idempotency_key=clave,
         channel=channel,
         # Mismo permiso de memoria que el loop (ADR-0114 §3, HU-AOS-15); None en legacy.
-        write_namespaces=release_vigente.write_namespaces_del_turno(),
+        write_namespaces=frozenset() if identidad is not None else release_vigente.write_namespaces_del_turno(),
         # Misma identidad del agente en foco que el loop (ADR-0145 §5); None en legacy.
         agent_id=agente.agent_id if agente is not None else None,
         agent_version_id=agente.version_id if agente is not None else None,
@@ -818,7 +848,8 @@ class ContextoMotor:
         salida: list[tuple[str, Any]] = []
         for clave, destino in sorted(self._a2a.destinos("query").items()):
             consultas = colaboracion.consultas_de(
-                destino, prohibidas=prohibidas, packs=self._a2a.packs, plugin_de=self._plugin_de_accion
+                destino, prohibidas=prohibidas, packs=self._a2a.packs, plugin_de=self._plugin_de_accion,
+                es_lectura=_es_lectura,
             )
             salida.extend((clave, c) for _i, c in sorted(consultas.items()))
         return salida
@@ -1503,7 +1534,7 @@ class ContextoMotor:
         try:
             if not registro.gobernable(proc, self._permitidos) or not await self._sigue_sano(proc):
                 return ResultadoComando(False, [mensaje("procedimiento_no_disponible")])
-            r = await self._sub_tarea(proc, destino, entradas)
+            r = await self._sub_tarea(proc, destino, entradas, decision.call_id)
             ok = r.ok
             if ok and decision.enlace is not None and "pii" not in decision.enlace.data_classes and r.resultado:
                 r.resultado = {
@@ -1513,14 +1544,16 @@ class ContextoMotor:
                 r.aviso = comandos.texto("encargo_listo", agente=escapar(clave))
             return r
         finally:
-            await a2a.liquidar(ctx.estado, decision.call_id, ok=ok)
+            await _liquidar_seguro(ctx.estado, decision.call_id, ok=ok)
 
-    async def _sub_tarea(self, proc: Procedure, destino: Any, entradas: Mapping[str, Any]) -> ResultadoComando:
+    async def _sub_tarea(
+        self, proc: Procedure, destino: Any, entradas: Mapping[str, Any], call_id: uuid.UUID
+    ) -> ResultadoComando:
         escribibles = comandos.escribibles(proc)
         errores: list[str] = []
         validos: dict[str, Any] = {}
         ctx_herr = _contexto_de_herramienta(
-            self.conversation_id, self.customer_id, self.channel, f"{self.conversation_id}:encargo"
+            self.conversation_id, self.customer_id, self.channel, f"encargo-{call_id}", identidad=destino
         )
         try:
             async with asyncio.timeout(_PRESUPUESTO_RESOLVERS_S):
@@ -1545,6 +1578,10 @@ class ContextoMotor:
         padre = self._foco.fila.id
         try:
             async with _con_lock(self.tenant_id, self.conversation_id) as s:
+                # El padre se relee bajo el lock: otro turno pudo cerrarlo.
+                actual = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+                if actual is None or actual.fila.id != padre:
+                    return ResultadoComando(False, [mensaje("sin_tarea")])
                 no_dichos = await self._no_dichos(s, proc, entradas, validos)
                 if no_dichos:
                     return ResultadoComando(False, [mensaje("dato_no_dicho", dato=n) for n in no_dichos])
@@ -1615,9 +1652,13 @@ class ContextoMotor:
             esquema = (herramienta.parameters if herramienta is not None else {}) or {}
             propiedades = esquema.get("properties") or {}
             args = {k: v for k, v in parametros.items() if k in propiedades}
+            tope_s = (decision.enlace.timeout_ms if decision.enlace is not None else 15_000) / 1000
             if herramienta is not None and not any(r not in args for r in esquema.get("required") or []):
                 try:
-                    resultado = await self.ejecutor_de_consulta(destino, consulta.accion, args, f"query-{decision.call_id}")
+                    async with asyncio.timeout(tope_s):
+                        resultado = await self.ejecutor_de_consulta(
+                            destino, consulta.accion, args, f"query-{decision.call_id}"
+                        )
                 except Exception as exc:
                     log.warning("motor_consulta_fallo", error=type(exc).__name__)
                     resultado = None
@@ -1625,10 +1666,16 @@ class ContextoMotor:
                 isinstance(resultado, dict)
                 and not resultado.get("error")
                 and resultado.get("ok") is not False
+                and resultado.get("status") != "confirmation_required"
                 and not errores_de_salida(resultado, consulta.output_schema)
             )
+            if ok:
+                resultado = _proyectar(resultado, consulta.output_schema)
+                con_pii = decision.enlace is not None and "pii" in decision.enlace.data_classes
+                # Un schema abierto (sin propiedades declaradas) puede traer PII: solo con `pii`.
+                ok = resultado is not None and (con_pii or bool(consulta.output_schema.get("properties")))
         finally:
-            await a2a.liquidar(ctx.estado, decision.call_id, ok=ok, resultado=resultado if ok else None)
+            await _liquidar_seguro(ctx.estado, decision.call_id, ok=ok, resultado=resultado if ok else None)
         if not ok:
             return ResultadoComando(False, [comandos.texto("consulta_fallida", agente=escapar(clave))])
         return ResultadoComando(

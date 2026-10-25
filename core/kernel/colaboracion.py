@@ -10,6 +10,8 @@
 - **Consultable:**
   - el destino declara la consulta con `action` y esa acción está entre sus tools habilitadas y en
     el scope de la release;
+  - la acción está marcada como de solo lectura (`MCPTool.solo_lectura`, fail-closed) y no crea
+    registros;
   - la acción no aparece en `stage.actions` de ningún procedimiento de la release ni pide
     confirmación en el binding del destino (si no, la consulta saltaría el ligado y la confirmación
     del motor).
@@ -76,7 +78,12 @@ def gobernadas_por_el_motor(procedimientos: Iterable[Procedure]) -> frozenset[st
 
 
 def consultas_de(
-    destino: Any, *, prohibidas: frozenset[str], packs: frozenset[str], plugin_de: Callable[[str], str | None]
+    destino: Any,
+    *,
+    prohibidas: frozenset[str],
+    packs: frozenset[str],
+    plugin_de: Callable[[str], str | None],
+    es_lectura: Callable[[str], bool] = lambda _a: False,
 ) -> dict[str, Consulta]:
     """Las consultas que `destino` responde (id → consulta). `plugin_de`: dueño de cada acción."""
     exposes = destino.content.get("exposes")
@@ -91,6 +98,8 @@ def consultas_de(
             continue
         accion = c.get("action")
         if not isinstance(accion, str) or accion not in propias or propias[accion] or accion in prohibidas:
+            continue
+        if not es_lectura(accion):
             continue
         plugin = plugin_de(accion)
         if plugin is None or (plugin != CORE_OWNER and plugin not in packs):

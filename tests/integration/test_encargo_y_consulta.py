@@ -89,6 +89,16 @@ def _congelado(key: str, instancia: uuid.UUID, agente: uuid.UUID, content: dict[
     )
 
 
+@pytest.fixture(autouse=True)
+def _lectura(monkeypatch: Any) -> None:
+    """La acción de prueba de la consulta, marcada como de solo lectura."""
+    from core.mcp.host import mcp_host
+
+    tool = mcp_host.get_tool("list_appointment_types")
+    assert tool is not None
+    monkeypatch.setattr(tool, "solo_lectura", True)
+
+
 async def _escenario(*, clases: list[str], gobernadas: list[str] | None = None) -> dict[str, Any]:
     """Negocio con Ventas (tarea de `contratar_plan` en foco) y Agenda; enlace delegate+query."""
     from core.db.session import get_session

@@ -164,7 +164,7 @@ Los agentes colaboran en el mismo hilo con mecanismos deterministas, permisos ve
      - Si se acepta, se comprueba que el pack del destino siga sano.
      - Después, en **una transacción bajo el lock de la conversación**:
        1. crea la sub-tarea (`parent_task_id` = tarea en foco, `owner_instance_id` = destino);
-       2. valida las `entradas` con `_validar_dato` (resolvers con el contexto del destino y su presupuesto de tiempo), `_no_dichos` (lo que el cliente no dijo se rechaza) y `_correos_dudosos` (un correo dudoso hace fallar el encargo y el modelo pregunta). Todo o nada;
+       2. relee el foco bajo el lock (si otro turno lo cerró, no se encarga) y valida las `entradas` con `_validar_dato` (resolvers con la identidad del destino, sin escribir memoria, clave `encargo-{call_id}` y su presupuesto de tiempo), `_no_dichos` (lo que el cliente no dijo se rechaza) y `_correos_dudosos` (un correo dudoso hace fallar el encargo y el modelo pregunta). Todo o nada;
        3. fija los datos y avanza las etapas de forma pura (`motor.salida_cumplida` + `motor.siguiente`, con tope `_MAX_AVANCES`), sin `_avanzar` ni `_devolver_control`, hasta `completed`.
    - **Si no se completa** (falta un dato), la transacción se deshace: no queda sub-tarea a medias, el modelo recibe qué falta y el ledger escribe `failed`.
    - **Efectos externos:** `procedure.slots_set` se emite solo después del commit y solo con la sub-tarea completada. `datos_fijados` (evidencia del verificador sobre la tarea en foco) no cambia.
@@ -172,6 +172,7 @@ Los agentes colaboran en el mismo hilo con mecanismos deterministas, permisos ve
 5. **Consulta (parte 2):**
    - **Consultable:**
      - el destino declara la consulta con `action` y la acción está entre sus `tools` y en el scope de la release;
+     - la acción está **marcada como de solo lectura** (`MCPTool.solo_lectura`, que declara quien escribe la tool) y no crea registros. Es fail-closed: sin la marca no se ofrece. Hoy solo `sub_consultar` la tiene. El linter avisa con `consulta_con_accion_que_escribe`;
      - la acción **no aparece en `stage.actions` de ningún procedimiento de la release** (no solo las puertas): si no, `consultar` ejecutaría fuera de etapa una acción que gobierna el motor y se saltaría el ligado y la confirmación;
      - la acción no pide confirmación en el binding.
      
@@ -179,8 +180,9 @@ Los agentes colaboran en el mismo hilo con mecanismos deterministas, permisos ve
    - **Ejecución:**
      - La guarda registra `query`. La intención es el id de la consulta y la clase es `internal`; los `parametros` son datos para la acción, no se clasifican, y el chequeo de clases del enlace no los cubre.
      - La acción corre con un ejecutor propio de consulta: el spec, el binding y la identidad del **destino** (denegaciones y confirmación del destino), memoria de solo lectura (`write_namespaces` vacío), auditoría como cualquier acción y clave idempotente `query-{call_id}`.
-     - La salida se valida contra `outputSchema` con el subconjunto de JSON Schema del kernel.
-   - **Resultado:** si valida, vuelve como dato (`resultado`); si no, `ok: false` y el ledger escribe `failed`.
+     - La acción tiene el tope de tiempo del enlace (`timeout_ms`) y su auditoría usa el actor `query:{acción}`: no cuenta como evidencia de que el agente del turno llamó esa tool.
+     - La salida se valida contra `outputSchema` con el subconjunto de JSON Schema del kernel; un `confirmation_required` cuenta como fallo.
+   - **Resultado:** si valida, vuelve como dato (`resultado`), **solo con las propiedades que declara el schema**. Un schema abierto (sin `properties`) solo se acepta si el enlace permite `pii`. Si no valida, `ok: false` y el ledger escribe `failed`.
 6. **Gasto:** estas operaciones no usan LLM propio y no escriben `agent_run`; `liquidar` se llama sin gasto. El tiempo y el costo LLM siguen en la fila `turn` del turno.
 7. **Escenarios simulados sin LLM** (modelo guionado, como HU-AOS-17):
    - **Parte 1:**

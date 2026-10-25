@@ -1066,6 +1066,9 @@ async def _execute_tool_safely(
 
     `identidad`/`solo_lectura` (HU-AOS-19): una consulta entre agentes corre con la identidad del
     agente que la responde y sin escribir memoria."""
+    # Una consulta entre agentes se audita como `query:` y no como `tool:`: no es evidencia de
+    # que el agente del turno llamó la tool (`_historical_tool_results`).
+    actor_de_auditoria = "query" if solo_lectura else "tool"
     if motor is not None and motor.es_comando(tool_call.name):
         return await _ejecutar_comando(conversation, motor, tool_call)
     from core.mcp.declarative import tools_for_spec
@@ -1098,7 +1101,7 @@ async def _execute_tool_safely(
         if denial is not None:
             result = {"error": denial}
             await record_audit(
-                actor=f"tool:{tool_call.name}",
+                actor=f"{actor_de_auditoria}:{tool_call.name}",
                 action="denied",
                 conversation_id=conversation.id,
                 input_data=tool_call.arguments,
@@ -1111,7 +1114,7 @@ async def _execute_tool_safely(
     previo = await motor.antes_de_accion(tool_call.name, tool_call.arguments) if motor is not None else None
     if previo is not None and (decision := previo.decision) is not None:
         await record_audit(
-            actor=f"tool:{tool_call.name}",
+            actor=f"{actor_de_auditoria}:{tool_call.name}",
             action=decision.auditoria,
             conversation_id=conversation.id,
             # Sin los valores (pueden traer datos del cliente): solo las claves y el hash.
@@ -1158,7 +1161,7 @@ async def _execute_tool_safely(
                 ),
             }
             await record_audit(
-                actor=f"tool:{tool_call.name}",
+                actor=f"{actor_de_auditoria}:{tool_call.name}",
                 action="confirmation_required",
                 conversation_id=conversation.id,
                 input_data=tool_call.arguments,
@@ -1210,7 +1213,7 @@ async def _execute_tool_safely(
     await procedencia.registrar(herramienta, result, conversation.id)
     auditado = resultado_auditable(herramienta, tool_call.name, result)
     await record_audit(
-        actor=f"tool:{tool_call.name}",
+        actor=f"{actor_de_auditoria}:{tool_call.name}",
         action="execute",
         conversation_id=conversation.id,
         # Lo que mandó el modelo: los datos ligados que completó el motor (PII de la tarea) no se

@@ -18,6 +18,7 @@ from core.agents.contrato_v3 import lint_agentspec
 from core.kernel import colaboracion
 from core.kernel.esquema_salida import errores, no_soportadas
 from core.kernel.procedures import comandos
+from core.kernel.procedures.catalogo import ActionInfo
 
 DEMO: dict[str, Any] = {
     "contract": "procedure/1",
@@ -106,8 +107,15 @@ def _destino_con_consulta(accion: str = "estado_demo", **binding: Any) -> _Agent
 
 def test_consulta_con_accion_propia_y_fuera_de_etapa() -> None:
     plugin = {"estado_demo": "pack_subscriptions"}.get
-    salida = colaboracion.consultas_de(_destino_con_consulta(), prohibidas=frozenset(), packs=frozenset({"pack_subscriptions"}), plugin_de=plugin)
+    salida = colaboracion.consultas_de(
+        _destino_con_consulta(), prohibidas=frozenset(), packs=frozenset({"pack_subscriptions"}), plugin_de=plugin,
+        es_lectura=lambda _a: True,
+    )
     assert list(salida) == ["subs.estado"] and salida["subs.estado"].accion == "estado_demo"
+    # Sin la marca de solo lectura no se ofrece (fail-closed).
+    assert colaboracion.consultas_de(
+        _destino_con_consulta(), prohibidas=frozenset(), packs=frozenset({"pack_subscriptions"}), plugin_de=plugin
+    ) == {}
 
 
 @pytest.mark.parametrize(
@@ -120,7 +128,9 @@ def test_consulta_con_accion_propia_y_fuera_de_etapa() -> None:
 )
 def test_consulta_que_no_se_ofrece(destino: _Agente, prohibidas: frozenset[str], packs: frozenset[str]) -> None:
     plugin = {"estado_demo": "pack_subscriptions"}.get
-    assert colaboracion.consultas_de(destino, prohibidas=prohibidas, packs=packs, plugin_de=plugin) == {}
+    assert colaboracion.consultas_de(
+        destino, prohibidas=prohibidas, packs=packs, plugin_de=plugin, es_lectura=lambda _a: True
+    ) == {}
 
 
 def test_sin_accion_o_con_accion_ajena_no_se_ofrece() -> None:
@@ -151,7 +161,11 @@ def test_subconjunto_de_json_schema() -> None:
 
 
 # ------------------------------------------------------------------ contrato 3.2.0
-CATALOGO: dict[str, Any] = {"estado_demo": object(), "otra": object()}
+CATALOGO: dict[str, Any] = {
+    "estado_demo": ActionInfo("estado_demo", "pack_subscriptions", solo_lectura=True),
+    "otra": ActionInfo("otra", "pack_subscriptions"),
+    "escribe": ActionInfo("escribe", "pack_subscriptions"),
+}
 
 def test_contrato_3_2_0_y_linter_de_consultas() -> None:
     assert __version__ == "3.2.0"
@@ -166,6 +180,11 @@ def test_contrato_3_2_0_y_linter_de_consultas() -> None:
         {**base, "exposes": {"consultas": [{"id": "subs.estado", "action": "estado_demo", "outputSchema": {"oneOf": []}}]}}
     )
     assert "schema_de_salida_no_soportado" in [i.code for i in lint_agentspec(rara, CATALOGO)]
+    escribe = AgentSpecV3.model_validate(
+        {"model": {"primary": "deepseek-flash"}, "tools": [{"tool": "escribe"}],
+         "exposes": {"consultas": [{"id": "subs.estado", "action": "escribe"}]}}
+    )
+    assert "consulta_con_accion_que_escribe" in [i.code for i in lint_agentspec(escribe, CATALOGO)]
     # Sin `action` no se revisa el schema (nada se ejecuta).
     sin = AgentSpecV3.model_validate({**base, "exposes": {"consultas": [{"id": "subs.estado", "outputSchema": {"oneOf": []}}]}})
     assert [i.code for i in lint_agentspec(sin, CATALOGO)] == []

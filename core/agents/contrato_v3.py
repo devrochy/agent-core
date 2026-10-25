@@ -231,6 +231,15 @@ def lint_agentspec(spec: AgentSpecV3, catalogo: Catalogo) -> list[Issue]:
                     f"'{consulta.action}' no está entre las tools habilitadas del agente: no puede exponer lo que no ejecuta.",
                 )
             )
+        info = catalogo.get(consulta.action)
+        if info is not None and not getattr(info, "solo_lectura", False):
+            issues.append(
+                Issue(
+                    "consulta_con_accion_que_escribe",
+                    f"exposes.consultas[{i}].action",
+                    f"'{consulta.action}' no está marcada como de solo lectura: no puede responder una consulta.",
+                )
+            )
         from core.kernel.esquema_salida import no_soportadas
 
         problemas = no_soportadas(consulta.outputSchema)
