@@ -44,6 +44,12 @@ if [ "$ROLE" = "api" ]; then
     echo "[entrypoint] ERROR: las migraciones fallaron. El servicio no arranca." >&2
     exit 1
   fi
+  # Base `agentcore_eval` del gate de pass^k (HU-AOS-21 parte 3b), si está configurada. Nunca frena el
+  # arranque: sin ella el gate no mide, pero el negocio sigue sirviendo.
+  if [ -n "${EVAL_MIGRATIONS_DATABASE_URL:-}" ]; then
+    echo "[entrypoint] migrando la base de eval..."
+    agent-core db migrate --eval || echo "[entrypoint] AVISO: la migración de agentcore_eval falló (ver el log)" >&2
+  fi
   # Versiones de las habilidades en `pack_versions` (HU-AOS-14), con el rol dueño. Nunca frena
   # el arranque: un contenido cambiado sin subir la versión alerta en el log y no se registra.
   echo "[entrypoint] registrando versiones de habilidades..."

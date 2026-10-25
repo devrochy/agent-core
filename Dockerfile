@@ -17,6 +17,7 @@ COPY core ./core
 COPY cli ./cli
 COPY alembic ./alembic
 COPY alembic.ini ./
+COPY evals ./evals
 COPY sdd/templates ./sdd/templates
 
 # Packs (packages/pack-*) y plugins (plugins/) horneados en la imagen:

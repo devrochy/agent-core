@@ -20,7 +20,14 @@ storage
 # OJO: los playbooks de los packs (packages/pack-*/playbooks/*.md) son RUNTIME
 # y se cargan vía load_playbook: no se excluyen con *.md.
 tests
-evals
+# `evals/` SÍ va en la imagen (HU-AOS-21 parte 3b): el corredor del gate de pass^k lanza
+# `evals/gate_release.py`, que usa los journeys y el cliente simulado. Fuera, lo pesado o de CI.
+evals/cassettes
+evals/golden_scenarios
+evals/conocimiento
+evals/verificador
+evals/specs
+evals/reportes
 docs
 sdd/*.md
 !sdd/templates/

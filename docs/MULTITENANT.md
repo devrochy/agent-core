@@ -147,6 +147,13 @@ apliquen. El dueño no es superusuario: necesita `GRANT SET ON PARAMETER
 session_replication_role` (migración `0072`, runbook de producción 4.3). `EXECUTE`
 solo para `app_runtime`.
 
+**Negocios efímeros del gate (HU-AOS-21).** El corredor del gate de pass^k (`evals/gate_release.py`,
+ADR-0117) crea en la base `agentcore_eval` negocios `gate-eval-*` con la foto de una release y los borra
+al terminar con la misma función SQL `purge_tenant` (más `purge_tenant_redis`), **sin** frase ni rol
+master: el id lo calcula el propio proceso, solo borra negocios con ese prefijo y se niega a correr si la
+base no es de eval. Es una extensión de la misma excepción a la invariante #8, acotada a una base que no
+tiene datos de clientes.
+
 **Estado Redis en la purga.** Redis no entra en la transacción, así que se limpia
 **después** del commit de la función SQL (y de verificar que la fila `tenants` ya no
 existe): si la purga SQL falla y hace rollback, el negocio conserva intacto su estado
