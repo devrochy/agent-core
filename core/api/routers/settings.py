@@ -72,7 +72,9 @@ class IdentitySettings(BaseModel):
     business_description: str
     brand_voice: str
     brand_voice_warning: bool = False  # True si quedó vacía (#158): el asistente no tiene voz de marca
-    tono: str
+    # Obsoleto (HU-CFG-01, D-SPEC-37-3): ningún código lo lee; la voz es `persona_tone`. Se sigue
+    # devolviendo para la APK instalada, hasta que la mínima soportada deje de leerlo.
+    tono: str = Field(default="calido", deprecated=True)
     debounce_mode: str
     split_style: str = "un_mensaje"
     # Moneda del negocio (HU-UI-01): COP por defecto.
@@ -106,7 +108,8 @@ class IdentityUpdate(BaseModel):
     assistant_name: str
     business_description: str = ""
     brand_voice: str = ""
-    tono: str = "calido"
+    # Obsoleto (HU-CFG-01): se acepta de las APK viejas y se ignora; no se escribe.
+    tono: str | None = Field(default=None, deprecated=True)
     debounce_mode: str = "natural"
     split_style: str = "un_mensaje"
     currency: str = "COP"
@@ -405,7 +408,6 @@ async def save_identity(
             app_settings.timezone = payload.timezone
         behavior = dict(app_settings.behavior_config)
         behavior.update(
-            tono=payload.tono,
             debounce_mode=payload.debounce_mode,
             split_style=payload.split_style
             if payload.split_style in ("un_mensaje", "pocos_cortos", "varios_cortos")
