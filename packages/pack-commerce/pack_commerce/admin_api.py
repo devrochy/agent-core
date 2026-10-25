@@ -625,6 +625,34 @@ async def commerce_modulos(
     return ModulosOut(aliados=await aliados.habilitados(principal.tenant_id))
 
 
+class MinimoPagoEnLineaOut(BaseModel):
+    """Mínimo por cobro para pagar en línea (HU-SUB-25). El panel lo usa para avisar al guardar un plan."""
+
+    minimo: float | None = Field(
+        description="Monto mínimo por cobro en la moneda del negocio; `null` si no hay pasarela que lo declare.",
+    )
+    fuente: Literal["negocio", "pasarela", "ninguna"] = Field(
+        description="`negocio`: lo fijó el negocio; `pasarela`: lo declara la pasarela para su ambiente.",
+    )
+    moneda: str = "COP"
+    cuentas_de_transferencia: int = Field(
+        description="Cuentas de transferencia configuradas (0 = el cobro bajo el mínimo no tendría cómo pagarse).",
+    )
+
+
+@router.get("/pago-en-linea/minimo", response_model=MinimoPagoEnLineaOut)
+async def minimo_pago_en_linea(
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> MinimoPagoEnLineaOut:
+    from .minimo import cuentas_de_transferencia_configuradas, minimo_efectivo
+    from .skills import _plugin_config
+
+    minimo, fuente = await minimo_efectivo(await _plugin_config())
+    return MinimoPagoEnLineaOut(
+        minimo=minimo, fuente=fuente, cuentas_de_transferencia=await cuentas_de_transferencia_configuradas()
+    )
+
+
 @router.get("/allies", response_model=list[AllyOut])
 async def list_allies(
     principal: Annotated[Principal, Depends(require("pack_commerce"))],

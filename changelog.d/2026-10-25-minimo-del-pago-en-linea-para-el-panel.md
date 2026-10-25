@@ -1,0 +1,2 @@
+### Added
+- `GET /api/v1/pack/commerce/pago-en-linea/minimo` (HU-SUB-25): devuelve el mínimo por cobro para pagar en línea del negocio activo (el que fijó en `pago_en_linea_monto_minimo` o el que declara la pasarela según su ambiente; `null` si no hay ninguno), su fuente y cuántas cuentas de transferencia tiene configuradas. Lo usa el panel para avisar, al guardar un plan, que un cobro bajo el mínimo no podrá tener link de pago. Sin cambios en `crear_pedido`.
