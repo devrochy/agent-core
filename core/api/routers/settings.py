@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
+from core.admin.roles import actua_como_master
 from core.admin.settings_service import (
     read_memory,
     read_skills,
@@ -36,6 +37,7 @@ from core.agents.spec import (
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.config import get_settings
+from core.config_registro import Catalogo, catalogo_para
 from core.db.models import AppSettings, AuditLog
 from core.db.session import get_session
 from core.kernel.fuera_de_horario import texto_por_defecto
@@ -360,6 +362,20 @@ async def get_settings_api(
         brain=_brain_out(spec),
         memory=MemorySettings(**read_memory(spec)),
         skills=[SkillBinding(**item) for item in read_skills(spec)],
+    )
+
+
+@router.get("/catalog", response_model=Catalogo)
+async def get_catalog_api(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> Catalogo:
+    """Catálogo de opciones de Identidad y comportamiento (SPEC-37, ADR-0166): qué es cada una,
+    qué valores acepta, qué cambia y quién la edita. Las del master solo las ve el master; la lista
+    de guardrails se calcula con los packs habilitados del negocio activo."""
+    spec = await load_active_spec()
+    return catalogo_para(
+        es_master=actua_como_master(principal.admin),
+        guardrails_disponibles=_available_guardrails(spec),
     )
 
 
