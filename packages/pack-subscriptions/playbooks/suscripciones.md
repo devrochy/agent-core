@@ -8,7 +8,8 @@ calendario y cobranza usan como pivote — ADR-0056).
 - `activa`: servicio activo; `proximo_cargo` indica el próximo cargo del período.
 - `pausada`: servicio suspendido; no hay cargos.
 - `cancelada`: servicio finalizado; `fecha_cancelacion` documenta el fin.
-- `vencida`: (uso futuro) no se renovó el cargo.
+- `vencida`: un cargo de período siguió impago pasados los días de gracia del negocio, o un plan Free
+  terminó su prueba sin pasar a un plan pago. No genera cargos nuevos; al pagar, la suscripción vuelve a `activa`.
 
 ## Ciclo de vida (planes como productos)
 - La suscripción se **habilita** cuando un pedido de un plan (producto de commerce
