@@ -416,6 +416,8 @@ async def list_conversation_connections(
                     .where(
                         ChannelConnection.tenant_id == principal.tenant_id,
                         ChannelConnection.deleted_at.is_(None),
+                        # La interna del Centro de pruebas no es un canal de clientes.
+                        or_(ChannelConnection.type_id.is_(None), ChannelConnection.type_id != "playground"),
                     )
                     .order_by(ChannelConnection.created_at)
                     .limit(100)

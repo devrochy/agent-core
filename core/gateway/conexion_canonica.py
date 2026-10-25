@@ -24,7 +24,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from core.db.models import ChannelConnection, utcnow
 from core.gateway.connection_types import (
@@ -115,6 +115,75 @@ async def asegurar_conexion_del_numero(
         await session.flush()
         log.info("conexion_canonica_creada", tenant_id=str(tenant_id), phone_number_id=phone_number_id)
     return "creada"
+
+
+async def asegurar_conexion_en_vuelo(
+    session: Any, tenant_id: uuid.UUID, phone_number_id: str, meta_connection_id: uuid.UUID
+) -> ChannelConnection | None:
+    """La conexión canónica de un número que llegó sin ella (la crea al recibir el primer mensaje).
+
+    Es el caso de un número de la cuenta que se conectó por un camino que no creó su fila: el
+    consumer lo asegura antes de abrir la conversación para que nazca con `connection_id`. Toma el
+    mismo candado por número que `claim_assets` y el backfill y **relee todo bajo el candado**: una
+    alta, una reconexión o una baja que corrió mientras esperaba manda (nunca se religa una fila
+    que otra alta ya dejó viva, y no se crea para un número liberado o de una cuenta dada de baja).
+    Con instancias, como las altas. None si no corresponde crearla (el consumer sigue como antes,
+    sin conexión) o si no se pudo."""
+    from core.agents.instancias import instancias_al_alta
+    from core.db.models import MetaConnection, PhoneNumber
+
+    await session.execute(
+        text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"meta_asset:phone:{phone_number_id}"}
+    )
+
+    async def _viva() -> ChannelConnection | None:
+        return (
+            await session.execute(
+                select(ChannelConnection)
+                .where(
+                    ChannelConnection.tenant_id == tenant_id,
+                    ChannelConnection.provider == PROVEEDOR,
+                    ChannelConnection.external_id == phone_number_id,
+                    ChannelConnection.deleted_at.is_(None),
+                )
+                .order_by(ChannelConnection.created_at)
+                .limit(1)
+            )
+        ).scalars().first()
+
+    existente = await _viva()
+    if existente is not None:
+        return existente  # otra alta la creó (o la religó) mientras esperaba el candado: gana
+    cuenta = (
+        await session.execute(
+            select(PhoneNumber.connection_id)
+            .join(
+                MetaConnection,
+                (MetaConnection.id == PhoneNumber.connection_id) & (MetaConnection.tenant_id == PhoneNumber.tenant_id),
+            )
+            .where(
+                PhoneNumber.tenant_id == tenant_id,
+                PhoneNumber.phone_number_id == phone_number_id,
+                PhoneNumber.deleted_at.is_(None),
+                MetaConnection.deleted_at.is_(None),
+                MetaConnection.status != "draft",
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if cuenta is None:
+        log.info("conexion_en_vuelo_sin_numero_vigente", tenant_id=str(tenant_id), phone_number_id=phone_number_id)
+        return None
+    try:
+        async with session.begin_nested():
+            await asegurar_conexion_del_numero(session, tenant_id, phone_number_id, cuenta)
+    except Exception:
+        log.warning("conexion_en_vuelo_fallo", tenant_id=str(tenant_id), phone_number_id=phone_number_id, exc_info=True)
+        return None
+    conexion = await _viva()
+    if conexion is not None:
+        await instancias_al_alta(session, tenant_id, phone_number_id, cuenta)
+    return conexion
 
 
 async def _asegurar_conexion_de_activo(

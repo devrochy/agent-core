@@ -61,9 +61,9 @@ from core.shared.tenant import tenant_scope
 log = get_logger(__name__)
 
 AVISO_CAMINOS = (
-    "antes de aplicar, los caminos que crean conversaciones deben asignar siempre una conexión: el consumer "
-    "con un número de la plataforma sin conexión y el Centro de pruebas (`admin/playground.py`) insertan "
-    "`connection_id = NULL` y fallarían con el NOT NULL (runbook § 5.1)"
+    "antes de aplicar, comprueba que el despliegue incluya que toda conversación nace con conexión (conexión interna "
+    "`playground` del Centro de pruebas y conexión del número en el consumer, ADR-0115 adenda 2026-10-24): sin eso un "
+    "`INSERT` con `connection_id = NULL` fallaría con el NOT NULL (runbook § 5.1)"
 )
 INDICE = "uq_conversations_open_per_connection"
 CHECK_CONEXION = "ck_conv_connection_nn"

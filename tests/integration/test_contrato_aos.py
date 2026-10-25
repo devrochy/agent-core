@@ -423,7 +423,7 @@ async def test_un_indice_invalido_de_un_intento_cortado_se_rehace(esquema) -> No
         )
         await conn.execute(text(insertar), {"t": t, "u": u, "c": c})
         await conn.execute(text(insertar), {"t": t, "u": u, "c": c})  # duplicada sin deduplicar
-        with pytest.raises(Exception, match="duplicate"):
+        with pytest.raises(Exception, match=r"(?i)unique|duplic"):
             await contrato._crear_indice(conn, nombre)  # CONCURRENTLY deja el índice inválido
         invalido = (await conn.execute(text(
             "SELECT NOT i.indisvalid FROM pg_index i JOIN pg_class k ON k.oid = i.indexrelid "

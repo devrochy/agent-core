@@ -113,9 +113,8 @@ Se hace **una sola vez**, cuando **todos** los negocios vivos están en `v3` y l
 3. **Ninguna conversación sin `connection_id`**, de cualquier estado y también las de negocios dados de baja (las cubre `backfill-conexiones`; si son de un negocio dado de baja, purga el negocio).
 4. Cada conexión conversacional viva con release activa y **2 releases estables sin rollback**: al menos dos promociones (sin contar las de un rollback) y ningún rollback posterior a la penúltima.
 5. Confirmación explícita (`--confirmo-sin-vuelta-atras`).
-6. **Requisito de código que el comando no puede comprobar:** todo camino que cree una conversación debe asignarle una conexión. Hoy el consumer inserta `connection_id = NULL` con un número de la plataforma sin conexión
-   (`core/orchestrator/consumer.py`) y el Centro de pruebas (`core/admin/playground.py`) siempre; con el NOT NULL esas inserciones fallarían (mensajes perdidos, Centro de pruebas roto). **Corrígelos y despliega antes de aplicar.**
-   El comando lo recuerda como aviso en cada corrida.
+6. **Requisito de despliegue que el comando no puede comprobar:** todo camino que cree una conversación debe asignarle una conexión. Eso ya está resuelto en el código (adenda 2026-10-24 de ADR-0115): el Centro de pruebas usa su conexión interna `playground` y, con `AOS_CONNECTION_ROUTING` encendida, el consumer asegura la conexión del número de la cuenta al primer mensaje.
+   **Comprueba que ese código esté desplegado y que `backfill-conexiones` (paso 5) haya ligado las conversaciones de prueba de antes** (si no, la precondición 3 las cuenta y bloquea). Mira el log `conversacion_sin_conexion` de los últimos días: si aparece, hay un camino que todavía crea conversaciones sin conexión. El comando lo recuerda como aviso en cada corrida.
 
 ### 5.2 Orden
 

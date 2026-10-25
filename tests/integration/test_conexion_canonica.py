@@ -461,9 +461,12 @@ async def test_bandera_encendida_una_conversacion_por_conexion_sin_reescribir(mo
     cliente = uniq("wa-on")
 
     # Una conversación abierta de antes del backfill (sin conexión, por la misma cuenta) se
-    # adopta en vez de abrir otra.
+    # adopta en vez de abrir otra. Nace con la bandera apagada: encendida, el consumer le
+    # asegura al número su conexión y la conversación ya nace con ella (adenda 2026-10-24).
+    _bandera(monkeypatch, False)
     previa = await _entrada(tid, cliente, viejo)
     assert previa.connection_id is None
+    _bandera(monkeypatch, True)
     por_uno = await _entrada(tid, cliente, uno)
     assert por_uno.id == previa.id
     assert por_uno.connection_id == conexion_uno.id
