@@ -1,6 +1,9 @@
 {
   "nombre": "contratar-premium-mensual",
   "semilla": 7,
+  "procedimientos": [
+    "pack_commerce.contratar_plan"
+  ],
   "descripcion": "Gherkin 1 de HU-AOS-07 (contratar_plan): el cliente simulado compra el Premium mensual con pago en línea. El pedido tiene la variante y el total del servidor y el link cobra ese total. Para medir pass^4 en vivo (con OK del dueño).",
   "pasos": [
     {

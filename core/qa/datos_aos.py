@@ -186,7 +186,7 @@ async def _activar_releases(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
                 tenant_id, cid, actor=ACTOR, modules=modulos, notas="Centro de pruebas: Preparar mis datos (HU-QA-09)."
             )
             if build.release_id != activa:
-                await promover(tenant_id, cid, build.release_id, actor=ACTOR, motivo="qa_datos")
+                await promover(tenant_id, cid, build.release_id, actor=ACTOR, motivo="qa_datos", exencion="qa_datos")
 
 
 async def _banderas(tenant_id: uuid.UUID, slug: str) -> None:

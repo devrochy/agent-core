@@ -240,3 +240,118 @@ mismo lock: tarea en foco → reglas del KernelSpec → disparadores → `elegir
 la ruta es el foco del turno y se escribe como dueño (`active_agent_instance_id`, `owner_since`; no es un handoff);
 en `shadow` solo se registra en `core_decisions.shadow_route`. `ReleaseCongelada` guarda en su caché el `routing`
 validado y el índice de disparadores. Detalle en ADR-0138.
+
+## Adenda propuesta HU-AOS-21: el gate de pass^k (2026-10-25)
+
+Propuesta. Decisiones del dueño del 2026-10-25 y diseño del gate de §5, ya revisado por el `arquitecto`.
+Se entrega en tres partes:
+(1) esta adenda;
+(2) qué tocó la candidata, la anotación del gate en cada promoción, exenciones que no se pueden
+falsificar y los escenarios por procedimiento;
+(3) el corredor contra `agentcore_eval`, que escribe veredictos y cierra el gate.
+
+**Decisiones del dueño (2026-10-25):**
+
+- **Costo.** pass^4 con LLM real, solo de los procedimientos que tocó la candidata. Es k = 4, no el k = 8
+  que ADR-0119 §1 pedía antes de una release: se enmienda ADR-0119 en ese punto. Lo paga la plataforma,
+  con tope mensual en USD por negocio. Al llegar al tope, la promoción queda bloqueada salvo que el master
+  la fuerce.
+- **Dónde.** Base `agentcore_eval` compartida por entorno, en el mismo Postgres y migrada con el despliegue.
+  Cada corrida siembra un negocio efímero con la release candidata y lo borra al terminar.
+- **Umbral.** pass^4 ≥ 0,85 por procedimiento tocado **y** no menor que el de la release activa para ese
+  procedimiento.
+- **Exenciones**, que nunca se deducen del `reason` que manda un cliente:
+  - release 1;
+  - `migrar-a-v3`;
+  - «Preparar mis datos» del Centro de pruebas, solo en negocios de prueba;
+  - hotfix por habilidad retirada (`yanked`, §3): pasa directo y se evalúa después sin bloquear;
+  - **forzado por el master** con motivo escrito.
+- **Sin procedimientos tocados, pasa sin evaluar.**
+- **Transición.** Hasta que exista el corredor (parte 3), una candidata que toca procedimientos y no tiene
+  veredicto **pasa**, con `gate = 'sin_evaluar'` anotado en el evento. La parte 3 cierra el gate.
+
+**Diseño:**
+
+1. **El gate lee, no mide.** `gate_aprobado` sigue dentro del `FOR UPDATE` de `promover`.
+   - **Base del veredicto.** Solo vale el último veredicto de la release cuyo `data.base_release_id` es la
+     `active_release_id` leída en ese mismo `FOR UPDATE`. Un veredicto contra otra base cuenta como
+     inexistente: después de un rollback u otra promoción, hay que volver a medir. `release_id` ya determina
+     `manifest_hash`, porque `connection_releases` es inmutable y única por hash.
+   - **Cuándo se mide.** La medición se encola al pedir la promoción (409 `gate_pendiente` y se encola) o
+     con «Evaluar» en el panel, **no** en `built`. Así no se gasta tope en borradores del editor ni de los
+     presets. Es idempotente por `(release_id, base_release_id)`, con `pg_advisory_xact_lock` por negocio al
+     encolar.
+2. **Qué tocó la candidata** (`core/releases/diferencias.py`). Se cargan las dos releases con el mismo
+   binario (`ReleaseCongelada.procedimientos()` y `procedimientos_de`) y se compara el contenido canónico de
+   cada `Procedure`.
+   - **Tocado por contenido:** un procedimiento distinto, nuevo o de otro dueño. Uno que desaparece no se
+     mide.
+   - **Tocan todos los procedimientos de los agentes afectados:**
+     - `content_hash` distinto del agente;
+     - overrides cuyo nombre está en los `playbooks` del agente (o en la allowlist v2);
+     - `app_settings`;
+     - `tenant_plugins`;
+     - un `skills[].manifest_hash` distinto, para los agentes que usan ese pack.
+   - **Coordinador:** un `content_hash` distinto del componente `core` (KernelSpec: voz, reglas, `routing`)
+     toca todos los procedimientos de todos los especialistas.
+   - **Componentes:** alta o baja de un componente, o un cambio de `is_default`, tocan todos los
+     procedimientos del especialista afectado.
+   - **Sin activa o con activa `release/1`:** todos los procedimientos de la candidata cuentan como tocados,
+     sin línea base.
+   - **Aproximación conocida:** un `content_hash` que cambia solo por campos que no entran al prompt (por
+     ejemplo, presupuestos) cuenta como tocado. Es más simple y más seguro.
+3. **Escenarios.** Cada escenario declara `procedimientos: [id]`. En la parte 2 siguen en
+   `evals/journeys/procedimientos/`.
+   - **Pendientes** (menos de 2 escenarios): `cambiar_plan` y `promesa_de_pago` (0), `tomar_pedido` y
+     `agendar_cita` (1).
+   - **El test del CI falla** si un procedimiento fuera de la lista tiene menos de 2, o si uno de la lista
+     llega a 2 y sigue listado. Así la lista solo se achica.
+   - Esto se aparta del Gherkin, que dice «el build falla»: el build no puede ver escenarios que no están
+     en el pack. Moverlos al pack y congelarlos con `pack_versions` va en la parte 3.
+   - Escribir escenarios que nunca corrieron no demuestra nada, y grabarlos es LLM real con OK del dueño.
+4. **Exenciones sin falsificar.**
+   - **Release 1:** la conexión no tiene `active_release_id`, leída en el `FOR UPDATE`; no se mira el motivo.
+   - **`migrar-a-v3`, Centro de pruebas y hotfix `yanked`:** pasan un parámetro de palabra clave
+     `exencion=...` de `promover`, que la API nunca envía. El del Centro de pruebas además exige que el
+     negocio sea de prueba.
+   - **Motivos reservados:** `migrar_a_v3` y `qa_datos` se suman a `_MOTIVOS_RESERVADOS` de la API.
+   - **Forzado (parte 3):** va en el body del promote con `forzar: true` y `motivo` (≤ 200 caracteres,
+     tratado como dato), solo con `actua_como_master`. Queda en el evento y en `audit_log`.
+5. **Pass^4 de un procedimiento** = fracción de sus escenarios con `pass_k = 1` (modelo de la migración
+   0058). Con 2 o 3 escenarios, ≥ 0,85 equivale a 100 %.
+   - **«La activa»** = el valor de ese procedimiento en el último veredicto `approved` de la release activa,
+     medido con los mismos `escenarios_sha256`. Si no lo hay (la activa fue `sin_evaluar`, `sin_cambios`,
+     exenta o forzada), solo aplica el umbral.
+6. **Migración (parte 3)**, aditiva:
+   - `eval_runs.release_id`, con FK compuesta `(tenant_id, release_id)` →
+     `connection_releases(tenant_id, id)`;
+   - `eval_runs.origen` (`gate`, `manual`, `nightly`);
+   - `eval_results.procedure_id`, sin CHECK, como dejó la migración 0070;
+   - índices `(tenant_id, release_id, started_at DESC)` y `(tenant_id, run_id, procedure_id)`.
+
+   El veredicto (`approved`/`rejected`) es un `release_events` con `data` =
+   `{run_id, intento, k, umbral, base_release_id, git_sha, tocados: {id: motivo},
+   por_procedimiento: {id: {pass_k, activa, ok, escenarios_sha256}}, motivo}`. No hay tabla nueva.
+7. **Qué se escribe en cada base (parte 3).**
+   - **Durante la medición,** solo en `agentcore_eval`, con el negocio efímero. El corredor es su propio
+     proceso o cola, con un engine hacia `agentcore_eval` y otro hacia la base del negocio. Hay que copiar
+     `agent_versions` y `pack_versions` a la base de eval.
+   - **Al terminar,** en UNA transacción dentro del `tenant_scope` del negocio real:
+     - `eval_runs` (`origen = 'gate'`, `release_id`) y sus `eval_results`;
+     - una fila agregada de `usage_ledger` con `kind = 'eval'`, más `connection_id` y `release_id` de la
+       candidata (`ck_usage_release_conn`);
+     - el `release_event` del veredicto.
+   - **`agentcore_eval` no es una base de negocio:** no guarda datos de clientes reales. Por eso borrar el
+     negocio efímero no es `tenant purge` ni pasa por `purge_tenant`. Va también en `docs/MULTITENANT.md`
+     como excepción declarada al invariante 8.
+8. **Tope y cuotas (parte 3).**
+   - El tope se guarda en `tenants.settings.evals.tope_usd_mensual`, que escribe solo el master. Por
+     defecto vale `EVAL_TOPE_USD_MENSUAL`.
+   - El consumo se lee de `usage_ledger` con `kind = 'eval'` del mes.
+   - **Toda lectura de gasto del negocio excluye `kind = 'eval'`**: cuota de costo
+     (`core/billing/metrics.py`), costos, tablero, data por agente y consola de conexiones. Un test lo fija.
+9. **Golden de ruteo (Gherkin «Por ruta»).** Va en la parte 3. Cuando cambien el KernelSpec, los ejemplos
+   o los disparadores, corren los disparadores contra el golden aplicado a la release y se reporta la
+   precisión por procedimiento. Hoy es un test de pytest con catálogos fijos (HU-AOS-17).
+
+**Lo que no cambia:** el rollback no pasa por el gate; el canary y la no-inferioridad son de HU-AOS-32.

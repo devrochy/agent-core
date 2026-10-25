@@ -2,9 +2,9 @@
 
 - **Promover** cambia el puntero `channel_connections.active_release_id` y deja un evento
   `promoted` (`from_release_id`, `reason`). La promoción es total: el canary con porcentaje
-  llega en HU-AOS-32 y aquí no se toca `canary_release_id`. Antes pasa `gate_aprobado`, el punto
-  de enganche del gate de pass^k (HU-AOS-21): hoy aprueba siempre y la candidata se prueba en
-  el playground (ADR-0075); lo anota en el evento.
+  llega en HU-AOS-32 y aquí no se toca `canary_release_id`. Antes pasa `gate_aprobado`, el gate
+  de pass^k (HU-AOS-21): calcula qué procedimientos tocó la candidata frente a la activa y lo
+  anota en el evento (`gate`, `gate_tocados`). Hasta el corredor de pass^k no bloquea.
 - **Rollback** vuelve el puntero a una release anterior: por defecto, la más reciente que estuvo
   activa (tiene `promoted`), no es la activa y no fue retirada por `rolled_back` después de ese
   `promoted`. Así dos clics seguidos no rebotan entre dos releases. Deja `rolled_back` en la
@@ -64,13 +64,52 @@ def _exigir_scope(tenant_id: uuid.UUID) -> None:
         raise PermissionError("releases: fuera del tenant_scope del negocio")
 
 
-def gate_aprobado(release: dict[str, Any]) -> tuple[bool, str]:
-    """Punto de enganche del gate de promoción (HU-AOS-21: pass^k contra `agentcore_eval`).
+# Exenciones del gate (adenda HU-AOS-21 de ADR-0117): las pasan los llamadores internos por
+# palabra clave; la API nunca las envía y sus motivos están reservados en el router. Release 1
+# no está aquí: se reconoce porque la conexión no tiene release activa.
+EXENCIONES = frozenset({"migrar_a_v3", "qa_datos", "hotfix_yanked"})
+# Tope de motivos anotados en el evento (el detalle completo irá en el veredicto, parte 3).
+_MAX_TOCADOS_EN_EVENTO = 50
 
-    Hoy no hay gate automático: la candidata se prueba en el playground y la promoción es
-    manual. Devuelve `(aprobado, motivo)`."""
-    del release
-    return True, "sin_gate_hu_aos_21"
+
+async def gate_aprobado(
+    session: Any,
+    tenant_id: uuid.UUID,
+    release_id: uuid.UUID,
+    activa: uuid.UUID | None,
+    *,
+    exencion: str | None = None,
+) -> tuple[bool, str, dict[str, str]]:
+    """El gate de promoción (HU-AOS-21). Devuelve `(aprobado, gate, tocados)`.
+
+    Lee, no mide: corre dentro del `FOR UPDATE` de `promover`. Hasta que exista el corredor de
+    pass^k (parte 3) no hay veredictos, así que una candidata que toca procedimientos pasa con
+    `gate = 'sin_evaluar'` (decisión del dueño, 2026-10-25). Valores de `gate`:
+    `exento_release_1`, `exento_<exencion>`, `sin_cambios` y `sin_evaluar`."""
+    if activa is None:
+        return True, "exento_release_1", {}
+    if exencion is not None:
+        if exencion not in EXENCIONES:
+            raise ValueError(f"exención desconocida: {exencion}")
+        if exencion == "qa_datos" and not await _es_negocio_de_prueba(session, tenant_id):
+            raise ConflictoDeRelease("exencion_invalida", "Esa exención solo aplica a negocios de prueba.")
+        return True, f"exento_{exencion}", {}
+    from core.releases.cargar import cargar_release
+    from core.releases.diferencias import procedimientos_tocados
+
+    candidata = await cargar_release(session, tenant_id, release_id)
+    base = await cargar_release(session, tenant_id, activa)
+    if candidata is None:
+        raise ReleaseNoEncontrada(str(release_id))
+    tocados = procedimientos_tocados(candidata, base)
+    return True, ("sin_evaluar" if tocados else "sin_cambios"), tocados
+
+
+async def _es_negocio_de_prueba(session: Any, tenant_id: uuid.UUID) -> bool:
+    slug = (
+        await session.execute(text("SELECT slug FROM tenants WHERE id = :t"), {"t": tenant_id})
+    ).scalar_one_or_none()
+    return isinstance(slug, str) and slug.startswith("qa-")
 
 
 async def _bloquear(
@@ -162,8 +201,12 @@ async def promover(
     *,
     actor: str,
     motivo: str = "manual",
+    exencion: str | None = None,
 ) -> Cambio:
-    """Activa la release (promoción total). 409 si ya es la activa o el gate la rechaza."""
+    """Activa la release (promoción total). 409 si ya es la activa o el gate la rechaza.
+
+    `exencion` solo la pasan los llamadores internos (`migrar_a_v3`, `qa_datos`,
+    `hotfix_yanked`); la API nunca la envía."""
     _exigir_scope(tenant_id)
     async with get_session() as session:
         activa, _ = await _bloquear(session, tenant_id, connection_id)
@@ -171,7 +214,9 @@ async def promover(
         if activa == release_id:
             raise ConflictoDeRelease("ya_activa", "Esa versión ya es la activa.")
         await _exigir_utilizable(session, tenant_id, release_id)
-        aprobado, gate = gate_aprobado(release)
+        aprobado, gate, tocados = await gate_aprobado(
+            session, tenant_id, release_id, activa, exencion=exencion
+        )
         if not aprobado:
             raise ConflictoDeRelease("gate_rechazado", "La versión no pasó el gate.")
         await _apuntar(session, tenant_id, connection_id, release_id)
@@ -186,6 +231,7 @@ async def promover(
                 "from_release_id": str(activa) if activa else None,
                 "reason": motivo[:40],
                 "gate": gate,
+                "gate_tocados": dict(sorted(tocados.items())[:_MAX_TOCADOS_EN_EVENTO]),
             },
         )
     log.info(
@@ -193,6 +239,8 @@ async def promover(
         connection_id=str(connection_id),
         number=release["number"],
         reason=motivo,
+        gate=gate,
+        procedimientos_tocados=len(tocados),
     )
     return Cambio(connection_id, activa, release_id, gate)
 
