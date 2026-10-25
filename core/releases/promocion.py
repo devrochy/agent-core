@@ -251,6 +251,22 @@ async def promover(
         if forzado:
             datos["gate_motivo"] = str(forzado_por_master).strip()[:200]
         await registrar_evento(session, tenant_id, connection_id, release_id, "promoted", actor, datos)
+        if forzado:
+            from core.db.models import AuditLog
+
+            # En la misma transacción que la promoción: no queda un forzado sin auditoría.
+            session.add(
+                AuditLog(
+                    tenant_id=tenant_id,
+                    actor=actor,
+                    action="release_gate_forzado",
+                    input={
+                        "connection_id": str(connection_id),
+                        "release_id": str(release_id),
+                        "motivo": datos["gate_motivo"],
+                    },
+                )
+            )
     log.info(
         "release_promoted",
         connection_id=str(connection_id),

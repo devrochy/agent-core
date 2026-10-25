@@ -272,14 +272,6 @@ async def promote_release(
         raise _error_de_base(exc, "release") from None
     except svc.ConflictoDeRelease as exc:
         raise ApiError(409, exc.codigo, str(exc)) from None
-    if forzado:
-        from core.shared.audit import record_audit
-
-        await record_audit(
-            actor=_actor(principal),
-            action="release_gate_forzado",
-            input_data={"connection_id": str(connection_id), "release_id": str(release_id), "motivo": forzado},
-        )
     return ReleaseChange(
         connection_id=cambio.connection_id,
         from_release_id=cambio.from_release_id,

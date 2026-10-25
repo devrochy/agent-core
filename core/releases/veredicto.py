@@ -98,6 +98,13 @@ def calcular(
     return Veredicto(not fallas, por, motivo)
 
 
+def _exigir_scope(tenant_id: uuid.UUID) -> None:
+    from core.shared.tenant import get_current_tenant_id
+
+    if get_current_tenant_id() != tenant_id:
+        raise PermissionError("veredicto: fuera del tenant_scope del negocio")
+
+
 async def registrar(
     tenant_id: uuid.UUID,
     connection_id: uuid.UUID,
@@ -122,10 +129,7 @@ async def registrar(
     from core.db.models import EvalResult, EvalRun, UsageLedger
     from core.db.session import get_session
     from core.releases.build import registrar_evento
-    from core.shared.tenant import get_current_tenant_id
-
-    if get_current_tenant_id() != tenant_id:
-        raise PermissionError("veredicto: fuera del tenant_scope del negocio")
+    _exigir_scope(tenant_id)
     escenarios = [e for m in mediciones for e in m.escenarios]
     async with get_session() as session:
         intento = int(
@@ -222,6 +226,7 @@ async def ultimo(
     session: Any, tenant_id: uuid.UUID, release_id: uuid.UUID, base_release_id: uuid.UUID | None
 ) -> dict[str, Any] | None:
     """El último veredicto de la release medido contra `base_release_id`, o None."""
+    _exigir_scope(tenant_id)
     fila = (
         await session.execute(
             text(
@@ -240,6 +245,7 @@ async def ultimo(
 
 async def de_la_activa(session: Any, tenant_id: uuid.UUID, activa: uuid.UUID) -> dict[str, dict[str, Any]] | None:
     """`por_procedimiento` del último veredicto aprobado de la release activa, o None."""
+    _exigir_scope(tenant_id)
     fila = (
         await session.execute(
             text(
@@ -254,6 +260,7 @@ async def de_la_activa(session: Any, tenant_id: uuid.UUID, activa: uuid.UUID) ->
 
 async def tope_del_mes(session: Any, tenant_id: uuid.UUID, ahora: datetime | None = None) -> tuple[float, float]:
     """`(gastado, tope)` en USD del mes en curso en evals del negocio."""
+    _exigir_scope(tenant_id)
     from core.config import get_settings
 
     ahora = ahora or datetime.now(UTC)

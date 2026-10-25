@@ -211,3 +211,34 @@ async def test_solo_el_master_fuerza_con_motivo_y_queda_auditado(app_client) -> 
     assert datos["gate"] == "forzado" and datos["gate_motivo"] == "Parche urgente de precios"
     auditoria = await _sql(tid, "select count(*) from audit_log where action = 'release_gate_forzado'")
     assert auditoria[0][0] >= 1
+
+
+async def test_veredictos_y_tope_no_cruzan_negocios() -> None:
+    from core.db.session import get_session
+    from core.releases import veredicto as v
+    from core.releases.promocion import ConflictoDeRelease
+    from core.shared.tenant import tenant_scope
+
+    a, a_cid, _ = await _negocio()
+    b, b_cid, b_uno = await _negocio()
+    a_dos = await _candidata(a, a_cid, "A dos")
+    b_dos = await _candidata(b, b_cid, "B dos")
+    # Un veredicto rechazado en B no cambia el gate de A.
+    await _registrar(b, b_cid, b_dos, b_uno, aprueba=False)
+    assert (await _promover(a, a_cid, a_dos)).gate == "sin_evaluar"
+    with pytest.raises(ConflictoDeRelease):
+        await _promover(b, b_cid, b_dos)
+    # Fuera del scope del negocio, las lecturas y la escritura se niegan.
+    async with tenant_scope(a):
+        async with get_session() as session:
+            with pytest.raises(PermissionError):
+                await v.tope_del_mes(session, b)
+            with pytest.raises(PermissionError):
+                await v.ultimo(session, b, b_dos, b_uno)
+    with pytest.raises(PermissionError):
+        async with tenant_scope(a):
+            medicion = v.Medicion("x", (v.Escenario("01", 4, 1.0, 1.0, True),), "s")
+            await v.registrar(
+                b, b_cid, b_dos, base_release_id=b_uno, tocados={}, mediciones=[medicion],
+                veredicto=v.calcular([medicion]), costo_usd=0.0, modelo="m",
+            )
