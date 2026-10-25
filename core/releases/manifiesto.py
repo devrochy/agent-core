@@ -20,6 +20,10 @@ el CI de la release del motor, ADR-0117 §2 y ADR-0120):
   packs del binario + estas secciones), no se congelan.
 - `app_settings`: los campos que entran al prompt (`brand_voice`, `assistant_name`,
   `business_description`, `language`).
+- `a2a_graph` (adenda HU-AOS-18 de ADR-0116): la versión del grafo de permisos A2A del negocio
+  (`version_id`, `version`, `content_hash`, `links`), **solo si el negocio tiene grafo**: sin él la
+  clave no aparece y el hash de las releases de antes no cambia. Entra al hash: cambiar los
+  permisos produce una release nueva. La guarda A2A lee esto, nunca las tablas vivas.
 - `built_with` (FUERA del hash): `git_sha` y versión de los contratos, para auditar. Un deploy
   no produce releases nuevas por sí solo.
 
@@ -89,6 +93,7 @@ def armar(
     flujo_del_negocio: Any,
     app_settings: Mapping[str, str | None],
     built_with: Mapping[str, str] | None = None,
+    a2a_graph: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """El manifiesto en su orden canónico (mismas entradas → mismo hash)."""
     comps = sorted(
@@ -100,7 +105,7 @@ def armar(
             "sha256": sha256_texto(texto_canonico(flujo_del_negocio)),
             "sections": flujo_del_negocio,
         }
-    return {
+    manifiesto: dict[str, Any] = {
         "schema": SCHEMA,
         "components": [_componente(c) for c in comps],
         "skills": [
@@ -121,6 +126,9 @@ def armar(
         "app_settings": {k: app_settings[k] for k in sorted(app_settings)},
         "built_with": dict(built_with or {}),
     }
+    if a2a_graph is not None:
+        manifiesto["a2a_graph"] = dict(a2a_graph)
+    return manifiesto
 
 
 def hash_de(manifest: Mapping[str, Any]) -> str:
@@ -153,7 +161,19 @@ def resumen(manifest: Mapping[str, Any]) -> dict[str, Any]:
             k: {"sha256": sha256_texto(str(v))}
             for k, v in (manifest.get("app_settings") or {}).items()
         },
+        "a2a_graph": _grafo(manifest.get("a2a_graph")),
         "built_with": manifest.get("built_with", {}),
+    }
+
+
+def _grafo(grafo: Any) -> dict[str, Any] | None:
+    if not isinstance(grafo, Mapping):
+        return None
+    enlaces = grafo.get("links")
+    return {
+        "version": grafo.get("version"),
+        "content_hash": grafo.get("content_hash"),
+        "links": len(enlaces) if isinstance(enlaces, list) else 0,
     }
 
 

@@ -4018,6 +4018,273 @@
         }
       }
     },
+    "/api/v1/admin/a2a/graph": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · colaboración entre agentes"
+        ],
+        "summary": "Get Graph",
+        "operationId": "get_graph_api_v1_admin_a2a_graph_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Graph"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · colaboración entre agentes"
+        ],
+        "summary": "Put Graph",
+        "operationId": "put_graph_api_v1_admin_a2a_graph_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GraphIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/a2a/graph/versions": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · colaboración entre agentes"
+        ],
+        "summary": "List Graph Versions",
+        "operationId": "list_graph_versions_api_v1_admin_a2a_graph_versions_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GraphVersion"
+                  },
+                  "title": "Response List Graph Versions Api V1 Admin A2A Graph Versions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/a2a/calls": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · colaboración entre agentes"
+        ],
+        "summary": "List Calls",
+        "operationId": "list_calls_api_v1_admin_a2a_calls_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Call"
+                  },
+                  "title": "Response List Calls Api V1 Admin A2A Calls Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/connections/{connection_id}/agents/{instance_id}": {
       "patch": {
         "tags": [
@@ -26110,6 +26377,113 @@
         ],
         "title": "CalendarStatus"
       },
+      "Call": {
+        "properties": {
+          "call_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Call Id"
+          },
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "from_instance_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "From Instance Id"
+          },
+          "to_instance_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Instance Id"
+          },
+          "intent": {
+            "type": "string",
+            "title": "Intent"
+          },
+          "depth": {
+            "type": "integer",
+            "title": "Depth"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Último evento de la llamada (`accepted`, `completed`, `denied`, …)."
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "tokens": {
+            "type": "integer",
+            "title": "Tokens"
+          },
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "ended_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Ended At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "call_id",
+          "connection_id",
+          "conversation_id",
+          "mode",
+          "from_instance_id",
+          "to_instance_id",
+          "intent",
+          "depth",
+          "status",
+          "reason",
+          "tokens",
+          "cost_usd",
+          "started_at",
+          "ended_at"
+        ],
+        "title": "Call"
+      },
       "CashAdjustment": {
         "properties": {
           "valor_nuevo": {
@@ -28667,6 +29041,132 @@
         ],
         "title": "GrantRequest"
       },
+      "Graph": {
+        "properties": {
+          "version": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphVersion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/Link"
+            },
+            "type": "array",
+            "title": "Links"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "Ciclos de `handoff` (`ciclo_handoff:a>b`): no bloquean."
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "links",
+          "warnings"
+        ],
+        "title": "Graph"
+      },
+      "GraphIn": {
+        "properties": {
+          "links": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Links"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "links"
+        ],
+        "title": "GraphIn"
+      },
+      "GraphOut": {
+        "properties": {
+          "version": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphVersion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/Link"
+            },
+            "type": "array",
+            "title": "Links"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "Ciclos de `handoff` (`ciclo_handoff:a>b`): no bloquean."
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "links",
+          "warnings",
+          "created"
+        ],
+        "title": "GraphOut"
+      },
+      "GraphVersion": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "content_hash": {
+            "type": "string",
+            "title": "Content Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "version",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "GraphVersion"
+      },
       "GuardrailsSettings": {
         "properties": {
           "guardrails_text": {
@@ -29644,6 +30144,70 @@
           "has_more"
         ],
         "title": "LeadsResponse"
+      },
+      "Link": {
+        "properties": {
+          "from_agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "From Agent Id"
+          },
+          "to_agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "To Agent Id"
+          },
+          "modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Modes"
+          },
+          "intents": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Intents"
+          },
+          "max_depth": {
+            "type": "integer",
+            "title": "Max Depth"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "title": "Timeout Ms"
+          },
+          "budget_usd": {
+            "type": "number",
+            "title": "Budget Usd"
+          },
+          "budget_tokens": {
+            "type": "integer",
+            "title": "Budget Tokens"
+          },
+          "data_classes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Data Classes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from_agent_id",
+          "to_agent_id",
+          "modes",
+          "intents",
+          "max_depth",
+          "timeout_ms",
+          "budget_usd",
+          "budget_tokens",
+          "data_classes"
+        ],
+        "title": "Link"
       },
       "LinkRequest": {
         "properties": {

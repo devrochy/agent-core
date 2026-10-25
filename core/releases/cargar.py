@@ -162,6 +162,26 @@ class ReleaseCongelada:
                 self._ruteo = Routing()
         return self._ruteo
 
+    @property
+    def a2a(self) -> Mapping[str, Any] | None:
+        """El grafo de permisos A2A congelado (adenda HU-AOS-18 de ADR-0116), o None: sin grafo
+        no hay enlaces y la guarda lo deniega todo con `no_link`."""
+        grafo = self.manifest.get("a2a_graph")
+        return grafo if isinstance(grafo, Mapping) else None
+
+    def limites_a2a(self) -> Any:
+        """`a2a` del KernelSpec congelado (`A2ALimits`); los valores por defecto si no valida."""
+        from agentcore_contracts.kernelspec import A2ALimits
+        from pydantic import ValidationError
+
+        kernel = self.kernel
+        crudo = kernel.content.get("a2a") if kernel is not None else None
+        try:
+            return A2ALimits.model_validate(crudo if isinstance(crudo, Mapping) else {})
+        except ValidationError:
+            log.error("release_a2a_invalido", release_number=self.number)
+            return A2ALimits()
+
     def indice_de_disparadores(self) -> tuple[Any, dict[str, str]]:
         """Índice léxico de los procedimientos publicados de los especialistas (con los ejemplos
         de `procedures[].overrides.examples` de cada agente) y la key del dueño de cada uno (el más

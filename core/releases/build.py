@@ -52,7 +52,7 @@ import json
 import os
 import re
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -456,6 +456,46 @@ def revisar_ruteo(instancias: list[_Instancia], componentes: list[man.Componente
     return problemas
 
 
+def revisar_a2a(
+    instancias: list[_Instancia], componentes: list[man.Componente], grafo: Mapping[str, Any] | None
+) -> list[str]:
+    """Enlaces A2A contra los límites del KernelSpec del Coordinador (adenda HU-AOS-18 de
+    ADR-0116 §3): un enlace solo puede bajarlos. Solo se revisan los enlaces con los dos agentes en
+    la conexión; los demás quedan inertes (ni error ni revisión)."""
+    from agentcore_contracts.kernelspec import A2ALimits
+    from pydantic import ValidationError
+
+    if not grafo:
+        return []
+    core = next((i for i in instancias if i.componente.role == "core"), None)
+    crudo = core.contenido.get("a2a") if core is not None else None
+    try:
+        limites = A2ALimits.model_validate(crudo if isinstance(crudo, Mapping) else {})
+    except ValidationError:
+        return ["el bloque a2a del Coordinador no valida"]
+    claves = {c.agent_id: c.agent_key for c in componentes}
+    problemas: list[str] = []
+    for enlace in grafo.get("links") or []:
+        origen, destino = claves.get(str(enlace.get("from_agent_id"))), claves.get(str(enlace.get("to_agent_id")))
+        if origen is None or destino is None:
+            continue
+        par = f"{origen[:40]}→{destino[:40]}"
+        if int(enlace.get("max_depth", 0)) > limites.maxDepth:
+            problemas.append(f"{par}: max_depth {enlace.get('max_depth')} > {limites.maxDepth} del Coordinador")
+        if float(enlace.get("budget_usd", 0)) > limites.turnBudgetUsd:
+            problemas.append(f"{par}: budget_usd {enlace.get('budget_usd')} > {limites.turnBudgetUsd} del turno")
+        if int(enlace.get("budget_tokens", 0)) > limites.turnBudgetTokens:
+            problemas.append(f"{par}: budget_tokens {enlace.get('budget_tokens')} > {limites.turnBudgetTokens} del turno")
+    return problemas
+
+
+async def _grafo_a2a(tenant_id: uuid.UUID) -> dict[str, Any] | None:
+    from core.agents import grafo_a2a
+
+    version = await grafo_a2a.vigente(tenant_id)
+    return grafo_a2a.para_el_manifiesto(version) if version is not None else None
+
+
 # ------------------------------------------------------------------ 4-5. textos y AppSettings
 def _overrides(slug: str | None, nombres: Iterable[str]) -> dict[str, str]:
     from core.agents.playbooks import MAX_SIZE_BYTES
@@ -604,6 +644,10 @@ async def armar_manifiesto(
     ruteo = revisar_ruteo(instancias, componentes)
     if ruteo:
         raise ErrorDelBuild("ruteo_invalido", "Una regla de enrutamiento no apunta a la release.", ruteo[:10])
+    grafo = await _grafo_a2a(tenant_id)
+    a2a = revisar_a2a(instancias, componentes, grafo)
+    if a2a:
+        raise ErrorDelBuild("a2a_invalido", "Un permiso entre agentes pide más que el Coordinador.", a2a[:10])
     return man.armar(
         componentes=componentes,
         habilidades=habilidades,
@@ -612,6 +656,7 @@ async def armar_manifiesto(
         flujo_del_negocio=flujo,
         app_settings=await _app_settings(tenant_id),
         built_with=_built_with(),
+        a2a_graph=grafo,
     )
 
 
@@ -669,7 +714,8 @@ async def construir(
         await session.execute(
             text(
                 "INSERT INTO connection_releases (id, tenant_id, connection_id, number, origin, manifest, "
-                "manifest_hash, created_by) VALUES (:id, :t, :c, :n, :o, cast(:m as jsonb), :h, :by)"
+                "manifest_hash, created_by, graph_version_id) "
+                "VALUES (:id, :t, :c, :n, :o, cast(:m as jsonb), :h, :by, :g)"
             ),
             {
                 "id": release_id,
@@ -680,6 +726,9 @@ async def construir(
                 "m": json.dumps(manifest, ensure_ascii=False),
                 "h": huella,
                 "by": created_by,
+                # Desde el manifiesto, no "la última versión": una publicación entre el armado y
+                # este INSERT los desalinearía.
+                "g": (manifest.get("a2a_graph") or {}).get("version_id"),
             },
         )
         for comp in manifest["components"]:

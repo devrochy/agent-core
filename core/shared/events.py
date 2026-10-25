@@ -95,6 +95,10 @@ ON_PLATFORM_RENEWAL_DUE = "platform.renewal_due"
 # el total). Cierra las tareas de `contratar_plan` y `tomar_pedido` que esperan el pago, por el
 # `order_id` que fijó `crear_pedido`. payload: order_id, public_order_number.
 ON_ORDER_PAID = "order.paid"
+# HU-AOS-18 (adenda de ADR-0116): la guarda A2A cortó un ciclo (o una autollamada) entre agentes.
+# In-process, después de confirmar el evento del ledger. Sin payload de la operación.
+# payload: tenant_id, connection_id, conversation_id, call_id, pila (instancias, de la raíz al destino).
+ON_A2A_LOOP_DETECTED = "a2a.loop.detected"
 
 # Claves del payload que identifican el objeto de cada evento (HU-AOS-05). El motor de
 # procedimientos solo cierra una tarea por estas claves (nunca por montos, proveedores ni el

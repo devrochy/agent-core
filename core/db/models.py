@@ -1034,6 +1034,8 @@ class UsageLedger(Base):
     release_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     # Tipo de fila (migración 0070, ADR-0116/0117): `turn` | `agent_run` | … | `eval`.
     kind: Mapped[str] = mapped_column(Text, default="turn")
+    # Llamada A2A que originó el gasto (`kind = 'agent_run'`, HU-AOS-18): el `call_id` de `a2a_events`.
+    a2a_call_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     # Crédito mensual (migración 0096, ADR-0144): créditos del turno calculados AL ESCRIBIR con
     # el tarifario y la TRM vigentes, que se guardan con la fila. NULL en filas anteriores.
     credits: Mapped[Decimal | None] = mapped_column(Numeric(12, 1))
