@@ -125,6 +125,8 @@ async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
             "fecha_vencimiento": payload.get("fecha_vencimiento"),
             "referencia": payload.get("referencia"),
             "link": payload.get("link"),
+            "datos_transferencia": payload.get("datos_transferencia"),
+            "forma_de_pago": payload.get("forma_de_pago"),
         },
         "recordatorio": {"dias": _dias_legibles(payload.get("dias"))},
         "mora": {"dias": payload.get("dias_mora")},

@@ -42,6 +42,8 @@ _VARIABLES_CARGO = {
     "cargo.fecha_vencimiento": "Fecha de vencimiento",
     "cargo.referencia": "Referencia del pago",
     "cargo.link": "Link de pago",
+    "cargo.datos_transferencia": "Datos de transferencia del negocio (cuentas)",
+    "cargo.forma_de_pago": "Cómo pagar: el link o, si no hay, los datos de transferencia",
 }
 
 _VARIABLES_CITA = {
@@ -66,6 +68,8 @@ EVENTOS: dict[str, dict[str, str]] = {
         "cargo.monto": "Monto adeudado",
         "cargo.periodo": "Período adeudado",
         "cargo.link": "Link de pago",
+        "cargo.datos_transferencia": "Datos de transferencia del negocio (cuentas)",
+        "cargo.forma_de_pago": "Cómo pagar: el link o, si no hay, los datos de transferencia",
         "mora.dias": "Días de mora",
     },
     # HU-SH-02: citas (al cliente).

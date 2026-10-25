@@ -10,13 +10,20 @@ Sugerencias (español, categoría Utilidad; el `{{n}}` es la variable posicional
 
 | Evento | Nombre sugerido | Cuerpo | Variables (`{{1}}`, `{{2}}`…) |
 |---|---|---|---|
-| `subscription.charge_created` | `aviso_cobro_suscripcion` | Hola {{1}}, ya está el cobro de tu plan {{2}} por {{3}}, con vencimiento el {{4}}. Puedes pagarlo en este link: {{5}} | `cliente.nombre`, `suscripcion.concepto`, `cargo.monto`, `cargo.fecha_vencimiento`, `cargo.link` |
-| `subscription.charge_reminder` | `recordatorio_pago_suscripcion` | Hola {{1}}, te recordamos el pago de tu plan {{2}} por {{3}}, que vence {{4}}. Link de pago: {{5}} | `cliente.nombre`, `suscripcion.concepto`, `cargo.monto`, `recordatorio.dias`, `cargo.link` |
-| `subscription.paused` | `suscripcion_pausada_mora` | Hola {{1}}, pausamos tu plan {{2}} porque el pago de {{3}} lleva {{4}} días pendiente. Cuando pagues se reactiva: {{5}} | `cliente.nombre`, `suscripcion.concepto`, `cargo.monto`, `mora.dias`, `cargo.link` |
+| `subscription.charge_created` | `aviso_cobro_suscripcion` | Hola {{1}}, ya está el cobro de tu plan {{2}} por {{3}}, con vencimiento el {{4}}. Cómo pagarlo: {{5}} | `cliente.nombre`, `suscripcion.concepto`, `cargo.monto`, `cargo.fecha_vencimiento`, `cargo.forma_de_pago` |
+| `subscription.charge_reminder` | `recordatorio_pago_suscripcion` | Hola {{1}}, te recordamos el pago de tu plan {{2}} por {{3}}, que vence {{4}}. Cómo pagar: {{5}} | `cliente.nombre`, `suscripcion.concepto`, `cargo.monto`, `recordatorio.dias`, `cargo.forma_de_pago` |
+| `subscription.paused` | `suscripcion_pausada_mora` | Hola {{1}}, pausamos tu plan {{2}} porque el pago de {{3}} lleva {{4}} días pendiente. Cuando pagues se reactiva. Cómo pagar: {{5}} | `cliente.nombre`, `suscripcion.concepto`, `cargo.monto`, `mora.dias`, `cargo.forma_de_pago` |
 
 Notas:
 
 - Meta rechaza plantillas de **utilidad** que suenan a marketing: sin promociones ni emojis de venta.
+- Mapea **`cargo.forma_de_pago`** y no `cargo.link` (HU-SUB-24): vale el link cuando lo hay y, si el cobro
+  no tiene link (monto bajo el mínimo de la pasarela, sin pasarela o link caído), los datos de transferencia
+  del negocio. Con `cargo.link` esa plantilla falla en un cargo sin link. También hay `cargo.datos_transferencia`
+  (solo las cuentas). Las cuentas salen de la configuración de comercio y, en el parámetro, van en una línea.
+- Texto de respaldo sin link: `aviso_cargo_transferencia_texto`, `recordatorio_transferencia_texto` y
+  `aviso_pausa_transferencia_texto`. Si el cobro no tiene link y el negocio no tiene cuentas, no sale el aviso
+  y el dueño recibe una alerta.
 - El link va en el **cuerpo** (v1 no resuelve variables de botones, ADR-0108).
 - Cada plantilla enviada consume el fee de plataforma (0,3 créditos) y Meta la cobra aparte.
 - Cuándo sale cada aviso: el cargo se genera `dias_anticipacion` antes del vencimiento (3 por defecto) con

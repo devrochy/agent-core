@@ -1151,6 +1151,12 @@ class CRMModule(BaseModule):
         from pack_commerce.planes import CatalogoDePlanes
 
         plan_catalog_registry.register("pack_commerce", CatalogoDePlanes())
+        # Cuentas de transferencia del negocio para los avisos de cobro de suscripciones
+        # (HU-SUB-24, adenda de ADR-0067): una sola fuente, sin que suscripciones importe este pack.
+        from core.payments.transferencia import transfer_registry
+        from pack_commerce.transferencia import CuentasDeTransferenciaDelNegocio
+
+        transfer_registry.register(PLUGIN_ID, CuentasDeTransferenciaDelNegocio())
         # Datos del pedido para el alta automática de negocios (HU-SH-03, ADR-0121).
         from core.provisioning.fuentes import fuentes_de_alta
         from pack_commerce.altas import DatosDeAltaDelPedido
