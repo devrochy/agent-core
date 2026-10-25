@@ -110,6 +110,18 @@ async def procesar_evento(capability: PaymentCapability, payload: dict) -> str |
     return str(await metodo(payload))
 
 
+async def monto_minimo(capability: PaymentCapability | None) -> float | None:
+    """Monto mínimo por cobro que declara la capacidad para el tenant activo (operación opcional,
+    mismo molde que `procesar_evento`). Lo fija la pasarela y depende del ambiente (Wompi: 150.000 COP
+    en sandbox, 1.500 en producción), así que ni comercio ni suscripciones lo guardan: lo preguntan.
+    `None` si no hay capacidad o no lo declara."""
+    metodo = getattr(capability, "monto_minimo", None)
+    if metodo is None:
+        return None
+    valor = await metodo()
+    return None if valor is None else float(valor)
+
+
 def qr_png_data_uri(payload: str) -> str | None:
     """QR PNG como data URI; `None` si `qrcode` no está instalado o falla."""
     if not payload:
