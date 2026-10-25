@@ -11940,6 +11940,76 @@
         }
       }
     },
+    "/api/v1/pack/pack_subscriptions/cargos/{charge_id}/registrar-pago": {
+      "post": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Registrar Pago Por Transferencia",
+        "description": "El cliente pagó el cobro por transferencia: lo marca `pagado` con la referencia (HU-SUB-26).\n\nReusa `registrar_pago_externo` del proveedor (no hay otro camino de pago): el cargo queda pagado\ncon `pago_externo.canal = transferencia`, la suscripción se reactiva si estaba vencida o pausada\npor mora, el período siguiente se calcula desde el pagado y sale `subscription.charge_paid` como\ncon un pago por link. El pack sigue cobrando los períodos siguientes. Idempotente por\nreferencia; un cargo ya pagado con otra referencia es 409. Auditada con el usuario.",
+        "operationId": "registrar_pago_por_transferencia_api_v1_pack_pack_subscriptions_cargos__charge_id__registrar_pago_post",
+        "parameters": [
+          {
+            "name": "charge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Charge Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistrarPagoBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagoRegistradoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/commerce/dashboard": {
       "get": {
         "tags": [
@@ -47081,6 +47151,67 @@
         ],
         "title": "Requirement",
         "description": "Algo que el negocio tiene que configurar para que el agente funcione (aviso, no bloquea)."
+      },
+      "PagoRegistradoOut": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "enum": [
+              "registrado",
+              "ya_registrado"
+            ],
+            "title": "Estado"
+          },
+          "charge_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Charge Id"
+          },
+          "periodo": {
+            "type": "string",
+            "title": "Periodo"
+          },
+          "suscripcion_estado": {
+            "type": "string",
+            "title": "Suscripcion Estado"
+          },
+          "proximo_cargo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proximo Cargo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado",
+          "charge_id",
+          "periodo",
+          "suscripcion_estado"
+        ],
+        "title": "PagoRegistradoOut"
+      },
+      "RegistrarPagoBody": {
+        "properties": {
+          "referencia": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 3,
+            "title": "Referencia",
+            "description": "Número del comprobante o texto que identifica la transferencia (para conciliar con el extracto)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "referencia"
+        ],
+        "title": "RegistrarPagoBody"
       }
     }
   }

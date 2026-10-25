@@ -30,7 +30,9 @@ from pack_subscriptions.esquemas import (
     ClienteConSuscripcion,
     Metricas,
     MotivoBody,
+    PagoRegistradoOut,
     ReenvioOut,
+    RegistrarPagoBody,
     SuscripcionDetalle,
     SuscripcionItem,
 )
@@ -505,3 +507,98 @@ async def reenviar_link_de_cargo(
         link=cargo.link_url,
         motivo=None if enviado else "sin_conversacion_whatsapp",
     )
+
+
+@router.post("/cargos/{charge_id}/registrar-pago", response_model=PagoRegistradoOut)
+async def registrar_pago_por_transferencia(
+    charge_id: uuid.UUID,
+    body: RegistrarPagoBody,
+    principal: Annotated[Principal, Depends(require(SECCION, write=True))],
+) -> PagoRegistradoOut:
+    """El cliente pagó el cobro por transferencia: lo marca `pagado` con la referencia (HU-SUB-26).
+
+    Reusa `registrar_pago_externo` del proveedor (no hay otro camino de pago): el cargo queda pagado
+    con `pago_externo.canal = transferencia`, la suscripción se reactiva si estaba vencida o pausada
+    por mora, el período siguiente se calcula desde el pagado y sale `subscription.charge_paid` como
+    con un pago por link. El pack sigue cobrando los períodos siguientes. Idempotente por
+    referencia; un cargo ya pagado con otra referencia es 409. Auditada con el usuario.
+    """
+    from sqlalchemy import select
+
+    from core.db.models import AuditLog
+    from core.db.session import get_session
+    from core.subscriptions import SubscriptionError
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl
+    from pack_subscriptions.models import CANAL_TRANSFERENCIA, Subscription, SubscriptionCharge
+    from pack_subscriptions.periodos import sumar_periodo
+
+    tenant = _tenant(principal)
+    referencia = body.referencia.strip()
+    if len(referencia) < 3:
+        raise ApiError(422, "referencia_invalida", "Indica el número del comprobante o una referencia de al menos 3 caracteres.")
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                select(SubscriptionCharge, Subscription)
+                .join(Subscription, Subscription.id == SubscriptionCharge.subscription_id)
+                .where(
+                    SubscriptionCharge.tenant_id == tenant,
+                    Subscription.tenant_id == tenant,
+                    SubscriptionCharge.id == charge_id,
+                    SubscriptionCharge.deleted_at.is_(None),
+                    Subscription.deleted_at.is_(None),
+                )
+            )
+        ).first()
+    if fila is None:
+        raise ApiError.not_found("Cargo no encontrado.")
+    cargo, sub = fila
+    if cargo.tipo != "periodo":
+        raise ApiError(409, "cargo_no_registrable", "Solo se registra el pago de un cobro de período.")
+    if cargo.estado == "anulado":
+        raise ApiError(409, "cargo_anulado", "Este cobro está anulado: no se puede registrar un pago.")
+    if cargo.estado == "pagado" and (cargo.pago_externo or {}).get("referencia") != referencia:
+        raise ApiError(409, "cargo_ya_pagado", "Este cobro ya está pagado.")
+    if cargo.estado != "pagado" and sub.estado == "cancelada":
+        raise ApiError(409, "suscripcion_cancelada", "La suscripción está cancelada: no hay nada que cobrar.")
+
+    inicio = cargo.fecha_vencimiento or datetime.now(UTC)
+    try:
+        resultado = await SubscriptionCapabilityImpl().registrar_pago_externo(
+            sub.id,
+            inicio=inicio,
+            fin=sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla),
+            referencia=referencia,
+            canal=CANAL_TRANSFERENCIA,
+            emitir_pago=True,
+            cargo_id=cargo.id,
+        )
+    except SubscriptionError as exc:
+        raise ApiError(409, exc.code or "error_suscripcion", str(exc)) from exc
+    if resultado["estado"] == "duplicado":
+        raise ApiError(409, "cargo_ya_pagado", "Este cobro ya está pagado.")
+
+    async with get_session() as session:
+        sub_actual = (
+            await session.execute(
+                select(Subscription).where(Subscription.tenant_id == tenant, Subscription.id == sub.id)
+            )
+        ).scalar_one()
+        if resultado["estado"] == "registrado":  # repetir el mismo registro no vuelve a auditar
+            session.add(
+                AuditLog(
+                    tenant_id=tenant,
+                    actor=_actor(principal),
+                    action="subs_pago_transferencia_registrado",
+                    input={"subscription_id": str(sub.id), "charge_id": str(cargo.id), "referencia": referencia},
+                    output={"periodo": resultado["periodo"]},
+                )
+            )
+    return PagoRegistradoOut(
+        estado=resultado["estado"],
+        charge_id=cargo.id,
+        periodo=resultado["periodo"],
+        suscripcion_estado=sub_actual.estado,
+        proximo_cargo=sub_actual.proximo_cargo,
+    )
+

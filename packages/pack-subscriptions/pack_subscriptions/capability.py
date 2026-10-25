@@ -763,11 +763,19 @@ class SubscriptionCapabilityImpl:
         fin: datetime,
         referencia: str,
         canal: str,
+        emitir_pago: bool = False,
+        cargo_id: uuid.UUID | None = None,
     ) -> dict[str, Any]:
         """Operación opcional del contrato (HU-SH-04, ADR-0123): el período que empieza en
         `inicio` lo pagó OTRO canal (p. ej. el panel de la plataforma). Su cargo queda pagado
         (se crea si todavía no existía) y la suscripción se reactiva como con un pago propio:
         el asistente no lo vuelve a cobrar ni a recordar. Idempotente por `referencia`.
+
+        `emitir_pago` (HU-SUB-26): además emite `subscription.charge_paid`, como un pago con el link
+        del pack, para que el core aplique el período al plan de un negocio aprovisionado. Lo pide el
+        registro que hace el negocio; el cobro de la plataforma ya aplicó su período y no lo pide.
+        `cargo_id` fija el cargo que se paga (el que el usuario eligió en el panel): sin él se resuelve por
+        la etiqueta del período, que puede no coincidir si la periodicidad cambió después de crearlo.
 
         Devuelve `{"estado", "periodo", "charge_id"}`. `estado`: `registrado`, `ya_registrado`
         o `duplicado` (el cargo ya estaba pagado por el link del pack u otro pago).
@@ -776,8 +784,30 @@ class SubscriptionCapabilityImpl:
         externo = {"canal": canal, "referencia": referencia, "registrado_en": ahora.isoformat()}
         async with get_session() as session:
             sub = await self._sub_bloqueada(session, subscription_id)
-            periodo = etiqueta_periodo(inicio, sub.periodicidad)
-            cargo = await self._cargo_del_periodo(session, sub, periodo)
+            if emitir_pago and sub.estado == "cancelada":
+                raise SubscriptionError("La suscripción está cancelada: no hay nada que cobrar.", code="suscripcion_cancelada")
+            if cargo_id is not None:
+                cargo = (
+                    await session.execute(
+                        select(SubscriptionCharge)
+                        .where(
+                            SubscriptionCharge.tenant_id == get_current_tenant_id(),
+                            SubscriptionCharge.subscription_id == sub.id,
+                            SubscriptionCharge.id == cargo_id,
+                            SubscriptionCharge.tipo == "periodo",
+                            SubscriptionCharge.deleted_at.is_(None),
+                        )
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if cargo is None:
+                    raise SubscriptionError("El cobro no existe.", code="cargo_no_encontrado")
+                periodo = cargo.periodo
+            else:
+                periodo = etiqueta_periodo(inicio, sub.periodicidad)
+                cargo = await self._cargo_del_periodo(session, sub, periodo)
+            if cargo is not None and cargo.estado == "anulado" and cargo_id is not None:
+                raise SubscriptionError("Este cobro está anulado: no se puede registrar un pago.", code="cargo_anulado")
             if cargo is not None and cargo.estado == "pagado":
                 previo = cargo.pago_externo or {}
                 estado = "ya_registrado" if previo.get("referencia") == referencia else "duplicado"
@@ -799,5 +829,9 @@ class SubscriptionCapabilityImpl:
             await session.flush()
             reactivar_por_pago(sub, cargo, fin=fin)
             await session.flush()
+            if emitir_pago:
+                from pack_subscriptions.module import _emitir_cargo_pagado
+
+                await _emitir_cargo_pagado(session, cargo, sub, referencia, duplicado=False)
             log.info("subs_pago_externo_registrado", subscription_id=str(sub.id), periodo=periodo, canal=canal)
             return {"estado": "registrado", "periodo": periodo, "charge_id": str(cargo.id)}

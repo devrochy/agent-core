@@ -37,7 +37,7 @@ from pack_subscriptions.horario_legal import (
     proximo_inicio_de_cobro,
     siguiente_dia,
 )
-from pack_subscriptions.models import Subscription, SubscriptionCharge
+from pack_subscriptions.models import CANAL_TRANSFERENCIA, Subscription, SubscriptionCharge
 from pack_subscriptions.periodos import etiqueta_periodo, sumar_periodo
 
 log = get_logger(__name__)
@@ -370,7 +370,8 @@ async def _marcar_vencidas(now: datetime) -> int:
 async def paga_por_otro_canal(session, tenant_id: uuid.UUID, sub: Subscription) -> bool:  # type: ignore[no-untyped-def]
     """¿El último período pagado de la suscripción lo pagó otro canal (`pago_externo`)?
     Entonces el cliente paga por ahí: el pack no le manda link ni recordatorios
-    (HU-SH-04, ADR-0123). Vuelve a cobrarle cuando pague un período con el link del pack."""
+    (HU-SH-04, ADR-0123). Vuelve a cobrarle cuando pague un período con el link del pack.
+    Una transferencia que registró el negocio (HU-SUB-26) no cuenta: el pack sigue cobrando."""
     ultimo = (
         await session.execute(
             select(SubscriptionCharge)
@@ -385,7 +386,8 @@ async def paga_por_otro_canal(session, tenant_id: uuid.UUID, sub: Subscription) 
             .limit(1)
         )
     ).scalar_one_or_none()
-    return ultimo is not None and bool(ultimo.pago_externo)
+    externo = (ultimo.pago_externo or {}) if ultimo is not None else {}
+    return bool(externo) and externo.get("canal") != CANAL_TRANSFERENCIA
 
 
 def _aplicar_cambio_programado(sub: Subscription, inicio: datetime) -> None:
