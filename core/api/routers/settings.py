@@ -546,6 +546,7 @@ def _bajas_out(app_settings: AppSettings | None) -> BajasSettings:
 async def get_bajas(
     principal: Annotated[Principal, Depends(require("settings"))],
 ) -> BajasSettings:
+    _exigir_negocio(principal)
     return _bajas_out(await _load_app_settings(principal.tenant_id))
 
 
@@ -556,6 +557,7 @@ async def save_bajas(
 ) -> BajasSettings:
     """Guarda las palabras de baja sin vacíos ni repetidos. Lista vacía = restablecer las de por
     defecto (se quita la clave). Los textos son dato del dueño, nunca instrucción (invariante 7)."""
+    _exigir_negocio(principal)
     palabras = limpiar_palabras_de_baja(payload.palabras)
     async with get_session() as session:
         app_settings = (
@@ -613,8 +615,10 @@ class WaWebPolicyUpdate(BaseModel):
         ge=rango("waweb_daily_outbound_cap").minimo, le=rango("waweb_daily_outbound_cap").maximo
     )
     warmup_enabled: bool
-    # Confirmación explícita del aviso de riesgo al pasar a `allow_outbound`.
+    # Confirmación explícita del aviso de riesgo al pasar a `allow_outbound`: `acepta_riesgo` y la
+    # versión del aviso que la persona vio (`risk_version` de la lectura), para no aceptar uno viejo.
     acepta_riesgo: bool = False
+    risk_version: str | None = None
 
     @field_validator("mode")
     @classmethod
@@ -635,6 +639,25 @@ def _exigir_master(principal: Principal) -> None:
         raise ApiError.forbidden("La política de WhatsApp Web la decide el equipo de SolversHub.")
 
 
+def _solo_master(*, write: bool):
+    """Dependencia: sección Configuración y además master. Como es dependencia, el 403 sale antes
+    de validar el cuerpo: un dueño no se entera de los modos ni rangos válidos con un 422."""
+    base = require("settings", write=write)
+
+    # `Depends` va como valor por defecto: con `from __future__ import annotations`, FastAPI no
+    # resolvería `base` (variable local) dentro de un `Annotated[...]` en texto.
+    async def dependency(principal: Principal = Depends(base)) -> Principal:  # noqa: B008
+        _exigir_master(principal)
+        return principal
+
+    return dependency
+
+
+def _exigir_negocio(principal: Principal) -> None:
+    if principal.tenant_id is None:
+        raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
+
+
 def _waweb_out(app_settings: AppSettings | None) -> WaWebPolicySettings:
     politica = policy_from_behavior(dict((app_settings.behavior_config if app_settings else {}) or {}))
     return WaWebPolicySettings(
@@ -649,20 +672,20 @@ def _waweb_out(app_settings: AppSettings | None) -> WaWebPolicySettings:
 
 @router.get("/whatsapp-web", response_model=WaWebPolicySettings)
 async def get_waweb_policy(
-    principal: Annotated[Principal, Depends(require("settings"))],
+    principal: Annotated[Principal, Depends(_solo_master(write=False))],
 ) -> WaWebPolicySettings:
-    _exigir_master(principal)
+    _exigir_negocio(principal)
     return _waweb_out(await _load_app_settings(principal.tenant_id))
 
 
 @router.put("/whatsapp-web", response_model=WaWebPolicySettings)
 async def save_waweb_policy(
     payload: WaWebPolicyUpdate,
-    principal: Annotated[Principal, Depends(require("settings", write=True))],
+    principal: Annotated[Principal, Depends(_solo_master(write=True))],
 ) -> WaWebPolicySettings:
     """Guarda la política del canal. Pasar a `allow_outbound` exige aceptar el aviso de riesgo
     vigente; cada cambio deja una fila en `audit_log` con quién, antes y después."""
-    _exigir_master(principal)
+    _exigir_negocio(principal)
     async with get_session() as session:
         app_settings = (
             await session.execute(
@@ -684,6 +707,13 @@ async def save_waweb_policy(
                 "Revisa los campos marcados.",
                 fields={"acepta_riesgo": "Acepta el aviso de riesgo para permitir envíos no solicitados."},
             )
+        if abre_envio and payload.risk_version != RISK_ACK_VERSION:
+            raise ApiError(
+                422,
+                "validation_error",
+                "Revisa los campos marcados.",
+                fields={"risk_version": "El aviso de riesgo cambió: vuelve a leerlo y acéptalo."},
+            )
         behavior = dict(app_settings.behavior_config or {})
         behavior.update(
             waweb_mode=payload.mode,
@@ -692,7 +722,7 @@ async def save_waweb_policy(
             waweb_daily_outbound_cap=payload.daily_outbound_cap,
             waweb_warmup_enabled=payload.warmup_enabled,
         )
-        despues = payload.model_dump(exclude={"acepta_riesgo"})
+        despues = payload.model_dump(exclude={"acepta_riesgo", "risk_version"})
         if despues != antes.model_dump(exclude={"risk_version"}):
             app_settings.behavior_config = behavior
             session.add(

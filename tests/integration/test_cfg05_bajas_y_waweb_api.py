@@ -93,6 +93,8 @@ async def test_el_duenio_no_ve_ni_edita_la_politica_de_whatsapp_web(app_client) 
     h = await api_headers(app_client, tid, email=email, password=PASSWORD)
     assert (await app_client.get(f"{BASE}/whatsapp-web", headers=h)).status_code == 403
     assert (await app_client.put(f"{BASE}/whatsapp-web", headers=h, json=POLITICA)).status_code == 403
+    # El 403 llega antes que la validación del cuerpo: no se filtran los modos ni rangos válidos.
+    assert (await app_client.put(f"{BASE}/whatsapp-web", headers=h, json={**POLITICA, "mode": "xyz"})).status_code == 403
 
 
 async def test_master_edita_la_politica_con_rangos_coherencia_y_aviso_de_riesgo(app_client) -> None:
@@ -119,6 +121,10 @@ async def test_master_edita_la_politica_con_rangos_coherencia_y_aviso_de_riesgo(
     assert r.status_code == 422 and "acepta_riesgo" in r.json()["error"]["fields"]
     assert (await app_client.get(f"{BASE}/whatsapp-web", headers=h)).json()["mode"] == "reply_only"
     r = await app_client.put(f"{BASE}/whatsapp-web", headers=h, json={**abierto, "acepta_riesgo": True})
+    assert r.status_code == 422 and "risk_version" in r.json()["error"]["fields"]  # sin la versión del aviso
+    r = await app_client.put(
+        f"{BASE}/whatsapp-web", headers=h, json={**abierto, "acepta_riesgo": True, "risk_version": RISK_ACK_VERSION}
+    )
     assert r.status_code == 200 and r.json()["mode"] == "allow_outbound"
     filas = await _auditoria(tid, "settings.waweb_allow_outbound")
     assert len(filas) == 1

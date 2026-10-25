@@ -45256,6 +45256,17 @@
             "type": "boolean",
             "title": "Acepta Riesgo",
             "default": false
+          },
+          "risk_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Version"
           }
         },
         "type": "object",

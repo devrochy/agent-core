@@ -5,6 +5,7 @@
   50 de 60 caracteres. Lista vacía = restablecer las de por defecto. Cada cambio queda en `audit_log`.
 - Nuevo `GET/PUT /api/v1/admin/settings/whatsapp-web` (solo master; 403 al resto): modo, pausa mínima y máxima, tope diario y
   calentamiento, con los rangos de `core/config_limites.py`. Una pausa máxima menor que la mínima responde 422 con el campo (antes
-  el runtime las igualaba en silencio). Pasar a `allow_outbound` exige `acepta_riesgo: true` (aviso `RISK_ACK_VERSION`) y deja una
+  el runtime las igualaba en silencio). Pasar a `allow_outbound` exige `acepta_riesgo: true` y la `risk_version` del aviso vigente (`RISK_ACK_VERSION`, la que devuelve la lectura) y deja una
   fila `settings.waweb_allow_outbound` en `audit_log` con quién, antes, después y la versión del aviso.
 - Sin migraciones; sin cambios de comportamiento para quien no toque estas opciones.
+- El 403 de la política de WhatsApp Web sale antes de validar el cuerpo (dependencia), y los PUT/GET sin negocio activo responden 400 `no_tenant`.
