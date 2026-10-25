@@ -78,15 +78,15 @@ async def _config_del_negocio():  # type: ignore[no-untyped-def]
     return config if isinstance(config, SubscriptionConfig) else SubscriptionConfig()
 
 
-async def zona_del_negocio(session) -> str | None:  # type: ignore[no-untyped-def]
-    """Zona horaria del negocio actual (ADR-0091); None = la de Bogotá."""
+async def zona_del_negocio(session, tenant_id: uuid.UUID) -> str | None:  # type: ignore[no-untyped-def]
+    """Zona horaria del negocio (ADR-0091); None = la de Bogotá. Exige el negocio explícito:
+    sin él fallaría callado hacia Bogotá."""
     from core.db.models import AppSettings
-    from core.shared.tenant import get_current_tenant_id
 
+    if tenant_id is None:
+        raise RuntimeError("zona_del_negocio sin tenant_id")
     return (
-        await session.execute(
-            select(AppSettings.timezone).where(AppSettings.tenant_id == get_current_tenant_id())
-        )
+        await session.execute(select(AppSettings.timezone).where(AppSettings.tenant_id == tenant_id))
     ).scalars().first()
 
 
@@ -257,7 +257,7 @@ async def _turno_legal_del_aviso(session, tenant_id: uuid.UUID, sub: Subscriptio
     """Primer momento del horario legal en un día en que el cliente no tenga otro aviso de
     cobro, con ese día ya reservado. None (entregar ya) solo si la ventana del negocio no
     abre en dos semanas, que la validación de la config no permite."""
-    tz = await zona_del_negocio(session)
+    tz = await zona_del_negocio(session, tenant_id)
     momento: datetime | None = now
     for _ in range(15):
         momento = proximo_inicio_de_cobro(momento, tz, config.ventana_cobro, config.pais_festivos)
@@ -446,7 +446,7 @@ async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
         async with tenant_scope(tenant_id):
             config = await _config_del_negocio()
             async with get_session() as session:
-                tz = await zona_del_negocio(session)
+                tz = await zona_del_negocio(session, tenant_id)
                 if not en_horario_de_cobro(now, tz, config.ventana_cobro, config.pais_festivos):
                     totales["fuera_de_horario"] += 1
                     continue

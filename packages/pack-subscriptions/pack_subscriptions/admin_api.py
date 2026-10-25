@@ -459,7 +459,7 @@ async def reenviar_link_de_cargo(
     async with get_session() as session:
         if enviado:
             config = await _config()
-            tz = await zona_del_negocio(session)
+            tz = await zona_del_negocio(session, _tenant(principal))
             if not en_horario_de_cobro(ahora, tz, config.ventana_cobro, config.pais_festivos):
                 raise ApiError(
                     409,

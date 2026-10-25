@@ -182,3 +182,33 @@ async def test_un_solo_aviso_de_cobro_por_cliente_y_dia() -> None:
     assert len(await _eventos(tid, "subscription.charge_reminder")) == 1
     await _avisos_de_cobro(martes + timedelta(days=1))
     assert len(await _eventos(tid, "subscription.charge_reminder")) == 2
+
+
+@pytest.mark.asyncio
+async def test_reservas_aisladas_por_negocio_y_solo_insercion() -> None:
+    from pack_subscriptions.jobs import reservar_aviso_del_dia
+    from sqlalchemy import text
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    a, b = await _negocio(), await _negocio()
+    cliente = uuid.uuid4()
+    hoy = NOCHE.date()
+    async with tenant_scope(b):
+        async with get_session() as s:
+            assert await reservar_aviso_del_dia(s, b, cliente, hoy, "t", None)
+    async with tenant_scope(a):
+        async with get_session() as s:
+            # El mismo cliente y día en otro negocio no choca, y A no ve las reservas de B.
+            assert await reservar_aviso_del_dia(s, a, cliente, hoy, "t", None)
+            visibles = (await s.execute(text("select tenant_id from pack_subscriptions_avisos_cobro"))).scalars().all()
+            assert set(visibles) == {a}
+    with pytest.raises(Exception):  # noqa: B017 - RLS (WITH CHECK) o permisos
+        async with tenant_scope(a):
+            async with get_session() as s:
+                await reservar_aviso_del_dia(s, b, uuid.uuid4(), hoy, "t", None)
+    with pytest.raises(Exception):  # noqa: B017 - solo inserción
+        async with tenant_scope(a):
+            async with get_session() as s:
+                await s.execute(text("delete from pack_subscriptions_avisos_cobro"))

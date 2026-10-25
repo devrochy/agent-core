@@ -45,15 +45,26 @@ def upgrade() -> None:
         f"create policy tenant_isolation on {TABLA} "
         f"using (tenant_id = {RLS}) with check (tenant_id = {RLS})"
     )
+    # Solo inserción (invariante 8): sin UPDATE ni DELETE para el runtime, y el trigger
+    # `prevent_mutation()` del core (0067) lo impide también al dueño. purge_tenant lo apaga.
     op.execute(
         f"""
         DO $do$
         BEGIN
             IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_runtime') THEN
+                REVOKE ALL ON {TABLA} FROM app_runtime;
                 GRANT SELECT, INSERT ON {TABLA} TO app_runtime;
             END IF;
         END $do$;
         """
+    )
+    op.execute(
+        f"CREATE TRIGGER {TABLA}_immutable BEFORE UPDATE OR DELETE ON {TABLA} "
+        "FOR EACH ROW EXECUTE FUNCTION prevent_mutation()"
+    )
+    op.execute(
+        f"CREATE TRIGGER {TABLA}_no_truncate BEFORE TRUNCATE ON {TABLA} "
+        "FOR EACH STATEMENT EXECUTE FUNCTION prevent_mutation()"
     )
 
 
