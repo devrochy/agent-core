@@ -36,12 +36,13 @@ from core.agents.spec import (
 )
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
-from core.config import get_settings
-from core.config_limites import rango
+from core.config import DEBOUNCE_DELAY_MS, get_settings
+from core.config_limites import leer_entero, rango
 from core.config_registro import Catalogo, catalogo_para
 from core.config_registro.validar import validar_valor
 from core.db.models import AppSettings, AuditLog
 from core.db.session import get_session
+from core.gateway.message_splitter import CAPS
 from core.kernel.fuera_de_horario import texto_por_defecto
 from core.llm.difficulty_router import (
     DIFFICULTY_SCORE_THRESHOLD,
@@ -322,6 +323,18 @@ def _web_chat_out(app_settings: AppSettings | None) -> WebChatSettings:
     )
 
 
+def _modo_efectivo(guardado: object, validos: dict, defecto: str, si_desconocido: str) -> str:
+    """El valor que de verdad aplica el runtime, para que el cliente nunca reenvíe uno inválido.
+
+    Ausente = el defecto. Un texto fuera de la lista (fila escrita por un script o anterior a la
+    validación, HU-CFG-03) se muestra como lo trata el runtime: `si_desconocido`. Así el siguiente
+    guardado desde el panel o la APK no responde 422 por algo que el dueño no puede ver ni corregir.
+    """
+    if guardado is None:
+        return defecto
+    return guardado if isinstance(guardado, str) and guardado in validos else si_desconocido
+
+
 def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) -> IdentitySettings:
     behavior = dict((app_settings.behavior_config if app_settings else {}) or {})
     escalation = dict((app_settings.escalation_config if app_settings else {}) or {})
@@ -332,22 +345,22 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
         brand_voice=(app_settings.brand_voice if app_settings else "") or "",
         brand_voice_warning=not bool(((app_settings.brand_voice if app_settings else "") or "").strip()),
         tono=behavior.get("tono", "calido"),
-        debounce_mode=behavior.get("debounce_mode", "natural"),
-        split_style=behavior.get("split_style", "un_mensaje"),
+        debounce_mode=_modo_efectivo(behavior.get("debounce_mode"), DEBOUNCE_DELAY_MS, "natural", "inmediato"),
+        split_style=_modo_efectivo(behavior.get("split_style"), CAPS, "un_mensaje", "pocos_cortos"),
         currency=(app_settings.currency if app_settings and app_settings.currency else "COP"),
         timezone=(app_settings.timezone if app_settings and app_settings.timezone else DEFAULT_TIMEZONE),
-        guardrail_max_retries=int(behavior.get("guardrail_max_retries", 1) or 0),
+        guardrail_max_retries=leer_entero(behavior, "guardrail_max_retries", 1),
         guardrail_fail_action="neutral" if behavior.get("guardrail_fail_action") == "neutral" else "escalate",
         disabled_guardrails=normalizar_desactivados(behavior.get("disabled_guardrails", [])),
         available_guardrails=available,
-        difficulty_long_message_threshold=int(
-            behavior.get("difficulty_long_message_threshold", LONG_MESSAGE_THRESHOLD)
+        difficulty_long_message_threshold=leer_entero(
+            behavior, "difficulty_long_message_threshold", LONG_MESSAGE_THRESHOLD
         ),
-        difficulty_turnos_sin_resolver_threshold=int(
-            behavior.get("difficulty_turnos_sin_resolver_threshold", TURNOS_SIN_RESOLVER_THRESHOLD)
+        difficulty_turnos_sin_resolver_threshold=leer_entero(
+            behavior, "difficulty_turnos_sin_resolver_threshold", TURNOS_SIN_RESOLVER_THRESHOLD
         ),
-        difficulty_score_threshold=int(
-            behavior.get("difficulty_score_threshold", DIFFICULTY_SCORE_THRESHOLD)
+        difficulty_score_threshold=leer_entero(
+            behavior, "difficulty_score_threshold", DIFFICULTY_SCORE_THRESHOLD
         ),
         escalation_keywords=list(escalation.get("keywords", []) or []),
         out_of_hours_message=escalation.get("out_of_hours_message", "") or "",
@@ -355,11 +368,11 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
             app_settings.language if app_settings else None,
             app_settings.assistant_name if app_settings else None,
         ),
-        auto_escalate_after_turns=int(escalation.get("auto_escalate_after_turns", 0) or 0),
+        auto_escalate_after_turns=leer_entero(escalation, "auto_escalate_after_turns", 0),
         persona_tone=persona.get("tone", "") or "",
-        persona_warmth=int(persona.get("warmth", 3) or 3),
+        persona_warmth=rango("persona_warmth").recortar(int(persona.get("warmth", 3) or 0)),
         persona_emojis=persona.get("emojis", "sparse") or "sparse",
-        persona_max_length=int(persona.get("maxLength", 500) or 0),
+        persona_max_length=rango("persona_max_length").recortar(int(persona.get("maxLength", 500) or 0)),
         persona_forbidden=list(persona.get("forbiddenPhrases", []) or []),
         bot_paused=bool(app_settings.bot_paused) if app_settings else False,
         business_tz=str(((escalation.get("business_hours") or {}).get("tz")) or ""),
