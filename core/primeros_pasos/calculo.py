@@ -88,7 +88,7 @@ async def calcular(tenant_id: uuid.UUID, *, omitir_hitos: Collection[str] = ()) 
                 mensaje = await _primer_mensaje(session, tenant_id)
                 if mensaje is not None:
                     hitos[reglas.PRIMER_MENSAJE] = mensaje
-        catalogo = reglas.paso_catalogo(await _contenidos(tenant_id, habilitadas))
+        catalogo = reglas.paso_catalogo(await contenidos_de_habilidades(tenant_id, habilitadas))
         preset = await _paso_activar_preset(tenant_id, settings, alta or {})
 
     pasos = [datos, whatsapp, catalogo, probar, equipo]
@@ -256,7 +256,7 @@ async def _habilidades_habilitadas(tenant_id: uuid.UUID) -> list[str]:
     return vistas
 
 
-async def _contenidos(tenant_id: uuid.UUID, habilitadas: list[str]) -> list[tuple[str, ContenidoCargado]]:
+async def contenidos_de_habilidades(tenant_id: uuid.UUID, habilitadas: list[str]) -> list[tuple[str, ContenidoCargado]]:
     """Lo que cargó el negocio en cada habilidad habilitada. Un pack que falla no tumba el
     checklist: queda en el log y se sigue con los demás."""
     from core.plugin_manager import plugin_manager
