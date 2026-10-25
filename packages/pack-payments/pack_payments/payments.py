@@ -33,6 +33,7 @@ from core.shared.tenant import get_current_tenant_id
 from pack_payments.models import PaymentTransaction, utcnow
 from pack_payments.proveedor import build_provider, tenant_config
 from pack_payments.providers.base import MontoBajoMinimo, PaymentLinkResult, PaymentRequestRejected
+from pack_payments.providers.wompi import min_amount_cop
 
 log = get_logger(__name__)
 
@@ -57,6 +58,15 @@ class WompiPaymentCapability:
                 kind="qr",
             )
         ]
+
+    async def monto_minimo(self) -> float | None:
+        """Mínimo por link del ambiente del negocio (sandbox o producción), para quien decide
+        antes de intentar el cobro (`core.payments.monto_minimo`). `None` si no hay config."""
+        try:
+            config = await tenant_config()
+        except Exception:
+            return None
+        return float(min_amount_cop(config.sandbox))
 
     async def create_link(
         self, *, reference: str, amount: float, description: str = "", method: str | None = None

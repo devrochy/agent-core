@@ -113,3 +113,27 @@ contestaba `monto_bajo_minimo` también a un pedido ya pagado o sin pasarela con
 `monto_bajo_minimo`. Suscripciones devuelve `cargo.link_url` guardado sin llamar a `create_link`
 (`_link_de_cargo`, `sub_link_pago`), así que todavía puede entregar un link vencido. Como
 `create_link` es idempotente, basta con quitar ese atajo.
+
+## Adenda (2026-10-25): el mínimo por cobro lo declara la capacidad, no el consumidor
+
+**Hallazgo.** `pack_commerce` guardaba su propia cifra (`pago_en_linea_monto_minimo`, 150.000 COP) para
+rechazar un pedido en línea antes de generar el link. Esa cifra salió de un 422 del **sandbox** de Wompi;
+en producción el mínimo publicado es 1.500 COP. Como el default valía igual en producción, un plan de
+80.000 pagado en línea salía rechazado salvo que cada negocio lo bajara a mano, y el playbook de ventas
+repetía el 150.000 como si fuera el mínimo real.
+
+**Decisión.**
+1. **Operación opcional `monto_minimo()`** en la capacidad, con el mismo molde que `procesar_evento`
+   (se invoca con `getattr`): devuelve el mínimo por link del ambiente del negocio, o `None` si no lo
+   sabe. `core.payments.monto_minimo(capacidad)` la expone a los packs sin importar `pack_payments`
+   (invariante nº5). El Protocol `PaymentCapability` no cambia.
+2. **`WompiPaymentCapability.monto_minimo()`** devuelve 150.000 con `sandbox` y 1.500 en producción
+   (`min_amount_cop`).
+3. **`pack_commerce`**: `pago_en_linea_monto_minimo` pasa a `None` por defecto. Vacío, el gate de
+   `crear_pedido` usa el mínimo de la pasarela; un valor explícito (incluido 0, que apaga el gate) manda
+   sobre el de la pasarela. Sin pasarela que lo declare queda 150.000, la política anterior.
+4. **Playbook de ventas** (`pack_commerce` 2.5.0): ya no cita una cifra; el modelo se apoya en el error
+   de `crear_pedido` y nunca nombra un mínimo.
+
+Fuera de esta adenda: el cobro de la plataforma (`core/billing/providers/wompi.py`, `MIN_AMOUNT_COP`) y
+el override de `solvershub-comercial`, que tienen su propio texto.

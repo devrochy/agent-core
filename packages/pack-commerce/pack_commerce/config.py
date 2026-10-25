@@ -63,22 +63,22 @@ class CRMConfig(BasePluginConfig):
         allow_inf_nan=False,
         description="Monto en COP que dispara escalamiento para planes recurrentes; None = nunca",
     )
-    # Gate determinístico en crear_pedido (incidente real 2026-09-11, tenant
-    # yopoldo): un pedido con pago_en_linea por debajo del mínimo real de la
-    # pasarela (Wompi: $150.000 COP, ver pack_payments/providers/wompi.py::
-    # MIN_AMOUNT_COP) nunca puede completarse -- pack_commerce no puede
-    # importar esa constante (invariante 5, ningún pack importa de otro), así
-    # que este valor es la política propia de pack_commerce, con un default
-    # que hoy coincide con el mínimo real. Antes de esto, `crear_pedido`
-    # dejaba pasar cualquier monto con pago_en_linea y el rechazo solo
-    # ocurría (si el modelo llegaba a llamarla) al generar el link, ya
-    # tarde para redirigir la conversación con naturalidad.
-    pago_en_linea_monto_minimo: float = Field(
-        default=150_000,
+    # Gate determinístico en crear_pedido (incidente real 2026-09-11, tenant yopoldo): un
+    # pedido con pago_en_linea por debajo del mínimo de la pasarela nunca puede completarse, y
+    # descubrirlo al generar el link es tarde para redirigir la conversación con naturalidad.
+    # El mínimo lo fija la pasarela y depende del ambiente (Wompi: 150.000 COP en sandbox, 1.500
+    # en producción), así que por defecto se le pregunta a la capacidad de pagos del core
+    # (`core.payments.monto_minimo`); pack_commerce no importa pack_payments (invariante 5).
+    # Un valor explícito manda sobre el de la pasarela (política propia del negocio).
+    pago_en_linea_monto_minimo: float | None = Field(
+        default=None,
         ge=0,
         le=9_999_999_999,
         allow_inf_nan=False,
-        description="Monto mínimo en COP para aceptar pago_en_linea al crear un pedido",
+        description=(
+            "Monto mínimo en COP para aceptar pago_en_linea al crear un pedido. Vacío = el de la "
+            "pasarela según su ambiente (sandbox o producción); un valor lo reemplaza."
+        ),
     )
     # Cuentas de transferencia visibles al cliente (nunca pasan por el LLM).
     # Formato: [{"entity","accountType","accountNumber","holderName","holderDocument"}]

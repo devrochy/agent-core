@@ -1884,13 +1884,12 @@ class OrderSkill(BaseSkill):
             es_gratis = es_plan and _float(quote.total) == 0
             # Para el antiabuso, Free es el plan, no el total (ADR-0125).
             incluye_free = es_plan and await _incluye_un_free(session, [i.variant_id for i in items])
-            min_online = getattr(config, "pago_en_linea_monto_minimo", 150_000) or 150_000
+            min_online = await self._minimo_pago_en_linea(config)
             if not es_gratis and payment_method == "pago_en_linea" and _float(quote.total) < min_online:
                 # Incidente real (tenant yopoldo, 2026-09-12): un pedido de
                 # $54.000 con pago_en_linea nunca iba a poder completarse (el
-                # mínimo real de la pasarela es $150.000, MIN_AMOUNT_COP en
-                # pack_payments/providers/wompi.py -- no importable acá,
-                # invariante 5). Antes esto solo se descubría (si el modelo
+                # mínimo de la pasarela era $150.000, el del sandbox; hoy se
+                # pregunta a la capacidad de pagos, invariante 5). Antes esto solo se descubría (si el modelo
                 # llegaba a llamarla) al generar el link, ya tarde para
                 # redirigir la conversación con naturalidad; ahora es
                 # determinístico en el primer punto posible.
@@ -2316,6 +2315,18 @@ class OrderSkill(BaseSkill):
             "hint": "Si ya pagó, puede tardar unos minutos. Si el link venció, confirmar_pago_pedido "
             "genera uno nuevo.",
         }
+
+    async def _minimo_pago_en_linea(self, config: Any) -> float:
+        """Mínimo del pago en línea: el valor explícito del negocio, o el que declara la
+        pasarela para su ambiente. Sin pasarela que lo declare queda el de Wompi en sandbox
+        (150.000), la política anterior."""
+        explicito = getattr(config, "pago_en_linea_monto_minimo", None)
+        if explicito is not None:
+            return float(explicito)
+        from core.payments import monto_minimo
+
+        declarado = await monto_minimo(await self._payment_capability())
+        return declarado if declarado is not None else 150_000.0
 
     async def _payment_capability(self):  # type: ignore[no-untyped-def]
         """Capacidad de pago de un pack habilitado, vía el registro del core."""
