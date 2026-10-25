@@ -107,7 +107,9 @@ async def gate_aprobado(
 
 async def _es_negocio_de_prueba(session: Any, tenant_id: uuid.UUID) -> bool:
     slug = (
-        await session.execute(text("SELECT slug FROM tenants WHERE id = :t"), {"t": tenant_id})
+        await session.execute(
+            text("SELECT slug FROM tenants WHERE id = :t AND deleted_at IS NULL"), {"t": tenant_id}
+        )
     ).scalar_one_or_none()
     return isinstance(slug, str) and slug.startswith("qa-")
 
