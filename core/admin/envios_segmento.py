@@ -130,6 +130,23 @@ def normalizar(texto: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]+", " ", sin_tildes.lower()).split())
 
 
+def limpiar_palabras_de_baja(palabras: list[str]) -> list[str]:
+    """Lista de palabras de baja sin vacíos ni repetidos (se comparan sin mayúsculas, tildes ni signos).
+
+    Conserva la primera escritura de cada una. Una palabra que al normalizarse queda vacía («¡¡!!»)
+    nunca coincidiría con un mensaje y se descarta.
+    """
+    vistas: set[str] = set()
+    limpias: list[str] = []
+    for palabra in palabras:
+        texto = " ".join(str(palabra or "").split())
+        clave = normalizar(texto)
+        if clave and clave not in vistas:
+            vistas.add(clave)
+            limpias.append(texto)
+    return limpias
+
+
 def es_palabra_de_baja(texto: str, palabras: list[str] | tuple[str, ...] | None = None) -> bool:
     """El mensaje entero es una palabra de baja (sin mayúsculas, tildes ni signos). Solo el
     mensaje entero: «baja el precio» no da de baja a nadie."""

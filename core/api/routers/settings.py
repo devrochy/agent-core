@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
+from core.admin.envios_segmento import PALABRAS_DE_BAJA_POR_DEFECTO, limpiar_palabras_de_baja
 from core.admin.roles import actua_como_master
 from core.admin.settings_service import (
     read_memory,
@@ -53,6 +54,7 @@ from core.llm.prompt_builder import DEFAULT_TIMEZONE
 from core.mcp.host import mcp_host
 from core.orchestrator.verificador import TOGGLES, normalizar_desactivados
 from core.shared.logger import get_logger
+from core.waweb.policy import MODE_ALLOW_OUTBOUND, RISK_ACK_VERSION, policy_from_behavior
 
 router = APIRouter(prefix="/admin/settings", tags=["admin · configuración"])
 log = get_logger(__name__)
@@ -502,6 +504,241 @@ async def save_identity(
 
     refreshed = await _load_app_settings(principal.tenant_id)
     return _identity_out(refreshed, spec, available)
+
+
+# ------------------------------------------------------------------ palabras de baja (HU-CFG-05)
+MAX_PALABRAS_DE_BAJA = 50
+MAX_LARGO_PALABRA_DE_BAJA = 60
+
+
+class BajasSettings(BaseModel):
+    """Palabras con las que un cliente se da de baja de los envíos a segmentos (ADR-0150)."""
+
+    palabras: list[str] = Field(description="Las guardadas por el negocio; vacío = usa las de por defecto.")
+    por_defecto: list[str]
+    usa_por_defecto: bool
+
+
+class BajasUpdate(BaseModel):
+    palabras: list[str] = Field(default=[], max_length=MAX_PALABRAS_DE_BAJA)
+
+    @field_validator("palabras")
+    @classmethod
+    def _largo_razonable(cls, value: list[str]) -> list[str]:
+        for palabra in value:
+            if len(palabra.strip()) > MAX_LARGO_PALABRA_DE_BAJA:
+                raise ValueError(f"Cada palabra admite hasta {MAX_LARGO_PALABRA_DE_BAJA} caracteres.")
+        return value
+
+
+def _bajas_out(app_settings: AppSettings | None) -> BajasSettings:
+    behavior = dict((app_settings.behavior_config if app_settings else {}) or {})
+    guardadas = behavior.get("palabras_de_baja")
+    palabras = limpiar_palabras_de_baja(guardadas) if isinstance(guardadas, list) else []
+    return BajasSettings(
+        palabras=palabras,
+        por_defecto=list(PALABRAS_DE_BAJA_POR_DEFECTO),
+        usa_por_defecto=not palabras,
+    )
+
+
+@router.get("/bajas", response_model=BajasSettings)
+async def get_bajas(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> BajasSettings:
+    _exigir_negocio(principal)
+    return _bajas_out(await _load_app_settings(principal.tenant_id))
+
+
+@router.put("/bajas", response_model=BajasSettings)
+async def save_bajas(
+    payload: BajasUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> BajasSettings:
+    """Guarda las palabras de baja sin vacíos ni repetidos. Lista vacía = restablecer las de por
+    defecto (se quita la clave). Los textos son dato del dueño, nunca instrucción (invariante 7)."""
+    _exigir_negocio(principal)
+    palabras = limpiar_palabras_de_baja(payload.palabras)
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == principal.tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+        behavior = dict(app_settings.behavior_config or {})
+        antes = behavior.get("palabras_de_baja")
+        if palabras:
+            behavior["palabras_de_baja"] = palabras
+        else:
+            behavior.pop("palabras_de_baja", None)
+        if behavior != dict(app_settings.behavior_config or {}):
+            app_settings.behavior_config = behavior
+            session.add(
+                AuditLog(
+                    tenant_id=principal.tenant_id,
+                    actor=f"admin:{principal.admin.email}",
+                    action="settings.palabras_de_baja",
+                    input={"antes": antes if isinstance(antes, list) else [], "despues": palabras},
+                )
+            )
+    return _bajas_out(await _load_app_settings(principal.tenant_id))
+
+
+# ------------------------------------------------------------------ política de WhatsApp Web (HU-CFG-05, ADR-0074)
+class WaWebPolicySettings(BaseModel):
+    """Política anti-baneo del canal no oficial. Solo la ve y la edita el master."""
+
+    mode: str
+    send_min_delay_ms: int
+    send_max_delay_ms: int
+    daily_outbound_cap: int
+    warmup_enabled: bool
+    # Versión del aviso de riesgo vigente: para pasar a `allow_outbound` hay que aceptarlo.
+    risk_version: str
+
+
+class WaWebPolicyUpdate(BaseModel):
+    mode: str
+    send_min_delay_ms: int = Field(
+        ge=rango("waweb_send_min_delay_ms").minimo, le=rango("waweb_send_min_delay_ms").maximo
+    )
+    send_max_delay_ms: int = Field(
+        ge=rango("waweb_send_max_delay_ms").minimo, le=rango("waweb_send_max_delay_ms").maximo
+    )
+    daily_outbound_cap: int = Field(
+        ge=rango("waweb_daily_outbound_cap").minimo, le=rango("waweb_daily_outbound_cap").maximo
+    )
+    warmup_enabled: bool
+    # Confirmación explícita del aviso de riesgo al pasar a `allow_outbound`: `acepta_riesgo` y la
+    # versión del aviso que la persona vio (`risk_version` de la lectura), para no aceptar uno viejo.
+    acepta_riesgo: bool = False
+    risk_version: str | None = None
+
+    @field_validator("mode")
+    @classmethod
+    def _modo_conocido(cls, value: str) -> str:
+        return validar_valor("waweb_mode", value)
+
+    @field_validator("send_max_delay_ms")
+    @classmethod
+    def _maximo_no_menor_que_el_minimo(cls, value: int, info) -> int:
+        minimo = info.data.get("send_min_delay_ms")
+        if minimo is not None and value < minimo:
+            raise ValueError("La pausa máxima no puede ser menor que la mínima.")
+        return value
+
+
+def _exigir_master(principal: Principal) -> None:
+    if not actua_como_master(principal.admin):
+        raise ApiError.forbidden("La política de WhatsApp Web la decide el equipo de SolversHub.")
+
+
+def _solo_master(*, write: bool):
+    """Dependencia: sección Configuración y además master. Como es dependencia, el 403 sale antes
+    de validar el cuerpo: un dueño no se entera de los modos ni rangos válidos con un 422."""
+    base = require("settings", write=write)
+
+    # `Depends` va como valor por defecto: con `from __future__ import annotations`, FastAPI no
+    # resolvería `base` (variable local) dentro de un `Annotated[...]` en texto.
+    async def dependency(principal: Principal = Depends(base)) -> Principal:  # noqa: B008
+        _exigir_master(principal)
+        return principal
+
+    return dependency
+
+
+def _exigir_negocio(principal: Principal) -> None:
+    if principal.tenant_id is None:
+        raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
+
+
+def _waweb_out(app_settings: AppSettings | None) -> WaWebPolicySettings:
+    politica = policy_from_behavior(dict((app_settings.behavior_config if app_settings else {}) or {}))
+    return WaWebPolicySettings(
+        mode=politica.mode,
+        send_min_delay_ms=politica.send_min_delay_ms,
+        send_max_delay_ms=politica.send_max_delay_ms,
+        daily_outbound_cap=politica.daily_outbound_cap,
+        warmup_enabled=politica.warmup_enabled,
+        risk_version=RISK_ACK_VERSION,
+    )
+
+
+@router.get("/whatsapp-web", response_model=WaWebPolicySettings)
+async def get_waweb_policy(
+    principal: Annotated[Principal, Depends(_solo_master(write=False))],
+) -> WaWebPolicySettings:
+    _exigir_negocio(principal)
+    return _waweb_out(await _load_app_settings(principal.tenant_id))
+
+
+@router.put("/whatsapp-web", response_model=WaWebPolicySettings)
+async def save_waweb_policy(
+    payload: WaWebPolicyUpdate,
+    principal: Annotated[Principal, Depends(_solo_master(write=True))],
+) -> WaWebPolicySettings:
+    """Guarda la política del canal. Pasar a `allow_outbound` exige aceptar el aviso de riesgo
+    vigente; cada cambio deja una fila en `audit_log` con quién, antes y después."""
+    _exigir_negocio(principal)
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == principal.tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+        antes = _waweb_out(app_settings)
+        abre_envio = payload.mode == MODE_ALLOW_OUTBOUND and antes.mode != MODE_ALLOW_OUTBOUND
+        if abre_envio and not payload.acepta_riesgo:
+            raise ApiError(
+                422,
+                "validation_error",
+                "Revisa los campos marcados.",
+                fields={"acepta_riesgo": "Acepta el aviso de riesgo para permitir envíos no solicitados."},
+            )
+        if abre_envio and payload.risk_version != RISK_ACK_VERSION:
+            raise ApiError(
+                422,
+                "validation_error",
+                "Revisa los campos marcados.",
+                fields={"risk_version": "El aviso de riesgo cambió: vuelve a leerlo y acéptalo."},
+            )
+        behavior = dict(app_settings.behavior_config or {})
+        behavior.update(
+            waweb_mode=payload.mode,
+            waweb_send_min_delay_ms=payload.send_min_delay_ms,
+            waweb_send_max_delay_ms=payload.send_max_delay_ms,
+            waweb_daily_outbound_cap=payload.daily_outbound_cap,
+            waweb_warmup_enabled=payload.warmup_enabled,
+        )
+        despues = payload.model_dump(exclude={"acepta_riesgo", "risk_version"})
+        if despues != antes.model_dump(exclude={"risk_version"}):
+            app_settings.behavior_config = behavior
+            session.add(
+                AuditLog(
+                    tenant_id=principal.tenant_id,
+                    actor=f"admin:{principal.admin.email}",
+                    action="settings.waweb_allow_outbound" if abre_envio else "settings.waweb_policy",
+                    input={
+                        "antes": antes.model_dump(exclude={"risk_version"}),
+                        "despues": despues,
+                        "riesgo_aceptado": payload.acepta_riesgo if abre_envio else None,
+                        "risk_version": RISK_ACK_VERSION,
+                    },
+                )
+            )
+    return _waweb_out(await _load_app_settings(principal.tenant_id))
 
 
 @router.put("/bot-paused", response_model=BotPausedState)
