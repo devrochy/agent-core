@@ -211,6 +211,54 @@ def migrar_a_v3(
         raise typer.Exit(1)
 
 
+@app.command("contract-aos")
+def contract_aos(
+    aplicar: bool = typer.Option(False, "--aplicar", help="Aplica el contract. Sin esta opción solo reporta (en seco)."),
+    confirmo: bool = typer.Option(
+        False, "--confirmo-sin-vuelta-atras", help="Con --aplicar: confirma que después no hay camino de vuelta."
+    ),
+    tenant: str | None = typer.Option(
+        None, "--tenant", help="Solo en seco: revisa si ESTE negocio está listo (el contract es global)."
+    ),
+    database_url: str | None = typer.Option(
+        None, "--database-url", help="Para el DDL; por defecto MIGRATIONS_DATABASE_URL (el rol dueño)."
+    ),
+) -> None:
+    """Agent OS (HU-AOS-15, C1): cierra la migración. Deduplica las conversaciones abiertas repetidas
+    por (conexión, cliente) sin cerrarlas, crea el índice único, vuelve `conversations.connection_id`
+    NOT NULL, exige conexión y release en `core_decisions` y valida lo que el expand dejó `NOT VALID`.
+    **Punto sin retorno.** Solo aplica con TODOS los negocios en `v3`, `AOS_CONNECTION_ROUTING` encendida,
+    ninguna conversación sin conexión y 2 releases estables sin rollback por conexión. Corre primero en
+    seco y sigue el runbook `docs/runbooks/migracion-agent-os.md`."""
+    import asyncio
+
+    from cli.tenant_ref import resolve_tenant
+    from core.releases.contrato import ReporteContrato, contraer
+
+    if tenant and aplicar:
+        raise typer.BadParameter("--tenant solo vale en seco: el contract es global.")
+
+    async def _run() -> ReporteContrato:
+        ids = [await resolve_tenant(tenant)] if tenant else None
+        return await contraer(dry_run=not aplicar, confirmado=confirmo, database_url=database_url, tenant_ids=ids)
+
+    reporte = asyncio.run(_run())
+    titulo = "Contract del Agent OS" + (" (en seco: no se escribió nada)" if reporte.dry_run else "")
+    console.print(f"[bold]{titulo}[/bold] · negocios: {reporte.negocios}")
+    for paso in reporte.pasos:
+        console.print(f"  · {paso}")
+    for validada in reporte.validadas:
+        console.print(f"    validada: {validada}")
+    for aviso in reporte.avisos:
+        console.print(f"[yellow]Aviso:[/yellow] {aviso}")
+    for bloqueo in reporte.bloqueos:
+        console.print(f"[red]Bloqueado:[/red] {bloqueo}")
+    if reporte.aplicado:
+        console.print("✓ [green]Contract aplicado.[/green] Desde aquí no se apaga AOS_CONNECTION_ROUTING.")
+    if reporte.bloqueos or reporte.fallo:
+        raise typer.Exit(1)
+
+
 @app.command("ruteo")
 def ruteo(
     tenant: str = typer.Option(..., "--tenant", help="El negocio (slug o UUID)."),
