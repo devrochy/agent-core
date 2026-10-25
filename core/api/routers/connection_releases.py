@@ -44,7 +44,9 @@ log = get_logger(__name__)
 # Motivos que escribe el sistema: la API no los acepta (así la auditoría no se confunde).
 # Motivos que escriben los caminos internos (exentos del gate, HU-AOS-21): la API no los acepta,
 # aunque la exención no se deduce del motivo sino de un parámetro que la API nunca envía.
-_MOTIVOS_RESERVADOS = frozenset({"rollback", "release_1", "yanked", "migrar_a_v3", "qa_datos"})
+_MOTIVOS_RESERVADOS = frozenset(
+    {"rollback", "release_1", "yanked", "hotfix_yanked", "migrar_a_v3", "qa_datos"}
+)
 
 
 def _motivo_libre(valor: str) -> str:
