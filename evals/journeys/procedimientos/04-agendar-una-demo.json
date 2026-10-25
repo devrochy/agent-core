@@ -1,6 +1,9 @@
 {
   "nombre": "agendar-una-demo",
   "semilla": 5,
+  "procedimientos": [
+    "pack_calendar.agendar_cita"
+  ],
   "descripcion": "Gherkin de agendar_cita (HU-AOS-08): el cliente simulado pide una demo, elige uno de los horarios libres que le ofrecen, da su correo y confirma. Queda una sola cita, con su correo y en un horario de la agenda. Para medir pass^4 en vivo (con OK del dueño).",
   "pasos": [
     {

@@ -1,6 +1,9 @@
 {
   "nombre": "pedido-a-domicilio",
   "semilla": 3,
+  "procedimientos": [
+    "pack_commerce.tomar_pedido"
+  ],
   "descripcion": "Gherkin 2 de HU-AOS-07 (tomar_pedido): un pedido a domicilio no pasa a confirmar sin la dirección confirmada; el pedido queda con esa dirección.",
   "pasos": [
     {

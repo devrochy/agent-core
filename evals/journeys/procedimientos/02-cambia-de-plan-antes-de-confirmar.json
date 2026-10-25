@@ -1,6 +1,9 @@
 {
   "nombre": "cambia-de-plan-antes-de-confirmar",
   "semilla": 11,
+  "procedimientos": [
+    "pack_commerce.contratar_plan"
+  ],
   "descripcion": "Gherkin 3 de HU-AOS-07: el cliente pide el Premium mensual y, antes de confirmar el total, se cambia al anual. La cotización se recalcula y el pedido sale del anual (la mensual nunca se acepta).",
   "pasos": [
     {

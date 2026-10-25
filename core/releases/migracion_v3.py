@@ -282,7 +282,14 @@ async def _construir_y_promover(tenant_id: uuid.UUID, connection_id: uuid.UUID, 
     resultado = await construir(
         tenant_id, connection_id, actor="system:migrar-a-v3", modules=modulos, notas="migrar-a-v3 --construir"
     )
-    await promover(tenant_id, connection_id, resultado.release_id, actor="system:migrar-a-v3", motivo="migrar_a_v3")
+    await promover(
+        tenant_id,
+        connection_id,
+        resultado.release_id,
+        actor="system:migrar-a-v3",
+        motivo="migrar_a_v3",
+        exencion="migrar_a_v3",
+    )
     return resultado.release_id
 
 
