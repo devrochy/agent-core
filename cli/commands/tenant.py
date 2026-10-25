@@ -110,16 +110,26 @@ def create(
 
     from core.presets import PresetError
 
+    # Alta y seed en un solo event loop: el engine async queda atado al loop en el
+    # que abre conexiones (dos `asyncio.run` seguidos rompen con "different loop").
+    async def _alta() -> uuid.UUID:
+        from core.db.session import get_engine
+
+        try:
+            tid, steps = await _onboard(answers)
+            console.print("✓ [green]Onboarding completado[/green]")
+            for s in steps:
+                console.print(f"  · {s}")
+            await _maybe_seed(answers["slug"], tid)
+            return tid
+        finally:
+            await get_engine().dispose()
+
     try:
-        tid, steps = asyncio.run(_onboard(answers))
+        tid = asyncio.run(_alta())
     except PresetError as exc:
         console.print(f"[red]Preset: {exc}[/red]")
         raise typer.Exit(1) from exc
-    console.print("✓ [green]Onboarding completado[/green]")
-    for s in steps:
-        console.print(f"  · {s}")
-
-    _maybe_seed(answers["slug"], tid)
 
     from core.tenants import tenant_webhook_url
 
@@ -233,7 +243,7 @@ async def _onboard(answers: dict) -> tuple[uuid.UUID, list[str]]:
     return tid, steps
 
 
-def _maybe_seed(slug: str, tenant_id: uuid.UUID) -> None:
+async def _maybe_seed(slug: str, tenant_id: uuid.UUID) -> None:
     from core.onboarding import ensure_brand_voice, load_tenant_catalog
 
     data = load_tenant_catalog(slug)
@@ -241,11 +251,11 @@ def _maybe_seed(slug: str, tenant_id: uuid.UUID) -> None:
         if data.get("pack") != "pack_commerce":
             console.print(f"[dim]catalog.json de {slug}: pack '{data.get('pack')}' sin seed conocido[/dim]")
         else:
-            asyncio.run(seed_catalog(tenant_id, data))
+            await seed_catalog(tenant_id, data)
             console.print(f"✓ [green]Catálogo importado desde {slug}/catalog.json[/green]")
-    asyncio.run(seed_pack_plugins(slug, tenant_id))
+    await seed_pack_plugins(slug, tenant_id)
     console.print(f"✓ [green]Seed de packs completado para {slug}[/green]")
-    if asyncio.run(ensure_brand_voice(tenant_id, slug)):
+    if await ensure_brand_voice(tenant_id, slug):
         console.print(f"✓ [green]brand_voice sembrada desde {slug}/docs/voz-de-marca.md[/green]")
 
 
@@ -557,34 +567,33 @@ def purge(
     la fila tenants y, después, su estado Redis. No se puede deshacer. Si Redis no se
     pudo limpiar, sale con código 2 y muestra el comando de reintento (`purge-redis`).
     """
-    from core.tenants import ensure_purgeable
-
-    # Antes de pedir la frase: no tiene sentido confirmar algo que se va a rechazar.
-    try:
-        tenant_id = str(asyncio.run(ensure_purgeable(slug)).id)
-    except ValueError as exc:
-        console.print(f"[red]✗ {exc}[/red]")
-        raise typer.Exit(1) from exc
-
-    phrase = confirm
-    if not phrase:
-        phrase = questionary.text(
-            f"[bold red]Irreversible[/bold red]. Escribe exactamente [bold]ELIMINAR {slug}[/bold] para confirmar:",
-        ).ask() or ""
-
-    async def _run() -> bool:
+    # Un solo event loop para validar, pedir la frase y purgar: el engine async de
+    # SQLAlchemy (y el cliente Redis) quedan atados al loop en el que abren conexiones,
+    # así que dos `asyncio.run` seguidos fallaban con "attached to a different loop".
+    async def _run() -> tuple[str, bool]:
+        from core.db.session import get_engine
         from core.memory.working import get_redis
-        from core.tenants import purge_tenant
+        from core.tenants import ensure_purgeable, purge_tenant
 
-        redis_limpio = await purge_tenant(slug, phrase)
         try:
-            await get_redis().aclose()
-        except Exception:
-            pass
-        return redis_limpio
+            # Antes de pedir la frase: no tiene sentido confirmar algo que se va a rechazar.
+            tenant_id = str((await ensure_purgeable(slug)).id)
+            phrase = confirm
+            if not phrase:
+                phrase = await questionary.text(
+                    f"[bold red]Irreversible[/bold red]. Escribe exactamente [bold]ELIMINAR {slug}[/bold] "
+                    "para confirmar:",
+                ).ask_async() or ""
+            return tenant_id, await purge_tenant(slug, phrase)
+        finally:
+            try:
+                await get_redis().aclose()
+            except Exception:
+                pass
+            await get_engine().dispose()
 
     try:
-        redis_limpio = asyncio.run(_run())
+        tenant_id, redis_limpio = asyncio.run(_run())
     except ValueError as exc:
         console.print(f"[red]✗ {exc}[/red]")
         raise typer.Exit(1) from exc
