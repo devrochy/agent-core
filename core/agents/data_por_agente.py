@@ -30,7 +30,7 @@ from sqlalchemy import ColumnElement, and_, false, func, literal, or_, select, t
 from sqlalchemy.dialects.postgresql import array_agg
 
 from core.agents.tolerante import KEY_GENERAL
-from core.billing.tipos_de_uso import NO_SON_TURNOS
+from core.billing.tipos_de_uso import NO_ES_ACTIVIDAD
 from core.db.models import (
     AgentInstanceRecord,
     AgentRecord,
@@ -220,7 +220,7 @@ async def resumen(tenant_id: uuid.UUID, *, ahora: datetime | None = None) -> dic
                     UsageLedger.created_at >= desde,
                     # La ingesta del conocimiento y los datos de prueba no son actividad de un agente
                     # (ADR-0145 §3, ADR-0146).
-                    UsageLedger.kind.not_in(NO_SON_TURNOS),
+                    UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
                 )
                 .group_by(UsageLedger.agent_instance_id)
             )
@@ -626,7 +626,7 @@ async def consumo(alcance: Alcance, filtros: Filtros) -> dict[str, Any]:
         UsageLedger.created_at < filtros.periodo.hasta,
         # Sin agente, la ingesta del conocimiento y los datos de prueba caerían en el General
         # (ADR-0140): no son turnos (ADR-0145, ADR-0146).
-        UsageLedger.kind.not_in(NO_SON_TURNOS),
+        UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
     ]
     if filtros.connection_id is not None:
         condiciones.append(UsageLedger.connection_id == filtros.connection_id)

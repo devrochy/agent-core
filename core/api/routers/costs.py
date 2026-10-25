@@ -21,7 +21,7 @@ from core.admin.meta_costs_service import (
     verify_credits,
 )
 from core.api.deps import Principal, require
-from core.billing.tipos_de_uso import EVAL, NO_SON_TURNOS
+from core.billing.tipos_de_uso import EVAL, NO_ES_ACTIVIDAD, NO_SON_TURNOS
 from core.db.models import UsageLedger
 from core.db.session import get_session
 
@@ -132,7 +132,7 @@ async def get_costs(
                     func.sum(UsageLedger.cost_usd),
                     func.max(UsageLedger.created_at),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind.not_in(NO_SON_TURNOS))
+                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind.not_in(NO_ES_ACTIVIDAD))
                 .group_by(UsageLedger.conversation_id)
                 .order_by(func.sum(UsageLedger.cost_usd).desc())
                 .limit(20)

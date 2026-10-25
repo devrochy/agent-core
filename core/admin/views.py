@@ -105,7 +105,7 @@ from core.agents.spec import (
     save_spec_version,
 )
 from core.billing.enforcement import QuotaExceeded
-from core.billing.tipos_de_uso import NO_SON_TURNOS
+from core.billing.tipos_de_uso import NO_ES_ACTIVIDAD, NO_SON_TURNOS
 from core.config import get_settings
 from core.db.models import (
     Admin,
@@ -2611,7 +2611,7 @@ async def costs_page(request: Request):
                     func.sum(UsageLedger.cost_usd),
                     func.max(UsageLedger.created_at),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind.not_in(NO_SON_TURNOS))
+                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind.not_in(NO_ES_ACTIVIDAD))
                 .group_by(UsageLedger.conversation_id)
                 .order_by(func.sum(UsageLedger.cost_usd).desc())
                 .limit(20)

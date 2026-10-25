@@ -12,6 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from core.api.routers import (
+    a2a,
     agent_data,
     agent_editor,
     agents,
@@ -87,6 +88,7 @@ api_router.include_router(agent_editor.router)
 api_router.include_router(connections.router)
 api_router.include_router(connection_agents.router)
 api_router.include_router(connection_releases.router)
+api_router.include_router(a2a.router)
 api_router.include_router(meta_ops.router)
 api_router.include_router(meta_wizard.router)
 api_router.include_router(meta_messenger.router)
