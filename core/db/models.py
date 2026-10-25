@@ -149,10 +149,13 @@ class AppSettings(Base):
 
     # Comportamiento
     behavior_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
-    # {"tono": "calido", "debounce_mode": "natural", "split_style": "pocos_cortos"}
+    # {"debounce_mode": "natural", "split_style": "pocos_cortos", "guardrail_max_retries": 1, ...}
+    # Inventario de claves: SPEC-37 de solvershub-docs. `tono` ya no se escribe ni se lee
+    # (HU-CFG-01): la voz es `persona.tone` del AgentSpec.
     brand_voice: Mapped[str] = mapped_column(Text, default="")
     escalation_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
-    # {"keywords": ["reclamo", "asesor"], "max_turnos_sin_resolver": 3}
+    # {"keywords": ["reclamo", "asesor"], "business_hours": {"tz": ..., "ranges": [...]},
+    #  "out_of_hours_message": "...", "auto_escalate_after_turns": 3}
 
     # Chat web embebible (HU-CHAN-02). JSONB con:
     # {"enabled": bool, "key": "<clave pública>", "allowed_origins": [...],

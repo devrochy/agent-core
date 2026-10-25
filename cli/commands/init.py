@@ -554,7 +554,7 @@ def _bootstrap_database(
     try:
         _create_admin_and_settings(
             answers["admin_email"], answers["admin_password"], answers["assistant_name"],
-            answers["business"], answers["language"], answers["tone"], answers["debounce_mode"],
+            answers["business"], answers["language"], answers["debounce_mode"],
         )
     except Exception as exc:
         _report_failure(str(exc), project)
@@ -581,7 +581,6 @@ def _create_admin_and_settings(
     assistant_name: str,
     business: str,
     language: str,
-    tone: str,
     debounce_mode: str,
 ) -> None:
     import asyncio
@@ -636,7 +635,7 @@ def _create_admin_and_settings(
                             assistant_name=assistant_name,
                             business_description=business,
                             language=language,
-                            behavior_config={"tono": tone, "debounce_mode": debounce_mode},
+                            behavior_config={"debounce_mode": debounce_mode},
                         )
                     )
                 else:

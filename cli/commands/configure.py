@@ -16,27 +16,45 @@ app = typer.Typer(no_args_is_help=True)
 console = Console()
 
 
+TONOS_PERSONA = ["formal", "neutral", "cercano", "informal"]
+
+
+async def cambiar_tono_persona(tid, tono: str) -> bool:
+    """Escribe `persona.tone` en una versión nueva del AgentSpec del negocio.
+
+    Devuelve False si el negocio no tiene `AppSettings` (no pasó por `agent-core init`)."""
+    from core.agents.spec import load_active_spec, save_spec_if_changed
+    from core.db.models import AppSettings
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            settings_row = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
+        if settings_row is None:
+            return False
+        spec = await load_active_spec()
+        data = spec.model_dump(mode="json")
+        data["persona"]["tone"] = tono
+        await save_spec_if_changed(spec, data, tid)
+    return True
+
+
 @app.command()
 def tone(tenant: str = typer.Argument(..., help="Tenant (slug o UUID)")) -> None:
-    """Cambia el tono del asistente (calido | formal | divertido) de un tenant."""
-    selected = questionary.select("Tono:", choices=["calido", "formal", "divertido"]).ask()
+    """Cambia el tono de la persona del asistente (formal | neutral | cercano | informal).
 
-    async def _update() -> None:
-        from core.db.models import AppSettings
-        from core.db.session import get_session
-        from core.shared.tenant import tenant_scope
+    Escribe `persona.tone` del AgentSpec (versionado), que es lo único que llega al prompt
+    (HU-CFG-01): la clave vieja `behavior_config["tono"]` ya no se escribe.
+    """
+    selected = questionary.select("Tono:", choices=TONOS_PERSONA).ask()
 
-        tid = await resolve_tenant(tenant)
-        async with tenant_scope(tid), get_session() as session:
-            settings_row = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
-            if settings_row is None:
-                console.print("[red]No hay configuración. Corre: agent-core init[/red]")
-                return
-            behavior = dict(settings_row.behavior_config)
-            behavior["tono"] = selected
-            settings_row.behavior_config = behavior
+    async def _run() -> bool:
+        return await cambiar_tono_persona(await resolve_tenant(tenant), selected)
 
-    asyncio.run(_update())
+    if not asyncio.run(_run()):
+        console.print("[red]No hay configuración. Corre: agent-core init[/red]")
+        raise typer.Exit(1)
     state = load_state()
     state["tone"] = selected
     append_changelog(state, f"Tono cambiado a: {selected}")
