@@ -1,0 +1,51 @@
+"""Catálogo de opciones que ve un usuario: filtrado por rol y con las listas del negocio."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+
+from pydantic import BaseModel
+
+from core.config_registro.modelo import Opcion, ValorPosible
+from core.config_registro.opciones import OPCIONES, POR_CLAVE
+
+
+class Catalogo(BaseModel):
+    # Huella del contenido: el cliente (APK) sabe si su copia guardada sigue vigente.
+    version: str
+    opciones: list[Opcion]
+
+
+def _huella(opciones: list[Opcion]) -> str:
+    cuerpo = json.dumps([o.model_dump(mode="json") for o in opciones], sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(cuerpo.encode()).hexdigest()[:12]
+
+
+def catalogo_para(*, es_master: bool, guardrails_disponibles: list[str]) -> Catalogo:
+    """Las opciones que puede ver el usuario, con los `valores` que dependen del negocio ya puestos.
+
+    - Las del master (`editable_por="master"`) solo se incluyen si `es_master`.
+    - `disabled_guardrails` lista los guardrails de los packs habilitados del negocio más los
+      interruptores del verificador (`_available_guardrails` en el router de configuración).
+    """
+    visibles: list[Opcion] = []
+    for opcion in OPCIONES:
+        if opcion.editable_por == "master" and not es_master:
+            continue
+        if opcion.valores_calculados:
+            opcion = opcion.model_copy(
+                update={
+                    "valores": [
+                        ValorPosible(valor=g, etiqueta=g) for g in sorted(set(guardrails_disponibles))
+                    ]
+                }
+            )
+        # Copia propia: lo que sale al cliente nunca comparte listas con el registro global.
+        visibles.append(opcion if opcion.valores_calculados else opcion.model_copy(deep=True))
+    return Catalogo(version=_huella(visibles), opciones=visibles)
+
+
+def opcion(clave: str) -> Opcion:
+    """La opción registrada con esa clave (KeyError si no existe)."""
+    return POR_CLAVE[clave]

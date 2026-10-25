@@ -9930,6 +9930,57 @@
         }
       }
     },
+    "/api/v1/admin/settings/catalog": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Get Catalog Api",
+        "description": "Catálogo de opciones de Identidad y comportamiento (SPEC-37, ADR-0166): qué es cada una,\nqué valores acepta, qué cambia y quién la edita. Las del master solo las ve el master; la lista\nde guardrails se calcula con los packs habilitados del negocio activo.",
+        "operationId": "get_catalog_api_api_v1_admin_settings_catalog_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Catalogo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/settings/identity": {
       "put": {
         "tags": [
@@ -26588,6 +26639,27 @@
         ],
         "title": "CatalogResponse"
       },
+      "Catalogo": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "opciones": {
+            "items": {
+              "$ref": "#/components/schemas/Opcion"
+            },
+            "type": "array",
+            "title": "Opciones"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "opciones"
+        ],
+        "title": "Catalogo"
+      },
       "CategoryOut": {
         "properties": {
           "id": {
@@ -31573,6 +31645,133 @@
           "numbers"
         ],
         "title": "NumbersResponse"
+      },
+      "Opcion": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "grupo": {
+            "type": "string",
+            "enum": [
+              "identidad",
+              "voz",
+              "respuesta",
+              "escalamiento",
+              "horario",
+              "calidad",
+              "bajas",
+              "whatsapp_web"
+            ],
+            "title": "Grupo"
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "texto",
+              "texto_largo",
+              "entero",
+              "decimal",
+              "booleano",
+              "elegir_una",
+              "elegir_varias",
+              "lista_de_textos",
+              "franjas"
+            ],
+            "title": "Tipo"
+          },
+          "etiqueta": {
+            "type": "string",
+            "title": "Etiqueta"
+          },
+          "explicacion": {
+            "type": "string",
+            "title": "Explicacion"
+          },
+          "ejemplo": {
+            "type": "string",
+            "title": "Ejemplo",
+            "default": ""
+          },
+          "unidad": {
+            "type": "string",
+            "title": "Unidad",
+            "default": ""
+          },
+          "valores": {
+            "items": {
+              "$ref": "#/components/schemas/ValorPosible"
+            },
+            "type": "array",
+            "title": "Valores"
+          },
+          "minimo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimo"
+          },
+          "maximo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximo"
+          },
+          "por_defecto": {
+            "title": "Por Defecto"
+          },
+          "depende_de": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dependencia"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "editable_por": {
+            "type": "string",
+            "enum": [
+              "dueno",
+              "master"
+            ],
+            "title": "Editable Por",
+            "default": "dueno"
+          },
+          "solo_lectura": {
+            "type": "boolean",
+            "title": "Solo Lectura",
+            "default": false
+          },
+          "almacen": {
+            "type": "string",
+            "title": "Almacen"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "clave",
+          "grupo",
+          "tipo",
+          "etiqueta",
+          "explicacion",
+          "almacen"
+        ],
+        "title": "Opcion",
+        "description": "Una opción de configuración. `extra=\"forbid\"`: un campo mal escrito falla al importar."
       },
       "OrderLine": {
         "properties": {
@@ -37757,6 +37956,31 @@
         ],
         "title": "ValidationError"
       },
+      "ValorPosible": {
+        "properties": {
+          "valor": {
+            "type": "string",
+            "title": "Valor"
+          },
+          "etiqueta": {
+            "type": "string",
+            "title": "Etiqueta"
+          },
+          "nota": {
+            "type": "string",
+            "title": "Nota",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "valor",
+          "etiqueta"
+        ],
+        "title": "ValorPosible",
+        "description": "Un valor que el usuario puede escoger, con su etiqueta en español."
+      },
       "VariantOut": {
         "properties": {
           "id": {
@@ -40119,6 +40343,47 @@
           "literals_to_migrate"
         ],
         "title": "DeclarativeToolsOut"
+      },
+      "Dependencia": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "condicion": {
+            "type": "string",
+            "enum": [
+              "no_vacia",
+              "verdadera",
+              "igual"
+            ],
+            "title": "Condicion"
+          },
+          "valor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valor"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "clave",
+          "condicion",
+          "motivo"
+        ],
+        "title": "Dependencia",
+        "description": "La opción solo tiene efecto si se cumple una condición sobre otra."
       },
       "PublishIn": {
         "properties": {
