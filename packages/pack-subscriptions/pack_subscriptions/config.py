@@ -6,11 +6,12 @@ se consume vía `core/payments` (registry) si `pack_payments` está habilitado.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 
 from core.mcp.types import BasePluginConfig
+from pack_subscriptions.horario_legal import VENTANA_LEGAL_CO, dentro_de_lo_legal
 
 
 class SubscriptionConfig(BasePluginConfig):
@@ -103,6 +104,40 @@ class SubscriptionConfig(BasePluginConfig):
         ),
         description="Texto del aviso de fin de la prueba (dentro de las 24 h).",
     )
+
+    # ------------------------------------------------------ horario legal (HU-SUB-18)
+    ventana_cobro: list[dict[str, Any]] = Field(
+        default_factory=lambda: [dict(r) for r in VENTANA_LEGAL_CO],
+        description=(
+            "Días y horas en que pueden salir los avisos de cobro, en la zona horaria del negocio. "
+            "Por defecto, el horario de la Ley 2300 de 2023: lunes a viernes de 7:00 a 19:00 y "
+            "sábados de 8:00 a 15:00. Se puede achicar, nunca ampliar. Domingos y festivos, nunca."
+        ),
+    )
+    pais_festivos: Literal["CO"] = Field(
+        default="CO",
+        description="País cuyos festivos bloquean los avisos de cobro.",
+    )
+
+    @field_validator("ventana_cobro")
+    @classmethod
+    def _ventana_legal(cls, valor: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rangos: list[dict[str, Any]] = []
+        for rango in valor or []:
+            try:
+                dia = int(rango["day"])
+                desde, hasta = str(rango["from"]).strip(), str(rango["to"]).strip()
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("Cada rango lleva day (0 = lunes), from y to en HH:MM.") from exc
+            if len(desde) != 5 or len(hasta) != 5 or desde[2] != ":" or hasta[2] != ":":
+                raise ValueError("Las horas van en formato HH:MM.")
+            rangos.append({"day": dia, "from": desde, "to": hasta})
+        if not dentro_de_lo_legal(rangos):
+            raise ValueError(
+                "La ventana de cobro solo puede estar dentro del horario legal: lunes a viernes de "
+                "07:00 a 19:00 y sábados de 08:00 a 15:00."
+            )
+        return rangos
 
     @field_validator("recordatorios_dias")
     @classmethod
