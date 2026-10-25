@@ -15,6 +15,7 @@ from agentcore_contracts import Persona
 from core.admin.envios_segmento import PALABRAS_DE_BAJA_POR_DEFECTO
 from core.agents.spec import DEFAULT_SPEC
 from core.config import DEBOUNCE_DELAY_MS, Settings
+from core.config_limites import rango
 from core.config_registro.modelo import Dependencia, Opcion, ValorPosible
 from core.db.models import DEFAULT_ASSISTANT_NAME
 from core.gateway.message_splitter import CAPS
@@ -28,9 +29,6 @@ from core.llm.prompt_builder import DEFAULT_TIMEZONE
 from core.orchestrator.escalation import DEFAULT_ESCALATION_KEYWORDS
 from core.orchestrator.guardrails import MAX_GUARDRAIL_RETRIES
 from core.waweb.policy import (
-    _CAP_BOUNDS,
-    _MAX_DELAY_BOUNDS,
-    _MIN_DELAY_BOUNDS,
     DEFAULT_DAILY_OUTBOUND_CAP,
     DEFAULT_MAX_DELAY_MS,
     DEFAULT_MIN_DELAY_MS,
@@ -278,8 +276,8 @@ CALIDAD = [
             "Intentos para corregir una respuesta que falló una validación o parece inventada. "
             "Más intentos mejoran la calidad pero gastan más."
         ),
-        minimo=0,
-        maximo=5,
+        minimo=rango("guardrail_max_retries").minimo,
+        maximo=rango("guardrail_max_retries").maximo,
         por_defecto=MAX_GUARDRAIL_RETRIES,
         almacen="behavior_config:guardrail_max_retries",
     ),
@@ -302,8 +300,8 @@ CALIDAD = [
         etiqueta="Mensaje largo",
         explicacion="Desde cuántos caracteres un mensaje cuenta como difícil y se manda al modelo de razonamiento.",
         unidad="caracteres",
-        minimo=50,
-        maximo=5000,
+        minimo=rango("difficulty_long_message_threshold").minimo,
+        maximo=rango("difficulty_long_message_threshold").maximo,
         por_defecto=LONG_MESSAGE_THRESHOLD,
         almacen="behavior_config:difficulty_long_message_threshold",
     ),
@@ -314,8 +312,8 @@ CALIDAD = [
         etiqueta="Turnos sin resolver",
         explicacion="Cuántos turnos seguidos sin resolver el problema antes de pasar al modelo de razonamiento.",
         unidad="turnos",
-        minimo=1,
-        maximo=20,
+        minimo=rango("difficulty_turnos_sin_resolver_threshold").minimo,
+        maximo=rango("difficulty_turnos_sin_resolver_threshold").maximo,
         por_defecto=TURNOS_SIN_RESOLVER_THRESHOLD,
         almacen="behavior_config:difficulty_turnos_sin_resolver_threshold",
     ),
@@ -326,8 +324,8 @@ CALIDAD = [
         etiqueta="Puntaje para razonamiento",
         explicacion="Puntaje de dificultad (1 a 10) desde el cual la conversación pasa al modelo de razonamiento.",
         unidad="puntos",
-        minimo=1,
-        maximo=10,
+        minimo=rango("difficulty_score_threshold").minimo,
+        maximo=rango("difficulty_score_threshold").maximo,
         por_defecto=DIFFICULTY_SCORE_THRESHOLD,
         almacen="behavior_config:difficulty_score_threshold",
     ),
@@ -374,8 +372,8 @@ WHATSAPP_WEB = [
         etiqueta="Pausa mínima entre mensajes",
         explicacion="Espera más corta entre un mensaje y el siguiente, para que el envío parezca humano.",
         unidad="ms",
-        minimo=_MIN_DELAY_BOUNDS[0],
-        maximo=_MIN_DELAY_BOUNDS[1],
+        minimo=rango("waweb_send_min_delay_ms").minimo,
+        maximo=rango("waweb_send_min_delay_ms").maximo,
         por_defecto=DEFAULT_MIN_DELAY_MS,
         editable_por="master",
         almacen="behavior_config:waweb_send_min_delay_ms",
@@ -387,8 +385,8 @@ WHATSAPP_WEB = [
         etiqueta="Pausa máxima entre mensajes",
         explicacion="Espera más larga entre mensajes. Si queda por debajo de la mínima, se usa la mínima.",
         unidad="ms",
-        minimo=_MAX_DELAY_BOUNDS[0],
-        maximo=_MAX_DELAY_BOUNDS[1],
+        minimo=rango("waweb_send_max_delay_ms").minimo,
+        maximo=rango("waweb_send_max_delay_ms").maximo,
         por_defecto=DEFAULT_MAX_DELAY_MS,
         editable_por="master",
         almacen="behavior_config:waweb_send_max_delay_ms",
@@ -400,8 +398,8 @@ WHATSAPP_WEB = [
         etiqueta="Tope diario de envíos no solicitados",
         explicacion="Máximo de mensajes que el asistente inicia por día. Aplica solo si se permite el envío no solicitado.",
         unidad="mensajes",
-        minimo=_CAP_BOUNDS[0],
-        maximo=_CAP_BOUNDS[1],
+        minimo=rango("waweb_daily_outbound_cap").minimo,
+        maximo=rango("waweb_daily_outbound_cap").maximo,
         por_defecto=DEFAULT_DAILY_OUTBOUND_CAP,
         depende_de=Dependencia(
             clave="waweb_mode",
@@ -445,8 +443,8 @@ ESCALAMIENTO = [
         etiqueta="Escalar tras N turnos",
         explicacion="Pasa la conversación a una persona si el asistente no la resuelve en este número de turnos. 0 = nunca.",
         unidad="turnos",
-        minimo=0,
-        maximo=1000,
+        minimo=rango("auto_escalate_after_turns").minimo,
+        maximo=rango("auto_escalate_after_turns").maximo,
         por_defecto=0,
         almacen="escalation_config:auto_escalate_after_turns",
     ),
@@ -515,8 +513,8 @@ VOZ = [
         tipo="entero",
         etiqueta="Calidez",
         explicacion="Qué tan afectuoso es el trato, de 0 (seco) a 5 (muy cálido).",
-        minimo=0,
-        maximo=5,
+        minimo=rango("persona_warmth").minimo,
+        maximo=rango("persona_warmth").maximo,
         por_defecto=_PERSONA_POR_DEFECTO["warmth"],
         almacen="spec:persona.warmth",
     ),
@@ -537,8 +535,8 @@ VOZ = [
         etiqueta="Longitud máxima de respuesta",
         explicacion="Largo máximo de cada respuesta. 0 = sin límite.",
         unidad="caracteres",
-        minimo=0,
-        maximo=10000,
+        minimo=rango("persona_max_length").minimo,
+        maximo=rango("persona_max_length").maximo,
         por_defecto=_PERSONA_POR_DEFECTO["maxLength"],
         almacen="spec:persona.maxLength",
     ),

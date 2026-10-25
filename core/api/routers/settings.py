@@ -37,7 +37,9 @@ from core.agents.spec import (
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.config import get_settings
+from core.config_limites import rango
 from core.config_registro import Catalogo, catalogo_para
+from core.config_registro.validar import validar_valor
 from core.db.models import AppSettings, AuditLog
 from core.db.session import get_session
 from core.kernel.fuera_de_horario import texto_por_defecto
@@ -118,27 +120,58 @@ class IdentityUpdate(BaseModel):
     # Rangos explícitos (P0 de pruebas 2026-10-17): un valor fuera de rango responde 422 con
     # el campo marcado, en vez de recortarse en silencio y "guardar con éxito". Son los mismos
     # rangos que aplica `save_identity`.
-    guardrail_max_retries: int = Field(default=1, ge=0, le=5)
+    guardrail_max_retries: int = Field(
+        default=1, ge=rango("guardrail_max_retries").minimo, le=rango("guardrail_max_retries").maximo
+    )
     guardrail_fail_action: GuardrailFailAction | None = None
     disabled_guardrails: list[str] = []
-    difficulty_long_message_threshold: int = Field(default=LONG_MESSAGE_THRESHOLD, ge=50, le=5000)
-    difficulty_turnos_sin_resolver_threshold: int = Field(
-        default=TURNOS_SIN_RESOLVER_THRESHOLD, ge=1, le=20
+    difficulty_long_message_threshold: int = Field(
+        default=LONG_MESSAGE_THRESHOLD,
+        ge=rango("difficulty_long_message_threshold").minimo,
+        le=rango("difficulty_long_message_threshold").maximo,
     )
-    difficulty_score_threshold: int = Field(default=DIFFICULTY_SCORE_THRESHOLD, ge=1, le=10)
+    difficulty_turnos_sin_resolver_threshold: int = Field(
+        default=TURNOS_SIN_RESOLVER_THRESHOLD,
+        ge=rango("difficulty_turnos_sin_resolver_threshold").minimo,
+        le=rango("difficulty_turnos_sin_resolver_threshold").maximo,
+    )
+    difficulty_score_threshold: int = Field(
+        default=DIFFICULTY_SCORE_THRESHOLD,
+        ge=rango("difficulty_score_threshold").minimo,
+        le=rango("difficulty_score_threshold").maximo,
+    )
     escalation_keywords: list[str] = []
     out_of_hours_message: str = ""
-    auto_escalate_after_turns: int = Field(default=0, ge=0, le=1000)
+    auto_escalate_after_turns: int = Field(
+        default=0, ge=rango("auto_escalate_after_turns").minimo, le=rango("auto_escalate_after_turns").maximo
+    )
     persona_tone: str = ""
-    persona_warmth: int = Field(default=3, ge=0, le=5)
+    persona_warmth: int = Field(
+        default=3, ge=rango("persona_warmth").minimo, le=rango("persona_warmth").maximo
+    )
     persona_emojis: str = "sparse"
-    persona_max_length: int = Field(default=500, ge=0, le=10000)
+    persona_max_length: int = Field(
+        default=500, ge=rango("persona_max_length").minimo, le=rango("persona_max_length").maximo
+    )
     persona_forbidden: list[str] = []
     # `None` = no cambiar: la pausa tiene su propio endpoint (`PUT .../bot-paused`) y un
     # formulario abierto desde antes no debe reactivar ni pausar el asistente al guardar.
     bot_paused: bool | None = None
     business_tz: str = ""
     business_ranges: list[dict[str, Any]] = Field(default=[], description=_BUSINESS_RANGES_DESC)
+
+    # Lista cerrada de valores (registro de opciones): un texto desconocido responde 422 con la lista
+    # válida, en vez de guardarse y comportarse como «sin espera» (HU-CFG-03). `persona_*` vacío
+    # significa «no cambiar».
+    @field_validator("debounce_mode", "split_style")
+    @classmethod
+    def _valor_de_la_lista(cls, value: str, info) -> str:
+        return validar_valor(info.field_name, value)
+
+    @field_validator("persona_tone", "persona_emojis")
+    @classmethod
+    def _valor_de_la_lista_o_vacio(cls, value: str, info) -> str:
+        return validar_valor(info.field_name, value) if value else value
 
     @field_validator("timezone")
     @classmethod
@@ -409,19 +442,19 @@ async def save_identity(
         behavior = dict(app_settings.behavior_config)
         behavior.update(
             debounce_mode=payload.debounce_mode,
-            split_style=payload.split_style
-            if payload.split_style in ("un_mensaje", "pocos_cortos", "varios_cortos")
-            else "un_mensaje",
-            # Mismo rango que aplica el loop (`core/orchestrator/loop.py`).
-            guardrail_max_retries=max(0, min(5, payload.guardrail_max_retries)),
+            split_style=payload.split_style,
+            # Los rangos ya los validó `IdentityUpdate` (422); se recorta igual con la misma fuente.
+            guardrail_max_retries=rango("guardrail_max_retries").recortar(payload.guardrail_max_retries),
             disabled_guardrails=sorted(set(available) & set(normalizar_desactivados(payload.disabled_guardrails))),
-            difficulty_long_message_threshold=max(
-                50, min(5000, payload.difficulty_long_message_threshold)
+            difficulty_long_message_threshold=rango("difficulty_long_message_threshold").recortar(
+                payload.difficulty_long_message_threshold
             ),
-            difficulty_turnos_sin_resolver_threshold=max(
-                1, min(20, payload.difficulty_turnos_sin_resolver_threshold)
+            difficulty_turnos_sin_resolver_threshold=rango(
+                "difficulty_turnos_sin_resolver_threshold"
+            ).recortar(payload.difficulty_turnos_sin_resolver_threshold),
+            difficulty_score_threshold=rango("difficulty_score_threshold").recortar(
+                payload.difficulty_score_threshold
             ),
-            difficulty_score_threshold=max(1, min(10, payload.difficulty_score_threshold)),
         )
         if payload.guardrail_fail_action is not None:
             behavior["guardrail_fail_action"] = payload.guardrail_fail_action
@@ -434,7 +467,9 @@ async def save_identity(
             **dict(app_settings.escalation_config or {}),
             "keywords": [k.strip() for k in payload.escalation_keywords if k.strip()],
             "out_of_hours_message": payload.out_of_hours_message.strip(),
-            "auto_escalate_after_turns": max(0, payload.auto_escalate_after_turns),
+            "auto_escalate_after_turns": rango("auto_escalate_after_turns").recortar(
+                payload.auto_escalate_after_turns
+            ),
             "business_hours": business_hours,
         }
         if payload.bot_paused is not None:
@@ -444,9 +479,9 @@ async def save_identity(
     persona_data["persona"].update(
         {
             "tone": payload.persona_tone or persona_data["persona"].get("tone", ""),
-            "warmth": max(0, min(5, payload.persona_warmth)),
+            "warmth": rango("persona_warmth").recortar(payload.persona_warmth),
             "emojis": payload.persona_emojis or persona_data["persona"].get("emojis", "sparse"),
-            "maxLength": max(0, payload.persona_max_length),
+            "maxLength": rango("persona_max_length").recortar(payload.persona_max_length),
             "forbiddenPhrases": [p.strip() for p in payload.persona_forbidden if p.strip()],
         }
     )

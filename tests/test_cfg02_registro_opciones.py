@@ -123,19 +123,6 @@ def test_los_rangos_de_whatsapp_web_son_los_de_la_politica() -> None:
         assert (o.minimo, o.maximo, o.por_defecto) == (*limites, defecto), clave
 
 
-def test_los_rangos_de_dificultad_son_los_que_aplica_el_loop() -> None:
-    """Hoy los rangos están escritos a mano en `loop.py`; el registro tiene que coincidir (HU-CFG-03 los unifica)."""
-    fuente = (RAIZ / "core/orchestrator/loop.py").read_text()
-    for clave, (lo, hi) in {
-        "difficulty_long_message_threshold": (50, 5000),
-        "difficulty_turnos_sin_resolver_threshold": (1, 20),
-        "difficulty_score_threshold": (1, 10),
-    }.items():
-        o = POR_CLAVE[clave]
-        assert (o.minimo, o.maximo) == (lo, hi)
-        assert f'"{clave}", ' in fuente
-
-
 def test_los_rangos_coinciden_con_los_que_valida_la_api() -> None:
     """`IdentityUpdate` responde 422 fuera de rango: el registro tiene que anunciar los mismos límites."""
     from core.api.routers.settings import IdentityUpdate
@@ -239,7 +226,7 @@ LECTORES: dict[str, set[str]] = {
     "core/kernel/ingress.py": {"escalation_cfg"},
     "core/waweb/policy.py": {"b"},
 }
-RECORTADORES = {"_clamped_int", "_clamped_bool"}
+RECORTADORES = {"_clamped_int", "_clamped_bool", "leer_entero"}
 
 
 def _claves_leidas(ruta: str, receptores: set[str]) -> dict[str, set[str]]:
@@ -263,6 +250,9 @@ def _claves_leidas(ruta: str, receptores: set[str]) -> dict[str, set[str]]:
         elif isinstance(nodo.func, ast.Name) and nodo.func.id in RECORTADORES:
             literal = next((a.value for a in nodo.args[:2] if isinstance(a, ast.Constant) and isinstance(a.value, str)), None)
             clave = literal
+            # `leer_entero(<config>, "clave", defecto)`: la configuración se deduce del primer argumento.
+            if nodo.func.id == "leer_entero" and nodo.args and "escalation" in ast.unparse(nodo.args[0]):
+                config = "escalation_config"
         if isinstance(clave, str):
             leidas[config].add(clave)
     return leidas

@@ -2,7 +2,7 @@
 
 - El default del sistema es `un_mensaje`.
 - `/api/v1/settings/identity` guarda y devuelve `split_style`.
-- Un valor inválido cae a `un_mensaje` (nunca deja el sistema sin estilo).
+- Un valor inválido responde 422 y no cambia lo guardado (HU-CFG-03; antes caía a `un_mensaje`).
 """
 
 from __future__ import annotations
@@ -63,13 +63,15 @@ async def test_identity_guarda_y_devuelve_split_style(app_client) -> None:
     assert r3.status_code == 200, r3.text
     assert r3.json()["split_style"] == "varios_cortos"
 
-    # PUT con un valor inválido: cae a `un_mensaje`.
+    # PUT con un valor inválido: 422 con el campo marcado y lo guardado no cambia.
     payload["split_style"] = "inventado"
     r4 = await app_client.put(
         "/api/v1/admin/settings/identity", headers={"Cookie": cookie}, json=payload
     )
-    assert r4.status_code == 200, r4.text
-    assert r4.json()["split_style"] == "un_mensaje"
+    assert r4.status_code == 422, r4.text
+    assert "split_style" in r4.json()["error"]["fields"]
+    despues = (await app_client.get("/api/v1/admin/settings", headers={"Cookie": cookie})).json()["identity"]
+    assert despues["split_style"] == "varios_cortos"
 
 
 async def test_identity_guarda_y_devuelve_currency(app_client) -> None:

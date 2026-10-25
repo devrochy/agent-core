@@ -107,6 +107,7 @@ from core.agents.spec import (
 from core.billing.enforcement import QuotaExceeded
 from core.billing.tipos_de_uso import NO_ES_ACTIVIDAD, NO_SON_TURNOS
 from core.config import get_settings
+from core.config_limites import rango
 from core.db.models import (
     Admin,
     AdminPermission,
@@ -3120,13 +3121,17 @@ async def settings_save(
         behavior = dict(app_settings.behavior_config)
         behavior.update(
             debounce_mode=debounce_mode,
-            guardrail_max_retries=max(0, guardrail_max_retries),
+            guardrail_max_retries=rango("guardrail_max_retries").recortar(guardrail_max_retries),
             disabled_guardrails=sorted(valid_names & set(normalizar_desactivados(disabled_guardrails))),
-            difficulty_long_message_threshold=max(50, min(5000, difficulty_long_message_threshold)),
-            difficulty_turnos_sin_resolver_threshold=max(
-                1, min(20, difficulty_turnos_sin_resolver_threshold)
+            difficulty_long_message_threshold=rango("difficulty_long_message_threshold").recortar(
+                difficulty_long_message_threshold
             ),
-            difficulty_score_threshold=max(1, min(10, difficulty_score_threshold)),
+            difficulty_turnos_sin_resolver_threshold=rango(
+                "difficulty_turnos_sin_resolver_threshold"
+            ).recortar(difficulty_turnos_sin_resolver_threshold),
+            difficulty_score_threshold=rango("difficulty_score_threshold").recortar(
+                difficulty_score_threshold
+            ),
         )
         app_settings.behavior_config = behavior
         keywords = [t.strip() for t in escalation_keywords.split(",") if t.strip()]
@@ -3139,7 +3144,7 @@ async def settings_save(
             "keywords": keywords,
             "business_hours": business_hours,
             "out_of_hours_message": out_of_hours_message.strip(),
-            "auto_escalate_after_turns": max(0, auto_escalate_after_turns),
+            "auto_escalate_after_turns": rango("auto_escalate_after_turns").recortar(auto_escalate_after_turns),
         }
     # Personalidad del AgentSpec (ADR-0050): se persiste como versión nueva del
     # spec (versionable), no en AppSettings.
@@ -3147,7 +3152,7 @@ async def settings_save(
     persona_data["persona"].update(
         {
             "tone": persona_tone or persona_data["persona"]["tone"],
-            "warmth": max(0, min(5, persona_warmth)),
+            "warmth": rango("persona_warmth").recortar(persona_warmth),
             "emojis": persona_emojis or persona_data["persona"]["emojis"],
             "maxLength": max(0, persona_max_length),
             "forbiddenPhrases": [p.strip() for p in persona_forbidden.split(",") if p.strip()],

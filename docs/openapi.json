@@ -29852,7 +29852,7 @@
           },
           "auto_escalate_after_turns": {
             "type": "integer",
-            "maximum": 1000.0,
+            "maximum": 20.0,
             "minimum": 0.0,
             "title": "Auto Escalate After Turns",
             "default": 0
