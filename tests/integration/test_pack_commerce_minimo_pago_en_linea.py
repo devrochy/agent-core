@@ -121,13 +121,42 @@ async def test_informa_cuantas_cuentas_de_transferencia_tiene(app_client, pasare
     tid = await _negocio()
     h = await api_headers(app_client, tid)
     assert (await app_client.get(RUTA, headers=h)).json()["cuentas_de_transferencia"] == 0
+    original = transfer_registry._providers.get("pack_commerce")
     transfer_registry.register("pack_commerce", _Cuentas(2))
     try:
         assert (await app_client.get(RUTA, headers=h)).json()["cuentas_de_transferencia"] == 2
     finally:
         transfer_registry.unregister("pack_commerce")
+        if original is not None:
+            transfer_registry.register("pack_commerce", original)
 
 
 async def test_sin_sesion_o_sin_permiso_no_responde(app_client, pasarela) -> None:
     tid = await _negocio()
     assert (await app_client.get(RUTA, headers={"X-Tenant-Id": str(tid)})).status_code in (401, 403)
+
+
+async def test_la_config_de_un_negocio_no_se_ve_desde_otro(app_client, monkeypatch) -> None:
+    """Sin falsear la config ni el registro de pasarelas: el mínimo y las cuentas que fijó A no
+    llegan a B. Corre el camino real (config del pack bajo RLS, spec activo, registros)."""
+    from core.plugin_manager import plugin_manager
+    from core.shared.tenant import tenant_scope
+
+    a, b = await _negocio(), await _negocio()
+    async with tenant_scope(a):
+        await plugin_manager.save_config(
+            "pack_commerce",
+            {
+                "pago_en_linea_monto_minimo": 77_000,
+                "transfer_accounts": [
+                    {"entity": "Nequi", "accountType": "ahorros", "accountNumber": "3001112233", "holderName": "A", "holderDocument": "1"}
+                ],
+            },
+        )
+    ha, hb = await api_headers(app_client, a), await api_headers(app_client, b)
+
+    de_a = (await app_client.get(RUTA, headers=ha)).json()
+    assert de_a["minimo"] == 77000.0 and de_a["fuente"] == "negocio" and de_a["cuentas_de_transferencia"] == 1
+    de_b = (await app_client.get(RUTA, headers=hb)).json()
+    assert de_b["fuente"] != "negocio" and de_b["minimo"] != 77000.0 and de_b["cuentas_de_transferencia"] == 0
+    assert set(de_a) == {"minimo", "fuente", "moneda", "cuentas_de_transferencia"}  # solo un conteo, nunca las cuentas

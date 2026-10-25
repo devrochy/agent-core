@@ -51,4 +51,7 @@ async def cuentas_de_transferencia_configuradas() -> int:
     try:
         return len(await proveedor.cuentas_de_transferencia())
     except Exception:
+        from core.shared.logger import get_logger
+
+        get_logger(__name__).warning("minimo_cuentas_fallo", exc_info=True)
         return 0
