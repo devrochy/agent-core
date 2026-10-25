@@ -12653,6 +12653,55 @@
         }
       }
     },
+    "/api/v1/pack/commerce/pago-en-linea/minimo": {
+      "get": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Minimo Pago En Linea",
+        "operationId": "minimo_pago_en_linea_api_v1_pack_commerce_pago_en_linea_minimo_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MinimoPagoEnLineaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/commerce/allies": {
       "get": {
         "tags": [
@@ -31439,6 +31488,50 @@
         ],
         "title": "ModulosOut",
         "description": "Módulos opcionales del pack encendidos en el negocio (el panel decide qué mostrar)."
+      },
+      "MinimoPagoEnLineaOut": {
+        "properties": {
+          "minimo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimo",
+            "description": "Monto mínimo por cobro en la moneda del negocio; `null` si no hay pasarela que lo declare."
+          },
+          "fuente": {
+            "type": "string",
+            "enum": [
+              "negocio",
+              "pasarela",
+              "ninguna"
+            ],
+            "title": "Fuente",
+            "description": "`negocio`: lo fijó el negocio; `pasarela`: lo declara la pasarela para su ambiente."
+          },
+          "moneda": {
+            "type": "string",
+            "title": "Moneda",
+            "default": "COP"
+          },
+          "cuentas_de_transferencia": {
+            "type": "integer",
+            "title": "Cuentas De Transferencia",
+            "description": "Cuentas de transferencia configuradas (0 = el cobro bajo el mínimo no tendría cómo pagarse)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "minimo",
+          "fuente",
+          "cuentas_de_transferencia"
+        ],
+        "title": "MinimoPagoEnLineaOut",
+        "description": "Mínimo por cobro para pagar en línea (HU-SUB-25). El panel lo usa para avisar al guardar un plan."
       },
       "Monitoring": {
         "properties": {
