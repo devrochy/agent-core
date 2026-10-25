@@ -78,6 +78,29 @@ async def test_registra_la_transferencia_y_reactiva_la_suscripcion(app_client) -
     assert fila.actor == "admin:admin@local" and fila.input["referencia"] == "Comprobante 99812"
 
 
+async def test_paga_el_cargo_elegido_aunque_la_periodicidad_cambiara_despues(app_client) -> None:
+    """El cargo se creó con etiqueta mensual y la suscripción pasó a anual: se paga ESE cargo,
+    sin crear otro pagado con la etiqueta recalculada."""
+    from pack_subscriptions.models import SubscriptionCharge
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    sid, cid = await _vencida(tid, periodicidad="anual")
+    h = await api_headers(app_client, tid)
+
+    r = await app_client.post(f"{BASE}/cargos/{cid}/registrar-pago", json={"referencia": "Comprobante 4471"}, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["charge_id"] == str(cid)
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            cargos = (await session.execute(select(SubscriptionCharge).where(SubscriptionCharge.subscription_id == sid))).scalars().all()
+    assert [(c.id, c.estado) for c in cargos] == [(cid, "pagado")]
+    [pagado] = await _eventos(tid, "subscription.charge_paid")
+    assert pagado.payload["charge_id"] == str(cid)
+
+
 async def test_pausada_por_mora_se_reactiva_y_pausada_por_el_cliente_sigue_pausada(app_client) -> None:
     tid = await _negocio()
     h = await api_headers(app_client, tid)

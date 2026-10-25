@@ -571,6 +571,7 @@ async def registrar_pago_por_transferencia(
             referencia=referencia,
             canal=CANAL_TRANSFERENCIA,
             emitir_pago=True,
+            cargo_id=cargo.id,
         )
     except SubscriptionError as exc:
         raise ApiError(409, exc.code or "error_suscripcion", str(exc)) from exc
