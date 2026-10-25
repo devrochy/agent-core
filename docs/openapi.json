@@ -39671,6 +39671,23 @@
             "pattern": "^[a-z_]{1,40}$",
             "title": "Reason",
             "default": "manual"
+          },
+          "forzar": {
+            "type": "boolean",
+            "title": "Forzar",
+            "default": false
+          },
+          "motivo_forzado": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Forzado"
           }
         },
         "additionalProperties": false,

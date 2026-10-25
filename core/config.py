@@ -174,6 +174,9 @@ class Settings(BaseSettings):
     knowledge_embedding_provider: Literal["hash", "openai"] = Field(
         default="hash", alias="KNOWLEDGE_EMBEDDING_PROVIDER"
     )
+    # Tope mensual en USD del gate de pass^k por negocio (HU-AOS-21): lo paga la plataforma. El
+    # master puede fijar otro en `tenants.settings.evals.tope_usd_mensual`.
+    eval_tope_usd_mensual: float = Field(default=10.0, ge=0, alias="EVAL_TOPE_USD_MENSUAL")
     # Retención de la memoria semántica en días (ADR-0053). 0 = sin purga automática.
     memory_retention_days: int = Field(default=0, alias="MEMORY_RETENTION_DAYS")
 

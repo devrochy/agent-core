@@ -79,15 +79,19 @@ async def gate_aprobado(
     activa: uuid.UUID | None,
     *,
     exencion: str | None = None,
+    forzado: bool = False,
 ) -> tuple[bool, str, dict[str, str]]:
     """El gate de promoción (HU-AOS-21). Devuelve `(aprobado, gate, tocados)`.
 
-    Lee, no mide: corre dentro del `FOR UPDATE` de `promover`. Hasta que exista el corredor de
-    pass^k (parte 3) no hay veredictos, así que una candidata que toca procedimientos pasa con
-    `gate = 'sin_evaluar'` (decisión del dueño, 2026-10-25). Valores de `gate`:
-    `exento_release_1`, `exento_<exencion>`, `sin_cambios` y `sin_evaluar`."""
+    Lee, no mide: corre dentro del `FOR UPDATE` de `promover` y solo cree el último veredicto de
+    la candidata medido contra la release activa de ahora (`base_release_id`). Valores de `gate`:
+    `exento_release_1`, `exento_<exencion>`, `forzado`, `sin_cambios`, `aprobado`, `rechazado` y
+    `sin_evaluar`. Sin veredicto, la candidata pasa con `sin_evaluar` mientras el corredor no
+    cierre el gate (decisión del dueño, 2026-10-25); un veredicto `rejected` la bloquea."""
     if activa is None:
         return True, "exento_release_1", {}
+    if forzado:
+        return True, "forzado", {}
     if exencion is not None:
         if exencion not in EXENCIONES:
             raise ValueError(f"exención desconocida: {exencion}")
@@ -102,12 +106,23 @@ async def gate_aprobado(
     if candidata is None:
         raise ReleaseNoEncontrada(str(release_id))
     tocados = procedimientos_tocados(candidata, base)
-    return True, ("sin_evaluar" if tocados else "sin_cambios"), tocados
+    if not tocados:
+        return True, "sin_cambios", tocados
+    from core.releases import veredicto
+
+    previo = await veredicto.ultimo(session, tenant_id, release_id, activa)
+    if previo is None:
+        return True, "sin_evaluar", tocados
+    if previo["tipo"] == veredicto.RECHAZADO:
+        return False, "rechazado", tocados
+    return True, "aprobado", tocados
 
 
 async def _es_negocio_de_prueba(session: Any, tenant_id: uuid.UUID) -> bool:
     slug = (
-        await session.execute(text("SELECT slug FROM tenants WHERE id = :t"), {"t": tenant_id})
+        await session.execute(
+            text("SELECT slug FROM tenants WHERE id = :t AND deleted_at IS NULL"), {"t": tenant_id}
+        )
     ).scalar_one_or_none()
     return isinstance(slug, str) and slug.startswith("qa-")
 
@@ -202,12 +217,15 @@ async def promover(
     actor: str,
     motivo: str = "manual",
     exencion: str | None = None,
+    forzado_por_master: str | None = None,
 ) -> Cambio:
     """Activa la release (promoción total). 409 si ya es la activa o el gate la rechaza.
 
     `exencion` solo la pasan los llamadores internos (`migrar_a_v3`, `qa_datos`,
-    `hotfix_yanked`); la API nunca la envía."""
+    `hotfix_yanked`); la API nunca la envía. `forzado_por_master` es el motivo escrito con el
+    que un master salta el gate (la API lo exige de un master); queda en el evento."""
     _exigir_scope(tenant_id)
+    forzado = bool(forzado_por_master and forzado_por_master.strip())
     async with get_session() as session:
         activa, _ = await _bloquear(session, tenant_id, connection_id)
         release = await _release(session, tenant_id, connection_id, release_id)
@@ -215,25 +233,40 @@ async def promover(
             raise ConflictoDeRelease("ya_activa", "Esa versión ya es la activa.")
         await _exigir_utilizable(session, tenant_id, release_id)
         aprobado, gate, tocados = await gate_aprobado(
-            session, tenant_id, release_id, activa, exencion=exencion
+            session, tenant_id, release_id, activa, exencion=exencion, forzado=forzado
         )
         if not aprobado:
-            raise ConflictoDeRelease("gate_rechazado", "La versión no pasó el gate.")
+            raise ConflictoDeRelease(
+                "gate_rechazado",
+                "La versión no pasó el gate de pass^k: algún procedimiento quedó bajo el umbral "
+                "o peor que la versión activa.",
+            )
         await _apuntar(session, tenant_id, connection_id, release_id)
-        await registrar_evento(
-            session,
-            tenant_id,
-            connection_id,
-            release_id,
-            "promoted",
-            actor,
-            {
-                "from_release_id": str(activa) if activa else None,
-                "reason": motivo[:40],
-                "gate": gate,
-                "gate_tocados": dict(sorted(tocados.items())[:_MAX_TOCADOS_EN_EVENTO]),
-            },
-        )
+        datos: dict[str, Any] = {
+            "from_release_id": str(activa) if activa else None,
+            "reason": motivo[:40],
+            "gate": gate,
+            "gate_tocados": dict(sorted(tocados.items())[:_MAX_TOCADOS_EN_EVENTO]),
+        }
+        if forzado:
+            datos["gate_motivo"] = str(forzado_por_master).strip()[:200]
+        await registrar_evento(session, tenant_id, connection_id, release_id, "promoted", actor, datos)
+        if forzado:
+            from core.db.models import AuditLog
+
+            # En la misma transacción que la promoción: no queda un forzado sin auditoría.
+            session.add(
+                AuditLog(
+                    tenant_id=tenant_id,
+                    actor=actor,
+                    action="release_gate_forzado",
+                    input={
+                        "connection_id": str(connection_id),
+                        "release_id": str(release_id),
+                        "motivo": datos["gate_motivo"],
+                    },
+                )
+            )
     log.info(
         "release_promoted",
         connection_id=str(connection_id),

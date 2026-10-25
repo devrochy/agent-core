@@ -1971,6 +1971,9 @@ class EvalRun(Base):
     pass_1: Mapped[float | None] = mapped_column(Numeric(5, 4))
     pass_k: Mapped[float | None] = mapped_column(Numeric(5, 4))
     simulator: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
+    # HU-AOS-21 (migración 0105): la release candidata medida por el gate y el origen de la corrida.
+    release_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    origen: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -1995,6 +1998,7 @@ class EvalResult(Base):
     simulator: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     state_assertions: Mapped[list | None] = mapped_column(JSONB(none_as_null=True))
     verifier: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))  # HU-ARCH-29
+    procedure_id: Mapped[str | None] = mapped_column(Text)  # HU-AOS-21 (migración 0105)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

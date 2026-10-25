@@ -23,6 +23,7 @@ from sqlalchemy import and_, func, or_, select, text, true
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
+from core.billing.tipos_de_uso import EVAL
 from core.db.models import (
     Admin,
     ChannelConnection,
@@ -492,6 +493,7 @@ async def get_conversation(
                 ).where(
                     UsageLedger.tenant_id == tenant_id,
                     UsageLedger.conversation_id == conversation_id,
+                    UsageLedger.kind != EVAL,
                 )
             )
         ).one()
