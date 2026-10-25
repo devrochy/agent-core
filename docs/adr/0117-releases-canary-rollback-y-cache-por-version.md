@@ -240,3 +240,62 @@ mismo lock: tarea en foco → reglas del KernelSpec → disparadores → `elegir
 la ruta es el foco del turno y se escribe como dueño (`active_agent_instance_id`, `owner_since`; no es un handoff);
 en `shadow` solo se registra en `core_decisions.shadow_route`. `ReleaseCongelada` guarda en su caché el `routing`
 validado y el índice de disparadores. Detalle en ADR-0138.
+
+## Adenda propuesta HU-AOS-21: el gate de pass^k (2026-10-25)
+
+Propuesta. Decisiones del dueño del 2026-10-25 y diseño del gate de §5. Se entrega en tres partes:
+(1) esta adenda; (2) el gate que lee veredictos, sin corredor; (3) el corredor contra `agentcore_eval`.
+
+**Decisiones del dueño (2026-10-25):**
+
+- **Costo.** pass^4 (k = 4, no k = 8 de ADR-0119) con LLM real, solo de los procedimientos que tocó la
+  candidata. Lo paga la plataforma, con tope mensual en USD por negocio. Al llegar al tope, la promoción
+  queda bloqueada salvo que el master la fuerce.
+- **Dónde.** Base `agentcore_eval` compartida por entorno, en el mismo Postgres y migrada con el despliegue.
+  Cada corrida siembra un negocio efímero con la release candidata y lo purga al terminar.
+- **Umbral.** pass^4 ≥ 0,85 por procedimiento tocado **y** no menor que el de la release activa para el
+  mismo procedimiento. Si la activa no tiene medición (release 1, `migrar-a-v3`), solo aplica el umbral.
+  Se exigen al menos 2 escenarios por procedimiento.
+- **Exenciones:** release 1 (`reason = 'release_1'`) y `migrar-a-v3`. Además, **forzado por el master**
+  con motivo escrito, que queda en el evento `promoted` (`gate = 'forzado'`, `gate_motivo`) y en `audit_log`.
+- **Sin procedimientos tocados, pasa sin evaluar** (`gate = 'sin_cambios'`). Un cambio de modelo o de
+  persona del agente cuenta como que toca **todos** los procedimientos de ese agente. Un cambio que no
+  entra al prompt ni a los procedimientos no los toca.
+- **Transición.** Hasta que exista el corredor (parte 3), una candidata que toca procedimientos y no tiene
+  veredicto **pasa** con `gate = 'sin_evaluar'` anotado en el evento: el panel y el editor siguen
+  funcionando. La parte 3 cierra el gate (sin veredicto → 409 `gate_pendiente`).
+
+**Diseño:**
+
+1. **El gate lee, no mide.** `gate_aprobado` sigue dentro del `FOR UPDATE` de `promover` y solo lee el
+   último veredicto de la release (`release_events` `approved`/`rejected`, por `release_id` y
+   `manifest_hash`). La medición corre fuera, en una tarea del worker encolada después de `built`.
+2. **Qué tocó la candidata** (`core/releases/diferencias.py`, puro). Compara el manifiesto de la candidata
+   con el de la activa y devuelve los procedimientos tocados con su motivo:
+   - versión de procedimiento distinta en `components[].procedures`;
+   - `content_hash` distinto en un componente (modelo, persona o tools): todos sus procedimientos;
+   - override de playbook o sección de `flow_tenant` que los alimenta;
+   - campos de `app_settings` que entran al prompt: todos.
+   Los procedimientos abiertos se resuelven con `core/releases/procedimientos.py` en las dos releases.
+3. **Escenarios.** Cada escenario declara `procedimientos: [id]` (hoy la relación solo está en el texto de
+   la descripción). En la parte 2 viven donde están (`evals/journeys/procedimientos/`). Un test del CI
+   falla si un procedimiento **que ya tiene escenarios** tiene menos de 2. Los que no tienen ninguno
+   (`cambiar_plan`, `promesa_de_pago`) quedan en una lista explícita de pendientes: escribir escenarios
+   que nunca corrieron no demuestra nada, y correrlos es LLM real con OK del dueño. Moverlos al pack y
+   congelarlos con `pack_versions` (§5: «escenarios de la habilidad») va en la parte 3.
+4. **Migración** (aditiva):
+   - `eval_runs`: `release_id uuid NULL` con FK compuesta `(tenant_id, release_id)` →
+     `connection_releases(tenant_id, id)`, `manifest_hash text NULL`, `origen text NULL`
+     (`gate`, `manual`, `nightly`); índice `(tenant_id, release_id, started_at DESC)`.
+   - `eval_results`: `procedure_id text NULL` (sin CHECK, ADR-0070); índice
+     `(tenant_id, run_id, procedure_id)`.
+   - El veredicto (`approved`/`rejected`) es un `release_events` con `data` =
+     `{run_id, k, umbral, por_procedimiento: {id: {pass_k, activa, ok}}, motivo}`. No hay tabla nueva.
+5. **Tope mensual** (parte 3): `tenants.settings.evals.tope_usd_mensual` (por defecto de plataforma,
+   `EVAL_TOPE_USD_MENSUAL`), consumo leído de `usage_ledger` con `kind = 'eval'` del negocio. La fila se
+   escribe en la base del negocio, no en `agentcore_eval`: el tope cuenta lo gastado por sus candidatas.
+6. **API.** `promover` traduce el rechazo en 409 `gate_rechazado` con el detalle por procedimiento y el
+   pendiente en 409 `gate_pendiente`. El forzado es `POST .../promote` con `forzar: true` y `motivo`, solo
+   master.
+
+**Lo que no cambia:** el rollback no pasa por el gate; el canary y la no-inferioridad son de HU-AOS-32.
