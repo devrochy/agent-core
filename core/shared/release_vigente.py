@@ -110,6 +110,9 @@ class ArtefactosDeRelease:
     # release `release/1`: rige la regla transitoria de HU-AOS-05 (procedimientos del binario).
     procedimientos: Mapping[str, Any] = field(default_factory=dict)
     procedimientos_por_agente: Mapping[uuid.UUID, Mapping[str, Any]] | None = None
+    # HU-AOS-19: el grafo de permisos A2A congelado en el manifiesto (datos planos, adenda HU-AOS-18
+    # de ADR-0116), o None: sin grafo no se ofrece ningún comando entre agentes.
+    a2a_graph: Mapping[str, Any] | None = None
 
 
 @dataclass

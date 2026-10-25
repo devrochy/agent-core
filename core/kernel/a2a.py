@@ -107,11 +107,18 @@ class GrafoCongelado:
                 timeout_ms=int(e.get("timeout_ms", _DEADLINE_SIN_ENLACE_MS)),
                 budget_usd=Decimal(str(e.get("budget_usd", "0"))),
                 budget_tokens=int(e.get("budget_tokens", 0)),
-                data_classes=frozenset(e.get("data_classes") or ()),
+                data_classes=frozenset(e.get("data_classes") or ("public", "internal")),
             )
             enlaces[(enlace.from_agent_id, enlace.to_agent_id)] = enlace
         version = crudo.get("version_id")
         return cls(enlaces, dict(agente_de), uuid.UUID(str(version)) if version else None)
+
+    def sin(self, desde: uuid.UUID, hacia: uuid.UUID) -> GrafoCongelado:
+        """El mismo grafo sin el enlace `desde → hacia`: la guarda lo niega con `no_link` (lo usa
+        el contrato expuesto, HU-AOS-19)."""
+        a, b = self.agente_de.get(desde), self.agente_de.get(hacia)
+        enlaces = {par: e for par, e in self.enlaces.items() if par != (a, b)}
+        return GrafoCongelado(enlaces, self.agente_de, self.version_id)
 
     def enlace(self, desde: uuid.UUID, hacia: uuid.UUID) -> Enlace | None:
         a, b = self.agente_de.get(desde), self.agente_de.get(hacia)
@@ -139,6 +146,31 @@ class Limites:
             budget_usd=Decimal(str(a2a.turnBudgetUsd)),
             budget_tokens=a2a.turnBudgetTokens,
             max_cambios_de_dueno=release.ruteo().owner.maxOwnerChangesPer6Turns,
+        )
+
+    @classmethod
+    def del_kernel(cls, contenido: Mapping[str, Any] | None) -> Limites:
+        """Desde el KernelSpec congelado (el contenido del Coordinador en la ranura del turno). Un
+        bloque que no valida da los valores por defecto (el build ya lo valida)."""
+        from agentcore_contracts.kernelspec import A2ALimits, OwnerStability
+        from pydantic import ValidationError
+
+        contenido = contenido or {}
+        crudo_a2a = contenido.get("a2a")
+        ruteo = contenido.get("routing")
+        crudo_dueno = ruteo.get("owner") if isinstance(ruteo, Mapping) else None
+        try:
+            a2a = A2ALimits.model_validate(crudo_a2a if isinstance(crudo_a2a, Mapping) else {})
+            dueno = OwnerStability.model_validate(crudo_dueno if isinstance(crudo_dueno, Mapping) else {})
+        except ValidationError:
+            log.error("a2a_limites_invalidos")
+            a2a, dueno = A2ALimits(), OwnerStability()
+        return cls(
+            max_depth=a2a.maxDepth,
+            max_calls=a2a.maxCallsPerTurn,
+            budget_usd=Decimal(str(a2a.turnBudgetUsd)),
+            budget_tokens=a2a.turnBudgetTokens,
+            max_cambios_de_dueno=dueno.maxOwnerChangesPer6Turns,
         )
 
 
@@ -575,6 +607,52 @@ async def liquidar(
         estado.pila.pop()
 
 
+def liberar(estado: EstadoDelTurno, call_id: uuid.UUID) -> Abierta:
+    """Suelta la reserva de una operación aceptada que no gasta LLM (el handoff, HU-AOS-19) sin
+    escribir nada: su cierre lo escribe quien la termina (`cerrar_handoff`)."""
+    abierta = estado.abiertas.pop(call_id)
+    estado.reservado_usd -= abierta.enlace.budget_usd
+    estado.reservado_tokens -= abierta.enlace.budget_tokens
+    if estado.pila and estado.pila[-1] == abierta.hacia:
+        estado.pila.pop()
+    return abierta
+
+
+async def cerrar_handoff(
+    session: Any,
+    estado: EstadoDelTurno,
+    *,
+    call_id: uuid.UUID,
+    desde: uuid.UUID,
+    hacia: uuid.UUID,
+    aplicado: bool,
+    razon: str | None = None,
+) -> None:
+    """Fase 2 del handoff (HU-AOS-19) en la transacción de quien llama: `handoff_applied` o
+    `cancelled`, y la conversación A2A queda `completed` o `failed`."""
+    if estado.a2a_conversation_id is None:
+        return
+    await _evento(
+        session,
+        estado,
+        tipo="handoff_applied" if aplicado else "cancelled",
+        call_id=call_id,
+        modo="handoff",
+        depth=1,
+        desde=desde,
+        hacia=hacia,
+        intencion="handoff",
+        razon=razon,
+    )
+    await session.execute(
+        text(
+            "UPDATE a2a_conversations SET status = CASE WHEN status = 'open' THEN :estado ELSE status END, "
+            "ended_at = coalesce(ended_at, now()) WHERE tenant_id = :t AND id = :a"
+        ),
+        {"t": estado.tenant_id, "a": estado.a2a_conversation_id, "estado": "completed" if aplicado else "failed"},
+    )
+
+
 async def cerrar_turno(estado: EstadoDelTurno) -> None:
     """Al terminar el turno: la conversación A2A que siga abierta queda `completed`."""
     if estado.a2a_conversation_id is None:
@@ -600,8 +678,10 @@ __all__ = [
     "Limites",
     "Operacion",
     "aplicar",
+    "cerrar_handoff",
     "cerrar_turno",
     "evaluar",
+    "liberar",
     "liquidar",
     "payload_hash",
     "redactar",

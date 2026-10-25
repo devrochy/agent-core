@@ -107,6 +107,11 @@ class Turno:
     candidates: list[dict[str, Any]] | None = None
     confidence: float | None = None
     shadow_route: dict[str, Any] | None = None
+    # HU-AOS-19: estado A2A del turno y handoff aceptado en la fase 1 (la fase 2 corre al cerrar
+    # el turno, `handoff.cerrar`). `final_instance_id`: el nuevo dueño si el cambio hizo commit.
+    a2a: Any = None
+    handoff: Any = None
+    final_instance_id: uuid.UUID | None = None
     _token_vigente: Any = None
 
     def ms(self) -> int:
@@ -191,8 +196,10 @@ async def _abrir_turno() -> AsyncIterator[Turno]:
                         # Solo `Exception`: una tarea cancelada no espera a la BD.
                         span.set_attribute("error.type", type(exc).__name__)
                         turno.status = "failed"
+                        await _cerrar_colaboracion(turno)
                         await _registrar_resultado(turno)
                         raise
+                    await _cerrar_colaboracion(turno)
                     await _registrar_resultado(turno)
                     span.set_attribute("outcome", turno.outcome or "")
                     span.set_attribute("status", turno.status or "")
@@ -406,6 +413,37 @@ def anotar_resultado(resultado: Any) -> None:
     turno.status = status
 
 
+async def _cerrar_colaboracion(turno: Turno) -> None:
+    """Fase 2 del handoff y cierre de la conversación A2A del turno (HU-AOS-19). Nunca lanza."""
+    if turno.handoff is None and turno.a2a is None:
+        return
+    from core.kernel import handoff
+
+    turno.final_instance_id = await handoff.cerrar(turno)
+
+
+def anotar_a2a(estado: Any) -> None:
+    """El estado A2A del turno (lo cierra `_cerrar_colaboracion`)."""
+    turno = turno_actual()
+    if turno is not None:
+        turno.a2a = estado
+
+
+def anotar_handoff(pendiente: Any) -> bool:
+    """Handoff aceptado en la fase 1. False si no hay turno abierto (sin turno no hay fase 2: el
+    motor no promete nada)."""
+    turno = turno_actual()
+    if turno is None or turno.handoff is not None:
+        return False
+    turno.handoff = pendiente
+    return True
+
+
+def handoff_pendiente() -> bool:
+    turno = turno_actual()
+    return turno is not None and turno.handoff is not None
+
+
 async def _registrar_resultado(turno: Turno) -> None:
     if not turno.decidido or turno._token_vigente is None:
         return  # sin cabecera no hay resultado (la FK no es diferida)
@@ -430,8 +468,8 @@ async def _registrar_resultado(turno: Turno) -> None:
                     "tokens_out": turno.tokens_out,
                     "cost_usd": round(turno.cost_usd, 6),
                     "latency_ms": turno.ms(),
-                    # Sin handoff (HU-AOS-19) el que termina es el que atendió.
-                    "final_instance_id": turno.active_instance_id,
+                    # Con un handoff aplicado (HU-AOS-19), el nuevo dueño; si no, el que atendió.
+                    "final_instance_id": turno.final_instance_id or turno.active_instance_id,
                 },
             )
     except Exception:

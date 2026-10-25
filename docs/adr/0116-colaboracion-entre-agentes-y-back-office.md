@@ -119,3 +119,82 @@ Los agentes colaboran en el mismo hilo con mecanismos deterministas, permisos ve
    - `GET /graph/versions`: historial;
    - `GET /calls?connection_id&limit&before`: una fila por `call_id` (agrupando `a2a_events`), sin payload.
 6. **Fuera de esta adenda:** las operaciones reales (`encargar`, `consultar`, `pasar_a_agente`) con su contrato expuesto, el scope de conexión del grafo (§2), el timeout por turno, el grafo de los presets y el congelado persistente del dueño (si el freno por turno no basta, se revisa).
+
+## Adenda HU-AOS-19 (2026-10-25): handoff, encargo y consulta en el mismo hilo
+
+**Estado:** propuesta, revisada por el arquitecto. Decisiones del dueño del 2026-10-25: (a) `encargar` solo acepta procedimientos que se completan con datos; ejecutar la acción de salida sin LLM queda para después; (b) una consulta nombra una acción de lectura (`ExposedQuery.action`, contratos 3.2.0, adenda de ADR-0113). Se entrega en dos partes: **parte 1**, el handoff (§1-§3); **parte 2**, el encargo y la consulta (§4-§5).
+
+1. **Tres comandos del hilo** (`core/kernel/procedures/comandos.py`, textos en el playbook `comandos`), con la misma infraestructura que `actualizar_tarea`: el modelo propone, el motor decide, nunca lanzan y devuelven `{ok, state_card, errors, …}`. Los nombres entran en `NOMBRES`, `_ARGUMENTOS` y `TEXTOS` (fail-closed: si falta un texto, el playbook no carga).
+   - `pasar_a_agente(agente)`;
+   - `encargar(agente, procedimiento, entradas)`, solo con tarea en foco;
+   - `consultar(agente, consulta, parametros)`.
+
+   `agente` es un enum con las **keys** de los especialistas de la release que el grafo congelado deja alcanzar desde el agente del turno con ese modo. El modelo nunca ve ids: el kernel traduce key → instancia con los componentes de la release. Se ofrecen solo con el motor activo, release `release/2` y al menos un destino para el modo; `pasar_a_agente` y `consultar` no dependen del foco. **Sin grafo, el prompt queda igual que hoy.**
+2. **Contexto A2A del turno.** `ArtefactosDeRelease` suma `a2a_graph` (el del manifiesto, datos planos). `contexto_del_motor` arma una vez por turno el `GrafoCongelado`, los `Limites` (del KernelSpec congelado) y un `EstadoDelTurno`, que comparten todas las operaciones del turno. Los cambios de dueño se leen con `router.cambios_de_dueno` en el momento del handoff, la misma fuente que el router.
+3. **Handoff en dos fases** (`core/kernel/handoff.py`).
+   - **Destinos posibles:** especialistas con enlace `handoff` desde el agente del turno que **declaran el procedimiento de cada tarea abierta** de la conversación. Si no lo declaran, no aparecen en el enum y la guarda los niega con `no_link`: es el contrato expuesto, sin razón nueva. Así una tarea nunca queda con un dueño que no la puede gobernar.
+   - **Fase 1 (en el turno):**
+     - La guarda registra la operación `handoff` (`accepted` o la negación) y libera la reserva enseguida (no hay gasto LLM).
+     - Si se acepta, el `Turno` guarda el handoff pendiente con todo lo que la fase 2 necesita sin leer la release: `from` y `to` (instancias), `call_id`, `a2a_conversation_id`, `connection_id` y `conversation_id`.
+     - Un segundo `pasar_a_agente` en el mismo turno no se ofrece.
+     - El modelo recibe que el pedido queda con el destino desde el siguiente mensaje y puede despedirse en esta respuesta. El texto no lo promete de forma absoluta: si el cliente vuelve pasado `idleMinutes`, el episodio nuevo suelta al dueño; y sin tarea en foco, una regla o un disparador del router puede llevar el turno a otro agente.
+     - Con un handoff pendiente, `cerrar_turno` no cierra la conversación A2A: la cierra la fase 2.
+   - **Fase 2 (al cerrar el turno):** la llama `_abrir_turno` después del `yield` y antes de escribir `turn_outcomes`, en el `tenant_scope` del turno (comprueba `get_current_tenant_id() == turno.tenant_id`). Es el único punto posterior a la entrega que conoce el status final. Reglas:
+     - Solo si el turno terminó `replied` o `silent`. Con `neutral`, el guardrail reemplazó la respuesta y el cliente no vio la despedida.
+     - Tiene tope de tiempo (`_TIMEOUT_ESCRITURA_S`) y **nunca lanza**: si lanzara, el consumer reintentaría el turno y el cliente recibiría la respuesta dos veces. Un fallo queda en el log y como `cancelled` (best-effort).
+     - Todo va en una transacción, bajo `FOR UPDATE` de la conversación:
+       1. Comprueba que `active_agent_instance_id` siga siendo el `from`. El turn gate es por negocio, no por conversación, y dos turnos de la misma conversación pueden cruzarse. Si cambió, `cancelled`.
+       2. `active_agent_instance_id` = destino y `owner_since = now()`.
+       3. `owner_changed` (`from_instance_id`, `to_instance_id`, actor `kernel`) en cada tarea de `state.tareas_abiertas`, que excluye las sub-tareas (estas nunca quedan abiertas: se completan en su transacción). Las tareas viajan intactas: misma tarjeta, datos y etapa. Con `aos_routing = active`, el router las sigue con el nuevo dueño (`source = task`); con `off`, el foco es el dueño de la conversación.
+       4. Evento A2A `handoff_applied` y cierre de la conversación A2A como `completed`.
+     - `turn_outcomes.final_instance_id` = destino, solo si la transacción hizo commit.
+   - **Si no se aplica:** con un turno `failed`, `escalated` o `neutral`, o con el dueño cambiado por otro turno, el ledger escribe `cancelled` (con `reason` nulo, o `error` si falló la escritura) y la conversación A2A queda `failed`. Un turno cancelado por `TurnTimeout` (`CancelledError`) no llega a la fase 2: el `accepted` queda sin cierre en el ledger y el dueño no cambia. Lo aceptamos: la proyección queda `open` con `deadline_at` vencido, y eso se puede reconocer.
+   - **Ping-pong:** la guarda niega con `owner_frozen` cuando los cambios de dueño de las últimas 6 decisiones ya están en `routing.owner.maxOwnerChangesPer6Turns`.
+4. **Encargo (parte 2)**: una sub-tarea completada sin LLM.
+   - **Encargable:** el destino lo declara en `exposes.procedures` y lo publica en la release; la definición es la congelada del destino (`procedimientos_por_agente`), no la del registro. Además, el procedimiento **se completa con datos**:
+     - ninguna etapa tiene acción de salida, confirmación, datos `confirmed` en la salida ni precondiciones, y no espera eventos de cierre;
+     - todo dato que pide una salida es escribible (sin `setBy`, sin `location`/`media`, sin `candidates`);
+     - ningún dato tiene `confirm: true` ni es de clase `payment`.
+     
+     Lo que no cumple no aparece en el enum (fail-closed). Hoy ningún procedimiento de los packs es encargable: los escenarios usan un procedimiento de prueba y no se construye editor ni preset para esto.
+   - **`entradas`:** un objeto con la unión de los datos escribibles de los procedimientos ofrecidos. El motor valida contra el procedimiento elegido (un dato que no es suyo es un error).
+   - **Ejecución:**
+     - La guarda registra `delegate`: la intención es el id del procedimiento y las clases de datos, las de los datos enviados.
+     - Si se acepta, se comprueba que el pack del destino siga sano.
+     - Después, en **una transacción bajo el lock de la conversación**:
+       1. crea la sub-tarea (`parent_task_id` = tarea en foco, `owner_instance_id` = destino);
+       2. valida las `entradas` con `_validar_dato` (resolvers con el contexto del destino y su presupuesto de tiempo), `_no_dichos` (lo que el cliente no dijo se rechaza) y `_correos_dudosos` (un correo dudoso hace fallar el encargo y el modelo pregunta). Todo o nada;
+       3. fija los datos y avanza las etapas de forma pura (`motor.salida_cumplida` + `motor.siguiente`, con tope `_MAX_AVANCES`), sin `_avanzar` ni `_devolver_control`, hasta `completed`.
+   - **Si no se completa** (falta un dato), la transacción se deshace: no queda sub-tarea a medias, el modelo recibe qué falta y el ledger escribe `failed`.
+   - **Efectos externos:** `procedure.slots_set` se emite solo después del commit y solo con la sub-tarea completada. `datos_fijados` (evidencia del verificador sobre la tarea en foco) no cambia.
+   - **Resultado tipado:** los datos finales de la sub-tarea, sin los `pii` si el enlace no permite `pii`. Va como dato JSON (invariante 7) y se registra solo su forma.
+5. **Consulta (parte 2):**
+   - **Consultable:**
+     - el destino declara la consulta con `action` y la acción está entre sus `tools` y en el scope de la release;
+     - la acción **no aparece en `stage.actions` de ningún procedimiento de la release** (no solo las puertas): si no, `consultar` ejecutaría fuera de etapa una acción que gobierna el motor y se saltaría el ligado y la confirmación;
+     - la acción no pide confirmación en el binding.
+     
+     Si llega una consulta que no cumple, se niega.
+   - **Ejecución:**
+     - La guarda registra `query`. La intención es el id de la consulta y la clase es `internal`; los `parametros` son datos para la acción, no se clasifican, y el chequeo de clases del enlace no los cubre.
+     - La acción corre con un ejecutor propio de consulta: el spec, el binding y la identidad del **destino** (denegaciones y confirmación del destino), memoria de solo lectura (`write_namespaces` vacío), auditoría como cualquier acción y clave idempotente `query-{call_id}`.
+     - La salida se valida contra `outputSchema` con el subconjunto de JSON Schema del kernel.
+   - **Resultado:** si valida, vuelve como dato (`resultado`); si no, `ok: false` y el ledger escribe `failed`.
+6. **Gasto:** estas operaciones no usan LLM propio y no escriben `agent_run`; `liquidar` se llama sin gasto. El tiempo y el costo LLM siguen en la fila `turn` del turno.
+7. **Escenarios simulados sin LLM** (modelo guionado, como HU-AOS-17):
+   - **Parte 1:**
+     - handoff sin pérdida: el segundo turno lo atiende el destino con `aos_routing` `off` y `active`, con la misma tarea, etapa y datos, `owner_changed` y `handoff_applied`;
+     - ping-pong en tres turnos (A→B pasa, B→A pasa, el tercero sale `owner_frozen`);
+     - destino que no declara la tarea en foco (no se ofrece y se niega);
+     - turno que escala o falla después de la fase 1 (sin cambio y `cancelled`);
+     - dueño cambiado por un turno concurrente (`cancelled`);
+     - sin grafo, el prompt es idéntico.
+   - **Parte 2:**
+     - encargo que se completa, con resultado tipado;
+     - encargo con un dato no dicho (rollback, sin sub-tarea y sin `slots_set`);
+     - consulta válida;
+     - salida que no valida el schema;
+     - consulta a una acción de etapa (no ofrecida y negada).
+
+   Los journeys con LLM real quedan para cuando el dueño apruebe el costo.
+8. **Fuera de esta adenda:** que el motor ejecute la acción de salida de un encargo; la pila de colaboración (HU-AOS-20, con `maxStack`); que un cambio de enlace cuente como procedimientos tocados en el gate (adenda HU-AOS-18 §2); y los presets con grafo.
