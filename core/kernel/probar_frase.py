@@ -43,6 +43,8 @@ class Prueba:
     confidence: float | None
     candidates: tuple[dict[str, Any], ...]
     no_evaluadas: tuple[str, ...] = field(default_factory=tuple)
+    # Títulos de los procedimientos (id → título) para mostrarlos en lenguaje claro.
+    titulos: dict[str, str] = field(default_factory=dict)
 
 
 async def probar(tenant_id: uuid.UUID, connection_id: uuid.UUID, frase: str) -> Prueba:
@@ -74,6 +76,9 @@ async def probar(tenant_id: uuid.UUID, connection_id: uuid.UUID, frase: str) -> 
     bandera = banderas.ruteo if get_settings().aos_connection_routing and banderas.runtime == "v3" else "off"
     entrada = router.Entrada(texto=frase[: router.MAX_TEXTO], channel=str(fila[1] or ""))
     ruta = router.decidir(release, routing, entrada, release.foco(None))
+    procedimientos = release.procedimientos()
+    ids = {ruta.procedure_id, *(str(c.get("procedure_id")) for c in ruta.candidates)} - {None}
+    titulos = {pid: procedimientos[pid].title for pid in ids if pid in procedimientos}
     no_evaluadas = tuple(
         r.id for r in routing.rules if r.when.customerFact or r.when.flowStage or r.when.withinHours
     )
@@ -87,6 +92,7 @@ async def probar(tenant_id: uuid.UUID, connection_id: uuid.UUID, frase: str) -> 
         confidence=ruta.confidence,
         candidates=tuple(dict(c) for c in ruta.candidates),
         no_evaluadas=no_evaluadas,
+        titulos=titulos,
     )
 
 

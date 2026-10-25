@@ -58,6 +58,7 @@ async def test_la_frase_va_al_agente_del_disparador_y_el_saludo_al_por_defecto(_
     datos = r.json()
     assert (datos["mode"], datos["source"], datos["agent_key"], datos["procedure_id"]) == ("active", "trigger", "agenda", CITA)
     assert datos["confidence"] >= 0.8 and datos["candidates"][0]["owner"] == "agenda"
+    assert datos["procedure_title"] and datos["candidates"][0]["title"] == datos["procedure_title"]
     r = await app_client.post(URL, headers=h, json={"connection_id": str(cid), "text": "hola"})
     assert (r.json()["source"], r.json()["agent_key"]) == ("default", "ventas")
     # No escribe nada en el ledger del turno.

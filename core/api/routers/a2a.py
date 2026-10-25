@@ -85,6 +85,7 @@ class RoutePreviewIn(BaseModel):
 
 class RouteCandidate(BaseModel):
     procedure_id: str
+    title: str | None = Field(default=None, description="Título del procedimiento (dato de la habilidad).")
     owner: str = Field(description="Key del agente que declara el procedimiento.")
     score: float
 
@@ -95,6 +96,7 @@ class RoutePreview(BaseModel):
     agent_key: str
     agent_id: uuid.UUID
     procedure_id: str | None
+    procedure_title: str | None = None
     rule_id: str | None
     confidence: float | None
     candidates: list[RouteCandidate]
@@ -245,10 +247,16 @@ async def route_preview(
         agent_key=prueba.agent_key,
         agent_id=prueba.agent_id,
         procedure_id=prueba.procedure_id,
+        procedure_title=prueba.titulos.get(prueba.procedure_id) if prueba.procedure_id else None,
         rule_id=prueba.rule_id,
         confidence=prueba.confidence,
         candidates=[
-            RouteCandidate(procedure_id=str(c["procedure_id"]), owner=str(c.get("owner") or ""), score=float(c["score"]))
+            RouteCandidate(
+                procedure_id=str(c["procedure_id"]),
+                title=prueba.titulos.get(str(c["procedure_id"])),
+                owner=str(c.get("owner") or ""),
+                score=float(c["score"]),
+            )
             for c in prueba.candidates
         ],
         not_evaluated_rules=list(prueba.no_evaluadas),

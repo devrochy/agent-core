@@ -36514,6 +36514,17 @@
             ],
             "title": "Procedure Id"
           },
+          "procedure_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Title"
+          },
           "rule_id": {
             "anyOf": [
               {
@@ -41116,6 +41127,18 @@
           "procedure_id": {
             "type": "string",
             "title": "Procedure Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title",
+            "description": "Título del procedimiento (dato de la habilidad)."
           },
           "owner": {
             "type": "string",
