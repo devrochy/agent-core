@@ -15,6 +15,10 @@ y el motor (`ejecucion.ContextoMotor.aplicar_comando`) los aplica. Este módulo 
   - `confirmar_tarea()`: con tarea en foco y algo pendiente de confirmar
     (`confirmable_por_comando`, el punto que puede ajustar la confirmación con botón);
   - `cancelar_tarea()`: con tarea en foco.
+- `pasar_a_agente(agente)` (HU-AOS-19, adenda de ADR-0116): con la release, a los especialistas
+  que el grafo A2A congelado deja alcanzar con `handoff` y que declaran las tareas abiertas;
+  `agente` es un enum de sus keys (el modelo nunca ve ids). El cambio de dueño se aplica al cerrar
+  el turno; en el turno solo se acepta o se niega.
 - Sin `task_id` ni `motivo` (adenda de ADR-0113): actúan sobre la tarea en foco, porque el
   modelo no ve UUIDs y no hay dos tareas abiertas del mismo procedimiento; un motivo libre sería
   PII en `task_events`, que no se puede redactar. Pausar y retomar quedan para HU-AOS-20.
@@ -44,15 +48,17 @@ INICIAR = "iniciar_procedimiento"
 ACTUALIZAR = "actualizar_tarea"
 CONFIRMAR = "confirmar_tarea"
 CANCELAR = "cancelar_tarea"
+PASAR = "pasar_a_agente"
 # Nombres reservados: ninguna acción del binario puede llamarse así (lo cubre un test) y una
 # tool declarativa del negocio con ese nombre no se ofrece mientras el motor esté activo.
-NOMBRES = frozenset({INICIAR, ACTUALIZAR, CONFIRMAR, CANCELAR})
+NOMBRES = frozenset({INICIAR, ACTUALIZAR, CONFIRMAR, CANCELAR, PASAR})
 # Argumentos de primer nivel de cada comando (`additionalProperties: false`).
 _ARGUMENTOS: dict[str, frozenset[str]] = {
     INICIAR: frozenset({"procedure_id"}),
     ACTUALIZAR: frozenset({"slots"}),
     CONFIRMAR: frozenset(),
     CANCELAR: frozenset(),
+    PASAR: frozenset({"agente"}),
 }
 # Tipos que el modelo no escribe: los llena el contenido que envía el cliente (ADR-0113 §1).
 _TIPOS_SIN_LLM = frozenset({"location", "media"})
@@ -68,6 +74,12 @@ TEXTOS = {
     "actualizar_tarea_slots": (),
     CONFIRMAR: (),
     CANCELAR: (),
+    PASAR: (),
+    "pasar_a_agente_agente": (),
+    "destinos": (),
+    "destino": ("agente",),
+    "pasar_aceptado": ("agente",),
+    "pasar_negado": ("agente",),
     "comando_no_disponible": ("comando",),
     "argumentos_invalidos": ("comando",),
 }
@@ -136,18 +148,26 @@ def confirmable_por_comando(tarea: Proyeccion, proc: Procedure) -> bool:
 
 
 def aplicables(
-    *, foco: tuple[Proyeccion, Procedure] | None, candidatos: Sequence[Procedure]
+    *,
+    foco: tuple[Proyeccion, Procedure] | None,
+    candidatos: Sequence[Procedure],
+    destinos_de_handoff: Sequence[str] = (),
 ) -> list[str]:
-    """Comandos que aplican al estado, en un orden fijo (determinista para el prompt)."""
-    if foco is None:
-        return [INICIAR] if candidatos else []
-    tarea, proc = foco
+    """Comandos que aplican al estado, en un orden fijo (determinista para el prompt). Los de
+    colaboración van al final y no dependen del foco."""
     salida: list[str] = []
-    if escribibles(proc):
-        salida.append(ACTUALIZAR)
-    if confirmable_por_comando(tarea, proc):
-        salida.append(CONFIRMAR)
-    salida.append(CANCELAR)
+    if foco is None:
+        if candidatos:
+            salida.append(INICIAR)
+    else:
+        tarea, proc = foco
+        if escribibles(proc):
+            salida.append(ACTUALIZAR)
+        if confirmable_por_comando(tarea, proc):
+            salida.append(CONFIRMAR)
+        salida.append(CANCELAR)
+    if destinos_de_handoff:
+        salida.append(PASAR)
     return salida
 
 
@@ -198,7 +218,11 @@ def _descripcion_de_inicio(candidatos: Sequence[Procedure]) -> str:
 
 
 def herramientas(
-    nombres: Sequence[str], *, foco: tuple[Proyeccion, Procedure] | None, candidatos: Sequence[Procedure]
+    nombres: Sequence[str],
+    *,
+    foco: tuple[Proyeccion, Procedure] | None,
+    candidatos: Sequence[Procedure],
+    destinos_de_handoff: Sequence[str] = (),
 ) -> list[MCPTool]:
     """Los `MCPTool` de los comandos `nombres` (salida de `aplicables`)."""
     salida: list[MCPTool] = []
@@ -225,6 +249,17 @@ def herramientas(
             salida.append(_tool(ACTUALIZAR, texto(ACTUALIZAR), {"slots": slots}, ["slots"]))
         elif nombre in (CONFIRMAR, CANCELAR):
             salida.append(_tool(nombre, texto(nombre), {}, []))
+        elif nombre == PASAR and destinos_de_handoff:
+            claves = sorted(destinos_de_handoff)
+            descripcion = "\n".join(
+                [texto(PASAR), texto("destinos"), *(texto("destino", agente=escapar(k)) for k in claves)]
+            )
+            salida.append(_tool(
+                PASAR,
+                descripcion,
+                {"agente": {"type": "string", "enum": claves, "description": texto("pasar_a_agente_agente")}},
+                ["agente"],
+            ))
     return salida
 
 
@@ -235,6 +270,8 @@ def argumentos_invalidos(nombre: str, args: Mapping[str, Any]) -> str | None:
     if permitidos is None or not isinstance(args, Mapping) or set(args) - permitidos:
         return texto("argumentos_invalidos", comando=nombre)
     if nombre == ACTUALIZAR and not isinstance(args.get("slots"), Mapping):
+        return texto("argumentos_invalidos", comando=nombre)
+    if nombre == PASAR and not isinstance(args.get("agente"), str):
         return texto("argumentos_invalidos", comando=nombre)
     return None
 

@@ -235,6 +235,7 @@ class ReleaseCongelada:
                 if self.con_procedimientos_por_agente
                 else None
             ),
+            a2a_graph=copy.deepcopy(self.a2a) if self.a2a is not None else None,
         )
 
     def procedimientos(self) -> dict[str, Procedure]:

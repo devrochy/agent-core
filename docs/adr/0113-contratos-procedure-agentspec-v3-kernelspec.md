@@ -1158,3 +1158,16 @@ confirmación» sin que existiera el pedido.
   y uno nuevo, el cliente podría nombrar el viejo. Hoy cada línea del resumen único lleva un solo valor; si eso cambia, el eco debe
   salir de los valores estructurados de la tarea y no del texto.
 
+
+## Adenda (2026-10-25, HU-AOS-19): `ExposedQuery.action` en 3.2.0
+
+**Estado:** propuesta. El dueño eligió el 2026-10-25 que una consulta nombre una acción de lectura.
+
+- **`agentcore-contracts` 3.2.0** agrega `ExposedQuery.action: str | None` (patrón de nombre de acción, por defecto `None`). Es un minor por la regla de la adenda del 2026-10-20: un campo opcional con default.
+- **Significado.** La consulta `id` del agente se responde ejecutando `action` con los parámetros que manda quien consulta, filtrados por el input schema de la acción. El resultado se valida contra `outputSchema` y entra como dato (ADR-0116, adenda HU-AOS-19).
+- **Linter (`lint_agentspec_v3`):**
+  - `action` debe ser una de las `tools` habilitadas del propio agente (`consulta_sin_accion_del_agente`). Nadie expone lo que no puede ejecutar.
+  - Con `action` presente (sin ella no se revisa: nada se ejecuta), `outputSchema` solo puede usar el subconjunto que valida el kernel: `type`, `properties`, `required`, `additionalProperties`, `items`, `enum`, `maxLength`, `maxItems` y `description` (`schema_de_salida_no_soportado`). Así la validación no depende de una librería nueva y es fail-closed.
+- **Despliegue:** primero el backend (contratos y runtime van en el mismo binario) y después el editor que escriba `action`. Como dice la adenda del 2026-10-20, en cuanto exista una versión con `action` no se puede volver a un binario anterior a 3.2.0.
+- **Sin `action`, la consulta no se ofrece** (el contrato la acepta, pero no hay qué ejecutar). Ningún agente declara consultas hoy.
+- Una consulta no garantiza que la acción sea solo de lectura (las acciones no declaran efectos, `catalogo.side_effect = None`). Eso lo responde el dueño del agente al declararla. **Una acción que aparece en alguna etapa de un procedimiento de la release, o que pide confirmación en el binding, no se ofrece como consulta**: el kernel la saca de la oferta y la niega si llega (ADR-0116, adenda HU-AOS-19 §5).

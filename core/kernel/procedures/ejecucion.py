@@ -47,6 +47,7 @@ from core.kernel.procedures import comandos, motor, registro
 from core.kernel.procedures.catalogo import CORE_OWNER
 from core.kernel.procedures.textos import confirmacion_suficiente, error_de_resolver, mensaje
 from core.kernel.state import Evento, Proyeccion
+from core.kernel.tarjeta import escapar
 from core.shared import turno as turno_vigente
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -96,6 +97,8 @@ class ResultadoComando:
     acciones: list[str] = field(default_factory=list)
     # Tarjeta de estado vigente al terminar el comando (HU-AOS-06): lo que el modelo ve después.
     tarjeta: str = ""
+    # Indicación al modelo de un comando que salió bien (HU-AOS-19: "despídete…").
+    aviso: str = ""
 
 
 @dataclass
@@ -550,6 +553,7 @@ class ContextoMotor:
         de_la_release: dict[str, Procedure] | None = None,
         packs_de_la_release: frozenset[str] | None = None,
         declaradas_por_el_agente: frozenset[str] | None = None,
+        a2a: Any = None,
     ) -> None:
         self.modo: Modo = modo
         self.tenant_id = tenant_id
@@ -588,6 +592,8 @@ class ContextoMotor:
         self._de_la_release = de_la_release
         self._packs = packs_de_la_release
         self._del_agente = declaradas_por_el_agente
+        # HU-AOS-19: colaboración A2A del turno (`handoff.ContextoA2A`), o None sin grafo.
+        self._a2a = a2a
         self._plugin_de = {
             t.name: getattr(t, "plugin_id", None) for t in (*self._base, *self._candidatas)
         }
@@ -744,10 +750,27 @@ class ContextoMotor:
     def _par_en_foco(self) -> tuple[Proyeccion, Procedure] | None:
         return (self._foco.tarea, self._foco.proc) if self._foco is not None else None
 
+    def _destinos_de_handoff(self) -> list[str]:
+        """Keys de los especialistas a los que se puede pasar la conversación (HU-AOS-19): con
+        grafo, sin un handoff ya aceptado en el turno y que declaran las tareas abiertas."""
+        if self._a2a is None:
+            return []
+        from core.kernel import decisions, handoff
+
+        if decisions.handoff_pendiente():
+            return []
+        return handoff.destinos_para_el_modelo(handoff.destinos_de_handoff(self._a2a, self._abiertas))
+
     def _comandos_aplicables(self) -> list[str]:
         if self.modo != "activo":
             return []
-        return comandos.aplicables(foco=self._par_en_foco(), candidatos=self._candidatos())
+        from core.kernel import decisions
+
+        # Con un handoff aceptado no se abren tareas nuevas: el destino podría no gobernarlas.
+        candidatos = [] if decisions.handoff_pendiente() else self._candidatos()
+        return comandos.aplicables(
+            foco=self._par_en_foco(), candidatos=candidatos, destinos_de_handoff=self._destinos_de_handoff()
+        )
 
     def comandos(self) -> list[Any]:
         """Los comandos que aplican al estado, como `MCPTool` (vacío fuera del modo activo)."""
@@ -757,7 +780,9 @@ class ContextoMotor:
         candidatos = self._candidatos()
         if nombres[0] == comandos.INICIAR:
             log.info("motor_candidatos_de_inicio", cantidad=len(candidatos))
-        return comandos.herramientas(nombres, foco=self._par_en_foco(), candidatos=candidatos)
+        return comandos.herramientas(
+            nombres, foco=self._par_en_foco(), candidatos=candidatos, destinos_de_handoff=self._destinos_de_handoff()
+        )
 
     def afirmaciones(self) -> list[Any]:
         """Las `claims` con frases de los procedimientos disponibles, compiladas a `Afirmacion`
@@ -798,12 +823,15 @@ class ContextoMotor:
             log.warning("motor_comando_fallo", comando=nombre, error=type(exc).__name__)
             r = ResultadoComando(False, [mensaje("error_interno")])
         await self._releer_seguro()
-        return {
+        salida = {
             "ok": r.ok,
             "state_card": self.tarjeta,
             "errors": list(r.errores),
             "allowed_actions": self._acciones(),
         }
+        if r.aviso:
+            salida["notice"] = r.aviso
+        return salida
 
     # -- antes y después de cada acción
     async def antes_de_accion(self, accion: str, args: dict[str, Any]) -> Previo:
@@ -1268,6 +1296,8 @@ class ContextoMotor:
                 return await self._confirmar()
             if nombre == "cancelar_tarea":
                 return await self._cancelar()
+            if nombre == comandos.PASAR:
+                return await self._pasar(str(args.get("agente") or ""))
         except _NoGobierna:
             return ResultadoComando(False, [mensaje("sin_tarea")])
         except Exception as exc:
@@ -1293,6 +1323,10 @@ class ContextoMotor:
         return ResultadoComando(True, [], self._acciones(), self.tarjeta)
 
     async def _iniciar(self, procedure_id: str) -> ResultadoComando:
+        from core.kernel import decisions
+
+        if decisions.handoff_pendiente():
+            return ResultadoComando(False, [mensaje("tarea_en_curso")])
         proc = self.procedimientos.get(procedure_id)
         if proc is None or not await self._sigue_sano(proc):
             return ResultadoComando(False, [mensaje("procedimiento_no_disponible")])
@@ -1310,6 +1344,59 @@ class ContextoMotor:
             task_id = fila.id
         self._seq_al_empezar[task_id] = 1
         return await self._terminar_comando(task_id)
+
+    async def _pasar(self, clave: str) -> ResultadoComando:
+        """Fase 1 del handoff (HU-AOS-19): la guarda decide y, si acepta, el turno guarda el
+        pendiente; el cambio de dueño lo aplica `handoff.cerrar` al cerrar el turno."""
+        from core.db.session import get_session
+        from core.kernel import a2a, decisions, handoff, router
+
+        no_disponible = ResultadoComando(False, [comandos.texto("comando_no_disponible", comando=comandos.PASAR)])
+        ctx = self._a2a
+        if ctx is None or decisions.handoff_pendiente():
+            return no_disponible
+        destino = next((c for c in ctx.agentes if c.key == clave and c.role == "specialist"), None)
+        if destino is None or destino.instance_id == ctx.agente.instance_id:
+            return no_disponible
+        async with get_session() as s:
+            filas = await state.tareas_abiertas(s, tenant_id=self.tenant_id, conversation_id=self.conversation_id)
+            ctx.estado.cambios_de_dueno = await router.cambios_de_dueno(s, self.tenant_id, self.conversation_id)
+        if ctx.estado.turn_id is None:
+            # El motor se arma antes de escribir la cabecera del turno (`enrutar`): el `turn_id` se
+            # toma cuando ya existe.
+            ctx.estado.turn_id = turno_vigente.turno_id()
+        desde = ctx.agente.instance_id
+        # Contrato expuesto: un destino que no declara una tarea abierta no la podría gobernar.
+        grafo = ctx.grafo if handoff.declara(destino, {f.procedure_id for f in filas}) else ctx.grafo.sin(desde, destino.instance_id)
+        decision = await a2a.registrar(
+            ctx.estado, a2a.Operacion(desde, destino.instance_id, "handoff", "handoff"), grafo, ctx.limites
+        )
+        negado = ResultadoComando(False, [comandos.texto("pasar_negado", agente=escapar(clave))])
+        if not decision.permitido:
+            return negado
+        try:
+            a2a.liberar(ctx.estado, decision.call_id)
+            pendiente = handoff.Pendiente(
+                ctx.estado, decision.call_id, desde, destino.instance_id, self.conversation_id,
+                frozenset(f.id for f in filas),
+            )
+            anotado = decisions.anotar_handoff(pendiente)
+        except Exception as exc:
+            log.warning("motor_handoff_fallo", error=type(exc).__name__)
+            anotado = False
+        if not anotado:
+            # Sin turno abierto no hay fase 2: se cancela ya y no se promete nada.
+            async with get_session() as s:
+                await a2a.cerrar_handoff(
+                    s, ctx.estado, call_id=decision.call_id, desde=desde, hacia=destino.instance_id, aplicado=False,
+                    razon="error",
+                )
+            return negado
+        self._cambio = True
+        await self._releer_seguro()
+        return ResultadoComando(
+            True, [], self._acciones(), self.tarjeta, aviso=comandos.texto("pasar_aceptado", agente=escapar(clave))
+        )
 
     async def _exigir_foco_sano(self) -> None:
         """Los comandos que escriben no gobiernan la tarea de un pack que se auto-desactivó a mitad
@@ -2083,6 +2170,15 @@ async def contexto_del_motor(
             tarjeta = renderizar_tarjeta(tareas, procedimientos=registro.definicion, rotulos_de=rotulos_de)
             foco = await _foco(session, tenant_id, conversation_id, comunes["permitidos"])
     if banderas.procedimientos:
+        # HU-AOS-19: colaboración A2A del turno (solo con release `release/2` y grafo congelado).
+        if "de_la_release" in comunes:
+            from core.kernel import decisions
+            from core.kernel.handoff import ContextoA2A
+
+            contexto_a2a = ContextoA2A.del_turno(conversation_id)
+            if contexto_a2a is not None:
+                decisions.anotar_a2a(contexto_a2a.estado)
+                comunes["a2a"] = contexto_a2a
         # Si el inbound fue un botón, su título no es un sí escrito: el turno no confirma por texto.
         por_boton = await _tomar_marca_interactivo(tenant_id, conversation_id)
         if por_boton:
