@@ -127,6 +127,8 @@ class SubscriptionSkill(BaseSkill):
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.consultar,
                 connection_predicate=predicate,
+                # Solo lee la suscripción y su próximo cargo (HU-AOS-19: puede responder consultas).
+                solo_lectura=True,
             ),
             MCPTool(
                 name="sub_link_pago",

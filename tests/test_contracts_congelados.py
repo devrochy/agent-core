@@ -13,7 +13,7 @@ from agentcore_contracts import (
 def test_version_congelada() -> None:
     # 3.0.0: `agentspec/3` y `kernelspec/1` (ADR-0113, HU-AOS-12); `AgentSpec` sigue siendo v2.
     # 3.1.0: `AgentSpecV3.knowledge` opcional (ADR-0145, adenda de ADR-0113 del 2026-10-20).
-    assert __version__ == "3.1.0"
+    assert __version__ == "3.2.0"
 
 
 def test_inbound_message_shape() -> None:

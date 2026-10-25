@@ -38,6 +38,8 @@ class ActionInfo:
     # Scopes que la acción exige a su binding (`MCPTool.scopes`). El lector tolerante de
     # AgentSpec v2 los concede al consentir una acción que hoy corre sin binding (HU-AOS-12).
     scopes: tuple[str, ...] = ()
+    # `MCPTool.solo_lectura` (HU-AOS-19): solo una acción de lectura responde una consulta.
+    solo_lectura: bool = False
 
 
 Catalogo = Mapping[str, ActionInfo]
@@ -77,7 +79,10 @@ def _armar(modules: list[Any]) -> dict[str, ActionInfo]:
     catalogo: dict[str, ActionInfo] = {}
     for skill in _core_skills():
         for tool in skill.get_tools():
-            catalogo[tool.name] = ActionInfo(name=tool.name, owner=CORE_OWNER, scopes=tuple(tool.scopes or ()))
+            catalogo[tool.name] = ActionInfo(
+                name=tool.name, owner=CORE_OWNER, scopes=tuple(tool.scopes or ()),
+                solo_lectura=bool(getattr(tool, "solo_lectura", False)),
+            )
     for module in modules:
         owner = str(getattr(module, "id", "") or "")
         for skill_cls in getattr(module, "declared_skills", None) or []:
@@ -88,6 +93,9 @@ def _armar(modules: list[Any]) -> dict[str, ActionInfo]:
                 continue
             for tool in tools:
                 catalogo.setdefault(
-                    tool.name, ActionInfo(name=tool.name, owner=owner, scopes=tuple(tool.scopes or ()))
+                    tool.name, ActionInfo(
+                        name=tool.name, owner=owner, scopes=tuple(tool.scopes or ()),
+                        solo_lectura=bool(getattr(tool, "solo_lectura", False)),
+                    )
                 )
     return catalogo

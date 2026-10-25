@@ -93,7 +93,7 @@ from core.shared.audit import record_audit
 from core.shared.crypto import get_secret_box
 from core.shared.exceptions import BusinessError, LLMProviderError, PluginError
 from core.shared.logger import get_logger
-from core.shared.release_vigente import con_valores_de_release
+from core.shared.release_vigente import AgenteCongelado, con_valores_de_release
 from core.shared.tenant import get_current_tenant_id
 from core.tools.core_skill import conversation_spent
 
@@ -369,6 +369,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     )
     if motor is not None:
         motor.ejecutor = _ejecutor_del_motor(conversation, customer, spec)
+        motor.ejecutor_de_consulta = _ejecutor_de_consulta(conversation, customer)
         # Confirmaciones de datos al empezar el turno (adenda 2026-10-12 de ADR-0113); solo activo.
         await motor.al_empezar_turno()
         active_tools = motor.herramientas()
@@ -963,6 +964,31 @@ def _ejecutor_del_motor(conversation: Conversation, customer: Customer, spec):  
     return ejecutar
 
 
+def _ejecutor_de_consulta(conversation: Conversation, customer: Customer):  # type: ignore[no-untyped-def]
+    """Consultas entre agentes (HU-AOS-19, adenda de ADR-0116 §5): la acción corre con el spec, el
+    binding y la identidad del agente que responde, sin escribir memoria, con auditoría y una
+    clave idempotente. Una acción que pide confirmación en su binding no se ejecuta."""
+    from core.agents.spec_de_release import spec_v2_desde_release
+
+    async def ejecutar(destino: AgenteCongelado, nombre: str, args: dict[str, Any], clave: str) -> dict[str, Any]:
+        actual = release_vigente.vigente()
+        if actual is None:
+            return {"error": "consulta_sin_release"}
+        spec = spec_v2_desde_release(
+            destino,
+            release_vigente.kernel_del_turno(),
+            tenant_id=actual.tenant_id,
+            skills=actual.skills,
+            tenant_plugins=actual.tenant_plugins,
+        )
+        if _binding_requires_confirmation(spec, nombre):
+            return {"error": "consulta_requiere_confirmacion"}
+        llamada = LLMToolCall(id=clave, name=nombre, arguments=args)
+        return await _execute_tool_safely(conversation, customer, llamada, spec, identidad=destino, solo_lectura=True)
+
+    return ejecutar
+
+
 # "Afirmación de 'agendada' sin…" (guardrails de cierre de los packs): la etiqueta sale del código
 # o de la config del negocio, nunca del borrador.
 _ETIQUETA_DEL_GUARDRAIL = re.compile(r"(?:Afirmaci[oó]n|Negaci[oó]n) de '(\w{1,60})'")
@@ -1033,15 +1059,23 @@ async def _execute_tool_safely(
     tool_call: LLMToolCall,
     spec=None,  # type: ignore[no-untyped-def]
     motor: ContextoMotor | None = None,
+    identidad: AgenteCongelado | None = None,
+    solo_lectura: bool = False,
 ) -> dict[str, Any]:
-    """Ejecuta una tool aislando el error: un plugin roto se desactiva, el turno sigue."""
+    """Ejecuta una tool aislando el error: un plugin roto se desactiva, el turno sigue.
+
+    `identidad`/`solo_lectura` (HU-AOS-19): una consulta entre agentes corre con la identidad del
+    agente que la responde y sin escribir memoria."""
+    # Una consulta entre agentes se audita como `query:` y no como `tool:`: no es evidencia de
+    # que el agente del turno llamó la tool (`_historical_tool_results`).
+    actor_de_auditoria = "query" if solo_lectura else "tool"
     if motor is not None and motor.es_comando(tool_call.name):
         return await _ejecutar_comando(conversation, motor, tool_call)
     from core.mcp.declarative import tools_for_spec
     from core.plugin_manager import plugin_manager
 
     declarative = {t.name: t for t in tools_for_spec(spec)} if spec is not None else {}
-    agente = release_vigente.agente_del_turno()
+    agente = identidad or release_vigente.agente_del_turno()
     conocimiento = agente.content.get("knowledge") if agente is not None else None
     context = new_tool_context(
         conversation_id=conversation.id,
@@ -1050,7 +1084,7 @@ async def _execute_tool_safely(
         channel=conversation.channel,
         http=_http_for_tool(tool_call.name, declarative),
         # `memory.writeNamespaces` del agente en foco (ADR-0114 §3, HU-AOS-15); None en legacy.
-        write_namespaces=release_vigente.write_namespaces_del_turno(),
+        write_namespaces=frozenset() if solo_lectura else release_vigente.write_namespaces_del_turno(),
         # Identidad del agente en foco y su `knowledge` congelado (ADR-0145 §5); None en legacy.
         agent_id=agente.agent_id if agente is not None else None,
         agent_version_id=agente.version_id if agente is not None else None,
@@ -1067,7 +1101,7 @@ async def _execute_tool_safely(
         if denial is not None:
             result = {"error": denial}
             await record_audit(
-                actor=f"tool:{tool_call.name}",
+                actor=f"{actor_de_auditoria}:{tool_call.name}",
                 action="denied",
                 conversation_id=conversation.id,
                 input_data=tool_call.arguments,
@@ -1080,7 +1114,7 @@ async def _execute_tool_safely(
     previo = await motor.antes_de_accion(tool_call.name, tool_call.arguments) if motor is not None else None
     if previo is not None and (decision := previo.decision) is not None:
         await record_audit(
-            actor=f"tool:{tool_call.name}",
+            actor=f"{actor_de_auditoria}:{tool_call.name}",
             action=decision.auditoria,
             conversation_id=conversation.id,
             # Sin los valores (pueden traer datos del cliente): solo las claves y el hash.
@@ -1127,7 +1161,7 @@ async def _execute_tool_safely(
                 ),
             }
             await record_audit(
-                actor=f"tool:{tool_call.name}",
+                actor=f"{actor_de_auditoria}:{tool_call.name}",
                 action="confirmation_required",
                 conversation_id=conversation.id,
                 input_data=tool_call.arguments,
@@ -1179,7 +1213,7 @@ async def _execute_tool_safely(
     await procedencia.registrar(herramienta, result, conversation.id)
     auditado = resultado_auditable(herramienta, tool_call.name, result)
     await record_audit(
-        actor=f"tool:{tool_call.name}",
+        actor=f"{actor_de_auditoria}:{tool_call.name}",
         action="execute",
         conversation_id=conversation.id,
         # Lo que mandó el modelo: los datos ligados que completó el motor (PII de la tarea) no se

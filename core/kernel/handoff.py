@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import text
@@ -58,6 +58,11 @@ class ContextoA2A:
     estado: a2a.EstadoDelTurno
     agente: Any  # AgenteCongelado del turno
     agentes: tuple[Any, ...]
+    # HU-AOS-19 parte 2: los procedimientos publicados de cada componente (id → `Procedure`) y
+    # todos los de la release (para saber qué acciones gobierna el motor).
+    procedimientos_por_agente: Mapping[uuid.UUID, Mapping[str, Any]] = field(default_factory=dict)
+    procedimientos: Mapping[str, Any] = field(default_factory=dict)
+    packs: frozenset[str] = frozenset()
 
     @classmethod
     def del_turno(cls, conversation_id: uuid.UUID) -> ContextoA2A | None:
@@ -79,7 +84,16 @@ class ContextoA2A:
             turno.turno_id(),
             release_id=release.release_id,
         )
-        return cls(grafo, a2a.Limites.del_kernel(kernel.content if kernel else None), estado, agente, release.agentes)
+        return cls(
+            grafo,
+            a2a.Limites.del_kernel(kernel.content if kernel else None),
+            estado,
+            agente,
+            release.agentes,
+            procedimientos_por_agente=dict(release.procedimientos_por_agente or {}),
+            procedimientos=dict(release.procedimientos),
+            packs=frozenset((*release.skills, *release.tenant_plugins)),
+        )
 
     def destinos(self, modo: str) -> dict[str, Any]:
         """Especialistas alcanzables desde el agente del turno con `modo`, por key."""

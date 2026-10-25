@@ -70,7 +70,7 @@ def codes(issues: list[Issue]) -> list[str]:
 
 # ------------------------------------------------------------------ contrato
 def test_version_del_paquete_y_export() -> None:
-    assert __version__ == "3.1.0"
+    assert __version__ == "3.2.0"
     assert Procedure.model_fields["contract"].default == "procedure/1"
 
 

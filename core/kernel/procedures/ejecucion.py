@@ -78,6 +78,40 @@ _MAX_AVANCES = 31  # una vuelta por etapa (el contrato admite hasta 30)
 VUELTAS_LIBRES_DE_COMANDOS = 3
 
 
+async def _liquidar_seguro(estado: Any, call_id: uuid.UUID, **kw: Any) -> None:
+    """Cierre del ledger A2A que no tapa un resultado ya confirmado (HU-AOS-19)."""
+    from core.kernel import a2a
+
+    try:
+        await a2a.liquidar(estado, call_id, **kw)
+    except Exception as exc:
+        log.warning("motor_a2a_liquidar_fallo", error=type(exc).__name__)
+
+
+def _es_lectura(accion: str) -> bool:
+    """La acción está marcada como de solo lectura y no crea registros (fail-closed)."""
+    from core.mcp.host import mcp_host
+
+    tool = mcp_host.get_tool(accion)
+    return tool is not None and bool(getattr(tool, "solo_lectura", False)) and getattr(tool, "crea_registro", None) is None
+
+
+def _proyectar(resultado: Mapping[str, Any], esquema: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Solo las propiedades que declara el `outputSchema` (lo demás no entra como dato)."""
+    propiedades = esquema.get("properties")
+    if not isinstance(propiedades, Mapping):
+        return dict(resultado)
+    return {k: v for k, v in resultado.items() if k in propiedades}
+
+
+class _EncargoIncompleto(Exception):
+    """A la sub-tarea de un encargo le faltan datos: se deshace la transacción (HU-AOS-19)."""
+
+    def __init__(self, faltan: list[str]) -> None:
+        super().__init__("encargo incompleto")
+        self.faltan = faltan
+
+
 class _NoGobierna(Exception):
     """La tarea en foco no la gobierna el motor (no hay foco o el binario no trae su versión)."""
 
@@ -99,6 +133,8 @@ class ResultadoComando:
     tarjeta: str = ""
     # Indicación al modelo de un comando que salió bien (HU-AOS-19: "despídete…").
     aviso: str = ""
+    # Resultado tipado de un encargo o una consulta (HU-AOS-19 parte 2): dato, nunca instrucción.
+    resultado: dict[str, Any] | None = None
 
 
 @dataclass
@@ -504,11 +540,15 @@ async def _validar_dato(
     return (veredicto.value if veredicto.value is not None else v), None
 
 
-def _contexto_de_herramienta(conversation_id: uuid.UUID, customer_id: uuid.UUID, channel: str, clave: str) -> Any:
+def _contexto_de_herramienta(
+    conversation_id: uuid.UUID, customer_id: uuid.UUID, channel: str, clave: str, identidad: Any = None
+) -> Any:
+    """`identidad` (HU-AOS-19): el agente destino de un encargo; sus resolvers corren con su
+    identidad y sin escribir memoria."""
     from core.mcp.host import new_tool_context
     from core.shared import release_vigente
 
-    agente = release_vigente.agente_del_turno()
+    agente = identidad or release_vigente.agente_del_turno()
     conocimiento = agente.content.get("knowledge") if agente is not None else None
     return new_tool_context(
         conversation_id=conversation_id,
@@ -516,7 +556,7 @@ def _contexto_de_herramienta(conversation_id: uuid.UUID, customer_id: uuid.UUID,
         idempotency_key=clave,
         channel=channel,
         # Mismo permiso de memoria que el loop (ADR-0114 §3, HU-AOS-15); None en legacy.
-        write_namespaces=release_vigente.write_namespaces_del_turno(),
+        write_namespaces=frozenset() if identidad is not None else release_vigente.write_namespaces_del_turno(),
         # Misma identidad del agente en foco que el loop (ADR-0145 §5); None en legacy.
         agent_id=agente.agent_id if agente is not None else None,
         agent_version_id=agente.version_id if agente is not None else None,
@@ -570,6 +610,8 @@ class ContextoMotor:
         # El mensaje del turno fue el toque de un botón: su título no es un sí escrito.
         self.por_boton = por_boton
         self.ejecutor: Ejecutor | None = None
+        # HU-AOS-19: ejecuta la acción de una consulta con la identidad del agente que responde.
+        self.ejecutor_de_consulta: Any = None
         # Datos de la tarea en foco que el motor fijó en ESTE turno por `actualizar_tarea` (todo o
         # nada: solo los aceptados). Evidencia del verificador para "anoté tu dirección" (ADR-0119).
         self.datos_fijados: set[str] = set()
@@ -769,8 +811,48 @@ class ContextoMotor:
         # Con un handoff aceptado no se abren tareas nuevas: el destino podría no gobernarlas.
         candidatos = [] if decisions.handoff_pendiente() else self._candidatos()
         return comandos.aplicables(
-            foco=self._par_en_foco(), candidatos=candidatos, destinos_de_handoff=self._destinos_de_handoff()
+            foco=self._par_en_foco(),
+            candidatos=candidatos,
+            destinos_de_handoff=self._destinos_de_handoff(),
+            encargos=bool(self._oferta_encargos()),
+            consultas=bool(self._oferta_consultas()),
         )
+
+    def _oferta_encargos(self) -> list[tuple[str, Procedure]]:
+        """(key del destino, procedimiento) que se pueden encargar (HU-AOS-19 parte 2)."""
+        if self._a2a is None or self._foco is None:
+            return []
+        from core.kernel import colaboracion
+
+        salida: list[tuple[str, Procedure]] = []
+        for clave, destino in sorted(self._a2a.destinos("delegate").items()):
+            publicados = self._a2a.procedimientos_por_agente.get(destino.instance_id, {})
+            salida.extend((clave, p) for p in colaboracion.encargables_de(destino, publicados).values())
+        return salida
+
+    def _plugin_de_accion(self, accion: str) -> str | None:
+        if accion in self._plugin_de:
+            return self._plugin_de[accion]
+        from core.mcp.host import mcp_host
+
+        tool = mcp_host.get_tool(accion)
+        return tool.plugin_id if tool is not None else None
+
+    def _oferta_consultas(self) -> list[tuple[str, Any]]:
+        """(key del destino, consulta) que se pueden hacer (HU-AOS-19 parte 2)."""
+        if self._a2a is None:
+            return []
+        from core.kernel import colaboracion
+
+        prohibidas = colaboracion.gobernadas_por_el_motor(self._a2a.procedimientos.values()) | self._confirmar_tambien
+        salida: list[tuple[str, Any]] = []
+        for clave, destino in sorted(self._a2a.destinos("query").items()):
+            consultas = colaboracion.consultas_de(
+                destino, prohibidas=prohibidas, packs=self._a2a.packs, plugin_de=self._plugin_de_accion,
+                es_lectura=_es_lectura,
+            )
+            salida.extend((clave, c) for _i, c in sorted(consultas.items()))
+        return salida
 
     def comandos(self) -> list[Any]:
         """Los comandos que aplican al estado, como `MCPTool` (vacío fuera del modo activo)."""
@@ -781,7 +863,12 @@ class ContextoMotor:
         if nombres[0] == comandos.INICIAR:
             log.info("motor_candidatos_de_inicio", cantidad=len(candidatos))
         return comandos.herramientas(
-            nombres, foco=self._par_en_foco(), candidatos=candidatos, destinos_de_handoff=self._destinos_de_handoff()
+            nombres,
+            foco=self._par_en_foco(),
+            candidatos=candidatos,
+            destinos_de_handoff=self._destinos_de_handoff(),
+            oferta_encargos=self._oferta_encargos() if comandos.ENCARGAR in nombres else (),
+            oferta_consultas=self._oferta_consultas() if comandos.CONSULTAR in nombres else (),
         )
 
     def afirmaciones(self) -> list[Any]:
@@ -831,6 +918,8 @@ class ContextoMotor:
         }
         if r.aviso:
             salida["notice"] = r.aviso
+        if r.resultado is not None:
+            salida["result"] = r.resultado
         return salida
 
     # -- antes y después de cada acción
@@ -1298,6 +1387,20 @@ class ContextoMotor:
                 return await self._cancelar()
             if nombre == comandos.PASAR:
                 return await self._pasar(str(args.get("agente") or ""))
+            if nombre == comandos.ENCARGAR:
+                entradas = args.get("entradas")
+                return await self._encargar(
+                    str(args.get("agente") or ""),
+                    str(args.get("procedimiento") or ""),
+                    entradas if isinstance(entradas, Mapping) else {},
+                )
+            if nombre == comandos.CONSULTAR:
+                parametros = args.get("parametros")
+                return await self._consultar(
+                    str(args.get("agente") or ""),
+                    str(args.get("consulta") or ""),
+                    parametros if isinstance(parametros, Mapping) else {},
+                )
         except _NoGobierna:
             return ResultadoComando(False, [mensaje("sin_tarea")])
         except Exception as exc:
@@ -1396,6 +1499,188 @@ class ContextoMotor:
         await self._releer_seguro()
         return ResultadoComando(
             True, [], self._acciones(), self.tarjeta, aviso=comandos.texto("pasar_aceptado", agente=escapar(clave))
+        )
+
+    def _turno_a2a(self) -> None:
+        if self._a2a is not None and self._a2a.estado.turn_id is None:
+            self._a2a.estado.turn_id = turno_vigente.turno_id()
+
+    async def _encargar(self, clave: str, procedure_id: str, entradas: Mapping[str, Any]) -> ResultadoComando:
+        """Encargo (HU-AOS-19 parte 2, adenda de ADR-0116 §4): una sub-tarea del destino que se
+        completa sin LLM en una sola transacción; si le falta un dato, no queda nada."""
+        from core.kernel import a2a, colaboracion
+
+        no_disponible = ResultadoComando(False, [comandos.texto("comando_no_disponible", comando=comandos.ENCARGAR)])
+        ctx = self._a2a
+        oferta = {(k, p.id): p for k, p in self._oferta_encargos()}
+        proc = oferta.get((clave, procedure_id))
+        if ctx is None or self._foco is None or proc is None:
+            return no_disponible
+        destino = ctx.destinos("delegate")[clave]
+        nombres = [str(n) for n in list(entradas)[:40]]
+        self._turno_a2a()
+        decision = await a2a.registrar(
+            ctx.estado,
+            a2a.Operacion(
+                ctx.agente.instance_id, destino.instance_id, "delegate", procedure_id,
+                dict(entradas), colaboracion.clases_de(proc, nombres),
+            ),
+            ctx.grafo,
+            ctx.limites,
+        )
+        if not decision.permitido:
+            return ResultadoComando(False, [comandos.texto("colaboracion_negada", agente=escapar(clave))])
+        ok = False
+        try:
+            if not registro.gobernable(proc, self._permitidos) or not await self._sigue_sano(proc):
+                return ResultadoComando(False, [mensaje("procedimiento_no_disponible")])
+            r = await self._sub_tarea(proc, destino, entradas, decision.call_id)
+            ok = r.ok
+            if ok and decision.enlace is not None and "pii" not in decision.enlace.data_classes and r.resultado:
+                r.resultado = {
+                    n: v for n, v in r.resultado.items() if n not in proc.slots or proc.slots[n].dataClass != "pii"
+                }
+            if ok:
+                r.aviso = comandos.texto("encargo_listo", agente=escapar(clave))
+            return r
+        finally:
+            await _liquidar_seguro(ctx.estado, decision.call_id, ok=ok)
+
+    async def _sub_tarea(
+        self, proc: Procedure, destino: Any, entradas: Mapping[str, Any], call_id: uuid.UUID
+    ) -> ResultadoComando:
+        escribibles = comandos.escribibles(proc)
+        errores: list[str] = []
+        validos: dict[str, Any] = {}
+        ctx_herr = _contexto_de_herramienta(
+            self.conversation_id, self.customer_id, self.channel, f"encargo-{call_id}", identidad=destino
+        )
+        try:
+            async with asyncio.timeout(_PRESUPUESTO_RESOLVERS_S):
+                for nombre, valor in list(entradas.items())[:40]:
+                    slot = proc.slots.get(str(nombre))
+                    if slot is None or str(nombre) not in escribibles:
+                        errores.append(mensaje("dato_desconocido", dato=_nombre_seguro(nombre)))
+                        continue
+                    v, error = await _validar_dato(proc, str(nombre), slot, valor, ctx_herr, dict(validos), self._permitidos)
+                    if error is not None:
+                        errores.append(error)
+                    else:
+                        validos[str(nombre)] = v
+        except TimeoutError:
+            return ResultadoComando(False, [mensaje("resolver_no_disponible", dato="los datos")])
+        if errores:
+            return ResultadoComando(False, errores)
+        dudosos = await self._correos_dudosos(proc, validos)
+        if dudosos:
+            return ResultadoComando(False, dudosos)
+        assert self._foco is not None
+        padre = self._foco.fila.id
+        try:
+            async with _con_lock(self.tenant_id, self.conversation_id) as s:
+                # El padre se relee bajo el lock: otro turno pudo cerrarlo.
+                actual = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+                if actual is None or actual.fila.id != padre:
+                    return ResultadoComando(False, [mensaje("sin_tarea")])
+                no_dichos = await self._no_dichos(s, proc, entradas, validos)
+                if no_dichos:
+                    return ResultadoComando(False, [mensaje("dato_no_dicho", dato=n) for n in no_dichos])
+                fila = await state.iniciar(
+                    s, tenant_id=self.tenant_id, conversation_id=self.conversation_id, procedure_id=proc.id,
+                    procedure_version=proc.version, stage=proc.stages[0].id, actor="kernel",
+                    turn_id=turno_vigente.turno_id(), owner_instance_id=destino.instance_id, parent_task_id=padre,
+                )
+                for nombre, v in validos.items():
+                    fila = await _registrar(
+                        s, fila, "slot_set",
+                        {"slot": nombre, "value": v, "source": "llm", "data_class": proc.slots[nombre].dataClass}, "llm",
+                    )
+                for _ in range(_MAX_AVANCES):
+                    tarea = state.proyeccion_de(fila)
+                    stage = motor.etapa(proc, tarea.stage)
+                    if stage is None:
+                        raise _EncargoIncompleto([])
+                    if motor.es_terminal(stage):
+                        fila = await _registrar(s, fila, "completed", {"reason": "encargo"}, "kernel")
+                        break
+                    if not motor.salida_cumplida(proc, stage, tarea, []):
+                        assert stage.exitWhen is not None
+                        vals = motor.valores(tarea)
+                        raise _EncargoIncompleto([n for n in stage.exitWhen.slots if vals.get(n) is None])
+                    destino_etapa = motor.siguiente(proc, stage)
+                    if destino_etapa is None:
+                        fila = await _registrar(s, fila, "completed", {"reason": "encargo"}, "kernel")
+                        break
+                    fila = await _registrar(
+                        s, fila, "stage_entered", {"from_stage": stage.id, "to_stage": destino_etapa.id}, "kernel"
+                    )
+                else:
+                    raise _EncargoIncompleto([])
+                final = motor.valores(state.proyeccion_de(fila))
+        except _EncargoIncompleto as exc:
+            faltan = ", ".join(exc.faltan[:10]) or "-"
+            return ResultadoComando(False, [comandos.texto("encargo_incompleto", faltan=faltan)])
+        await self._avisar_datos(proc.id, {n: v for n, v in validos.items() if proc.slots[n].dataClass != "payment"})
+        return ResultadoComando(True, [], self._acciones(), self.tarjeta, resultado={n: v for n, v in final.items() if v is not None})
+
+    async def _consultar(self, clave: str, consulta_id: str, parametros: Mapping[str, Any]) -> ResultadoComando:
+        """Consulta (HU-AOS-19 parte 2, adenda de ADR-0116 §5): la acción del destino con su
+        identidad y la salida validada contra `outputSchema`; entra como dato."""
+        from core.kernel import a2a
+        from core.kernel.esquema_salida import errores as errores_de_salida
+        from core.mcp.host import mcp_host
+
+        no_disponible = ResultadoComando(False, [comandos.texto("comando_no_disponible", comando=comandos.CONSULTAR)])
+        ctx = self._a2a
+        consulta = dict(((k, c.id), c) for k, c in self._oferta_consultas()).get((clave, consulta_id))
+        if ctx is None or consulta is None or self.ejecutor_de_consulta is None:
+            return no_disponible
+        destino = ctx.destinos("query")[clave]
+        self._turno_a2a()
+        decision = await a2a.registrar(
+            ctx.estado,
+            a2a.Operacion(ctx.agente.instance_id, destino.instance_id, "query", consulta_id, dict(parametros), ("internal",)),
+            ctx.grafo,
+            ctx.limites,
+        )
+        if not decision.permitido:
+            return ResultadoComando(False, [comandos.texto("colaboracion_negada", agente=escapar(clave))])
+        ok = False
+        resultado: Any = None
+        try:
+            herramienta = mcp_host.get_tool(consulta.accion)
+            esquema = (herramienta.parameters if herramienta is not None else {}) or {}
+            propiedades = esquema.get("properties") or {}
+            args = {k: v for k, v in parametros.items() if k in propiedades}
+            tope_s = (decision.enlace.timeout_ms if decision.enlace is not None else 15_000) / 1000
+            if herramienta is not None and not any(r not in args for r in esquema.get("required") or []):
+                try:
+                    async with asyncio.timeout(tope_s):
+                        resultado = await self.ejecutor_de_consulta(
+                            destino, consulta.accion, args, f"query-{decision.call_id}"
+                        )
+                except Exception as exc:
+                    log.warning("motor_consulta_fallo", error=type(exc).__name__)
+                    resultado = None
+            ok = (
+                isinstance(resultado, dict)
+                and not resultado.get("error")
+                and resultado.get("ok") is not False
+                and resultado.get("status") != "confirmation_required"
+                and not errores_de_salida(resultado, consulta.output_schema)
+            )
+            if ok:
+                resultado = _proyectar(resultado, consulta.output_schema)
+                con_pii = decision.enlace is not None and "pii" in decision.enlace.data_classes
+                # Un schema abierto (sin propiedades declaradas) puede traer PII: solo con `pii`.
+                ok = resultado is not None and (con_pii or bool(consulta.output_schema.get("properties")))
+        finally:
+            await _liquidar_seguro(ctx.estado, decision.call_id, ok=ok, resultado=resultado if ok else None)
+        if not ok:
+            return ResultadoComando(False, [comandos.texto("consulta_fallida", agente=escapar(clave))])
+        return ResultadoComando(
+            True, [], self._acciones(), self.tarjeta,
+            aviso=comandos.texto("consulta_lista", agente=escapar(clave)), resultado=resultado,
         )
 
     async def _exigir_foco_sano(self) -> None:

@@ -1,4 +1,4 @@
-"""agentcore-contracts — v3.1.0 (Python).
+"""agentcore-contracts — v3.2.0 (Python).
 
 Contratos congelados de agent-core. Ver docs/adr/0011-contratos-python.md.
 
@@ -10,6 +10,8 @@ Contratos congelados de agent-core. Ver docs/adr/0011-contratos-python.md.
   los presets y el alta hasta HU-AOS-46; el lector tolerante del core lo convierte a v3.
 - v3.1.0: `AgentSpecV3.knowledge` (`KnowledgeConfigV3`), opcional con default: un minor según la
   adenda de ADR-0113 del 2026-10-20 (ADR-0145, HU-AOS-49).
+- v3.2.0: `ExposedQuery.action`, opcional con default (adenda HU-AOS-19 de ADR-0113): la acción de
+  lectura que responde la consulta.
 """
 
 from agentcore_contracts.agentspec import (
@@ -78,7 +80,7 @@ from agentcore_contracts.procedure import (
     Triggers,
 )
 
-__version__ = "3.1.0"
+__version__ = "3.2.0"
 
 __all__ = [
     "SENSITIVE_HEADERS",

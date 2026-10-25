@@ -358,6 +358,10 @@ class MCPTool:
     # completo. Una tool que devuelve contenido que se puede borrar (fragmentos de documentos)
     # guarda solo ids y puntajes. El LLM sigue recibiendo el resultado completo.
     resumen_de_auditoria: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    # HU-AOS-19 (adenda de ADR-0116 §5): la tool solo lee (no escribe registros, memoria ni
+    # efectos externos). Solo una tool marcada puede responder una consulta entre agentes
+    # (fail-closed: sin la marca, no se ofrece). La declara quien la escribe.
+    solo_lectura: bool = False
 
 
 @dataclass

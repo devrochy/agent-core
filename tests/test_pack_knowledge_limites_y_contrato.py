@@ -29,7 +29,8 @@ TENANT = uuid.UUID("20000000-0000-0000-0000-000000000049")
 
 # ------------------------------------------------------------------ contrato
 def test_version_minor_3_1_0() -> None:
-    assert __version__ == "3.1.0"
+    # `knowledge` entra en 3.1.0; los minors posteriores lo conservan (3.2.0, HU-AOS-19).
+    assert tuple(int(p) for p in __version__.split(".")) >= (3, 1, 0)
 
 
 def test_spec_sin_knowledge_sigue_validando() -> None:

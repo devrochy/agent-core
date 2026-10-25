@@ -162,6 +162,9 @@ class ExposedQuery(_Strict):
     id: str = Field(pattern=QUERY_ID_PATTERN)
     description: str = Field(default="", max_length=500)
     outputSchema: dict[str, Any] = Field(default_factory=lambda: {"type": "object"})
+    # 3.2.0 (adenda HU-AOS-19 de ADR-0113): la acción de lectura que responde la consulta. Sin ella
+    # la consulta no se ofrece (no hay qué ejecutar).
+    action: str | None = Field(default=None, pattern=ACTION_PATTERN)
 
 
 class Exposes(_Strict):
