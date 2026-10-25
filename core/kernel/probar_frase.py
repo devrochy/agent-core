@@ -24,8 +24,12 @@ from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
 
 
+class ConexionNoEncontrada(LookupError):
+    """La conexión no existe en el negocio (o está borrada)."""
+
+
 class SinReleaseActiva(LookupError):
-    """La conexión no es del negocio o no tiene release activa."""
+    """La conexión no tiene release activa."""
 
 
 @dataclass(frozen=True)
@@ -58,7 +62,9 @@ async def probar(tenant_id: uuid.UUID, connection_id: uuid.UUID, frase: str) -> 
                 {"t": tenant_id, "c": connection_id},
             )
         ).first()
-        if fila is None or fila[0] is None:
+        if fila is None:
+            raise ConexionNoEncontrada(str(connection_id))
+        if fila[0] is None:
             raise SinReleaseActiva(str(connection_id))
         release = await cargar_release(session, tenant_id, fila[0])
         if release is None:
@@ -84,4 +90,4 @@ async def probar(tenant_id: uuid.UUID, connection_id: uuid.UUID, frase: str) -> 
     )
 
 
-__all__ = ["Prueba", "SinReleaseActiva", "probar"]
+__all__ = ["ConexionNoEncontrada", "Prueba", "SinReleaseActiva", "probar"]

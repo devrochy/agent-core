@@ -231,11 +231,10 @@ async def route_preview(
     from core.kernel import probar_frase
 
     tid = _tenant(principal)
-    existe = await _conexion_del_negocio(tid, payload.connection_id)
-    if not existe:
-        raise ApiError.not_found("Conexión no encontrada.")
     try:
         prueba = await probar_frase.probar(tid, payload.connection_id, payload.text)
+    except probar_frase.ConexionNoEncontrada:
+        raise ApiError.not_found("Conexión no encontrada.") from None
     except probar_frase.SinReleaseActiva:
         raise ApiError(
             409, "sin_release_activa", "Esta conexión todavía no tiene una versión activa: publica una para probar."
@@ -254,14 +253,4 @@ async def route_preview(
         ],
         not_evaluated_rules=list(prueba.no_evaluadas),
     )
-
-
-async def _conexion_del_negocio(tid: uuid.UUID, connection_id: uuid.UUID) -> bool:
-    async with get_session() as session:
-        return (
-            await session.execute(
-                text("SELECT 1 FROM channel_connections WHERE tenant_id = :t AND id = :c AND deleted_at IS NULL"),
-                {"t": tid, "c": connection_id},
-            )
-        ).first() is not None
 
