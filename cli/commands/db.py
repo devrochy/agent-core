@@ -13,8 +13,17 @@ console = Console()
 
 
 @app.command()
-def migrate() -> None:
+def migrate(
+    eval_: bool = typer.Option(
+        False,
+        "--eval",
+        help="Migra la base `agentcore_eval` del gate de pass^k (EVAL_*_DATABASE_URL), no la del negocio.",
+    ),
+) -> None:
     """Corre las migraciones del core + las de todos los plugins instalados."""
+    if eval_:
+        _migrar_eval()
+        return
     from core.db.migrations import upgrade_all
 
     results = upgrade_all()
@@ -33,6 +42,32 @@ def migrate() -> None:
     if failed:
         console.print("\n[red]Alguna migración de plugin falló (ver arriba).[/red]")
         raise typer.Exit(1)
+
+
+def _migrar_eval() -> None:
+    """Migra `agentcore_eval` (HU-AOS-21 parte 3b) en un proceso aparte con SUS URLs: nunca la del negocio."""
+    import os
+    import re
+
+    from sqlalchemy.engine import make_url
+
+    from core.config import get_settings
+
+    settings = get_settings()
+    runtime, dueno = settings.eval_database_url, settings.eval_migrations_database_url
+    if not runtime or not dueno:
+        console.print("[red]EVAL_DATABASE_URL y EVAL_MIGRATIONS_DATABASE_URL son obligatorias con --eval.[/red]")
+        raise typer.Exit(1)
+    negocio = (make_url(settings.database_url).database or "").lower()
+    for url in (runtime, dueno):
+        nombre = (make_url(url).database or "").lower()
+        if not re.match(r"^agentcore_eval(_[a-z0-9]{1,20})?$", nombre) or nombre == negocio:
+            console.print("[red]La base de eval debe llamarse agentcore_eval y no ser la del negocio.[/red]")
+            raise typer.Exit(1)
+    entorno = {**os.environ, "DATABASE_URL": runtime, "MIGRATIONS_DATABASE_URL": dueno}
+    resultado = subprocess.run([sys.executable, "-m", "cli.main", "db", "migrate"], env=entorno, check=False)
+    if resultado.returncode != 0:
+        raise typer.Exit(resultado.returncode)
 
 
 @app.command()
@@ -143,6 +178,50 @@ def backfill_releases(
         donde = f" conexión {problema.connection_id}" if problema.connection_id else ""
         console.print(f"[red]Error:[/red] negocio {problema.tenant_id}{donde}: {problema.mensaje}")
     if reporte.fallo:
+        raise typer.Exit(1)
+
+
+@app.command("evaluar-release")
+def evaluar_release(
+    tenant: str = typer.Argument(..., help="Negocio (slug o UUID)."),
+    connection: str = typer.Option(..., "--connection", help="UUID de la conexión."),
+    release: str = typer.Option(..., "--release", help="UUID de la release candidata."),
+    grabacion: str = typer.Option("", "--grabacion", help="`replay`: desde evals/cassettes, sin LLM. Vacío: LLM real."),
+    confirmo_costo: bool = typer.Option(
+        False, "--confirmo-costo", help="Obligatorio con el LLM real: la corrida cuesta (escenarios por 4 intentos)."
+    ),
+) -> None:
+    """Gate de pass^k (HU-AOS-21 parte 3b): mide la candidata en `agentcore_eval` y deja el veredicto.
+
+    Es la vía manual del corredor, sin worker. Con el LLM real gasta dinero de la plataforma (cuenta
+    contra el tope mensual del negocio): hay que pasar `--confirmo-costo`. No promueve nada."""
+    import asyncio
+    import uuid as _uuid
+
+    if grabacion not in ("", "replay"):
+        raise typer.BadParameter("--grabacion solo admite `replay`.")
+    if not grabacion and not confirmo_costo:
+        console.print("[red]Con el LLM real hay que pasar --confirmo-costo (o usar --grabacion replay).[/red]")
+        raise typer.Exit(2)
+    from cli.tenant_ref import resolve_tenant
+    from core.releases.corredor import ResultadoMedicion, medir
+    from core.shared.tenant import tenant_scope
+
+    async def _run() -> ResultadoMedicion:
+        tid = await resolve_tenant(tenant)
+        async with tenant_scope(tid):
+            return await medir(
+                tid, _uuid.UUID(connection), _uuid.UUID(release), actor="cli:evaluar-release", grabacion=grabacion or None
+            )
+
+    r = asyncio.run(_run())
+    console.print(f"Estado: {r.estado}" + (f" — {r.detalle}" if r.detalle else ""))
+    for pid, datos in sorted(r.por_procedimiento.items()):
+        console.print(f"  {pid}: pass^4 {datos['pass_k']} (activa {datos['activa']}) {'ok' if datos['ok'] else 'FALLA'}")
+    if r.sin_escenarios or r.no_medibles:
+        console.print(f"  sin escenarios: {r.sin_escenarios}; no medibles sin ruteo: {r.no_medibles}")
+    console.print(f"Costo: {r.costo_usd:.4f} USD")
+    if r.estado not in ("aprobada", "rechazada", "exento", "sin_cambios", "ya_medida", "sin_escenarios"):
         raise typer.Exit(1)
 
 

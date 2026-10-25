@@ -134,7 +134,7 @@ _VOLATIL = re.compile(
     # Tokens de 16 hex con al menos una letra (p. ej. el token de términos del alta, un HMAC de la
     # conversación). Sin letras serían números (teléfonos, tarjetas de prueba) y no se tocan.
     r"|(?P<hex16>(?<![0-9A-Fa-f])(?=[0-9]*[a-f])[0-9a-f]{16}(?![0-9A-Fa-f]))"
-    r"|(?P<slug>journeys-[0-9a-f]{8}(?![0-9a-z]))"
+    r"|(?P<slug>(?:journeys-[0-9a-f]{8}|gate-eval-[0-9a-f]{10})(?![0-9a-z]))"
     r"|(?P<fecha>(?<!\d)\d{4}-\d{2}-\d{2}(?!\d))"
 )
 _MARCADOR = re.compile(r"<(ts|uuid|hex16|hex|slug|fecha|call):\d+>")

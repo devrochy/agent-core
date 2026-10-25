@@ -177,6 +177,16 @@ class Settings(BaseSettings):
     # Tope mensual en USD del gate de pass^k por negocio (HU-AOS-21): lo paga la plataforma. El
     # master puede fijar otro en `tenants.settings.evals.tope_usd_mensual`.
     eval_tope_usd_mensual: float = Field(default=10.0, ge=0, alias="EVAL_TOPE_USD_MENSUAL")
+    # Corredor del gate (HU-AOS-21 parte 3b). Base de eval (mismo Postgres, base `agentcore_eval`):
+    # URL del rol de runtime y del rol dueño (migra y registra `pack_versions`). El subproceso del
+    # corredor recibe ESTAS y no la del negocio. El gate no se cierra con ellas: eso es un seguimiento.
+    eval_database_url: str = Field(default="", alias="EVAL_DATABASE_URL")
+    eval_migrations_database_url: str = Field(default="", alias="EVAL_MIGRATIONS_DATABASE_URL")
+    # Tiempo máximo del subproceso de una medición y vigencia de una solicitud sin respuesta.
+    eval_timeout_segundos: int = Field(default=3600, ge=60, alias="EVAL_TIMEOUT_SEGUNDOS")
+    # Base lógica de Redis del subproceso: aparte de la del negocio (memoria de trabajo y cola de
+    # Celery), para que nada de lo que encole el efímero llegue a los workers reales.
+    eval_redis_db: int = Field(default=15, ge=1, le=15, alias="EVAL_REDIS_DB")
     # Retención de la memoria semántica en días (ADR-0053). 0 = sin purga automática.
     memory_retention_days: int = Field(default=0, alias="MEMORY_RETENTION_DAYS")
 

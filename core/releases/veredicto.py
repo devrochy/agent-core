@@ -98,6 +98,66 @@ def calcular(
     return Veredicto(not fallas, por, motivo)
 
 
+def _fila_de_gasto(
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    release_id: uuid.UUID,
+    costo_usd: float,
+    modelo: str,
+    input_tokens: int,
+    output_tokens: int,
+    run_id: uuid.UUID | None,
+    proposito: str,
+) -> Any:
+    from core.billing.tarifario import TARIFARIO_VIGENTE, trm_vigente
+    from core.db.models import UsageLedger
+
+    return UsageLedger(
+        tenant_id=tenant_id,
+        conversation_id=None,
+        turn_id=None,
+        connection_id=connection_id,
+        release_id=release_id,
+        kind=EVAL,
+        model=modelo,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=costo_usd,
+        result={"proposito": proposito, **({"run_id": str(run_id)} if run_id else {})},
+        # A cargo de la plataforma (decisión del dueño, 2026-10-25): sin créditos del negocio.
+        credits=Decimal("0.0"),
+        key_mode="platform",
+        tarifario_version=TARIFARIO_VIGENTE.version,
+        trm_cop=trm_vigente(),
+    )
+
+
+async def registrar_gasto(
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    release_id: uuid.UUID,
+    *,
+    costo_usd: float,
+    modelo: str,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    proposito: str = "gate_fallido",
+) -> None:
+    """Gasto de una medición que NO llegó a veredicto (falló o cortó el presupuesto): el LLM se pagó
+    igual, así que cuenta contra el tope. Exige el `tenant_scope` del negocio."""
+    from core.db.session import get_session
+
+    _exigir_scope(tenant_id)
+    if costo_usd <= 0 and input_tokens <= 0 and output_tokens <= 0:
+        return
+    async with get_session() as session:
+        session.add(
+            _fila_de_gasto(
+                tenant_id, connection_id, release_id, costo_usd, modelo or "desconocido", input_tokens, output_tokens, None, proposito
+            )
+        )
+
+
 def _exigir_scope(tenant_id: uuid.UUID) -> None:
     from core.shared.tenant import get_current_tenant_id
 
@@ -125,8 +185,7 @@ async def registrar(
     """Escribe la corrida, sus resultados, el gasto y el evento del veredicto en una transacción.
 
     Exige el `tenant_scope` del negocio; filtra por `tenant_id` además de RLS."""
-    from core.billing.tarifario import TARIFARIO_VIGENTE, trm_vigente
-    from core.db.models import EvalResult, EvalRun, UsageLedger
+    from core.db.models import EvalResult, EvalRun
     from core.db.session import get_session
     from core.releases.build import registrar_evento
     _exigir_scope(tenant_id)
@@ -173,23 +232,8 @@ async def registrar(
                     )
                 )
         session.add(
-            UsageLedger(
-                tenant_id=tenant_id,
-                conversation_id=None,
-                turn_id=None,
-                connection_id=connection_id,
-                release_id=release_id,
-                kind=EVAL,
-                model=modelo,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cost_usd=costo_usd,
-                result={"proposito": "gate", "run_id": str(corrida.id)},
-                # A cargo de la plataforma (decisión del dueño, 2026-10-25): sin créditos del negocio.
-                credits=Decimal("0.0"),
-                key_mode="platform",
-                tarifario_version=TARIFARIO_VIGENTE.version,
-                trm_cop=trm_vigente(),
+            _fila_de_gasto(
+                tenant_id, connection_id, release_id, costo_usd, modelo, input_tokens, output_tokens, corrida.id, "gate"
             )
         )
         await registrar_evento(

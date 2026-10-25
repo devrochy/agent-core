@@ -355,3 +355,48 @@ falsificar y los escenarios por procedimiento;
    precisión por procedimiento. Hoy es un test de pytest con catálogos fijos (HU-AOS-17).
 
 **Lo que no cambia:** el rollback no pasa por el gate; el canary y la no-inferioridad son de HU-AOS-32.
+
+### Parte 3b realizada: el corredor del gate (2026-10-25)
+
+El corredor ya existe y escribe veredictos; **el gate todavía no se cierra** (una candidata sin veredicto
+sigue pasando con `gate = 'sin_evaluar'`). Qué quedó y qué se decidió al construirlo:
+
+- **`agentcore_eval` es una base de datos, no un comando.** Mismo Postgres, creada a mano una vez por el
+  dueño de la infraestructura (`CREATE DATABASE agentcore_eval`) y migrada con
+  `agent-core db migrate --eval` (el `entrypoint.sh` lo corre sin abortar si falla, cuando
+  `EVAL_MIGRATIONS_DATABASE_URL` está definida). Variables: `EVAL_DATABASE_URL`,
+  `EVAL_MIGRATIONS_DATABASE_URL`, `EVAL_REDIS_DB` (índice lógico distinto del del negocio, 15 por defecto)
+  y `EVAL_TIMEOUT_SEGUNDOS` (3600).
+- **Entrada manual:** `agent-core db evaluar-release` mide una release de un negocio. Con el LLM real exige
+  `--confirmo-costo`; con `--grabacion replay` corre desde `evals/cassettes/` sin red. No hay todavía tarea de
+  Celery ni endpoint: el encolado y el 409 `gate_pendiente` son el seguimiento.
+- **Subproceso.** `core/releases/corredor.py` reclama, lanza y cierra; la medición corre en
+  `evals/gate_release.py` como subproceso con entorno armado desde cero (lista blanca: sin secretos de
+  canales, cobro, correo ni push; `DATABASE_URL` y `REDIS_URL` son los de eval; `APP_SECRET_KEY` y
+  `TOKEN_MASTER_KEYS` son claves desechables por corrida, nunca las de la plataforma; corre con `cwd` fuera
+  del repo para no recargar un archivo de entorno; `EVAL_REDIS_DB` no puede ser el índice del negocio). Razón: los journeys parchean
+  el proceso (pasarela y correos simulados) y `core/db/session.py` tiene un engine global; no se pueden
+  convivir con el servidor. El subproceso se niega a correr si la base no se llama `agentcore_eval[_x]`, si
+  es la del negocio o si tiene negocios que no son suyos.
+- **Foto de la release (`core/releases/snapshot.py`).** Se exporta lo que la release congeló (componentes,
+  versiones, agentes, instancias y `pack_versions`) y se importa bajo un negocio efímero conservando los UUID.
+  Nunca viaja un dato del cliente. Como los UUID se conservan, las mediciones se serializan con un candado
+  de sesión en la base de eval (**concurrencia de worker = 1**).
+- **Borrado del efímero.** El negocio `gate-eval-*` se suspende y se borra con `purge_tenant` (SQL) y
+  `purge_tenant_redis`, sin frase ni master: el id lo calcula el proceso y la base es la de eval. Es la misma
+  excepción de la invariante 8 que `tenant purge`, ampliada a este caso (ver `docs/MULTITENANT.md`). Al
+  arrancar, una corrida limpia los restos de otra caída.
+- **Escenarios** salen de `evals/journeys/` de la imagen (el `Dockerfile` ahora copia `evals/`, sin las
+  carpetas pesadas). Con `aos_routing = off` en el efímero, un procedimiento que no es del especialista foco
+  es `no_medible`; uno sin escenarios es `sin_escenarios`: ninguno de los dos produce un veredicto `approved`.
+- **Presupuesto y gasto.** El presupuesto de la corrida es lo que queda del tope mensual del negocio e incluye el
+  costo del cliente simulado; al pasarse, la corrida se corta. El gasto (también el parcial de una corrida
+  fallida) queda en `usage_ledger` con `kind = 'eval'`, pagado por la plataforma (créditos 0).
+- **Infra nunca rechaza.** Una falla del subproceso (tiempo, grabación faltante, salida inválida, base de eval
+  ausente) deja un evento `evaluated` con `estado = fallida` y gasto parcial, nunca `rejected`. Cinco
+  fallidas en 24 horas por `(release, base)` cortan los reintentos. Un reclamo `en_curso` vence a los
+  `EVAL_TIMEOUT_SEGUNDOS`. La salida del subproceso se valida contra lo pedido (es dato, no instrucción).
+- **Pendiente para cerrar el gate** (seguimientos): tarea de Celery y worker con concurrencia 1; endpoint
+  «Evaluar» y 409 `gate_pendiente` con el flag por negocio; mover los escenarios a los packs; los escenarios
+  PENDIENTES de la parte 2; grabar con LLM real (necesita OK del dueño y medir el costo de la primera
+  corrida); tope global de la plataforma; panel.
