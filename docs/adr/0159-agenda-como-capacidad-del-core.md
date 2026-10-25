@@ -13,18 +13,19 @@ Para agendar una visita, el pack inmobiliario tiene que reservar en la agenda de
 El core define `SchedulingCapability`, que implementa pack-calendar, con interfaz mínima:
 
 - `disponibilidad(admin_id, desde, hasta, duracion)`;
-- `reservar(customer_id, admin_id, inicio, duracion, titulo, idempotency_key, correo=None)`;
+- `reservar(customer_id, admin_id, inicio, duracion, titulo, ref_local, idempotency_key, correo=None)`;
 - `reagendar(reserva_ref, inicio)`;
 - `cancelar(reserva_ref)`.
 
-1. **Registro y resolución.** `scheduling_registry.register(plugin_id, cap)` en el `on_activate` del pack. La resolución es solo `capability_for_tenant(get_current_tenant_id())`, que cruza con los packs habilitados del AgentSpec (molde de `core/subscriptions/__init__.py`). Nunca `capability_for(None)`.
+1. **Registro y resolución.**
+   - `scheduling_registry.register(plugin_id, cap)` en el `on_activate` del pack que implementa la agenda.
+   - El consumidor la pide con `scheduling_registry.para(solicitante=<plugin_id del pack que llama>)`, que resuelve el proveedor con `capability_for_tenant(get_current_tenant_id())` (cruza con los packs habilitados del AgentSpec, molde de `core/subscriptions/__init__.py`; nunca `capability_for(None)`).
+   - Devuelve un **envoltorio del core**: compone `referencia = f"{solicitante}:{ref_local}"`, la pasa al proveedor y, en `reagendar` y `cancelar`, rechaza referencias con otro prefijo.
 2. **Las operaciones no reciben `tenant_id`.**
-   - El core pone la `referencia` con el id del pack que llama (ADR-0158).
-   - `reagendar` y `cancelar` rechazan reservas de otro pack.
 3. **Choques.** Un choque devuelve horarios alternativos, no una excepción.
 4. **Idempotencia y estado.**
    - La idempotencia es por `idempotency_key`.
-   - No hay `obtener`: el estado llega por los eventos `appointment.*`.
+   - No hay `obtener`: el estado llega por los eventos `appointment.*`. Para eso, `appointment.changed` y `appointment.confirmed` agregan `referencia` y `customer_id` al payload (cambio aditivo). Así, si el asesor cancela una visita en la Agenda, el pack dueño se entera.
 5. **Sin estado en la instancia:** nada de cachés de configuración ni de tokens.
 
 ## Alternativas consideradas
@@ -33,6 +34,7 @@ El core define `SchedulingCapability`, que implementa pack-calendar, con interfa
 |---|---|
 | `encargar(agenda, …)` del Agent OS | No existe antes de R3, agrega un salto y parte la visita en dos tareas |
 | El LLM llama las tools de calendar | Dos escrituras del modelo, correo obligatorio, cita sin inmueble |
+| Evento `inmobiliario.visita_solicitada` que calendar atiende | Asíncrono: no puede devolver el choque con horarios alternativos dentro del turno |
 
 ## Consecuencias
 
@@ -49,3 +51,4 @@ El core define `SchedulingCapability`, que implementa pack-calendar, con interfa
 - `core/scheduling/` (nuevo registro).
 - `packages/pack-calendar/pack_calendar/module.py` (registro).
 - `packages/pack-calendar/pack_calendar/capability.py` (nuevo).
+- `packages/pack-calendar/pack_calendar/demo.py` y `admin_api.py` (payload de `appointment.changed` y `appointment.confirmed`).

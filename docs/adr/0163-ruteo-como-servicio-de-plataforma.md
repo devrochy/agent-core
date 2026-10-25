@@ -12,7 +12,7 @@ La vertical calcula el tiempo de desplazamiento desde un inmueble hasta un desti
 
 El ruteo es un **servicio del core** que habla con un contenedor OSRM propio con el extracto de Colombia de OpenStreetMap.
 
-1. **Configuración solo de plataforma**: `ROUTING_PROVIDER` (`none|osrm`), `ROUTING_BASE_URL`, `ROUTING_TIMEOUT_SECONDS`, y perfiles carro, bici y a pie.
+1. **Configuración solo de plataforma**, en `core/routing/config.py` aparte (precedente de `core/geocoding/config.py`, ADR-0154): `ROUTING_PROVIDER` (`none|osrm`), `ROUTING_BASE_URL`, `ROUTING_TIMEOUT_SECONDS`. **v1 solo tiene el perfil carro**: cada perfil es un dataset y un proceso `osrm-routed` aparte. Bici y a pie se agregan si el VPS lo permite.
    - No es configuración del negocio.
    - Con `none`, la función se apaga.
 2. **API del core**: `tiempo_de_viaje(origen, destinos, modo)`, que devuelve minutos redondeados a 5. El pack la llama sin HTTP propio.
@@ -20,7 +20,7 @@ El ruteo es un **servicio del core** que habla con un contenedor OSRM propio con
    - La caché es del pack, en Redis: `inmo:{tenant_id}:ruta:{inmueble_id}:{celda}:{modo}`, con TTL.
    - Los logs no llevan coordenadas.
 4. **Si OSRM no responde**, error de negocio controlado: el pack dice que no está disponible y ofrece las cercanías precalculadas.
-5. **Operación**: un contenedor en el VPS. El extracto se actualiza cada mes con un job de plataforma. La RAM del grafo de Colombia se mide antes de producción.
+5. **Operación**: un contenedor en el VPS con tope de 2 GB de RAM. El extracto de Colombia se construye **fuera del VPS** cada mes (el `osrm-extract` tiene un pico de memoria) y se despliega la imagen.
 6. **Sin tráfico en tiempo real ni transporte público** (GTFS) en v1.
 
 ## Alternativas consideradas
@@ -38,12 +38,12 @@ El ruteo es un **servicio del core** que habla con un contenedor OSRM propio con
 **Negativas / lo que aceptamos pagar:** operar un contenedor más con su memoria y su actualización mensual, y tiempos sin tráfico.
 
 **Qué haría que revisáramos esto:**
-- Que el piloto reporte errores de más del 30 % frente al tiempo real en horas pico.
-- Que el contenedor no quepa en el VPS.
+- Que, en una muestra de 30 rutas del piloto medidas a mano en hora pico, el error mediano pase del 30 %.
+- Que el contenedor pase de 2 GB de RAM en producción.
 
 ## Impacto en el código
 
 - `core/routing/` (nuevo).
-- `core/config.py` (settings).
+- `core/routing/config.py` (settings).
 - `docker-compose` y despliegue (contenedor OSRM).
 - Pack inmobiliario (caché y llamada).

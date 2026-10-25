@@ -10,13 +10,14 @@ D-44 suma simulador de crédito, precio por comparables (CMA), rentabilidad, ent
 
 ## Decisión
 
-Las herramientas de análisis son tools de lectura **deterministas** del pack, con parámetros del negocio y salida en **bloque determinista**.
+Las herramientas de análisis son tools **deterministas** del pack (de lectura, salvo `inmo_registrar_oferta`, que escribe en el pack), con parámetros del negocio y salida en **bloque determinista**. Lo arquitectónico son los puntos 1 a 3; el 4 y el 6 son reglas del pack que se dejan aquí para que no se pierdan.
 
 1. **Bloque determinista hasta la fase 5.**
    - Cifras, diferencias y el aviso obligatorio («simulación informativa, no es una oferta de crédito»; «orientativo, no es un avalúo») los arma el servidor, con el molde de `_safe_append`.
    - Los textos salen de configuración (ADR-0017).
    - El LLM pone una frase de entrada y no repite cifras; un golden lo comprueba.
-   - Los montos van además bajo `monto`/`total` para el verificador actual.
+   - El bloque usa `_safe_append` tal cual: no se agrega ninguna clave reservada al core.
+   - Fuera del bloque, el resultado visible al modelo no lleva porcentajes, minutos, m² ni cifras abreviadas; solo montos bajo `MONEY_KEYS` (`monto`/`total`), que el verificador ya contrasta.
 2. **Cálculo en el servidor.**
    - Las cifras derivadas (Δ entre inmuebles, inicial + gastos, año de equilibrio) las calcula el servidor; el modelo nunca suma ni resta.
    - Las tools devuelven solo valores redondeados: 100 m y 5 min.
@@ -40,7 +41,7 @@ Las herramientas de análisis son tools de lectura **deterministas** del pack, c
 
 | Opción | Por qué no |
 |---|---|
-| Redacción libre con verificador ampliado ya | Ampliar `MONEY_KEYS` y agregar parsers es un cambio del core que hoy no tiene más consumidores. Llega con HU-INMO-27 |
+| Redacción libre con verificador ampliado ya | Ampliar `MONEY_KEYS` y agregar parsers del verificador es un cambio del core que hoy no tiene más consumidores. Llega con HU-INMO-27 |
 | Que el modelo estime cuotas o precios | Viola la constitución §1.2.1: cifras inverificables |
 | Integrar tasas automáticas (Banco de la República, Superfinanciera) | Una integración más que mantener, y las tasas publicadas son promedios, no ofertas |
 
@@ -59,4 +60,4 @@ Las herramientas de análisis son tools de lectura **deterministas** del pack, c
 ## Impacto en el código
 
 - `packages/pack-inmobiliario/` (tools `inmo_simular_credito`, `inmo_gastos_compra`, `inmo_arrendar_vs_comprar`, `inmo_rentabilidad`, `inmo_precio_sugerido`, `inmo_entorno`, `inmo_desplazamiento`, `inmo_comparar`, `inmo_registrar_oferta`).
-- `core/orchestrator/safe_renderer.py` (bloque).
+- Sin cambios en el core: el bloque usa `_safe_append` (`core/orchestrator/safe_renderer.py`) tal cual.
