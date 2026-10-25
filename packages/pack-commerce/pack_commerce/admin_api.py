@@ -30,7 +30,7 @@ from . import aliados
 # Registra los providers de búsqueda global del pack (ADR-0096).
 from . import search as _search  # noqa: F401
 from . import sync as _sync  # noqa: F401
-from .fotos import url_foto
+from .fotos import key_foto_valida, url_foto
 from .models import Ally, Category, Inventory, Order, OrderItem, Product, ProductVariant, Promotion
 
 router = APIRouter(prefix="/api/v1/pack/commerce", tags=["pack · comercio"])
@@ -193,10 +193,11 @@ async def _validar_plan(tenant_id: uuid.UUID | None, payload: ProductSave, ya_re
 
 
 def _key_producto_valida(key: str, slug: str | None) -> bool:
-    """La clave de una foto subida tiene que ser de este negocio y existir en disco."""
-    if not slug or not key.startswith(f"{slug}/productos/"):
+    """La clave de una foto subida tiene que ser de este negocio, sin `..` ni rutas raras, y
+    existir en disco dentro de `TENANTS_ROOT/<slug>/productos/` (no basta el prefijo del texto)."""
+    if not slug or not key_foto_valida(key, slug):
         return False
-    return almacenamiento.abrir(key) is not None
+    return almacenamiento.abrir(key, dentro_de=almacenamiento.carpeta_de("producto", slug)) is not None
 
 
 @router.get("/products", response_model=list[ProductOut])
@@ -391,7 +392,9 @@ async def save_product(
             product.has_variants = False
     if viejo_key:
         # La foto anterior se reemplazó: se borra después de confirmar el cambio de clave.
-        almacenamiento.borrar(viejo_key)
+        # Solo dentro de la carpeta de fotos del propio negocio: una key vieja sospechosa no borra nada.
+        if slug:
+            almacenamiento.borrar(viejo_key, dentro_de=almacenamiento.carpeta_de("producto", slug))
     return Response(status_code=204)
 
 

@@ -120,3 +120,17 @@ que hay que probar bien (aislamiento, traversal, MIME, tamaño, atómico).
   migración quede libre.
 - `pack_commerce` (HU-CRM-05), `core/qa/evidencias.py` y `pack_knowledge/archivos.py` (refactor
   con los mismos paths).
+
+## Adenda 2026-10-25 — las keys son relativas y limpias, y los llamadores acotan por carpeta
+
+Una auditoría halló que `pack_commerce` validaba la `image_key` solo por prefijo de texto
+(`<slug>/productos/`), de modo que `<slug>/productos/../../<otro>/…` llegaba al archivo de otro
+negocio (URL firmada y borrado). Reglas desde ahora:
+
+- `abrir`/`borrar` descartan toda key con segmentos vacíos, `.` o `..`, barras invertidas, NUL o ruta
+  absoluta (`key_limpia`), además de lo que ya escapaba de `TENANTS_ROOT`.
+- Quien recibe una key del exterior (API, base) la acota con `dentro_de=carpeta_de(kind, slug)`: la ruta
+  resuelta, enlaces simbólicos incluidos, tiene que quedar dentro de la carpeta de ese negocio. Un prefijo
+  de texto no es una validación.
+- `borrar` solo borra archivos y nunca carpetas; una key hostil ya guardada en la base no se sirve ni se
+  borra (no se migran datos: se detectan con una consulta).

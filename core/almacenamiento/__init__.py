@@ -33,7 +33,9 @@ __all__ = [
     "StoredRef",
     "abrir",
     "borrar",
+    "carpeta_de",
     "guardar",
+    "key_limpia",
     "resolver_avatar",
     "url",
 ]
@@ -71,10 +73,42 @@ def _nombre_base(valor: str | None) -> str:
     return valor
 
 
-def _ruta(key: str) -> Path | None:
-    """Ruta absoluta de una `key`; `None` si escapa de `TENANTS_ROOT`."""
-    base = tenants_root().resolve()
-    destino = (base / (key or "")).resolve()
+def key_limpia(key: str | None) -> bool:
+    """`True` si la `key` es una ruta relativa sin trucos: sin segmentos vacíos, `.` ni `..`,
+    sin barras invertidas, sin NUL y sin ser absoluta. Las keys que genera `guardar` siempre
+    cumplen esto; una que no lo cumple vino de fuera (o de un dato viejo) y no se sirve ni se borra."""
+    if not key or "\\" in key or "\x00" in key or key.startswith("/"):
+        return False
+    return all(segmento not in ("", ".", "..") for segmento in key.split("/"))
+
+
+def carpeta_de(kind: str, tenant_slug: str | None = None) -> str:
+    """Carpeta (relativa a `TENANTS_ROOT`) donde `guardar` deja los archivos de ese `kind`.
+
+    Es el valor para `dentro_de` de `abrir`/`borrar`: p. ej. `carpeta_de("producto", "acme")` es
+    `acme/productos`. Lanza `StorageInvalido` si el perfil es por negocio y falta el slug."""
+    perfil_ = perfil(kind)
+    base = _base(perfil_, tenant_slug)
+    return base.relative_to(tenants_root().resolve()).joinpath(perfil_.carpeta).as_posix()
+
+
+def _ruta(key: str, dentro_de: str | None = None) -> Path | None:
+    """Ruta absoluta de una `key`; `None` si no es limpia o escapa de `TENANTS_ROOT`.
+
+    Con `dentro_de` (carpeta relativa a `TENANTS_ROOT`, ver `carpeta_de`) además exige que el
+    destino ya resuelto quede dentro de esa carpeta: así una key de un negocio no puede llegar al
+    archivo de otro con `..`, ni por un enlace simbólico."""
+    if not key_limpia(key):
+        return None
+    raiz = tenants_root().resolve()
+    base = raiz
+    if dentro_de is not None:
+        if not key_limpia(dentro_de):
+            return None
+        base = (raiz / dentro_de).resolve()
+        if base == raiz or raiz not in base.parents:
+            return None
+    destino = (raiz / key).resolve()
     if destino == base or base not in destino.parents:
         return None
     return destino
@@ -121,16 +155,18 @@ def guardar(
     )
 
 
-def abrir(key: str) -> Path | None:
-    """Ruta física de un archivo; `None` si la key escapa de `TENANTS_ROOT` o no existe."""
-    destino = _ruta(key)
+def abrir(key: str, *, dentro_de: str | None = None) -> Path | None:
+    """Ruta física de un archivo; `None` si la key no es limpia, escapa de `TENANTS_ROOT` (o de
+    `dentro_de`, si se pasa) o no existe."""
+    destino = _ruta(key, dentro_de)
     return destino if destino is not None and destino.is_file() else None
 
 
-def borrar(key: str) -> None:
-    """Borra el archivo (limpieza o reemplazo)."""
-    destino = _ruta(key)
-    if destino is not None:
+def borrar(key: str, *, dentro_de: str | None = None) -> None:
+    """Borra el archivo (limpieza o reemplazo). Nunca toca algo fuera de `TENANTS_ROOT` (ni de
+    `dentro_de`, si se pasa) ni una carpeta; una key hostil se ignora."""
+    destino = _ruta(key, dentro_de)
+    if destino is not None and destino.is_file():
         destino.unlink(missing_ok=True)
 
 
