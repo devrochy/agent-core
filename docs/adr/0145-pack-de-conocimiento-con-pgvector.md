@@ -761,3 +761,14 @@ adoptó la recomendación de abajo.
   costaba recall sin ganar negativas.
 - **Pendiente:** la eval de punta a punta con el LLM, que ahora lleva el criterio de «no inventar».
   Va junto a la próxima regrabación del gate, con el OK del dueño.
+
+## Adenda propuesta (2026-10-24, SPEC-28 HU-INMO-40): el servicio de embeddings para más de un pack
+
+Propuesta, se acepta al firmarse el piloto de la vertical inmobiliaria (D-31 de solvershub-docs). No cambia la conducta de conocimiento.
+
+- **Segundo consumidor:** la búsqueda semántica de inmuebles (HU-INMO-40) usa el mismo proveedor, modelo (`text-embedding-3-small`), dimensión (1536) y medición. Con dos consumidores se cumple ADR-0023.
+- **Firma:** nueva `embeber(textos, *, proposito, ref: RefEmbedding)`, con `RefEmbedding = {pack, ref}`. `embeber_conocimiento` queda como envoltura que pasa `{pack: "pack_knowledge", ref: document_id}`.
+- **Setting:** se conserva `KNOWLEDGE_EMBEDDING_PROVIDER` con su nombre (`hash|openai`). `EMBEDDING_PROVIDER` es de la memoria (`local|openai|none`, 384 dimensiones) y unificarlos queda fuera.
+- **Ledger:** una fila `kind='embedding'` por lote de indexación con `result={"proposito": "ingesta", "pack": …, "ref": …}`. La consulta no escribe fila (§3). Hoy la indexación de conocimiento va con `credits = 0` por decisión del dueño. **Extender eso a inmuebles es una decisión de costo que el dueño toma antes de HU-INMO-40**; mientras tanto, la recomendación es la misma regla.
+- **Uso desde la vertical:** similitud exacta (`embedding <=> :q`) sobre los ≤ 200 candidatos que ya pasaron los filtros, leídos por PK. Sin HNSW (§1). Indexación como tarea `register_task` con `tenant_scope` (§2).
+- **Evaluación:** el golden de relevancia se mide con embeddings grabados (`grabacion`). Grabar con el proveedor real necesita el OK del dueño con la estimación de costo.
