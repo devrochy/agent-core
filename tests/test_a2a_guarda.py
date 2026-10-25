@@ -189,11 +189,22 @@ def test_presupuesto_reserva_el_del_enlace_contra_lo_que_queda_del_turno() -> No
 
 
 # ------------------------------------------------------------------ payload
-def test_payload_hash_es_hmac_de_64_hex_y_estable() -> None:
-    h = payload_hash({"b": 1, "a": [1, 2]})
+def test_payload_hash_es_hmac_de_64_hex_estable_y_por_negocio() -> None:
+    t = uuid.uuid4()
+    h = payload_hash(t, {"b": 1, "a": [1, 2]})
     assert len(h) == 64 and all(c in "0123456789abcdef" for c in h)
-    assert h == payload_hash({"a": [1, 2], "b": 1})
-    assert h != payload_hash({"a": [1, 2], "b": 2})
+    assert h == payload_hash(t, {"a": [1, 2], "b": 1})
+    assert h != payload_hash(t, {"a": [1, 2], "b": 2})
+    assert h != payload_hash(uuid.uuid4(), {"b": 1, "a": [1, 2]})
+
+
+def test_una_intencion_que_no_es_identificador_se_niega_y_no_se_guarda() -> None:
+    from core.kernel.a2a import intencion_registrable
+
+    grafo = _grafo(_enlace(A, B))
+    assert evaluar(_estado(), _op(IA, IB, intencion="Juan 3001234567 quiere"), grafo, Limites()).razon == "no_link"
+    assert intencion_registrable("Juan 3001234567 quiere") == "invalida"
+    assert intencion_registrable("pack_commerce.cotizar") == "pack_commerce.cotizar"
 
 
 def test_payload_redactado_solo_guarda_la_forma() -> None:

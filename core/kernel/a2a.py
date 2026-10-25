@@ -58,6 +58,9 @@ _PROFUNDIDAD_MAXIMA = 5
 # Forma del payload redactado: profundidad, claves por nivel y largo de clave.
 _REDACCION = (3, 20, 40)
 _CLAVE_PERSONAL = re.compile(r"\d{6,}|@")
+# La intención es un identificador, no texto libre: sin esta forma se niega y no se guarda.
+_INTENCION = re.compile(r"^[a-z0-9_.:-]{1,80}$")
+_INTENCION_INVALIDA = "invalida"
 
 
 # ------------------------------------------------------------------ datos
@@ -208,16 +211,22 @@ class Gasto:
 
 
 # ------------------------------------------------------------------ payload
-def _clave() -> bytes:
+def _clave(tenant_id: uuid.UUID) -> bytes:
+    """Derivada por negocio: el mismo payload da hashes distintos en dos negocios."""
     from core.config import get_settings
 
-    return hmac.new(get_settings().app_secret_key.encode(), _CONTEXTO_CLAVE, hashlib.sha256).digest()
+    contexto = _CONTEXTO_CLAVE + tenant_id.bytes
+    return hmac.new(get_settings().app_secret_key.encode(), contexto, hashlib.sha256).digest()
 
 
-def payload_hash(payload: Mapping[str, Any]) -> str:
+def payload_hash(tenant_id: uuid.UUID, payload: Mapping[str, Any]) -> str:
     """HMAC-SHA256 (64 hex) del payload canónico. Rotar `APP_SECRET_KEY` cambia los hashes."""
     canonico = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
-    return hmac.new(_clave(), canonico.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(_clave(tenant_id), canonico.encode(), hashlib.sha256).hexdigest()
+
+
+def intencion_registrable(intencion: str) -> str:
+    return intencion if _INTENCION.match(intencion) else _INTENCION_INVALIDA
 
 
 def redactar(valor: Any, nivel: int = 0) -> Any:
@@ -253,7 +262,7 @@ def redactar(valor: Any, nivel: int = 0) -> Any:
 # ------------------------------------------------------------------ guarda
 def evaluar(estado: EstadoDelTurno, op: Operacion, grafo: GrafoCongelado, limites: Limites) -> Decision:
     """La decisión sobre una operación, sin efectos: no toca la base ni el estado."""
-    huella = payload_hash(op.payload)
+    huella = payload_hash(estado.tenant_id, op.payload)
     pila = list(estado.pila)
     if not pila:
         pila = [op.from_instance_id]
@@ -273,6 +282,8 @@ def evaluar(estado: EstadoDelTurno, op: Operacion, grafo: GrafoCongelado, limite
     if op.to_instance_id in pila:
         return no("cycle")
     enlace = grafo.enlace(op.from_instance_id, op.to_instance_id)
+    if not _INTENCION.match(op.intencion):
+        return no("no_link", enlace)
     if enlace is None or op.modo not in enlace.modes or (enlace.intents and op.intencion not in enlace.intents):
         return no("no_link", enlace)
     if depth > min(enlace.max_depth, limites.max_depth):
@@ -406,7 +417,7 @@ async def _evento(
             "d": max(1, min(depth, _PROFUNDIDAD_MAXIMA)),
             "desde": desde,
             "hacia": hacia,
-            "intent": intencion[:80],
+            "intent": intencion_registrable(intencion),
             "red": json.dumps(redactado) if redactado is not None else None,
             "hash": huella,
             "res": json.dumps(resultado) if resultado is not None else None,
@@ -426,6 +437,11 @@ async def registrar(
     Sin cabecera del turno en `core_decisions` niega sin escribir (`no_ledger` en el log)."""
     _exigir_scope(estado.tenant_id)
     decision = evaluar(estado, op, grafo, limites)
+    if op.from_instance_id not in grafo.agente_de:
+        # Quien pide no es de la release: ni siquiera se puede registrar (FK compuesta).
+        log.warning("a2a_origen_desconocido", connection_id=str(estado.connection_id), reason="no_ledger")
+        estado.llamadas += 1
+        return Decision(False, "no_ledger", decision.call_id, decision.depth, decision.payload_hash, None, decision.pila)
     async with get_session() as session:
         if not await _cabecera_confirmada(session, estado):
             log.warning("a2a_sin_cabecera", connection_id=str(estado.connection_id), reason="no_ledger")
@@ -442,7 +458,8 @@ async def registrar(
             modo=op.modo,
             depth=decision.depth,
             desde=op.from_instance_id,
-            hacia=op.to_instance_id,
+            # Un destino que no es de la release no se nombra (la FK compuesta lo rechazaría).
+            hacia=op.to_instance_id if op.to_instance_id in grafo.agente_de else None,
             intencion=op.intencion,
             huella=decision.payload_hash,
             redactado=redactar(op.payload),
