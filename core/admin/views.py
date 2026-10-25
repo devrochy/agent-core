@@ -3073,7 +3073,7 @@ async def settings_save(
     assistant_name: str = Form(...),
     business_description: str = Form(default=""),
     brand_voice: str = Form(default=""),
-    tono: str = Form(default="calido"),
+    tono: str = Form(default=""),  # obsoleto (HU-CFG-01): se acepta y se ignora
     debounce_mode: str = Form(default="natural"),
     guardrail_max_retries: int = Form(default=1),
     disabled_guardrails: list[str] = Form(default=[]),  # noqa: B008
@@ -3119,7 +3119,6 @@ async def settings_save(
         app_settings.brand_voice = brand_voice
         behavior = dict(app_settings.behavior_config)
         behavior.update(
-            tono=tono,
             debounce_mode=debounce_mode,
             guardrail_max_retries=max(0, guardrail_max_retries),
             disabled_guardrails=sorted(valid_names & set(normalizar_desactivados(disabled_guardrails))),

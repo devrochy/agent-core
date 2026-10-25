@@ -197,7 +197,6 @@ async def onboard_tenant(
                         assistant_name=name,
                         business_description=business_description,
                         language=language,
-                        behavior_config={"tono": persona.get("tone", "calido") if persona else "calido"},
                         # `escalation.triggers` del AgentSpec nunca se lee en runtime
                         # (core/orchestrator/consumer.py lee este campo) -- ver
                         # `_default_spec_for`, que ya NO escribe ahí.
