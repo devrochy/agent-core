@@ -37,6 +37,10 @@
       "reloj": "+6d"
     },
     {
+      "nota": "los avisos de cobro solo salen en horario legal (HU-SUB-18)",
+      "reloj": "hábil"
+    },
+    {
       "job": "pack_subscriptions.avisos_de_cobro"
     },
     {
