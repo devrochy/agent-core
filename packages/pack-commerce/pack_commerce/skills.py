@@ -481,28 +481,10 @@ def _sin_cotizacion_vigente() -> dict[str, Any]:
 
 async def _transfer_safe_append() -> str:
     """Arma el bloque de datos de transferencia (nunca lo escribe el LLM)."""
+    from core.payments.transferencia import formatear_cuentas
+
     config = await _plugin_config()
-    accounts = getattr(config, "transfer_accounts", []) or []
-    if not accounts:
-        return ""
-    lines = ["💳 Datos para tu transferencia:"]
-    for acc in accounts:
-        entity = acc.get("entity", "")
-        account_type = acc.get("accountType", "")
-        number = acc.get("accountNumber", "")
-        holder = acc.get("holderName", "")
-        doc = acc.get("holderDocument", "")
-        line = f"• {entity}"
-        if account_type:
-            line += f" ({account_type})"
-        if number:
-            line += f" N° {number}"
-        if holder:
-            line += f" a nombre de {holder}"
-        if doc:
-            line += f" CC {doc}"
-        lines.append(line)
-    return "\n".join(lines)
+    return formatear_cuentas(getattr(config, "transfer_accounts", None))
 
 
 async def _get_variant_with_stock(variant_id_or_sku) -> dict[str, Any] | None:  # type: ignore[no-untyped-def]

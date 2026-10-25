@@ -13,9 +13,11 @@ from decimal import Decimal
 
 import pytest
 from _api_helpers import uniq
+from _transferencia import con_cuentas_de_transferencia  # noqa: F401  (fixture)
 from sqlalchemy import select
 
 pytestmark = [
+    pytest.mark.usefixtures("con_cuentas_de_transferencia"),
     pytest.mark.asyncio(loop_scope="session"),
     pytest.mark.skipif(
         os.environ.get("AGENT_CORE_INTEGRATION") != "1",

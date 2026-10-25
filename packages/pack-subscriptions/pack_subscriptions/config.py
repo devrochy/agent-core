@@ -81,6 +81,35 @@ class SubscriptionConfig(BasePluginConfig):
         ),
         description="Texto del aviso de pausa por mora (dentro de las 24 h).",
     )
+    # HU-SUB-24: cuando el cargo no tiene link (monto bajo el mínimo, sin pasarela o link caído) el aviso
+    # lleva los datos de transferencia del negocio en lugar del link.
+    aviso_cargo_transferencia_texto: str = Field(
+        default=(
+            "Hola {cliente.nombre}, ya está tu cobro de {suscripcion.concepto} por {cargo.monto} "
+            "(vence el {cargo.fecha_vencimiento}). Puedes pagarlo por transferencia. "
+            "{cargo.datos_transferencia} Indica en la transferencia: {suscripcion.concepto} "
+            "{cargo.periodo}. Cuando pagues, avísanos por aquí."
+        ),
+        description="Aviso de cargo nuevo cuando no hay link de pago y el negocio tiene cuentas de transferencia.",
+    )
+    recordatorio_transferencia_texto: str = Field(
+        default=(
+            "Hola {cliente.nombre}, te recordamos el pago de {suscripcion.concepto} por "
+            "{cargo.monto}, que vence {recordatorio.dias}. Puedes pagarlo por transferencia. "
+            "{cargo.datos_transferencia} Indica en la transferencia: {suscripcion.concepto} "
+            "{cargo.periodo}."
+        ),
+        description="Recordatorio de un cargo impago sin link de pago (con cuentas de transferencia).",
+    )
+    aviso_pausa_transferencia_texto: str = Field(
+        default=(
+            "Hola {cliente.nombre}, pausamos tu suscripción a {suscripcion.concepto} porque el "
+            "pago de {cargo.monto} lleva {mora.dias} días pendiente. Cuando pagues se reactiva. "
+            "{cargo.datos_transferencia} Indica en la transferencia: {suscripcion.concepto} "
+            "{cargo.periodo}."
+        ),
+        description="Aviso de pausa por mora cuando el cargo no tiene link de pago.",
+    )
 
     varias_por_cliente: bool = Field(
         default=False,

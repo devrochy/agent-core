@@ -78,6 +78,40 @@ async def _config_del_negocio():  # type: ignore[no-untyped-def]
     return config if isinstance(config, SubscriptionConfig) else SubscriptionConfig()
 
 
+async def _datos_de_transferencia() -> str:
+    """Bloque de transferencia del negocio activo (HU-SUB-24), o `""` si no tiene cuentas. Lo ofrece
+    otro pack por el core (`core.payments.transferencia`); este pack no lo importa."""
+    from core.agents.spec import enabled_packs, load_active_spec
+    from core.payments.transferencia import datos_de_transferencia
+
+    return await datos_de_transferencia(enabled_packs(await load_active_spec()))
+
+
+async def _avisar_sin_forma_de_pago(tenant_id: uuid.UUID, sub: Subscription, cargo: SubscriptionCharge) -> None:
+    """El cargo no tiene link ni el negocio tiene cuentas de transferencia: el cliente no recibe un
+    aviso sin cómo pagar y el dueño se entera para configurar una forma de pago (HU-SUB-24)."""
+    from core.shared.audit import record_audit
+
+    log.warning("subs_cargo_sin_forma_de_pago", subscription_id=str(sub.id), charge_id=str(cargo.id), periodo=cargo.periodo)
+    await record_audit(
+        actor=f"plugin:{PACK_ID}",
+        action="subs_cargo_sin_forma_de_pago",
+        output_data={"subscription_id": str(sub.id), "charge_id": str(cargo.id), "periodo": cargo.periodo},
+    )
+    try:
+        from core.tasks.push_tasks import notify_owners_push
+
+        notify_owners_push.delay(
+            str(tenant_id),
+            "Cobro sin forma de pago",
+            f"El cobro de «{sub.concepto}» por {cargo.monto} no tiene link de pago y no hay cuentas de "
+            "transferencia configuradas: el cliente no recibió el aviso.",
+            {"kind": "subs_cargo_sin_forma_de_pago", "subscription_id": str(sub.id)},
+        )
+    except Exception:
+        log.warning("subs_alerta_push_fallida", subscription_id=str(sub.id), exc_info=True)
+
+
 async def zona_del_negocio(session, tenant_id: uuid.UUID) -> str | None:  # type: ignore[no-untyped-def]
     """Zona horaria del negocio (ADR-0091); None = la de Bogotá. Exige el negocio explícito:
     sin él fallaría callado hacia Bogotá."""
@@ -238,6 +272,14 @@ async def generar_cargo_de(session, tenant_id: uuid.UUID, sub: Subscription, now
             cargo.link_url = link.url
         except Exception:
             log.warning("subs_link_fallido", subscription_id=str(sub.id), exc_info=True)
+    # Sin link (monto bajo el mínimo, sin pasarela o link caído): el aviso trae los datos de
+    # transferencia del negocio; sin ellos no hay aviso, porque diría «págalo aquí» sin link (HU-SUB-24).
+    transferencia = ""
+    if not cargo.link_url:
+        transferencia = await _datos_de_transferencia()
+        if not transferencia:
+            await _avisar_sin_forma_de_pago(tenant_id, sub, cargo)
+            return cargo
     # Aviso al cliente por el outbox, en la MISMA transacción que el cargo (ADR-0107): si el
     # cargo se revierte, no hay aviso. El core lo envía como plantilla o texto según la
     # ventana de 24 h (ADR-0108); la entrega espera el horario legal (HU-SUB-18).
@@ -247,7 +289,9 @@ async def generar_cargo_de(session, tenant_id: uuid.UUID, sub: Subscription, now
         tenant_id=tenant_id,
         topic=ON_SUBSCRIPTION_CHARGE_CREATED,
         dedupe_key=f"sub_charge:{cargo.id}",
-        payload=payload_cargo_nuevo(cargo, sub, config.aviso_cargo_texto),
+        payload=payload_cargo_nuevo(
+            cargo, sub, config.aviso_cargo_texto if cargo.link_url else config.aviso_cargo_transferencia_texto, transferencia
+        ),
         entregar_desde=entregar_desde,
     )
     return cargo
@@ -401,7 +445,9 @@ def _aplicar_cambio_programado(sub: Subscription, inicio: datetime) -> None:
     log.info("subs_downgrade_aplicado", subscription_id=str(sub.id), plan=sub.concepto)
 
 
-def _payload_cargo(cargo: SubscriptionCharge, sub: Subscription) -> dict[str, object]:
+def _payload_cargo(cargo: SubscriptionCharge, sub: Subscription, transferencia: str = "") -> dict[str, object]:
+    """Datos del aviso. `transferencia`: bloque de cuentas del negocio, solo para el cargo sin link
+    (HU-SUB-24); `forma_de_pago` es el link o, si no hay, ese bloque."""
     return {
         "charge_id": str(cargo.id),
         "subscription_id": str(sub.id),
@@ -413,12 +459,16 @@ def _payload_cargo(cargo: SubscriptionCharge, sub: Subscription) -> dict[str, ob
         "fecha_vencimiento": cargo.fecha_vencimiento.date().isoformat() if cargo.fecha_vencimiento else None,
         "referencia": cargo.referencia,
         "link": cargo.link_url,
+        "datos_transferencia": transferencia or None,
+        "forma_de_pago": cargo.link_url or transferencia or None,
     }
 
 
-def payload_cargo_nuevo(cargo: SubscriptionCharge, sub: Subscription, texto: str) -> dict[str, object]:
+def payload_cargo_nuevo(
+    cargo: SubscriptionCharge, sub: Subscription, texto: str, transferencia: str = ""
+) -> dict[str, object]:
     """Payload del aviso de cargo nuevo (`subscription.charge_created`)."""
-    return {**_payload_cargo(cargo, sub), "texto": texto}
+    return {**_payload_cargo(cargo, sub, transferencia), "texto": texto}
 
 
 @register_cron(PACK_ID, "5 * * * *")
@@ -469,7 +519,10 @@ async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
                     )
                 ).all()
                 pausadas: set[uuid.UUID] = set()
+                transferencia: str | None = None  # bloque de cuentas, solo si algún cargo no tiene link
                 for cargo, sub in filas:
+                    if not cargo.link_url and transferencia is None:
+                        transferencia = await _datos_de_transferencia()
                     vence = cargo.fecha_vencimiento
                     dias_mora = (now - vence).days
                     if (
@@ -492,9 +545,13 @@ async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
                             topic=ON_SUBSCRIPTION_PAUSED,
                             dedupe_key=f"sub_paused:{sub.id}:{cargo.id}",
                             payload={
-                                **_payload_cargo(cargo, sub),
+                                **_payload_cargo(cargo, sub, "" if cargo.link_url else transferencia or ""),
                                 "dias_mora": dias_mora,
-                                "texto": config.aviso_pausa_texto,
+                                "texto": (
+                                    config.aviso_pausa_texto
+                                    if cargo.link_url or not transferencia
+                                    else config.aviso_pausa_transferencia_texto
+                                ),
                             },
                         )
                         await _avisar_pausa_al_negocio(tenant_id, sub, cargo, dias_mora)
@@ -508,6 +565,8 @@ async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
                     )
                     if dia is None or await ya_emitido(session, tenant_id, f"sub_reminder:{cargo.id}:{dia}"):
                         continue
+                    if not cargo.link_url and not transferencia:
+                        continue  # sin link ni cuentas no hay cómo pagar: no se avisa (HU-SUB-24)
                     if not await reservar_aviso_del_dia(
                         session, tenant_id, sub.customer_id, hoy, ON_SUBSCRIPTION_CHARGE_REMINDER, cargo.id
                     ):
@@ -517,7 +576,11 @@ async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
                         tenant_id=tenant_id,
                         topic=ON_SUBSCRIPTION_CHARGE_REMINDER,
                         dedupe_key=f"sub_reminder:{cargo.id}:{dia}",
-                        payload={**_payload_cargo(cargo, sub), "dias": dia, "texto": config.recordatorio_texto},
+                        payload={
+                            **_payload_cargo(cargo, sub, "" if cargo.link_url else transferencia or ""),
+                            "dias": dia,
+                            "texto": config.recordatorio_texto if cargo.link_url else config.recordatorio_transferencia_texto,
+                        },
                     )
                     totales["recordatorios"] += int(insertado)
                 totales["pausadas"] += len(pausadas)

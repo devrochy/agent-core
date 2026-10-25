@@ -137,3 +137,29 @@ repetía el 150.000 como si fuera el mínimo real.
 
 Fuera de esta adenda: el cobro de la plataforma (`core/billing/providers/wompi.py`, `MIN_AMOUNT_COP`) y
 el override de `solvershub-comercial`, que tienen su propio texto.
+
+## Adenda (2026-10-25): los datos de transferencia del negocio son una capacidad del core
+
+**Hallazgo.** Cuando un cobro de suscripción no puede tener link (monto bajo el mínimo de la pasarela,
+negocio sin pasarela o link caído, HU-SUB-13), el aviso al cliente salía igual con «págalo aquí:» y el
+link vacío; el fallo solo quedaba en el log. Las cuentas de transferencia existen (`transfer_accounts`,
+configuración de `pack_commerce`), pero `pack_subscriptions` no puede importar ese pack (invariante nº5).
+
+**Decisión (opción A del dueño, HU-SUB-24).**
+1. **`core.payments.transferencia`**: un `TransferDetailsProvider` (`cuentas_de_transferencia()`) y un
+   registro filtrado por pack habilitado, con el mismo molde que `payment_registry`. Es independiente
+   del Protocol `PaymentCapability`, que no cambia: ofrecer cuentas no exige cobrar en línea.
+2. **`formatear_cuentas` y `datos_de_transferencia(enabled)`** arman el bloque «Datos para tu
+   transferencia»; son la única fuente del texto. El chat de ventas (`_transfer_safe_append`) y los avisos
+   de cobro imprimen lo mismo. Un proveedor que falla cuenta como «sin datos».
+3. **`pack_commerce`** registra sus cuentas al activarse; **`pack_subscriptions`** las consulta.
+4. **Avisos de cobro** (cargo nuevo, recordatorio, pausa por mora): un cargo sin link lleva las cuentas en
+   lugar del link (`cargo.datos_transferencia`, y `cargo.forma_de_pago` = link o cuentas, para plantillas de
+   Meta); tiene textos propios de respaldo. Un cargo sin link y sin cuentas **no avisa al cliente** (no le
+   promete un link inexistente), conserva su fila sin link para el panel y alerta al dueño.
+5. Las cuentas son datos del negocio que se imprimen tal cual, nunca instrucciones ni texto del modelo
+   (invariante nº7).
+
+Fuera de esta adenda: el reenvío del link desde el panel para un cargo sin link, y registrar el pago por
+transferencia (HU-SUB-26, repo solvershub-docs).
+
