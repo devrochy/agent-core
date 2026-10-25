@@ -56,7 +56,7 @@ __all__ = ["crear_suscripcion_para"]
 class SubscriptionsModule(BaseModule):
     id = PLUGIN_ID
     name = "Suscripciones"
-    version = "0.2.0"
+    version = "0.3.0"
     description = "Suscripción de cliente final activada por pago de un plan (ADR-0083)"
     display_name = "Suscripciones"
     category = "Cobros"
