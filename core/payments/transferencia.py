@@ -36,10 +36,11 @@ class TransferDetailsRegistry:
     def unregister(self, plugin_id: str) -> None:
         self._providers.pop(plugin_id, None)
 
-    def provider_for(self, enabled: set[str] | None) -> TransferDetailsProvider | None:
-        """Primer proveedor de un pack habilitado (o cualquiera si `enabled` es None)."""
+    def provider_for(self, enabled: set[str]) -> TransferDetailsProvider | None:
+        """Primer proveedor de un pack habilitado. `enabled` es obligatorio: sin los packs del
+        negocio activo no se ofrece ningún proveedor."""
         for pid, provider in self._providers.items():
-            if enabled is None or pid in enabled:
+            if pid in enabled:
                 return provider
         return None
 
@@ -66,7 +67,7 @@ def formatear_cuentas(cuentas: list[dict[str, Any]] | None) -> str:
     return "\n".join(lineas)
 
 
-async def datos_de_transferencia(enabled: set[str] | None) -> str:
+async def datos_de_transferencia(enabled: set[str]) -> str:
     """Bloque de transferencia del negocio activo, o `""` si ningún pack habilitado lo ofrece o el
     negocio no tiene cuentas. Un proveedor que falla no rompe el aviso: se trata como sin datos."""
     provider = transfer_registry.provider_for(enabled)

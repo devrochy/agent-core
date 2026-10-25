@@ -63,9 +63,9 @@ def test_el_registro_filtra_por_pack_habilitado() -> None:
     registro.register("pack_commerce", comercio_)
     assert registro.provider_for({"pack_commerce"}) is comercio_
     assert registro.provider_for({"pack_subscriptions"}) is None
-    assert registro.provider_for(None) is comercio_
+    assert registro.provider_for(set()) is None
     registro.unregister("pack_commerce")
-    assert registro.provider_for(None) is None
+    assert registro.provider_for({"pack_commerce"}) is None
 
 
 @pytest.mark.asyncio
@@ -82,7 +82,7 @@ async def test_un_proveedor_que_falla_cuenta_como_sin_datos(monkeypatch) -> None
     registro = TransferDetailsRegistry()
     registro.register("pack_commerce", _Proveedor("pack_commerce", RuntimeError("config rota")))
     monkeypatch.setattr("core.payments.transferencia.transfer_registry", registro)
-    assert await datos_de_transferencia(None) == ""
+    assert await datos_de_transferencia({"pack_commerce"}) == ""
 
 
 @pytest.mark.asyncio
