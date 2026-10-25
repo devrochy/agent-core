@@ -14,7 +14,7 @@ from typing import Any, Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DebounceMode = Literal["inmediato", "rapido", "natural", "pausado"]
+DebounceMode = Literal["inmediato", "corto", "rapido", "natural", "pausado"]
 SplitStyle = Literal["un_mensaje", "pocos_cortos", "varios_cortos"]
 
 DEBOUNCE_DELAY_MS: dict[str, int] = {

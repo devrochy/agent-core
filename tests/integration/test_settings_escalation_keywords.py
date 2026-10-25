@@ -108,7 +108,6 @@ async def test_settings_save_escribe_escalation_config_no_el_spec_muerto(
     # keys quedan explícitas).
     expected_behavior = {
         **behavior,
-        "tono": behavior.get("tono", "calido"),
         "debounce_mode": behavior.get("debounce_mode", "natural"),
         "guardrail_max_retries": max(0, behavior.get("guardrail_max_retries", 1)),
         "disabled_guardrails": sorted(behavior.get("disabled_guardrails", [])),
@@ -126,7 +125,6 @@ async def test_settings_save_escribe_escalation_config_no_el_spec_muerto(
                 "assistant_name": snapshot["assistant_name"],
                 "business_description": snapshot["business_description"],
                 "brand_voice": snapshot["brand_voice"],
-                "tono": expected_behavior["tono"],
                 "debounce_mode": expected_behavior["debounce_mode"],
                 "guardrail_max_retries": expected_behavior["guardrail_max_retries"],
                 "disabled_guardrails": expected_behavior["disabled_guardrails"],

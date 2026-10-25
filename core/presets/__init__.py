@@ -16,7 +16,15 @@ from typing import Annotated, Any, Literal
 
 from agentcore_contracts.contracts import Tone
 from agentcore_contracts.kernelspec import RoutingWhen
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 PRESETS_DIR = Path(__file__).resolve().parent
 PLANTILLAS_DIR = PRESETS_DIR / "plantillas"
@@ -39,11 +47,23 @@ class PresetPersona(BaseModel):
 
 
 class PresetAppSettings(BaseModel):
+    """Claves de `app_settings` que un preset puede fijar. `extra="forbid"`: una clave que no está acá
+    (por ejemplo, una clave de comportamiento inventada) falla al cargar nombrando la clave."""
+
     model_config = ConfigDict(extra="forbid")
     split_style: str | None = None
     language: str | None = Field(default=None, max_length=8)
     currency: str | None = Field(default=None, max_length=3)
     timezone: str | None = Field(default=None, max_length=64)
+
+    @field_validator("split_style")
+    @classmethod
+    def _estilo_conocido(cls, value: str | None) -> str | None:
+        from core.gateway.message_splitter import CAPS
+
+        if value is not None and value not in CAPS:
+            raise ValueError(f"split_style «{value}» no es válido: usa uno de {', '.join(CAPS)}")
+        return value
 
 
 class PresetManifest(BaseModel):

@@ -29583,7 +29583,9 @@
           },
           "tono": {
             "type": "string",
-            "title": "Tono"
+            "title": "Tono",
+            "default": "calido",
+            "deprecated": true
           },
           "debounce_mode": {
             "type": "string",
@@ -29708,7 +29710,6 @@
           "assistant_name",
           "business_description",
           "brand_voice",
-          "tono",
           "debounce_mode",
           "guardrail_max_retries",
           "disabled_guardrails",
@@ -29748,9 +29749,16 @@
             "default": ""
           },
           "tono": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Tono",
-            "default": "calido"
+            "deprecated": true
           },
           "debounce_mode": {
             "type": "string",
@@ -29844,7 +29852,7 @@
           },
           "auto_escalate_after_turns": {
             "type": "integer",
-            "maximum": 1000.0,
+            "maximum": 20.0,
             "minimum": 0.0,
             "title": "Auto Escalate After Turns",
             "default": 0
