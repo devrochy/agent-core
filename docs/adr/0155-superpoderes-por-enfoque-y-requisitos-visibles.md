@@ -46,18 +46,36 @@ existentes). Un agente con un superpoder fuera de su enfoque sigue funcionando h
 fallará con `superpoder_fuera_de_enfoque` hasta que el dueño lo quite. Una limpieza automática exigiría derogar
 esa adenda y se decide solo después de medir cuántos agentes están afectados.
 
+## Requisitos visibles (entrega 2)
+
+6. **Un aviso, no una puerta.** `core/agents/requisitos.py` calcula, para cada plantilla y negocio, lo que falta
+   configurar. Publicar no se bloquea por esto (lo que bloquea sigue siendo D-35 y el tope del plan).
+7. **Dos hechos, sin lógica por habilidad.** `habilidad_sin_configurar`: una habilidad que el agente necesita y el
+   negocio no habilitó (las opcionales de la plantilla, como el cobro en línea de Ventas, y las que otra habilidad
+   pide en `required_connections`, como Suscripciones). `sin_contenido`: una habilidad habilitada sin nada que ofrecer,
+   según el hook `BaseModule.contenido_cargado` que ya usan los Primeros pasos. Una opcional acotada a unas acciones
+   (`acciones_opcionales`, Agenda con `crear_lead`) no se avisa.
+8. **Los textos son del pack** (`display_name`, `setup_guide`); el panel traduce `kind` y lleva a la pantalla según
+   `section`. El core no guarda rutas ni textos de interfaz. Las lecturas devuelven solo nombres, cantidades en cero o
+   no y secciones, nunca claves ni datos de clientes.
+9. **API aditiva:** `requirements[]` en cada `agent-templates` y `GET /admin/agents/{id}/requirements` (404 si el
+   agente es de otro negocio; vacío para keys sin plantilla). Se muestra al elegir plantilla, en el paso Superpoderes y
+   en el paso Publicar.
+
+Fuera de esta entrega, a propósito: la conexión de Google Calendar (el calendario interno es el valor por defecto y
+no la necesita), el proveedor de suscripciones (`core.subscriptions.estado_proveedor`), los documentos del paso
+Memoria (pertenecen al agente, ADR-0145) y la visión de imágenes (es de entrada y aplica a todo el negocio). El
+estado de una habilidad opcional se calcula por negocio: un agente creado antes de activar el cobro en línea no
+tiene esas tools (ADR-0139, adenda 2026-10-19), aunque el aviso ya no lo diga.
+
 ## Siguiente (fuera de este ADR)
 
-- **Requisitos visibles** (HU-AOS-50, entrega 2): avisar al elegir plantilla, en el editor y al publicar qué falta
-  configurar (cobro en línea, calendario, catálogo o cartera cargados, proveedor de suscripciones). Se apoya en
-  `pack_installations.status = 'pending_config'` y en el hook `contenido_cargado` de cada pack, sin lógica por pack
-  en el core. Este ADR se enmienda cuando se decida.
-- **Catálogo en los packs:** cuando HU-AOS-16 parte 2 declare capacidades en los packs, el enfoque pasará de
-  la lista de la plantilla a esa declaración.
+- **Catálogo en los packs:** cuando HU-AOS-16 parte 2 declare capacidades en los packs, el enfoque y los requisitos
+  pasarán de la plantilla a esa declaración.
 
 ## Consecuencias
 
 - Tres de las cuatro plantillas tienen un solo procedimiento: el filtro les deja una casilla. El valor para el
   dueño está en no ver lo ajeno y, en la entrega 2, en saber qué le falta configurar.
 - Quitar un procedimiento de un agente cambia el desempate de enrutamiento en vivo (ADR-0138).
-- Se agrega el parámetro `agent_id` al OpenAPI (aditivo, retrocompatible).
+- Se agregan al OpenAPI el parámetro `agent_id`, el campo `requirements` y la ruta de requisitos (aditivos).

@@ -10,6 +10,8 @@ el editor del panel necesita y no existía:
   ya existe; 409 `template_unavailable` si faltan habilidades.
 - `GET  /api/v1/admin/agent-superpowers` — superpoderes que ofrece el negocio con sus frases;
   con `?agent_id=` solo los del enfoque de ese agente (404 si no es del negocio).
+- `GET  /api/v1/admin/agents/{id}/requirements` — lo que falta configurar para el enfoque del agente
+  (aviso, no bloquea). También viene en cada plantilla de `agent-templates`.
 - `GET  /api/v1/admin/agent-models` — modelos de la tabla de precios del core, cuáles sirve el
   proveedor del negocio, si hay un modelo BYOK que manda y el costo estimado por 1.000 turnos
   con el promedio real de tokens por turno del negocio (30 días); sin historial (o sin acceso a
@@ -32,7 +34,7 @@ consumo de `agent-models`, la sección `costs`. Como el resto del Agent OS, con
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Path, Query, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -40,7 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from core.admin.permissions import effective_access
 from core.admin.roles import actua_como_master
 from core.agents import editor as svc
-from core.agents import versiones
+from core.agents import requisitos, versiones
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
@@ -58,6 +60,7 @@ from core.api.routers.agents import (
     _version,
 )
 from core.billing.enforcement import QuotaExceeded
+from core.presets import PresetError, load_plantilla
 
 router = APIRouter(prefix="/admin", tags=["admin · editor de agentes"])
 
@@ -72,6 +75,17 @@ class Superpower(BaseModel):
     phrases: list[str]
 
 
+class Requirement(BaseModel):
+    """Algo que el negocio tiene que configurar para que el agente funcione (aviso, no bloquea)."""
+
+    skill: str
+    kind: Literal["habilidad_sin_configurar", "sin_contenido"]
+    title: str
+    explanation: str
+    section: str
+    content: Literal["catalogo", "servicios", "cartera"] | None = None
+
+
 class AgentTemplate(BaseModel):
     key: str
     name: str
@@ -81,6 +95,7 @@ class AgentTemplate(BaseModel):
     available: bool
     missing_skills: list[str]
     superpowers: list[Superpower]
+    requirements: list[Requirement]
 
 
 class FromTemplateIn(BaseModel):
@@ -157,6 +172,21 @@ def _superpower(s: svc.Superpoder) -> Superpower:
     )
 
 
+_TIPOS_DE_CONTENIDO = frozenset({"catalogo", "servicios", "cartera"})
+
+
+def _requirement(r: requisitos.Requisito) -> Requirement:
+    return Requirement(
+        skill=r.pack,
+        kind=r.tipo,
+        title=r.titulo,
+        explanation=r.explicacion,
+        section=r.seccion,
+        # Un pack que declare otro tipo de contenido no tumba la lista: se avisa igual, sin el tipo.
+        content=r.contenido if r.contenido in _TIPOS_DE_CONTENIDO else None,  # type: ignore[arg-type]
+    )
+
+
 def _error(exc: svc.ErrorDelEditor) -> ApiError:
     return ApiError(exc.status, exc.code, str(exc), fields=exc.campos or None)
 
@@ -177,7 +207,10 @@ Paginados = Annotated[PageParams, Depends(page_params)]
 async def list_templates(
     principal: Annotated[Principal, Depends(require("settings"))], params: Paginados
 ) -> Page[AgentTemplate]:
-    vistas = svc.plantillas(await svc.habilitados_del_negocio(_tenant(principal)))
+    tid = _tenant(principal)
+    habilitados = await svc.habilitados_del_negocio(tid)
+    vistas = svc.plantillas(habilitados)
+    por_clave = await requisitos.de_plantillas(tid, habilitados, [load_plantilla(v.key) for v in vistas])
     items = [
         AgentTemplate(
             key=v.key,
@@ -188,6 +221,7 @@ async def list_templates(
             available=v.available,
             missing_skills=list(v.missing_skills),
             superpowers=[_superpower(s) for s in v.superpowers],
+            requirements=[_requirement(r) for r in por_clave.get(v.key, [])],
         )
         for v in vistas
     ]
@@ -232,6 +266,28 @@ async def list_superpowers(
         except versiones.AgenteNoEncontrado:
             raise ApiError.not_found("Agente no encontrado.") from None
     items = [_superpower(s) for s in poderes]
+    return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
+
+
+@router.get("/agents/{agent_id}/requirements", response_model=Page[Requirement])
+async def list_requirements(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+    params: Paginados,
+) -> Page[Requirement]:
+    """Lo que falta configurar para el enfoque de este agente. Un agente que no es de una plantilla
+    (`general`, `coordinador`, especialistas por API) no tiene requisitos propios."""
+    tid = _tenant(principal)
+    try:
+        agente = await versiones.obtener_agente(tid, agent_id)
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    try:
+        plantilla = load_plantilla(agente.key)
+    except PresetError:
+        return build_page([], 0, params)
+    por_clave = await requisitos.de_plantillas(tid, await svc.habilitados_del_negocio(tid), [plantilla])
+    items = [_requirement(r) for r in por_clave.get(plantilla.key, [])]
     return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
 
 

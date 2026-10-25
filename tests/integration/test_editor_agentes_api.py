@@ -357,3 +357,33 @@ async def test_superpoderes_por_enfoque(app_client) -> None:
     h_otro = await _dueno(app_client, otro)
     r = await app_client.get(f"/api/v1/admin/agent-superpowers?agent_id={aid}", headers=h_otro)
     assert r.status_code == 404, r.text
+
+
+async def test_requisitos_de_configuracion_por_enfoque(app_client) -> None:
+    """Ventas avisa lo que le falta al negocio (cobro en línea y catálogo vacío), por plantilla y por agente."""
+    tid, _ = await _negocio()
+    h = await _dueno(app_client, tid)
+
+    r = await app_client.get("/api/v1/admin/agent-templates", headers=h)
+    assert r.status_code == 200, r.text
+    ventas = {p["key"]: p for p in r.json()["items"]}["ventas"]
+    pedidos = {(q["skill"], q["kind"]): q for q in ventas["requirements"]}
+    assert ("pack_payments", "habilidad_sin_configurar") in pedidos
+    assert ("pack_commerce", "sin_contenido") in pedidos
+    cobro = pedidos[("pack_payments", "habilidad_sin_configurar")]
+    assert cobro["title"] and cobro["section"] == "plugins"
+    assert pedidos[("pack_commerce", "sin_contenido")]["content"] == "catalogo"
+
+    # Por agente: lo mismo, y sin secretos ni datos de clientes en la respuesta.
+    r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
+    assert r.status_code == 201, r.text
+    aid = r.json()["agent"]["id"]
+    r = await app_client.get(f"/api/v1/admin/agents/{aid}/requirements", headers=h)
+    assert r.status_code == 200, r.text
+    assert {(q["skill"], q["kind"]) for q in r.json()["items"]} == set(pedidos)
+
+    # Aislamiento: el agente de un negocio no se consulta desde otro.
+    otro, _ = await _negocio()
+    h_otro = await _dueno(app_client, otro)
+    r = await app_client.get(f"/api/v1/admin/agents/{aid}/requirements", headers=h_otro)
+    assert r.status_code == 404, r.text

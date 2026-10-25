@@ -24363,6 +24363,90 @@
           }
         }
       }
+    },
+    "/api/v1/admin/agents/{agent_id}/requirements": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "List Requirements",
+        "description": "Lo que falta configurar para el enfoque de este agente. Un agente que no es de una plantilla\n(`general`, `coordinador`, especialistas por API) no tiene requisitos propios.",
+        "operationId": "list_requirements_api_v1_admin_agents__agent_id__requirements_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_Requirement_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -41869,6 +41953,13 @@
             },
             "type": "array",
             "title": "Superpowers"
+          },
+          "requirements": {
+            "items": {
+              "$ref": "#/components/schemas/Requirement"
+            },
+            "type": "array",
+            "title": "Requirements"
           }
         },
         "type": "object",
@@ -41880,7 +41971,8 @@
           "optional_skills",
           "available",
           "missing_skills",
-          "superpowers"
+          "superpowers",
+          "requirements"
         ],
         "title": "AgentTemplate"
       },
@@ -46882,6 +46974,96 @@
           "monto"
         ],
         "title": "TramoDeMora"
+      },
+      "Page_Requirement_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Requirement"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "has_more"
+        ],
+        "title": "Page[Requirement]"
+      },
+      "Requirement": {
+        "properties": {
+          "skill": {
+            "type": "string",
+            "title": "Skill"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "habilidad_sin_configurar",
+              "sin_contenido"
+            ],
+            "title": "Kind"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "explanation": {
+            "type": "string",
+            "title": "Explanation"
+          },
+          "section": {
+            "type": "string",
+            "title": "Section"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "catalogo",
+                  "servicios",
+                  "cartera"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "skill",
+          "kind",
+          "title",
+          "explanation",
+          "section"
+        ],
+        "title": "Requirement",
+        "description": "Algo que el negocio tiene que configurar para que el agente funcione (aviso, no bloquea)."
       }
     }
   }
