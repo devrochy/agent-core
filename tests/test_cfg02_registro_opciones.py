@@ -9,6 +9,7 @@ consistencia (`ast`): toda clave literal que el código lee de `behavior_config`
 from __future__ import annotations
 
 import ast
+import subprocess
 import sys
 from pathlib import Path
 from typing import get_args
@@ -67,7 +68,8 @@ def test_los_numeros_llevan_rango_y_el_defecto_cabe_en_el_rango() -> None:
 
 def test_el_defecto_de_una_opcion_de_elegir_es_uno_de_sus_valores() -> None:
     for o in OPCIONES:
-        if o.tipo == "elegir_una" and o.valores:
+        # `business_tz` no tiene defecto propio: hereda la zona del negocio.
+        if o.tipo == "elegir_una" and o.valores and o.por_defecto is not None:
             assert o.por_defecto in {v.valor for v in o.valores}, o.clave
 
 
@@ -134,6 +136,22 @@ def test_los_rangos_de_dificultad_son_los_que_aplica_el_loop() -> None:
         assert f'"{clave}", ' in fuente
 
 
+def test_los_rangos_coinciden_con_los_que_valida_la_api() -> None:
+    """`IdentityUpdate` responde 422 fuera de rango: el registro tiene que anunciar los mismos límites."""
+    from core.api.routers.settings import IdentityUpdate
+
+    comprobadas = 0
+    for clave, campo in IdentityUpdate.model_fields.items():
+        if clave not in POR_CLAVE or POR_CLAVE[clave].tipo != "entero":
+            continue
+        limites = {type(m).__name__: m for m in campo.metadata}
+        lo = getattr(limites.get("Ge"), "ge", None)
+        hi = getattr(limites.get("Le"), "le", None)
+        assert (POR_CLAVE[clave].minimo, POR_CLAVE[clave].maximo) == (lo, hi), clave
+        comprobadas += 1
+    assert comprobadas >= 7
+
+
 # ------------------------------------------------------------------ rol y negocio
 def test_el_duenio_no_ve_las_waweb_y_el_master_si() -> None:
     dueno = catalogo_para(es_master=False, guardrails_disponibles=[])
@@ -169,22 +187,47 @@ def test_la_version_es_estable_para_el_mismo_contenido() -> None:
 
 
 # ------------------------------------------------------------------ sin prompts (invariante 3)
-def test_el_runtime_de_turnos_no_importa_el_registro() -> None:
-    """Las etiquetas y explicaciones son texto para personas: nunca llegan al contexto del LLM."""
-    prohibidos = ("llm", "orchestrator", "kernel", "agents", "gateway", "mcp", "memory", "waweb", "tasks")
+def _importa_el_registro(arbol: ast.AST) -> bool:
+    for nodo in ast.walk(arbol):
+        if isinstance(nodo, ast.ImportFrom):
+            modulo = nodo.module or ""
+            if modulo == "core.config_registro" or modulo.startswith("core.config_registro."):
+                return True
+            if modulo == "core" and any(a.name == "config_registro" for a in nodo.names):
+                return True
+        elif isinstance(nodo, ast.Import):
+            if any(a.name == "core.config_registro" or a.name.startswith("core.config_registro.") for a in nodo.names):
+                return True
+    return False
+
+
+def test_solo_el_router_de_configuracion_importa_el_registro() -> None:
+    """Las etiquetas y explicaciones son texto para personas: nunca llegan al contexto del LLM.
+
+    Lista blanca: en `core/`, `packages/` y `plugins/` solo el router de configuración (y el propio
+    paquete) pueden importar el registro.
+    """
+    permitidos = {"core/api/routers/settings.py"}
     ofensores: list[str] = []
-    for carpeta in prohibidos:
-        for ruta in (RAIZ / "core" / carpeta).rglob("*.py"):
-            arbol = ast.parse(ruta.read_text())
-            for nodo in ast.walk(arbol):
-                modulos = []
-                if isinstance(nodo, ast.ImportFrom) and nodo.module:
-                    modulos = [nodo.module]
-                elif isinstance(nodo, ast.Import):
-                    modulos = [a.name for a in nodo.names]
-                if any(m == "core.config_registro" or m.startswith("core.config_registro.") for m in modulos):
-                    ofensores.append(str(ruta.relative_to(RAIZ)))
-    assert not ofensores, f"el runtime de turnos importa el registro: {ofensores}"
+    for carpeta in ("core", "packages", "plugins"):
+        for ruta in (RAIZ / carpeta).rglob("*.py"):
+            rel = ruta.relative_to(RAIZ).as_posix()
+            if rel.startswith("core/config_registro/") or rel in permitidos:
+                continue
+            if _importa_el_registro(ast.parse(ruta.read_text())):
+                ofensores.append(rel)
+    assert not ofensores, f"importan el registro de opciones: {ofensores}"
+
+
+def test_cargar_el_runtime_de_turnos_no_trae_el_registro() -> None:
+    """Cubre lo transitivo: ni el loop, ni el consumer, ni el sender, ni el ingress cargan el registro."""
+    codigo = (
+        "import sys\n"
+        "import core.orchestrator.loop, core.orchestrator.consumer, core.gateway.sender, core.kernel.ingress\n"
+        "print('core.config_registro' in sys.modules)\n"
+    )
+    salida = subprocess.run([sys.executable, "-c", codigo], capture_output=True, text=True, cwd=RAIZ, check=True)
+    assert salida.stdout.strip().splitlines()[-1] == "False"
 
 
 # ------------------------------------------------------------------ consistencia con ast
@@ -233,6 +276,29 @@ def _registradas() -> dict[str, set[str]]:
         if prefijo in registradas:
             registradas[prefijo].add(resto.split(".", 1)[0])
     return registradas
+
+
+# Módulos que mencionan las dos configuraciones pero no leen claves literales con `.get`: escriben,
+# definen el modelo o pasan el diccionario entero. Un módulo nuevo que las nombre tiene que
+# añadirse a `LECTORES` o aquí, a propósito.
+NO_LECTORES = {
+    "core/admin/settings_service.py", "core/admin/views.py", "core/agents/spec.py", "core/alta_negocio.py",
+    "core/api/routers/settings.py", "core/db/models.py", "core/llm/difficulty_router.py", "core/mcp/host.py",
+    "core/orchestrator/guardrails.py", "core/orchestrator/verificador/verificador.py", "core/presets/apply.py",
+}  # fmt: skip
+
+
+def test_ningun_modulo_nuevo_lee_las_configuraciones_sin_declararse() -> None:
+    conocidos = set(LECTORES) | NO_LECTORES
+    nuevos = []
+    for ruta in (RAIZ / "core").rglob("*.py"):
+        rel = ruta.relative_to(RAIZ).as_posix()
+        if rel.startswith("core/config_registro/") or rel in conocidos:
+            continue
+        texto = ruta.read_text()
+        if "behavior_config" in texto or "escalation_config" in texto:
+            nuevos.append(rel)
+    assert not nuevos, f"módulos que nombran behavior_config/escalation_config sin declararse: {nuevos}"
 
 
 def test_toda_clave_leida_esta_registrada_y_toda_registrada_tiene_lector() -> None:

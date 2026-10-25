@@ -28,9 +28,11 @@ La configuración del asistente está repartida en tres lugares: columnas de `Ap
 
 ## Consecuencias
 
-**Positivas:** una opción nueva nace explicada en los dos clientes; los rangos tienen una fuente (HU-CFG-03 hace que el runtime y la API la lean); una configuración conversacional futura sabe qué puede tocar.
+**Positivas:** una opción nueva nace explicada en los dos clientes; los rangos tienen una fuente (HU-CFG-03 hace que el runtime y la API la lean); una configuración conversacional futura podría apoyarse en él, pero eso exige un ADR propio y expondría solo clave, tipo y rango al modelo, nunca etiquetas ni explicaciones (decisión 4).
 
-**Negativas / lo que aceptamos pagar:** texto de interfaz en código Python del core (por eso el límite de importación y la prueba); hay que registrar cada clave nueva (la prueba de consistencia lo exige).
+**Negativas / lo que aceptamos pagar:** texto de interfaz en código Python del core (por eso el límite de importación y la prueba); hay que registrar cada clave nueva (la prueba de consistencia lo exige); las listas de moneda y zona horaria son cerradas y agregar un mercado exige un despliegue (los clientes deben mostrar un valor actual fuera de la lista); las validaciones apagables salen con su id técnico como etiqueta hasta que el registro de guardrails traiga una descripción.
+
+**Pendiente para HU-CFG-03:** que el runtime lea rangos y defaults del registro sin importar los textos. Para no invertir la dependencia ni romper la prueba de importación, los límites se separan en un módulo hoja (sin textos ni imports del runtime) que el runtime y el registro comparten.
 
 **Qué haría que revisáramos esto:** que las etiquetas necesiten traducción por negocio, o que haya opciones por negocio que cambien con tanta frecuencia que justifiquen una tabla.
 

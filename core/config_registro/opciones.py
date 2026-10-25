@@ -457,7 +457,8 @@ ESCALAMIENTO = [
         etiqueta="Zona del horario de atención",
         explicacion="Zona en la que se leen las franjas del horario. Si no eliges una, se usa la zona del negocio.",
         valores=VALORES_ZONA_HORARIA,
-        por_defecto=DEFAULT_TIMEZONE,
+        # Sin valor propio hereda la zona del negocio (`timezone`): no hay un defecto fijo.
+        por_defecto=None,
         depende_de=Dependencia(
             clave="business_ranges",
             condicion="no_vacia",
