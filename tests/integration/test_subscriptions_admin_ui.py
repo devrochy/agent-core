@@ -397,7 +397,10 @@ async def test_reenviar_link_sin_whatsapp_devuelve_el_link_y_no_envia(app_client
     assert fila.output == {"enviado": False} and fila.actor == "admin:admin@local"
 
 
-async def test_reenviar_link_con_whatsapp_encola_el_aviso_una_vez(app_client) -> None:
+async def test_reenviar_link_con_whatsapp_encola_el_aviso_una_vez(app_client, monkeypatch) -> None:
+    import pack_subscriptions.horario_legal as horario
+
+    monkeypatch.setattr(horario, "en_horario_de_cobro", lambda *a, **k: True)  # el CI corre a cualquier hora
     tid = await _negocio()
     ana = await _cliente(tid, "Ana", con_whatsapp=True)
     sid = await _sub(tid, ana)
@@ -414,6 +417,27 @@ async def test_reenviar_link_con_whatsapp_encola_el_aviso_una_vez(app_client) ->
     # Aparece en los avisos del cargo (trazabilidad de HU-SUB-05).
     avisos = (await app_client.get(f"{BASE}/cargos/{cargo}/avisos", headers=h)).json()
     assert [a["evento"] for a in avisos] == ["subscription.charge_reminder"]
+
+
+async def test_reenviar_link_fuera_de_horario_o_con_aviso_del_dia_responde_409(app_client, monkeypatch) -> None:
+    """HU-SUB-18: el reenvío del panel es un contacto de cobro (Ley 2300)."""
+    import pack_subscriptions.horario_legal as horario
+
+    tid = await _negocio()
+    ana = await _cliente(tid, "Ana", con_whatsapp=True)
+    cargo = await _cargo(tid, await _sub(tid, ana), vence=datetime.now(UTC) - timedelta(days=2))
+    h = await api_headers(app_client, tid)
+
+    monkeypatch.setattr(horario, "en_horario_de_cobro", lambda *a, **k: False)
+    r = await app_client.post(f"{BASE}/cargos/{cargo}/reenviar-link", headers=h)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "fuera_de_horario_de_cobro"
+    assert await _eventos(tid, "subscription.charge_reminder") == []
+
+    monkeypatch.setattr(horario, "en_horario_de_cobro", lambda *a, **k: True)
+    assert (await app_client.post(f"{BASE}/cargos/{cargo}/reenviar-link", headers=h)).status_code == 200
+    r = await app_client.post(f"{BASE}/cargos/{cargo}/reenviar-link", headers=h)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "aviso_de_cobro_del_dia_enviado"
+    assert len(await _eventos(tid, "subscription.charge_reminder")) == 1
 
 
 async def test_reenviar_link_rechaza_lo_que_no_se_puede_cobrar(app_client) -> None:

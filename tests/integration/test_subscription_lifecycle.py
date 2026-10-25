@@ -242,8 +242,13 @@ async def test_rls_forzada_en_las_tablas_de_suscripciones() -> None:
             await s.execute(
                 text(
                     "select relname, relforcerowsecurity from pg_class where relname in "
-                    "('pack_subscriptions_subscriptions', 'pack_subscriptions_charges')"
+                    "('pack_subscriptions_subscriptions', 'pack_subscriptions_charges', "
+                    "'pack_subscriptions_avisos_cobro')"
                 )
             )
         ).all()
-    assert dict(filas) == {"pack_subscriptions_subscriptions": True, "pack_subscriptions_charges": True}
+    assert dict(filas) == {
+        "pack_subscriptions_subscriptions": True,
+        "pack_subscriptions_charges": True,
+        "pack_subscriptions_avisos_cobro": True,
+    }

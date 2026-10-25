@@ -404,6 +404,8 @@ async def reenviar_link_de_cargo(
 
     Reusa el link del cargo (o lo crea si falta, sin duplicar el cargo). Si el cliente no tiene
     una conversación de WhatsApp no se envía nada y se devuelve el link para copiarlo.
+    Es un contacto de cobro: solo dentro del horario legal del negocio y si el cliente no
+    recibió otro aviso de cobro ese día (HU-SUB-18, Ley 2300 de 2023); si no, 409.
     """
     from sqlalchemy import select
 
@@ -414,7 +416,8 @@ async def reenviar_link_de_cargo(
     from core.shared.events import ON_SUBSCRIPTION_CHARGE_REMINDER
     from core.subscriptions import SubscriptionError
     from pack_subscriptions.capability import SubscriptionCapabilityImpl, _config
-    from pack_subscriptions.jobs import _payload_cargo
+    from pack_subscriptions.horario_legal import en_horario_de_cobro, hora_local
+    from pack_subscriptions.jobs import _payload_cargo, reservar_aviso_del_dia, zona_del_negocio
     from pack_subscriptions.models import Subscription, SubscriptionCharge
 
     async def cargar() -> tuple[SubscriptionCharge, Subscription]:
@@ -456,6 +459,24 @@ async def reenviar_link_de_cargo(
     async with get_session() as session:
         if enviado:
             config = await _config()
+            tz = await zona_del_negocio(session, _tenant(principal))
+            if not en_horario_de_cobro(ahora, tz, config.ventana_cobro, config.pais_festivos):
+                raise ApiError(
+                    409,
+                    "fuera_de_horario_de_cobro",
+                    "Fuera del horario legal de cobro (lunes a viernes de 7:00 a 19:00, sábados de "
+                    "8:00 a 15:00, sin domingos ni festivos). Copia el link o reenvíalo en ese horario.",
+                )
+            if not await reservar_aviso_del_dia(
+                session, _tenant(principal), sub.customer_id, hora_local(ahora, tz).date(),
+                ON_SUBSCRIPTION_CHARGE_REMINDER, cargo.id,
+            ):
+                raise ApiError(
+                    409,
+                    "aviso_de_cobro_del_dia_enviado",
+                    "Este cliente ya recibió un aviso de cobro hoy: la ley permite uno por día. "
+                    "Copia el link o reenvíalo mañana.",
+                )
             vence = cargo.fecha_vencimiento or ahora
             sello = ahora.strftime("%Y%m%d%H%M")  # un clic repetido en el mismo minuto no duplica el aviso
             await emit_domain(

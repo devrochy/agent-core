@@ -655,9 +655,21 @@ async def paso_evento(ctx: Contexto, paso: dict[str, Any], registro: list[str]) 
 
 
 def paso_reloj(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> None:
+    if str(paso["reloj"]) == "hábil":
+        # Adelanta hasta el horario legal de cobro (HU-SUB-18, zona de Bogotá): sin esto el
+        # resultado dependería de la hora del runner. 30 min de margen para no quedar en el
+        # borde del cierre mientras corre el journey.
+        from pack_subscriptions.horario_legal import proximo_inicio_de_cobro
+
+        objetivo = proximo_inicio_de_cobro(ctx.ahora + timedelta(minutes=30), "America/Bogota")
+        if objetivo is None:
+            raise FallaJourney("reloj hábil: la ventana legal no abre en 15 días")
+        ctx.desfase += objetivo - ctx.ahora
+        registro.append(f"    reloj → {ctx.ahora:%Y-%m-%d %H:%M} UTC (horario legal de cobro)")
+        return
     salto = _SALTO.match(str(paso["reloj"]))
     if not salto:
-        raise FallaJourney(f"reloj inválido: {paso['reloj']!r} (formato +30d, +6h, +15m)")
+        raise FallaJourney(f"reloj inválido: {paso['reloj']!r} (formato +30d, +6h, +15m o hábil)")
     cantidad, unidad = int(salto.group(1)), salto.group(2)
     ctx.desfase += {"d": timedelta(days=cantidad), "h": timedelta(hours=cantidad), "m": timedelta(minutes=cantidad)}[unidad]
     registro.append(f"    reloj → {ctx.ahora:%Y-%m-%d %H:%M} UTC")
