@@ -13,6 +13,7 @@ permisos de quien mira. Corre en el `tenant_scope` del negocio y filtra `tenant_
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -37,7 +38,7 @@ class Agente:
 @dataclass(frozen=True)
 class Paso:
     at: datetime
-    tipo: str  # comando | accion | motor | escalacion | verificador | guardrail | otro
+    tipo: str  # command | action | engine | escalation | verifier | guardrail | other
     actor: str
     nombre: str
     accion: str
@@ -145,18 +146,26 @@ def _exigir_scope(tenant_id: uuid.UUID) -> None:
 def tipo_de_paso(actor: str) -> str:
     """Cómo se agrupa una fila de `audit_log` en la línea de tiempo."""
     if actor == "core:comando":
-        return "comando"
+        return "command"
     if actor in {"core:motor", "core:motor_sombra"}:
-        return "motor"
+        return "engine"
     if actor == "core:escalation":
-        return "escalacion"
+        return "escalation"
     if actor == "core:verificador":
-        return "verificador"
+        return "verifier"
     if actor == "core:guardrail":
         return "guardrail"
     if not actor.startswith(("core:", "admin:", "system:")):
-        return "accion"  # `tool:<nombre>` o el actor de auditoría del agente
-    return "otro"
+        return "action"  # `tool:<nombre>` o el actor de auditoría del agente
+    return "other"
+
+
+_CODIGO = re.compile(r"^[a-z0-9_.:-]{1,60}$")
+
+
+def _codigos(valores: Any) -> list[str]:
+    """Solo lo que tiene forma de código: un texto libre (que podría traer datos) se descarta."""
+    return [v for v in valores if isinstance(v, str) and _CODIGO.fullmatch(v)][:20]
 
 
 def resultado_sin_valores(salida: Any) -> tuple[bool | None, list[str]]:
@@ -165,13 +174,13 @@ def resultado_sin_valores(salida: Any) -> tuple[bool | None, list[str]]:
     `{code}`); la salida de una acción ejecutada sin `error` cuenta como bien."""
     if not isinstance(salida, dict):
         return None, []
-    codigos = [str(c)[:60] for c in salida.get("codigos") or [] if isinstance(c, str)]
+    codigos = _codigos(salida.get("codigos") or [])
     if "ok" in salida and isinstance(salida["ok"], bool):
         return salida["ok"], codigos
     error = salida.get("error")
     if error is not None:
         codigo = error.get("code") if isinstance(error, dict) else None
-        return False, [str(codigo)[:60]] if isinstance(codigo, str) else codigos
+        return False, _codigos([codigo]) or codigos
     return True, codigos
 
 
@@ -224,9 +233,11 @@ async def leer(session: Any, tenant_id: uuid.UUID, turn_id: uuid.UUID) -> Turno 
             await session.execute(
                 text(
                     "SELECT created_at, actor, action, input, output FROM audit_log "
-                    "WHERE tenant_id = :t AND turn_id = :turno ORDER BY created_at, id LIMIT :max"
+                    "WHERE tenant_id = :t AND turn_id = :turno "
+                    "AND (CAST(:conv AS uuid) IS NULL OR conversation_id IS NULL OR conversation_id = :conv) "
+                    "ORDER BY created_at, id LIMIT :max"
                 ),
-                p,
+                {**p, "conv": d[0]},
             )
         ).all()
     ]
@@ -278,9 +289,10 @@ async def leer(session: Any, tenant_id: uuid.UUID, turn_id: uuid.UUID) -> Turno 
                 text(
                     "SELECT id, created_at, status, content, template_name, error_reason FROM messages "
                     "WHERE tenant_id = :t AND turn_id = :turno AND direction = 'outbound' AND deleted_at IS NULL "
+                    "AND (CAST(:conv AS uuid) IS NULL OR conversation_id = :conv) "
                     "ORDER BY created_at LIMIT :max"
                 ),
-                p,
+                {**p, "conv": d[0]},
             )
         ).all()
     ]
@@ -329,12 +341,21 @@ async def leer(session: Any, tenant_id: uuid.UUID, turn_id: uuid.UUID) -> Turno 
 
 
 def _redactar_evento(e: EventoDeTarea, ver_pii: bool) -> EventoDeTarea:
-    """Datos de un evento de tarea: el `value` según su clase (pago siempre oculto; PII solo para
-    quien ve la conversación) y el resto por clave sensible (son códigos, etapas y nombres)."""
-    data = {k: (v if k == "value" else enmascarar(v, k)) for k, v in e.data.items()}
-    clase = e.data.get("data_class")
-    if "value" in data and (clase == "payment" or (clase != "public" and not ver_pii)):
-        data["value"] = enmascarar(data["value"], data_class="payment" if clase == "payment" else "pii")
+    """Datos de un evento de tarea: el `value` según su clase (pago, o clase ausente o desconocida,
+    siempre oculto; PII visible para quien ve la conversación, con las claves sensibles de un valor
+    compuesto enmascaradas) y el resto por clave sensible. Sin los `candidates` de una acción (ids
+    que pudo ofrecer un dato de pago): solo cuántos fueron."""
+    data = {k: (v if k == "value" else enmascarar(v, k)) for k, v in e.data.items() if k != "candidates"}
+    if isinstance(e.data.get("candidates"), list):
+        data["candidates"] = len(e.data["candidates"])
+    if "value" in data:
+        clase = e.data.get("data_class")
+        if clase == "public":
+            data["value"] = enmascarar(data["value"])
+        elif clase == "pii" and ver_pii:
+            data["value"] = enmascarar(data["value"]) if isinstance(data["value"], (dict, list)) else data["value"]
+        else:
+            data["value"] = enmascarar(data["value"], data_class="payment" if clase != "pii" else "pii")
     return replace(e, data=data)
 
 
@@ -350,7 +371,15 @@ def redactar(t: Turno, *, ver_detalle: bool, ver_costos: bool, ver_pii: bool = T
         )
         for p in t.pasos
     ]
-    envio = [replace(e, texto=e.texto if ver_pii else (enmascarar_texto(e.texto) if e.texto else e.texto)) for e in t.envio]
+    envio = [
+        replace(
+            e,
+            texto=e.texto if ver_pii else (enmascarar_texto(e.texto) if e.texto else e.texto),
+            # El error de Meta a veces trae el número de destino.
+            error=enmascarar_texto(e.error) if e.error else e.error,
+        )
+        for e in t.envio
+    ]
     a2a = [
         replace(
             o,

@@ -96,7 +96,7 @@ async def _turno() -> dict[str, Any]:
 
 
 def _accion(detalle: dict[str, Any]) -> dict[str, Any]:
-    return next(p for p in detalle["steps"] if p["kind"] == "accion")
+    return next(p for p in detalle["steps"] if p["kind"] == "action")
 
 
 async def test_el_dueno_ve_el_turno_completo_y_la_pii_enmascarada(app_client) -> None:
@@ -115,7 +115,7 @@ async def test_el_dueno_ve_el_turno_completo_y_la_pii_enmascarada(app_client) ->
     assert accion["input"] == {"email": "a***@correo.co", "telefono": "•••4567", "total": 185000}
     assert accion["output"] == {"order_id": "PED-2041", "status": "confirmed"}
     assert accion["ok"] is True and accion["error_codes"] == []
-    assert [p["kind"] for p in d["steps"]].count("comando") == 1
+    assert [p["kind"] for p in d["steps"]].count("command") == 1
     assert d["delivery"][0]["text"].startswith("Listo") and d["cost"][0]["cost_usd"] == pytest.approx(0.0042)
     # El mensaje del agente trae su turno (abre el depurador desde el chat).
     msgs = (await app_client.get(f"/api/v1/admin/conversations/{e['conv']}", headers=h)).json()["messages"]
@@ -129,7 +129,7 @@ async def test_el_colaborador_no_hereda_observabilidad_ni_ve_dinero_sin_costs(ap
     d = (await app_client.get(base, headers=sin_fila)).json()
     accion = _accion(d)
     assert d["can_see_detail"] is False and accion["input"] is None and accion["output"] is None
-    assert accion["detalle_oculto"] is True and accion["ok"] is True  # el resultado, sin valores
+    assert accion["detail_hidden"] is True and accion["ok"] is True  # el resultado, sin valores
     assert d["can_see_costs"] is False and d["cost"][0]["cost_usd"] is None
     # Con el permiso explícito ve el detalle, también enmascarado.
     con_grant = await api_headers(
@@ -158,3 +158,44 @@ async def test_un_turno_del_playground_no_se_depura_aqui(app_client) -> None:
     await _sql(e["tid"], "update conversations set channel = :canal where id = :c", canal=TEST_CHANNEL, c=e["conv"])
     h = await api_headers(app_client, e["tid"])
     assert (await app_client.get(f"/api/v1/admin/turns/{e['turno']}", headers=h)).status_code == 404
+
+
+async def test_el_dueno_hereda_observabilidad(app_client) -> None:
+    from core.admin.auth import hash_password
+    from core.db.models import Admin, TenantUser
+    from core.db.session import get_session
+
+    e = await _turno()
+    email = f"{uniq('dueno')}@example.test"
+    async with get_session() as session:
+        admin = Admin(email=email, password_hash=hash_password(PASSWORD), role="colaborador")
+        session.add(admin)
+        await session.flush()
+        session.add(TenantUser(tenant_id=e["tid"], admin_id=admin.id, role="owner"))
+    # Filas de otro negocio con el mismo `turn_id` no pueden existir: las FK `(tenant_id, turn_id)`
+    # hacia `core_decisions` (0070/0071) lo impiden; el filtro explícito por negocio queda de defensa.
+    h = await api_headers(app_client, e["tid"], email=email, password=PASSWORD)
+    d = (await app_client.get(f"/api/v1/admin/turns/{e['turno']}", headers=h)).json()
+    assert d["can_see_detail"] is True and _accion(d)["input"]["email"] == "a***@correo.co"
+
+
+async def test_el_none_del_dueno_tapa_una_fila_global_de_observabilidad() -> None:
+    from core.admin.collaborators_service import _hay_acceso_que_tapar
+    from core.admin.permissions import resolver_seccion
+    from core.db.models import AdminPermission
+    from core.db.session import get_session
+
+    tid, _slug, _cid = await _negocio()
+    email = await _colaborador(tid, {})
+    async with get_session() as session:
+        from sqlalchemy import select
+
+        from core.db.models import Admin
+
+        admin = (await session.execute(select(Admin).where(Admin.email == email))).scalar_one()
+        assert await _hay_acceso_que_tapar(session, admin.id, "observability", "colaborador", tid) is False
+        session.add(AdminPermission(admin_id=admin.id, tenant_id=None, section="observability", access="read"))
+        await session.flush()
+        assert await _hay_acceso_que_tapar(session, admin.id, "observability", "colaborador", tid) is True
+    # Y la fila `none` del negocio gana sobre la global (mismo nivel no: por negocio prevalece).
+    assert resolver_seccion("observability", "colaborador", tid, {"observability": ["read", "none"]}) is None

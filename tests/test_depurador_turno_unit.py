@@ -30,7 +30,7 @@ def _turno(**extra: object) -> Turno:
 
 def test_tipos_de_paso() -> None:
     assert [tipo_de_paso(a) for a in ("core:comando", "core:motor", "tool:crear_pedido", "core:escalation", "core:otra")] == [
-        "comando", "motor", "accion", "escalacion", "otro",
+        "command", "engine", "action", "escalation", "other",
     ]
 
 
@@ -56,3 +56,15 @@ def test_pago_siempre_oculto_en_los_eventos_de_tarea() -> None:
     t = redactar(_turno(estado=[evento, pii]), ver_detalle=True, ver_costos=True)
     assert t.estado[0].data["value"] == "•••1111"
     assert t.estado[1].data["value"] == "Ana Pérez"  # quien ve la conversación ya ve sus datos
+
+
+def test_codigos_con_texto_libre_se_descartan() -> None:
+    assert resultado_sin_valores({"error": {"code": "ana@x.co 3001234567"}}) == (False, [])
+    assert resultado_sin_valores({"ok": False, "codigos": ["sin_stock", "Ana Pérez no paga"]}) == (False, ["sin_stock"])
+
+
+def test_clase_desconocida_se_oculta_y_los_candidatos_solo_se_cuentan() -> None:
+    sin_clase = EventoDeTarea(AHORA, uuid.uuid4(), "pedido", 5, "slot_set", "kernel", {"name": "x", "value": "secreto"})
+    accion = EventoDeTarea(AHORA, uuid.uuid4(), "pedido", 6, "action_succeeded", "tool", {"action": "buscar", "candidates": ["a", "b"]})
+    t = redactar(_turno(estado=[sin_clase, accion]), ver_detalle=True, ver_costos=True)
+    assert t.estado[0].data["value"] == "•••" and t.estado[1].data["candidates"] == 2

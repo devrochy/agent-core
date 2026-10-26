@@ -26,7 +26,8 @@ from core.observability import turno as svc
 
 router = APIRouter(prefix="/admin", tags=["admin · depurador"])
 
-StepKind = Literal["comando", "accion", "motor", "escalacion", "verificador", "guardrail", "otro"]
+StepKind = Literal["command", "action", "engine", "escalation", "verifier", "guardrail", "other"]
+Lane = Literal["stable", "canary", "pinned", "legacy"]
 _REDACTADO = "Redactado: los datos personales van enmascarados (ADR-0169)."
 
 
@@ -35,12 +36,24 @@ class TurnAgent(BaseModel):
     name: str
 
 
+class TurnCandidate(BaseModel):
+    procedure_id: str | None
+    owner: str | None
+    score: float | None
+
+
+class TurnVerifierCheck(BaseModel):
+    kind: str
+    verdict: str = Field(description="pass | fail | unverifiable | error")
+    count: int
+
+
 class TurnDecision(BaseModel):
-    outcome: str = Field(description="routed | blocked | escalated | ignored")
+    outcome: str = Field(description="Decisión del Coordinador: routed | blocked | escalated | ignored.")
     blocked_by: str | None
     route_source: str | None
     rule_id: str | None
-    candidates: list[dict[str, Any]] = Field(description="Procedimientos candidatos: `{procedure_id, owner, score}`.")
+    candidates: list[TurnCandidate] = Field(description="Procedimientos candidatos con su puntaje.")
     confidence: float | None
     active_agent: TurnAgent | None
     final_agent: TurnAgent | None = Field(description="Quien terminó el turno (distinto si hubo un traspaso).")
@@ -53,11 +66,11 @@ class TurnStep(BaseModel):
     actor: str
     name: str = Field(description="Nombre de la acción, el comando o el componente.")
     action: str = Field(description="execute | denied | confirmation_required | el comando | el código del paso.")
-    input: Any = Field(None, description=f"Solo con la sección `observability`. {_REDACTADO}")
-    output: Any = Field(None, description=f"Solo con la sección `observability`. {_REDACTADO}")
-    detalle_oculto: bool = Field(False, description="Hay entrada o salida pero falta `observability` para verla.")
-    ok: bool | None = Field(None, description="¿Salió bien? Visible siempre; null si el paso no lo dice.")
-    error_codes: list[str] = Field(default_factory=list, description="Códigos de error (sin valores).")
+    input: Any = Field(description=f"Solo con la sección `observability`; si no, null. {_REDACTADO}")
+    output: Any = Field(description=f"Solo con la sección `observability`; si no, null. {_REDACTADO}")
+    detail_hidden: bool = Field(description="Hay entrada o salida pero falta `observability` para verla.")
+    ok: bool | None = Field(description="¿Salió bien? Visible siempre; null si el paso no lo dice.")
+    error_codes: list[str] = Field(description="Códigos de error, sin valores (solo los que tienen forma de código).")
 
 
 class TurnTaskEvent(BaseModel):
@@ -78,7 +91,7 @@ class TurnA2AEvent(BaseModel):
     from_instance_id: uuid.UUID | None
     to_instance_id: uuid.UUID | None
     payload: Any = Field(None, description="Solo la forma (redactado al escribir, HU-AOS-18).")
-    result: Any = None
+    result: Any = Field(None, description="Solo la forma (redactado al escribir, HU-AOS-18).")
     reason: str | None
     cost_usd: float | None = Field(None, description="Solo con la sección `costs`.")
 
@@ -115,14 +128,16 @@ class TurnDetail(BaseModel):
     conversation_id: uuid.UUID | None
     connection_id: uuid.UUID | None
     at: datetime
-    latency_ms: int | None
+    latency_ms: int | None = Field(description="Latencia del turno completo (la de la decisión si no terminó).")
     release_id: uuid.UUID | None
     release_number: int | None
-    lane: str | None = Field(description="stable | canary | pinned | legacy")
-    inbound_message_ids: list[uuid.UUID]
+    lane: Lane | None
+    inbound_message_ids: list[uuid.UUID] = Field(description="Mensajes del cliente que atendió el turno.")
     decision: TurnDecision
-    status: str | None = Field(description="Resultado del turno: replied | neutral | escalated | silent | failed.")
-    verifier: list[dict[str, Any]] = Field(description="Comprobaciones del verificador: `{kind, verdict, count}`.")
+    status: str | None = Field(
+        description="Resultado final del turno (`turn_outcomes`): replied | neutral | escalated | silent | failed."
+    )
+    verifier: list[TurnVerifierCheck] = Field(description="Comprobaciones del verificador.")
     verifier_retries: int
     steps: list[TurnStep]
     task_events: list[TurnTaskEvent]
@@ -170,21 +185,29 @@ async def turn_detail(
         latency_ms=t.latencia_ms,
         release_id=t.release_id,
         release_number=t.release_number,
-        lane=t.carril,
+        lane=t.carril if t.carril in ("stable", "canary", "pinned", "legacy") else None,  # type: ignore[arg-type]
         inbound_message_ids=t.mensajes_entrantes,
         decision=TurnDecision(
             outcome=t.resultado,
             blocked_by=t.bloqueado_por,
             route_source=t.origen_ruta,
             rule_id=t.regla,
-            candidates=t.candidatos,
+            candidates=[
+                TurnCandidate(procedure_id=c.get("procedure_id"), owner=c.get("owner"), score=c.get("score"))
+                for c in t.candidatos
+                if isinstance(c, dict)
+            ],
             confidence=t.confianza,
             active_agent=_agente(t.agente_activo),
             final_agent=_agente(t.agente_final),
             shadow_stack=t.pila,
         ),
         status=t.estado_final,
-        verifier=t.verificador,
+        verifier=[
+            TurnVerifierCheck(kind=str(v.get("kind")), verdict=str(v.get("verdict")), count=int(v.get("count") or 0))
+            for v in t.verificador
+            if isinstance(v, dict)
+        ],
         verifier_retries=t.reintentos_verificador,
         steps=[
             TurnStep(
@@ -195,7 +218,7 @@ async def turn_detail(
                 action=p.accion,
                 input=p.entrada,
                 output=p.salida,
-                detalle_oculto=p.detalle_oculto,
+                detail_hidden=p.detalle_oculto,
                 ok=p.ok,
                 error_codes=p.codigos,
             )

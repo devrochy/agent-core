@@ -87,7 +87,7 @@ class MessageItem(BaseModel):
     # del turno), de `usage_ledger.tool_calls`.
     tool_calls: list[str] = Field(default_factory=list)
     # HU-AOS-28: el turno que produjo el mensaje del agente (abre el depurador, `GET /turns/{id}`).
-    turn_id: uuid.UUID | None = Field(default=None, description="Turno del agente que lo envió; null en los del cliente.")
+    turn_id: uuid.UUID | None = Field(default=None, description="Turno del agente que lo envió; null salvo en los mensajes del agente.")
 
 
 class MessagesSince(BaseModel):
