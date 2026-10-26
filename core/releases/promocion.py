@@ -250,7 +250,10 @@ async def promover(
         if not aprobado and gate == "pendiente":
             from core.releases import gate as svc_gate
 
-            medicion = await svc_gate.ultima_medicion(session, tenant_id, release_id, activa)
+            # `pendiente` solo sale con una activa (sin activa el gate es `exento_release_1`).
+            medicion = (
+                await svc_gate.ultima_medicion(session, tenant_id, release_id, activa) if activa is not None else None
+            )
             raise ConflictoDeRelease(
                 "gate_pendiente",
                 "La versión todavía no se ha medido contra la activa. La medición está en camino; "
