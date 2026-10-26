@@ -95,6 +95,10 @@ ON_PLATFORM_RENEWAL_DUE = "platform.renewal_due"
 # el total). Cierra las tareas de `contratar_plan` y `tomar_pedido` que esperan el pago, por el
 # `order_id` que fijó `crear_pedido`. payload: order_id, public_order_number.
 ON_ORDER_PAID = "order.paid"
+# Centro de notificaciones (ADR-0167): se escribe en el outbox junto con la fila de
+# `notifications` y el handler del core envía el push (idempotente por `push_sent_at`).
+ON_NOTIFICATION_CREATED = "notification.created"  # payload: notification_id
+
 # HU-AOS-18 (adenda de ADR-0116): la guarda A2A cortó un ciclo (o una autollamada) entre agentes.
 # In-process, después de confirmar el evento del ledger. Sin payload de la operación.
 # payload: tenant_id, connection_id, conversation_id, call_id, pila (instancias, de la raíz al destino).

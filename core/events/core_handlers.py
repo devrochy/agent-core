@@ -17,12 +17,14 @@ from core.billing.canales import on_platform_period_paid, on_subscription_charge
 from core.billing.renovacion import on_platform_renewal_due
 from core.db.models import Conversation, Customer
 from core.db.session import get_session
+from core.notifications.service import on_notification_created
 from core.provisioning.consumer import on_alta_aprobada, on_subscription_activated
 from core.shared.events import (
     ON_ALTA_APROBADA,
     ON_APPOINTMENT_CONFIRMED,
     ON_APPOINTMENT_NO_SHOW,
     ON_APPOINTMENT_REMINDER,
+    ON_NOTIFICATION_CREATED,
     ON_PLATFORM_PERIOD_PAID,
     ON_PLATFORM_RENEWAL_DUE,
     ON_SEGMENT_SEND_BATCH,
@@ -224,6 +226,8 @@ _HANDLERS = (
     (ON_PLATFORM_RENEWAL_DUE, on_platform_renewal_due),
     # HU-CRM-06 (ADR-0150): un lote del envío de una plantilla a un segmento de Clientes.
     (ON_SEGMENT_SEND_BATCH, on_segment_send_batch),
+    # ADR-0167: el push del centro de notificaciones (idempotente por `push_sent_at`).
+    (ON_NOTIFICATION_CREATED, on_notification_created),
 )
 
 

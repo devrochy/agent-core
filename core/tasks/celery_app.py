@@ -187,6 +187,25 @@ celery.conf.beat_schedule[_MEMORY_RETENTION_TASK] = {
     "schedule": crontab(hour="3", minute="45"),
 }
 
+# Retención del centro de notificaciones (ADR-0167): baja lógica a los 180 días.
+_NOTIFICATIONS_RETENTION_TASK = "core.notifications_retention"
+
+
+@celery.task(name=_NOTIFICATIONS_RETENTION_TASK)
+def _notifications_retention() -> None:
+    from core.tasks.notifications_retention import retener_notificaciones
+
+    try:
+        run_async(retener_notificaciones())
+    except Exception:
+        log.exception("cron_task_failed", task=_NOTIFICATIONS_RETENTION_TASK)
+
+
+celery.conf.beat_schedule[_NOTIFICATIONS_RETENTION_TASK] = {
+    "task": _NOTIFICATIONS_RETENTION_TASK,
+    "schedule": crontab(hour="4", minute="0"),
+}
+
 # Consolidación nocturna de la memoria (ADR-0114, HU-AOS-36): datos de tareas cerradas → hechos.
 _MEMORY_CONSOLIDATION_TASK = "core.memory_consolidation"
 
