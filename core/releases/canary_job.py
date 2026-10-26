@@ -10,7 +10,7 @@ Dos entradas en el beat (`core/tasks/celery_app.py`), sin estado propio para sab
 Por negocio (`aos_runtime = v3`), bajo su `tenant_scope` y con `try` por negocio; por conexión, una
 transacción con el `FOR UPDATE` de la conexión que vuelve a leer el canary (idempotente: una carrera
 con el dueño, o una segunda corrida, no hace nada dos veces). Los avisos van en la misma transacción
-que la acción (`notify`), deduplicados por `(release, motivo)`.
+que la acción (`notify`), uno de cada tipo por prueba (la versión y el inicio de la prueba).
 """
 
 from __future__ import annotations
@@ -74,22 +74,30 @@ async def revisar_conexion(
     from core.notifications.service import notify
     from core.releases import canary as svc
     from core.releases.promocion import _bloquear, detener_canary
+    from core.shared.tenant import get_current_tenant_id
 
+    if get_current_tenant_id() != tenant_id:
+        raise PermissionError("canary: fuera del tenant_scope del negocio")
     async with get_session() as session:
         _activa, canary = await _bloquear(session, tenant_id, connection_id)
         if canary is None:
             return "sin_canary"
         numero = await _numero(session, tenant_id, canary)
+        desde, _datos = await svc._inicio(session, tenant_id, canary)
+        episodio = int(desde.timestamp())
 
         async def retirar(motivo: str, metricas: dict[str, Any] | None, peores: list[str] | None = None) -> str:
             await detener_canary(session, tenant_id, connection_id, canary, motivo=motivo, actor=ACTOR, metricas=metricas)
-            await notify(session, tenant_id, catalog.canary_revertido(connection_id, canary, numero, motivo=motivo, metricas=peores))
+            await notify(
+                session, tenant_id,
+                catalog.canary_revertido(connection_id, canary, numero, motivo=motivo, episodio=episodio, metricas=peores),
+            )
             log.info("canary_retirado", connection_id=str(connection_id), reason=motivo)
             return motivo
 
         if await _usa_habilidad_retirada(session, tenant_id, canary):
             return await retirar("habilidad_retirada", None)
-        estado = await svc.evaluar(session, tenant_id, connection_id, canary, ahora)
+        estado = await svc.evaluar(session, tenant_id, connection_id, canary, ahora, solo_senal=not no_inferioridad)
         if estado.senal_dura.activa:
             return await retirar("senal_dura", _metricas(estado))
         if not no_inferioridad:
@@ -99,14 +107,14 @@ async def revisar_conexion(
         if veredicto.estado == "peor":
             return await retirar("no_inferioridad", _metricas(estado), list(veredicto.motivos))
         if veredicto.estado == "listo":
-            await notify(session, tenant_id, catalog.canary_listo(connection_id, canary, numero))
+            await notify(session, tenant_id, catalog.canary_listo(connection_id, canary, numero, episodio=episodio))
             if "costo" in veredicto.advertencias:
-                await notify(session, tenant_id, catalog.canary_costo(connection_id, canary, numero))
+                await notify(session, tenant_id, catalog.canary_costo(connection_id, canary, numero, episodio=episodio))
             if "lentitud" in veredicto.advertencias:
-                await notify(session, tenant_id, catalog.canary_lentitud(connection_id, canary, numero))
+                await notify(session, tenant_id, catalog.canary_lentitud(connection_id, canary, numero, episodio=episodio))
             return "listo"
         if ahora - estado.desde >= timedelta(days=int(estado.umbrales["dias_manual"])):
-            await notify(session, tenant_id, catalog.canary_sin_muestra(connection_id, canary, numero))
+            await notify(session, tenant_id, catalog.canary_sin_muestra(connection_id, canary, numero, episodio=episodio))
             return "sin_muestra_vencida"
         return "sin_muestra"
 
@@ -139,9 +147,17 @@ async def revisar(ahora: datetime | None = None, *, no_inferioridad: bool) -> di
                         ).all()
                     ]
                 for connection_id in conexiones:
-                    resultado = await revisar_conexion(
-                        tenant_id, connection_id, ahora=ahora, no_inferioridad=no_inferioridad
-                    )
+                    # Por conexión: una que falla no frena a las demás del negocio.
+                    try:
+                        resultado = await revisar_conexion(
+                            tenant_id, connection_id, ahora=ahora, no_inferioridad=no_inferioridad
+                        )
+                    except Exception as exc:
+                        resultado = "fallo"
+                        log.warning(
+                            "canary_job_fallo", tenant_id=str(tenant_id), connection_id=str(connection_id),
+                            error=type(exc).__name__, codigo=getattr(exc, "codigo", None),
+                        )
                     conteos[resultado] = conteos.get(resultado, 0) + 1
         except Exception as exc:
             conteos["fallo"] = conteos.get("fallo", 0) + 1

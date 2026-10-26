@@ -262,8 +262,12 @@ async def _carril(
     )
 
 
-async def evaluar(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID, canary: uuid.UUID, ahora: datetime) -> Estado:
-    """Calcula el estado del canary (sin escribir). Usa el veredicto guardado si ya se decidió."""
+async def evaluar(
+    session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID, canary: uuid.UUID, ahora: datetime,
+    *, solo_senal: bool = False,
+) -> Estado:
+    """Calcula el estado del canary (sin escribir). Usa el veredicto guardado si ya se decidió. Con
+    `solo_senal` (la corrida de 5 min del job) no agrega los carriles: solo la señal dura."""
     from core.metricas import fiabilidad as m
 
     _exigir_scope(tenant_id)
@@ -271,8 +275,11 @@ async def evaluar(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID, 
     desde, datos = await _inicio(session, tenant_id, canary)
     u = ev.umbrales(datos.get("umbrales"))
     base = uuid.UUID(str(datos["base_release_id"])) if datos.get("base_release_id") else None
-    estable = await _carril(session, tenant_id, connection_id, base, "stable", desde, ahora)
-    candidato = await _carril(session, tenant_id, connection_id, canary, "canary", desde, ahora)
+    if solo_senal:
+        estable, candidato = ev.Carril(), ev.Carril()
+    else:
+        estable = await _carril(session, tenant_id, connection_id, base, "stable", desde, ahora)
+        candidato = await _carril(session, tenant_id, connection_id, canary, "canary", desde, ahora)
     horas = max(0.0, (ahora - desde).total_seconds() / 3600)
     guardado = await _guardado(session, tenant_id, canary, desde)
     if guardado is not None:
@@ -280,6 +287,8 @@ async def evaluar(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID, 
             str(guardado.get("veredicto")), list(guardado.get("motivos") or []),
             list(guardado.get("advertencias") or []), dict(guardado.get("detalle") or {}),
         )
+    elif solo_senal:
+        veredicto = ev.Veredicto("sin_muestra")
     else:
         veredicto = ev.decidir(candidato, estable, horas, u)
     ventana = int(u["dura_ventana"])

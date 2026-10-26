@@ -30,6 +30,7 @@ LUEGO = datetime.now(UTC) + timedelta(days=4)
 async def _iniciado() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, datetime]:
     tid, cid, uno, dos = await _con_candidata()
     await _svc(tid, "iniciar", cid, dos, percent=50, actor="test")
+    _NEGOCIOS.append(tid)
     ((inicio,),) = await _sql(tid, "select created_at from release_events where release_id = :r and type = 'canary_started'", r=dos)
     return tid, cid, uno, dos, inicio
 
@@ -60,6 +61,20 @@ async def _sembrar(
                 "turn_id, connection_id, release_id) values (:id, :t, :conv, 'fake', 1, 1, :costo, 'turn', :turno, :c, :r)",
                 id=uuid.uuid4(), t=tid, conv=conv, costo=costo, turno=turno, c=cid, r=rid,
             )
+
+
+_NEGOCIOS: list[uuid.UUID] = []
+
+
+@pytest.fixture(autouse=True)
+def _solo_los_de_este_test(monkeypatch: Any) -> None:
+    """El job recorre solo los negocios de cada test (la base de test es compartida)."""
+    _NEGOCIOS.clear()
+
+    async def _v3(_session: Any) -> list[uuid.UUID]:
+        return list(_NEGOCIOS)
+
+    monkeypatch.setattr("core.kernel.banderas.negocios_v3", _v3)
 
 
 async def _revisar(no_inferioridad: bool, ahora: datetime = LUEGO) -> dict[str, int]:
@@ -162,10 +177,14 @@ async def test_un_negocio_no_ve_el_de_otro_y_legacy_se_salta() -> None:
     await _sembrar(tid, cid, dos, "canary", 20, inicio, fallidas=8)
     from core.shared.tenant import tenant_scope
 
-    # La conexión de un negocio no existe bajo el scope de otro.
+    _NEGOCIOS.append(otro)
+    # La conexión de un negocio no existe bajo el scope de otro, y no se revisa el negocio de otro scope.
     async with tenant_scope(otro):
         with pytest.raises(ConexionNoEncontrada):
             await revisar_conexion(otro, cid, ahora=LUEGO, no_inferioridad=False)
+        with pytest.raises(PermissionError):
+            await revisar_conexion(tid, cid, ahora=LUEGO, no_inferioridad=False)
+    assert await _sql(tid, "select canary_release_id from channel_connections where id = :c", c=cid) == [(dos,)]
     await _revisar(no_inferioridad=False)
     assert await _parado(tid, dos) == [("senal_dura",)]
     assert await _sql(otro, "select count(*) from notifications") == [(0,)]

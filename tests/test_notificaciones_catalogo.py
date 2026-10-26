@@ -30,12 +30,14 @@ CONSTRUCTORES = {
         uuid.uuid4(), CID, desde=datetime(2026, 10, 26, tzinfo=UTC), umbral_minutos=15
     ),
     # HU-AOS-32: canary.
-    "canary_revertido": lambda: catalog.canary_revertido(CID, uuid.uuid4(), 5, motivo="no_inferioridad", metricas=["escalamiento"]),
-    "canary_revertido_dura": lambda: catalog.canary_revertido(CID, uuid.uuid4(), None, motivo="senal_dura"),
-    "canary_listo": lambda: catalog.canary_listo(CID, uuid.uuid4(), 5),
-    "canary_sin_muestra": lambda: catalog.canary_sin_muestra(CID, uuid.uuid4(), 5),
-    "canary_costo": lambda: catalog.canary_costo(CID, uuid.uuid4(), 5),
-    "canary_lentitud": lambda: catalog.canary_lentitud(CID, uuid.uuid4(), 5),
+    "canary_revertido": lambda: catalog.canary_revertido(
+        CID, uuid.uuid4(), 5, motivo="no_inferioridad", episodio=1, metricas=["escalamiento"]
+    ),
+    "canary_revertido_dura": lambda: catalog.canary_revertido(CID, uuid.uuid4(), None, motivo="senal_dura", episodio=1),
+    "canary_listo": lambda: catalog.canary_listo(CID, uuid.uuid4(), 5, episodio=1),
+    "canary_sin_muestra": lambda: catalog.canary_sin_muestra(CID, uuid.uuid4(), 5, episodio=1),
+    "canary_costo": lambda: catalog.canary_costo(CID, uuid.uuid4(), 5, episodio=1),
+    "canary_lentitud": lambda: catalog.canary_lentitud(CID, uuid.uuid4(), 5, episodio=1),
 }
 
 
@@ -73,3 +75,19 @@ def test_el_aviso_de_handoff_lleva_al_actor_para_no_avisarle_a_el() -> None:
     admin = uuid.uuid4()
     spec = catalog.handoff_tomado(uuid.uuid4(), CID, admin, "ana@negocio.com")
     assert spec.data["actorAdminId"] == str(admin)
+
+
+
+def test_los_avisos_del_canary_solo_llevan_ids_y_un_motivo_fijo() -> None:
+    """HU-AOS-32: `data` con claves fijas; un motivo desconocido no entra crudo al texto ni a `data`;
+    otra prueba de la misma versión tiene otra clave de dedupe."""
+    rid = uuid.uuid4()
+    for nombre in ("canary_listo", "canary_sin_muestra", "canary_costo", "canary_lentitud"):
+        spec = getattr(catalog, nombre)(CID, rid, 5, episodio=1)
+        assert set(spec.data) == {"type", "connectionId", "releaseId"}
+    raro = catalog.canary_revertido(CID, rid, 5, motivo="<script>", episodio=1)
+    assert set(raro.data) == {"type", "connectionId", "releaseId", "reason"}
+    assert raro.data["reason"] == "no_inferioridad" and "<script>" not in raro.body
+    otra = catalog.canary_revertido(CID, rid, 5, motivo="senal_dura", episodio=2)
+    assert otra.dedupe_key != raro.dedupe_key
+

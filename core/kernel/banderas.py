@@ -72,10 +72,13 @@ async def banderas_del_negocio(session: AsyncSession, tenant_id: uuid.UUID) -> B
 
 
 async def negocios_v3(session: AsyncSession) -> list[uuid.UUID]:
-    """Negocios vivos con `aos_runtime = 'v3'` (job del canary, HU-AOS-32). Cada uno se recorre
-    después bajo su `tenant_scope`."""
+    """Negocios vivos y no suspendidos con `aos_runtime = 'v3'` (job del canary, HU-AOS-32). `tenants`
+    es tabla de sistema, sin RLS: cada negocio se recorre después bajo su `tenant_scope`."""
     filas = await session.execute(
-        text("SELECT id FROM tenants WHERE aos_runtime = 'v3' AND deleted_at IS NULL ORDER BY id")
+        text(
+            "SELECT id FROM tenants WHERE aos_runtime = 'v3' AND deleted_at IS NULL "
+            "AND status IS DISTINCT FROM 'suspended' ORDER BY id"
+        )
     )
     return [fila[0] for fila in filas]
 
