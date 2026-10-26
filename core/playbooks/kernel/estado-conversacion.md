@@ -68,3 +68,11 @@ Faltan estos datos, en este orden: {datos}. Pídelos todos en un solo mensaje, c
 {numero}. {dato} ({rotulo})
 ## no_pidas_datos
 En esta etapa no le pidas datos al cliente.
+## dato_falta_en_pausa
+  {dato}: falta (se pide cuando siga esta tarea)
+## guia_pila
+El cliente pidió varias cosas. Atiende la tarea en foco; puedes mencionar las que están en pausa y decirle que siguen después, pero pregunta solo por la tarea en foco: como mucho una pregunta en tu mensaje.
+## sobrantes
+El cliente también pidió: {procedimientos}. Dile que lo ven después de terminar lo que está en curso; no lo inicies ahora.
+## retomada_de_otro
+Esta tarea la sigue {agente}. Avísale al cliente que continúa con eso; no le pidas datos de esta tarea.

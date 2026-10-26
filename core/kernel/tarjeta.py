@@ -86,8 +86,15 @@ CLAVES = {
     "pide_ahora": ("datos",),
     "dato_a_pedir": ("numero", "dato", "rotulo"),
     "no_pidas_datos": (),
+    # Pila de tareas (HU-AOS-20, adenda de ADR-0116): solo aparecen con tareas en pausa.
+    "dato_falta_en_pausa": ("dato",),
+    "guia_pila": (),
+    "sobrantes": ("procedimientos",),
+    "retomada_de_otro": ("agente",),
 }
-MAX_EN_PAUSA = 3          # maxStack por defecto (KernelSpec, HU-AOS-12)
+# Tope de tareas en pausa que se pintan: `procedures.maxStack - 1` de la release (el de abajo es
+# el del contrato, 2, para quien no lo pasa).
+MAX_EN_PAUSA = 1
 MAX_VALOR_CHARS = 200
 MAX_TARJETA_CHARS = 2000
 
@@ -204,6 +211,7 @@ def _lineas_de_tarea(
     *,
     en_foco: bool,
     rotulos: Mapping[str, str] | None = None,
+    instrucciones: bool = True,
 ) -> list[str]:
     etapa = tarea.stage if _NOMBRE.fullmatch(tarea.stage or "") else "?"
     titulo = proc.title if proc is not None else tarea.procedure_id
@@ -234,18 +242,19 @@ def _lineas_de_tarea(
             # como cualquier valor, para que no cuele una orden fuera de las comillas.
             dato = nombre if nombre in definidos else escapar(nombre)
             lineas.append(r[clave].format(dato=dato, valor=escapar(meta["value"]), origen=origen))
-        elif proc is not None and en_foco and nombre in proc.slots and _requerido(proc.slots[nombre], valores):
-            lineas.append(r["dato_falta"].format(dato=nombre))
+        elif proc is not None and nombre in proc.slots and _requerido(proc.slots[nombre], valores):
+            # En pausa se dice qué falta, pero no se pide todavía (una sola pregunta, la del foco).
+            lineas.append(r["dato_falta" if en_foco and instrucciones else "dato_falta_en_pausa"].format(dato=nombre))
 
     pendiente = tarea.pending_confirmation
-    if en_foco and isinstance(pendiente, Mapping):
+    if en_foco and instrucciones and isinstance(pendiente, Mapping):
         clase, nombre = pendiente.get("kind"), pendiente.get("name")
         patron = _ACCION if clase == "action" else _NOMBRE
         rotulo = {"stage": "objetivo_etapa", "slot": "objetivo_dato", "action": "objetivo_accion"}.get(str(clase))
         if rotulo and isinstance(nombre, str) and patron.fullmatch(nombre):
             lineas.append(r["por_confirmar"].format(objetivo=r[rotulo].format(nombre=nombre)))
 
-    if en_foco and proc is not None:
+    if en_foco and instrucciones and proc is not None:
         etapa_def = next((s for s in proc.stages if s.id == etapa), None)
         if etapa_def is not None:
             pedir = describir_lo_que_se_pide(proc, etapa_def, tarea, r, rotulos)
@@ -312,15 +321,20 @@ def renderizar_tarjeta(
     procedimientos: ResolverProcedimiento | None = None,
     max_chars: int = MAX_TARJETA_CHARS,
     rotulos_de: RotulosDe | None = None,
+    max_en_pausa: int = MAX_EN_PAUSA,
+    sobrantes: Sequence[str] = (),
+    foco_de_otro: str | None = None,
 ) -> str:
-    """La tarjeta para el prompt, o "" si no hay tareas abiertas. Pura.
+    """La tarjeta para el prompt, o "" si no hay tareas abiertas ni sobrantes. Pura.
 
     Con tope de tamaño: se quitan líneas o tareas ENTERAS (primero las en pausa), nunca se
-    corta un valor por la mitad.
+    corta un valor por la mitad. Pila de tareas (HU-AOS-20): con tareas en pausa sale la guía de
+    una sola pregunta; `sobrantes` son los títulos de lo que el cliente pidió y no cupo; con
+    `foco_de_otro` (la tarea en foco la sigue otro agente) no salen instrucciones de esa tarea.
     """
     r = r or rotulos()
     abiertas = [t for t in tareas if t.status in ("active", "suspended") and t.parent_task_id is None]
-    if not abiertas:
+    if not abiertas and not sobrantes:
         return ""
     foco = next((t for t in abiertas if t.status == "active" and t.stack_position == 0), None)
     pausa = sorted(
@@ -335,7 +349,9 @@ def renderizar_tarjeta(
     if foco is not None:
         proc_foco = proc(foco)
         propios = rotulos_de(proc_foco) if rotulos_de is not None and proc_foco is not None else None
-        lineas = _lineas_de_tarea(r, foco, proc_foco, en_foco=True, rotulos=propios)
+        lineas = _lineas_de_tarea(r, foco, proc_foco, en_foco=True, rotulos=propios, instrucciones=foco_de_otro is None)
+        if foco_de_otro is not None:
+            lineas.append(r["retomada_de_otro"].format(agente=escapar(foco_de_otro)))
         # Si no cabe todo, primero las instrucciones (líneas sin sangría: qué falta, qué pedir,
         # acciones) y después los datos, sin cambiar el orden.
         elegidas: set[int] = set()
@@ -345,8 +361,13 @@ def renderizar_tarjeta(
                     elegidas.add(i)
                     usado += len(linea) + 1
         salida.extend(linea for i, linea in enumerate(lineas) if i in elegidas)
-    omitidas = max(0, len(pausa) - MAX_EN_PAUSA)
-    for tarea in pausa[:MAX_EN_PAUSA]:
+    tope = max(0, max_en_pausa)
+    if pausa and foco is not None and foco_de_otro is None:
+        guia = r["guia_pila"]
+        salida.append(guia)
+        usado += len(guia) + 1
+    omitidas = max(0, len(pausa) - tope)
+    for tarea in pausa[:tope]:
         bloque = _lineas_de_tarea(r, tarea, proc(tarea), en_foco=False)
         largo = sum(len(linea) + 1 for linea in bloque)
         if usado + largo > max_chars:
@@ -356,6 +377,8 @@ def renderizar_tarjeta(
         usado += largo
     if omitidas:
         salida.append(r["mas_en_pausa"].format(cantidad=omitidas))
+    if sobrantes:
+        salida.append(r["sobrantes"].format(procedimientos=", ".join(escapar(t) for t in sobrantes)))
     return "\n".join(salida)
 
 

@@ -106,6 +106,10 @@ class Ruta:
     frenada_por_estabilidad: bool = False
     # HU-AOS-20: lo que la pila habría abierto (`{"abre", "pausa", "sobrantes"}`), en sombra.
     pila_sombra: dict[str, list[str]] | None = None
+    # HU-AOS-20, pila activa: lo que se abre en pausa detrás del foco, con el dueño de cada una
+    # (el especialista que declara el procedimiento), y el tope `maxStack` de la release.
+    pila: tuple[tuple[str, uuid.UUID | None], ...] = ()
+    max_stack: int = 1
 
     def sombra(self) -> dict[str, Any]:
         """Lo que se guarda en `core_decisions.shadow_route`: la decisión, sin texto del cliente."""
@@ -202,6 +206,13 @@ def _elegir_dueno(
     if not candidatos:
         return None
     return orden_de_duenos(candidatos, generalista, dueno)[0]
+
+
+def dueno_de(
+    release: ReleaseCongelada, routing: Routing, procedure_id: str, dueno: uuid.UUID | None
+) -> AgenteCongelado | None:
+    """El especialista que atiende un procedimiento (el mismo criterio del disparador)."""
+    return _elegir_dueno(_Release(release).duenos_de(procedure_id), dueno, generalista(release, routing))
 
 
 def generalista(release: ReleaseCongelada, routing: Routing) -> uuid.UUID | None:
@@ -590,6 +601,7 @@ __all__ = [
     "cumple",
     "decidir",
     "detectar_intenciones",
+    "dueno_de",
     "estabilizar",
     "generalista",
     "guardar_payload",

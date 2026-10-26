@@ -589,6 +589,7 @@ class ContextoMotor:
         permitidos: frozenset[str] = frozenset(),
         confirmar_tambien: frozenset[str] = frozenset(),
         abiertas: frozenset[str] = frozenset(),
+        abiertas_propias: frozenset[str] | None = None,
         sin_gobierno: str | None = None,
         de_la_release: dict[str, Procedure] | None = None,
         packs_de_la_release: frozenset[str] | None = None,
@@ -622,6 +623,8 @@ class ContextoMotor:
         self._seq_al_empezar = dict(seq_al_empezar or {})
         # Procedimientos con una tarea abierta: no son candidatos de `iniciar_procedimiento`.
         self._abiertas = frozenset(abiertas)
+        # HU-AOS-20: las que viajan con un handoff (sin las pausadas de otro especialista).
+        self._abiertas_propias = frozenset(abiertas if abiertas_propias is None else abiertas_propias)
         # Procedimiento de la tarea activa en foco que el motor no gobierna (versión fuera del
         # binario o habilidad deshabilitada): queda el flujo v2 de respaldo y SUS puertas no se
         # ocultan (las de los demás procedimientos, sí).
@@ -641,6 +644,8 @@ class ContextoMotor:
         }
         self._cambio = False
         self._sombra: Any = None
+        # HU-AOS-20: títulos de lo que el cliente pidió y no cupo en la pila (solo este turno).
+        self._sobrantes: list[str] = []
         # HU-AOS-09: args de cada acción que pidió confirmación (por hash: son los que firma el
         # botón) y resultados de las acciones de la etapa en el turno, para armar el resumen.
         self._pedidas: dict[str, tuple[str, dict[str, Any]]] = {}
@@ -679,6 +684,13 @@ class ContextoMotor:
             # lo que compromete (adenda 2026-10-12 de ADR-0113).
             ocultas = comandos.NOMBRES | self._puertas_sin_foco()
             salida = [t for t in self._base if t.name not in ocultas]
+        elif _de_otro_agente(self._foco.fila):
+            # HU-AOS-20: la tarea en foco la sigue otro agente (se retomó en este turno); el resto
+            # del turno no se ofrecen sus acciones ni los comandos sobre ella.
+            puertas = self._todas_las_puertas()
+            return self._del_scope_y_del_agente(
+                [t for t in self._base if t.name in self._core and t.name not in puertas]
+            )
         else:
             permitidas = set(self._foco.stage.actions)
             salida = [t for t in self._candidatas if t.name in permitidas]
@@ -801,7 +813,7 @@ class ContextoMotor:
 
         if decisions.handoff_pendiente():
             return []
-        return handoff.destinos_para_el_modelo(handoff.destinos_de_handoff(self._a2a, self._abiertas))
+        return handoff.destinos_para_el_modelo(handoff.destinos_de_handoff(self._a2a, self._abiertas_propias))
 
     def _comandos_aplicables(self) -> list[str]:
         if self.modo != "activo":
@@ -810,8 +822,10 @@ class ContextoMotor:
 
         # Con un handoff aceptado no se abren tareas nuevas: el destino podría no gobernarlas.
         candidatos = [] if decisions.handoff_pendiente() else self._candidatos()
+        # HU-AOS-20: la tarea en foco de otro agente (retomada en este turno) no la gobierna este.
+        de_otro = self._foco is not None and _de_otro_agente(self._foco.fila)
         return comandos.aplicables(
-            foco=self._par_en_foco(),
+            foco=None if de_otro else self._par_en_foco(),
             candidatos=candidatos,
             destinos_de_handoff=self._destinos_de_handoff(),
             encargos=bool(self._oferta_encargos()),
@@ -937,6 +951,10 @@ class ContextoMotor:
         try:
             async with _con_lock(self.tenant_id, self.conversation_id) as s:
                 foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+                if foco is not None and _de_otro_agente(foco.fila):
+                    # HU-AOS-20: la tarea en foco la sigue otro agente: sus acciones no corren aquí.
+                    log.info("motor_accion_de_tarea_de_otro_agente", accion=accion)
+                    return Previo(Decision({"error": mensaje("fuera_del_agente", accion=accion)}, "denied", h))
                 etapa = foco.stage.actions if foco is not None else ()
                 if self._fuera_del_agente(accion, etapa):
                     # Fail-closed por agente y por scope (ADR-0118 §3): no la ofrece y no corre.
@@ -1147,14 +1165,12 @@ class ContextoMotor:
             return True
         try:
             from core.db.session import get_session
-            from core.kernel.tarjeta import renderizar_tarjeta
 
             async with get_session() as s:
                 filas = await state.tareas_abiertas(s, tenant_id=self.tenant_id, conversation_id=self.conversation_id)
                 self._abiertas = frozenset(f.procedure_id for f in filas)
-                tarjeta = renderizar_tarjeta(
-                    [state.proyeccion_de(f) for f in filas], procedimientos=registro.definicion, rotulos_de=rotulos_de
-                )
+                self._abiertas_propias = _propias(filas)
+                tarjeta = _tarjeta(filas, self._sobrantes)
                 self._foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
                 self._sin_gobierno = _sin_gobierno(filas, self._foco)
                 self.tarjeta = self._con_pista_sin_foco(tarjeta)
@@ -1247,7 +1263,16 @@ class ContextoMotor:
     async def _iniciar_por_regla(self) -> None:
         from core.shared import release_vigente
 
-        procedure_id = release_vigente.tomar_inicio()
+        inicio = release_vigente.tomar_inicio()
+        if inicio is None:
+            return
+        if inicio.pila:
+            try:
+                await self._abrir_pila(inicio)
+            except Exception as exc:
+                log.warning("motor_pila_fallo", error=type(exc).__name__)
+            return
+        procedure_id = inicio.start
         if procedure_id is None or self._foco is not None:
             return
         # Defensa en profundidad: solo un procedimiento que el agente del turno declara.
@@ -1261,6 +1286,75 @@ class ContextoMotor:
             log.warning("motor_inicio_por_regla_fallo", error=type(exc).__name__)
             return
         log.info("motor_inicio_por_regla", procedure_id=procedure_id, ok=resultado.ok)
+
+    async def _abrir_pila(self, inicio: Any) -> None:
+        """La pila de tareas del Coordinador (adenda HU-AOS-20 de ADR-0116), en UNA transacción con
+        la conversación bloqueada: relee las tareas abiertas y recalcula qué va en foco (el `start`,
+        si no hay foco), qué va en pausa (con el dueño que eligió el router: el especialista que
+        declara el procedimiento, sin la guarda de «solo los del agente del turno», decisión e),
+        qué ya está abierto y qué no cabe en `maxStack` (sobrantes, a la tarjeta)."""
+        from core.kernel import decisions
+        from core.shared import release_vigente
+
+        if decisions.handoff_pendiente():
+            return
+        arts = release_vigente.vigente()
+        por_agente = (arts.procedimientos_por_agente if arts is not None else None) or {}
+        inicial: Procedure | None = None
+        if inicio.start is not None:
+            del_agente = release_vigente.procedimientos_del_agente()
+            if del_agente is None or inicio.start in del_agente:
+                inicial = self.procedimientos.get(inicio.start)
+            if inicial is not None and not await self._sigue_sano(inicial):
+                inicial = None
+        en_pausa: list[tuple[Procedure, uuid.UUID | None]] = []
+        for pid, dueno in inicio.pila:
+            proc = (por_agente.get(dueno) or {}).get(pid) if dueno is not None else None
+            if proc is None or not await self._sigue_sano(proc):
+                log.info("motor_pila_no_disponible", procedure_id=pid)
+                continue
+            en_pausa.append((proc, dueno))
+        sobrantes: list[str] = []
+        en_foco: uuid.UUID | None = None
+        async with _con_lock(self.tenant_id, self.conversation_id) as s:
+            abiertas = await state.tareas_abiertas(s, tenant_id=self.tenant_id, conversation_id=self.conversation_id)
+            ya = {f.procedure_id for f in abiertas}
+            cuantas = len(abiertas)
+            con_foco = any(f.status == "active" and f.stack_position == 0 for f in abiertas)
+            posicion = max((f.stack_position for f in abiertas), default=0)
+            comunes = {
+                "tenant_id": self.tenant_id, "conversation_id": self.conversation_id, "actor": "kernel",
+                "turn_id": turno_vigente.turno_id(),
+            }
+            if inicial is not None and not con_foco and inicial.id not in ya and cuantas < inicio.max_stack:
+                fila = await state.iniciar(
+                    s, procedure_id=inicial.id, procedure_version=inicial.version, stage=inicial.stages[0].id,
+                    owner_instance_id=_agente_del_turno_id(), **comunes,
+                )
+                en_foco = fila.id
+                ya.add(inicial.id)
+                cuantas += 1
+            for proc, dueno in en_pausa:
+                if proc.id in ya:
+                    continue
+                if cuantas >= inicio.max_stack:
+                    sobrantes.append(proc.title or proc.id)
+                    continue
+                posicion += 1
+                await state.iniciar(
+                    s, procedure_id=proc.id, procedure_version=proc.version, stage=proc.stages[0].id,
+                    stack_position=posicion, owner_instance_id=dueno, **comunes,
+                )
+                ya.add(proc.id)
+                cuantas += 1
+        self._sobrantes = sobrantes
+        log.info("motor_pila", en_foco=en_foco is not None, sobrantes=len(sobrantes))
+        if en_foco is not None:
+            self._seq_al_empezar[en_foco] = 1
+            await self._terminar_comando(en_foco)
+        else:
+            self._cambio = True
+            await self._releer_seguro()
 
     async def _confirmaciones_al_empezar(self, task_id: uuid.UUID) -> bool:
         """True si confirmó un dato. Todo se relee bajo el lock (el botón del consumer compite)."""
@@ -1470,7 +1564,8 @@ class ContextoMotor:
             ctx.estado.turn_id = turno_vigente.turno_id()
         desde = ctx.agente.instance_id
         # Contrato expuesto: un destino que no declara una tarea abierta no la podría gobernar.
-        grafo = ctx.grafo if handoff.declara(destino, {f.procedure_id for f in filas}) else ctx.grafo.sin(desde, destino.instance_id)
+        propias = handoff.propias(filas, desde)
+        grafo = ctx.grafo if handoff.declara(destino, {f.procedure_id for f in propias}) else ctx.grafo.sin(desde, destino.instance_id)
         decision = await a2a.registrar(
             ctx.estado, a2a.Operacion(desde, destino.instance_id, "handoff", "handoff"), grafo, ctx.limites
         )
@@ -2385,6 +2480,41 @@ def _nombre_seguro(nombre: Any) -> str:
     return " ".join(str(nombre).split())[:40] or "?"
 
 
+def _propias(filas: Sequence[Any]) -> frozenset[str]:
+    """Procedimientos de las tareas que viajan con un handoff del agente del turno (HU-AOS-20)."""
+    from core.kernel.handoff import propias
+
+    return frozenset(f.procedure_id for f in propias(filas, _agente_del_turno_id()))
+
+
+def _de_otro_agente(fila: Any) -> bool:
+    """¿La tarea la sigue otro especialista que el del turno? (HU-AOS-20: una pausada de otro
+    agente que se retomó en este turno). Sin release, nunca."""
+    turno = _agente_del_turno_id()
+    dueno = getattr(fila, "owner_instance_id", None)
+    return turno is not None and dueno is not None and dueno != turno
+
+
+def _tarjeta(filas: Sequence[Any], sobrantes: Sequence[str] = ()) -> str:
+    """La tarjeta del turno con lo de la pila de tareas (HU-AOS-20): tope de pausadas por
+    `maxStack`, los sobrantes y la tarea en foco que sigue otro agente."""
+    from core.kernel.tarjeta import renderizar_tarjeta
+    from core.shared import release_vigente
+
+    foco = next((f for f in filas if f.status == "active" and f.stack_position == 0), None)
+    de_otro = (
+        release_vigente.nombre_de_agente(foco.owner_instance_id) if foco is not None and _de_otro_agente(foco) else None
+    )
+    return renderizar_tarjeta(
+        [state.proyeccion_de(f) for f in filas],
+        procedimientos=registro.definicion,
+        rotulos_de=rotulos_de,
+        max_en_pausa=release_vigente.max_stack() - 1,
+        sobrantes=sobrantes,
+        foco_de_otro=de_otro,
+    )
+
+
 def _agente_del_turno_id() -> uuid.UUID | None:
     """El especialista que atiende el turno (HU-AOS-15/17): dueño de la tarea que se inicia, así
     el router sabe quién la sigue. None sin release (legacy)."""
@@ -2414,7 +2544,6 @@ async def contexto_del_motor(
     from core.db.session import get_session
     from core.kernel.banderas import banderas_del_negocio
     from core.kernel.episodio import DEFAULT_IDLE_MINUTES, abrir_episodio
-    from core.kernel.tarjeta import renderizar_tarjeta
     from core.shared import release_vigente
 
     tenant_id = get_current_tenant_id()
@@ -2451,8 +2580,7 @@ async def contexto_del_motor(
                 idle_minutes=release_vigente.idle_minutes(DEFAULT_IDLE_MINUTES),
             )
             filas = await state.tareas_abiertas(session, tenant_id=tenant_id, conversation_id=conversation_id)
-            tareas = [state.proyeccion_de(f) for f in filas]
-            tarjeta = renderizar_tarjeta(tareas, procedimientos=registro.definicion, rotulos_de=rotulos_de)
+            tarjeta = _tarjeta(filas)
             foco = await _foco(session, tenant_id, conversation_id, comunes["permitidos"])
     if banderas.procedimientos:
         # HU-AOS-19: colaboración A2A del turno (solo con release `release/2` y grafo congelado).
@@ -2472,6 +2600,7 @@ async def contexto_del_motor(
             modo="activo", procedimientos=registro.disponibles(enabled, disabled), tarjeta=tarjeta,
             foco=foco, texto_cliente=texto_cliente, por_boton=por_boton, seq_al_empezar={f.id: f.last_seq for f in filas},
             confirmar_tambien=confirmar_tambien, abiertas=frozenset(f.procedure_id for f in filas),
+            abiertas_propias=_propias(filas),
             sin_gobierno=_sin_gobierno(filas, foco), **comunes,
         )
     if banderas.runtime == "v3" and registro.hay_procedimientos():
