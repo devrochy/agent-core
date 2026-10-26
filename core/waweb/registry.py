@@ -24,6 +24,11 @@ class SessionContext:
     connection_id: uuid.UUID
     connection_external_id: str
     status: str
+    # Dato DURABLE de que la sesión ya se vinculó alguna vez y conserva
+    # credenciales (`last_connected_at` o `jid`, más `creds_encrypted`): a
+    # diferencia de `status`, no cambia por un error o un reinicio. El manager
+    # lo usa para no tratar como "nunca vinculada" una sesión que sí lo estuvo.
+    linked_before: bool = False
 
 
 class SessionRegistry(Protocol):
@@ -82,6 +87,10 @@ class DbSessionRegistry:
                     connection_id=wa_session.connection_id,
                     connection_external_id=connection.external_id,
                     status=wa_session.status,
+                    linked_before=(
+                        wa_session.last_connected_at is not None or bool(wa_session.jid)
+                    )
+                    and wa_session.creds_encrypted is not None,
                 )
                 for wa_session, connection in rows
                 if wa_session.connection_id is not None
