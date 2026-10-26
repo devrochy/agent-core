@@ -44341,7 +44341,7 @@
           "detenida": {
             "type": "boolean",
             "title": "Detenida",
-            "description": "La detuvo el dueño (no se puede activar).",
+            "description": "Bloqueada: la detuvo el dueño (como candidata) o el sistema la retiró de una prueba por ir peor. No se puede activar.",
             "default": false
           },
           "manifest": {
