@@ -2,7 +2,8 @@
 
 Cualquier admin autenticado registra el token de SU dispositivo en el negocio
 activo (sin gate de sección: no es un dato del panel, es del teléfono). Alta
-idempotente (reactiva un token dado de baja) y baja por soft delete (ADR-0099).
+idempotente (reactiva un token dado de baja; si el dispositivo cambia de cuenta, el token se
+reasigna a la cuenta que lo registra, ADR-0168) y baja por soft delete (ADR-0099).
 """
 
 from __future__ import annotations
@@ -39,13 +40,11 @@ async def _registrar(principal: Principal, token: str, platform: str) -> None:
                 )
             )
         ).scalar_one_or_none()
-        if existente is not None and existente.admin_id != principal.admin.id:
-            raise ApiError(
-                409,
-                "token_de_otra_cuenta",
-                "El token ya está registrado por otra cuenta de este negocio.",
-            )
+        reasignado = existente is not None and existente.admin_id != principal.admin.id
         if existente is not None:
+            # El token de Expo identifica el dispositivo: quien lo registra ahora es quien
+            # lo tiene en la mano (ADR-0168). Se reasigna en vez de rechazar con 409.
+            existente.admin_id = principal.admin.id
             existente.platform = platform
             existente.deleted_at = None
         else:
@@ -58,6 +57,12 @@ async def _registrar(principal: Principal, token: str, platform: str) -> None:
                 )
             )
         await session.commit()
+    if reasignado:
+        log.info(
+            "push_token_reasignado",
+            tenant_id=str(principal.tenant_id),
+            admin_id=str(principal.admin.id),
+        )
     log.info(
         "push_token_registrado",
         tenant_id=str(principal.tenant_id),
