@@ -1,4 +1,5 @@
-"""Las 31 opciones del primer recorte de SPEC-37: Identidad y comportamiento.
+"""Opciones de configuración: 31 de Identidad y comportamiento (SPEC-37) y las del Coordinador y el
+Agent OS (HU-CFG-07).
 
 Cada `por_defecto`, rango y lista de valores sale de la constante del runtime que ya los usa
 (`DEBOUNCE_DELAY_MS`, `CAPS`, `TOGGLES`, los umbrales de dificultad, la política de WhatsApp
@@ -10,8 +11,12 @@ from __future__ import annotations
 
 from typing import Any, get_args
 
-from agentcore_contracts import Persona
+from agentcore_contracts import KernelSpec, Persona
+from annotated_types import Ge, Le
+from pydantic import BaseModel
+from pydantic.fields import FieldInfo
 
+from core.admin.agent_os import RUNTIMES
 from core.admin.envios_segmento import PALABRAS_DE_BAJA_POR_DEFECTO
 from core.agents.spec import DEFAULT_SPEC
 from core.config import DEBOUNCE_DELAY_MS, Settings
@@ -19,7 +24,9 @@ from core.config_limites import rango
 from core.config_registro.modelo import Dependencia, Opcion, ValorPosible
 from core.db.models import DEFAULT_ASSISTANT_NAME
 from core.gateway.message_splitter import CAPS
+from core.kernel.banderas import APAGADAS
 from core.kernel.fuera_de_horario import IDIOMA_POR_DEFECTO, IDIOMAS
+from core.kernel.router import MODOS as MODOS_RUTEO
 from core.llm.difficulty_router import (
     DIFFICULTY_SCORE_THRESHOLD,
     LONG_MESSAGE_THRESHOLD,
@@ -552,7 +559,255 @@ VOZ = [
     ),
 ]
 
+
+# ------------------------------------------------------------------ Coordinador (KernelSpec)
+# HU-CFG-07. El KernelSpec (`kernelspec/1`) vive en la versión del agente `core` de cada CONEXIÓN y
+# se cambia con una versión nueva y su release: el registro solo lo DESCRIBE. Rangos y defectos salen
+# de los campos del contrato congelado, no se copian.
+def _campo(ruta: str) -> FieldInfo:
+    modelo: type[BaseModel] = KernelSpec
+    campo: FieldInfo | None = None
+    for parte in ruta.split("."):
+        campo = modelo.model_fields[parte]
+        anotacion = campo.annotation
+        if isinstance(anotacion, type) and issubclass(anotacion, BaseModel):
+            modelo = anotacion
+    assert campo is not None
+    return campo
+
+
+def _rango_kernel(ruta: str) -> tuple[float, float]:
+    metadatos = _campo(ruta).metadata
+    minimo = next(m.ge for m in metadatos if isinstance(m, Ge))
+    maximo = next(m.le for m in metadatos if isinstance(m, Le))
+    return minimo, maximo
+
+
+def _defecto_kernel(ruta: str) -> Any:
+    return _campo(ruta).default
+
+
+def hojas_del_kernelspec(modelo: type[BaseModel] = KernelSpec, prefijo: str = "") -> list[str]:
+    """Rutas punteadas de cada campo que no es un submodelo (listas y uniones incluidas)."""
+    rutas: list[str] = []
+    for nombre, campo in modelo.model_fields.items():
+        anotacion = campo.annotation
+        if isinstance(anotacion, type) and issubclass(anotacion, BaseModel):
+            rutas += hojas_del_kernelspec(anotacion, f"{prefijo}{nombre}.")
+        else:
+            rutas.append(f"{prefijo}{nombre}")
+    return rutas
+
+
+# Hojas del KernelSpec que el registro NO ofrece, y por qué. La prueba de consistencia exige que
+# toda hoja esté registrada o aquí: un campo nuevo del contrato no puede pasar sin que alguien decida.
+EXCLUIDAS_DEL_KERNELSPEC: dict[str, str] = {
+    "contract": "es la versión del contrato, no una opción",
+    "voice.role": "la voz es la de `persona_*`; ofrecerla aquí duplicaría el selector (SPEC-37)",
+    "voice.tone": "la voz es la de `persona_*`; ofrecerla aquí duplicaría el selector (SPEC-37)",
+    "voice.warmth": "la voz es la de `persona_*`; ofrecerla aquí duplicaría el selector (SPEC-37)",
+    "voice.emojis": "la voz es la de `persona_*`; ofrecerla aquí duplicaría el selector (SPEC-37)",
+    "routing.defaultAgent": "referencia un agente que debe existir en la conexión: necesita lista calculada",
+    "routing.rules": "es un DSL de reglas, no un valor; lo edita la vista de enrutamiento (HU-AOS-26)",
+    "routing.coprocessor.model": "id de modelo en texto libre: el runtime lo ignora si es de otra familia (ADR-0086, ADR-0132)",
+    "routing.coprocessor.playbook": "elige qué playbook corre: es selección de prompt (invariante 3)",
+    "modelPolicy.highRiskStage.model": "id de modelo en texto libre: el runtime lo ignora si es de otra familia (ADR-0086, ADR-0132)",
+    "composition.style": "un solo valor posible: no hay nada que elegir",
+    "responses": "elige qué playbook de respuestas corre: es selección de prompt (invariante 3)",
+    "policies.budgetUsdPerConversation": "admite «sin tope» (nulo) y el registro aún no expresa opciones anulables",
+    "policies.backofficeBudgetUsdMonthly": "admite «sin tope» (nulo) y el registro aún no expresa opciones anulables",
+}  # fmt: skip
+
+_SOLO_V3 = " Solo tiene efecto cuando el Agent OS del negocio está activo (runtime v3)."
+
+
+def _k(
+    clave: str,
+    ruta: str,
+    tipo: str,
+    etiqueta: str,
+    explicacion: str,
+    *,
+    ejemplo: str = "",
+    unidad: str = "",
+    valores: list[ValorPosible] | None = None,
+    editable_por: str = "dueno",
+) -> Opcion:
+    """Una opción del KernelSpec: defecto y rango salen del contrato."""
+    numero = tipo in ("entero", "decimal")
+    minimo, maximo = _rango_kernel(ruta) if numero else (None, None)
+    return Opcion(
+        clave=clave,
+        grupo="coordinador",
+        tipo=tipo,  # type: ignore[arg-type]
+        etiqueta=etiqueta,
+        explicacion=explicacion + _SOLO_V3,
+        ejemplo=ejemplo,
+        unidad=unidad,
+        valores=valores or [],
+        minimo=minimo,
+        maximo=maximo,
+        por_defecto=_defecto_kernel(ruta),
+        editable_por=editable_por,  # type: ignore[arg-type]
+        almacen=f"kernelspec:{ruta}",
+    )
+
+
+_CONFIRMACION = {
+    "interactive_button": ("Con un botón", "el cliente toca «Confirmar»; un «sí» escrito no basta"),
+    "explicit": ("Escribiendo", "el cliente confirma con una frase clara"),
+}
+VALORES_CONFIRMACION = [
+    ValorPosible(valor=v, etiqueta=_CONFIRMACION.get(v, (v, ""))[0], nota=_CONFIRMACION.get(v, (v, ""))[1])
+    for v in get_args(_campo("procedures.confirmIrreversibleWith").annotation)
+]
+
+COORDINADOR: list[Opcion] = [
+    _k(
+        "kernel_episode_idle_minutes", "episode.idleMinutes", "entero", "Pausa que cierra un tramo de conversación",
+        "Si el cliente deja de escribir tanto tiempo, el siguiente mensaje empieza un tramo nuevo y puede atenderlo otro agente.",
+        unidad="minutos", ejemplo="720 = 12 horas",
+    ),
+    _k(
+        "kernel_routing_shadow_mode", "routing.shadowMode", "booleano", "Probar el enrutamiento sin aplicarlo",
+        "Calcula a qué agente pasaría cada conversación y lo registra, pero la atiende quien la atendía.",
+    ),
+    _k(
+        "kernel_routing_triggers_embeddings", "routing.triggers.embeddings", "booleano", "Entender el sentido de la frase",
+        "Además de las palabras clave, compara el significado del mensaje con las habilidades disponibles.",
+    ),
+    _k(
+        "kernel_routing_triggers_min_score", "routing.triggers.minScore", "decimal", "Parecido mínimo para considerar una habilidad",
+        "De 0 a 1. Por debajo de este parecido, una habilidad ni se considera para el mensaje del cliente.",
+    ),
+    _k(
+        "kernel_routing_triggers_strong_score", "routing.triggers.strongScore", "decimal", "Parecido que decide sin dudar",
+        "De 0 a 1. Con este parecido o más, se elige la habilidad sin desempatar. No puede ser menor que el parecido mínimo.",
+    ),
+    _k(
+        "kernel_routing_triggers_margin", "routing.triggers.margin", "decimal", "Ventaja necesaria sobre la segunda",
+        "De 0 a 1. Cuánto debe ganarle la mejor habilidad a la siguiente para elegirla sin desempatar.",
+    ),
+    _k(
+        "kernel_routing_triggers_max_candidates", "routing.triggers.maxCandidates", "entero", "Habilidades que se comparan",
+        "Cuántas habilidades candidatas se consideran por mensaje. Más candidatas ayudan a acertar y cuestan un poco más.",
+    ),
+    _k(
+        "kernel_routing_coprocessor_when_candidates_above", "routing.coprocessor.whenCandidatesAbove", "entero",
+        "Candidatas que activan al desempatador",
+        "Si quedan más candidatas que este número, un modelo pequeño desempata cuál es la adecuada.",
+    ),
+    _k(
+        "kernel_routing_coprocessor_thinking", "routing.coprocessor.thinking", "booleano", "Que el desempatador razone",
+        "El desempatador razona antes de decidir. Acierta más en casos dudosos y cuesta más.",
+    ),
+    _k(
+        "kernel_routing_coprocessor_max_cost_usd", "routing.coprocessor.maxCostUsd", "decimal", "Costo máximo por desempate",
+        "Tope de gasto de cada desempate. Si lo superaría, se queda con la mejor candidata.",
+        unidad="USD", editable_por="master",
+    ),
+    _k(
+        "kernel_routing_owner_max_changes", "routing.owner.maxOwnerChangesPer6Turns", "entero", "Cambios de agente en 6 mensajes",
+        "Evita que la conversación salte de un agente a otro en cada mensaje. 0 = nunca cambia dentro de esos 6 mensajes.",
+    ),
+    _k(
+        "kernel_procedures_max_stack", "procedures.maxStack", "entero", "Gestiones abiertas a la vez",
+        "Cuántas gestiones (como un pedido y una cita) puede tener abiertas un cliente al mismo tiempo.",
+    ),
+    _k(
+        "kernel_procedures_confirm_irreversible_with", "procedures.confirmIrreversibleWith", "elegir_una",
+        "Cómo se confirma lo que no se puede deshacer",
+        "Para acciones irreversibles, como cobrar o cancelar. Siempre se confirman; aquí eliges cómo.",
+        valores=VALORES_CONFIRMACION,
+    ),
+    _k(
+        "kernel_model_policy_high_risk_thinking", "modelPolicy.highRiskStage.thinking", "booleano",
+        "Razonar más en pasos delicados",
+        "En las etapas de riesgo alto (dinero, datos personales) el modelo razona antes de responder. Cuesta algo más.",
+    ),
+    _k(
+        "kernel_a2a_max_depth", "a2a.maxDepth", "entero", "Cadena máxima entre agentes",
+        "Cuántos agentes pueden encargarse algo en cadena dentro de un mismo mensaje del cliente.",
+    ),
+    _k(
+        "kernel_a2a_max_calls_per_turn", "a2a.maxCallsPerTurn", "entero", "Encargos máximos por mensaje",
+        "Cuántas veces puede un agente pedirle algo a otro mientras responde un solo mensaje. 0 = ninguna.",
+    ),
+    _k(
+        "kernel_a2a_turn_budget_usd", "a2a.turnBudgetUsd", "decimal", "Gasto máximo entre agentes por mensaje",
+        "Tope de lo que pueden gastar los agentes colaborando para responder un mensaje. Cada enlace entre agentes solo puede bajarlo.",
+        unidad="USD", editable_por="master",
+    ),
+    _k(
+        "kernel_a2a_turn_budget_tokens", "a2a.turnBudgetTokens", "entero", "Texto máximo entre agentes por mensaje",
+        "Tope del texto que pueden procesar los agentes colaborando para responder un mensaje. Cada enlace solo puede bajarlo.",
+        unidad="tokens", editable_por="master",
+    ),
+    _k(
+        "kernel_composition_max_questions", "composition.maxQuestions", "entero", "Preguntas por respuesta",
+        "Máximo de preguntas que el asistente le hace al cliente en una misma respuesta. 0 = ninguna.",
+    ),
+]  # fmt: skip
+
+# ------------------------------------------------------------------ banderas del Agent OS
+_OPCION_RUNTIME = "aos_runtime"
+_RUNTIME = {"legacy": ("Clásico", "el asistente de siempre"), "v3": ("Agent OS", "Coordinador y agentes versionados")}
+_RUTEO = {
+    "off": ("Apagado", "atiende siempre el agente de la conexión"),
+    "shadow": ("Sombra", "calcula y registra, sin aplicar"),
+    "active": ("Activo", "pasa la conversación al agente elegido"),
+}
+AGENT_OS: list[Opcion] = [
+    Opcion(
+        clave="aos_runtime",
+        grupo="agent_os",
+        tipo="elegir_una",
+        etiqueta="Motor de conversación",
+        explicacion=(
+            "Con «Agent OS» el negocio usa el Coordinador y los agentes versionados; con «Clásico», el asistente "
+            "de siempre. El Agent OS además exige AOS_CONNECTION_ROUTING en el entorno del despliegue."
+        ),
+        valores=[ValorPosible(valor=v, etiqueta=_RUNTIME.get(v, (v, ""))[0], nota=_RUNTIME.get(v, (v, ""))[1]) for v in RUNTIMES],
+        por_defecto=APAGADAS.runtime,
+        editable_por="master",
+        almacen="tenants:aos_runtime",
+    ),
+    Opcion(
+        clave="aos_procedures",
+        grupo="agent_os",
+        tipo="booleano",
+        etiqueta="Procedimientos guiados",
+        explicacion=(
+            "El Coordinador lleva las gestiones (pedidos, citas, cobros) paso a paso y las verifica, en vez de "
+            "dejar que el modelo las cierre solo. Antes de encenderlos, mide el pass^4 del negocio."
+        ),
+        por_defecto=APAGADAS.procedimientos,
+        depende_de=Dependencia(
+            clave=_OPCION_RUNTIME, condicion="igual", valor="v3", motivo="Los procedimientos exigen el Agent OS."
+        ),
+        editable_por="master",
+        almacen="tenants:aos_procedures",
+    ),
+    Opcion(
+        clave="aos_routing",
+        grupo="agent_os",
+        tipo="elegir_una",
+        etiqueta="Enrutamiento entre agentes",
+        explicacion=(
+            "Decide qué agente atiende cada mensaje. «Sombra» calcula y registra sin aplicar; «Activo» sí pasa la "
+            "conversación al agente elegido."
+        ),
+        valores=[ValorPosible(valor=v, etiqueta=_RUTEO.get(v, (v, ""))[0], nota=_RUTEO.get(v, (v, ""))[1]) for v in MODOS_RUTEO],
+        por_defecto=APAGADAS.ruteo,
+        depende_de=Dependencia(
+            clave=_OPCION_RUNTIME, condicion="igual", valor="v3", motivo="El enrutamiento exige el Agent OS."
+        ),
+        editable_por="master",
+        almacen="tenants:aos_routing",
+    ),
+]
+
 OPCIONES: tuple[Opcion, ...] = tuple(
-    IDENTIDAD + RESPUESTA + CALIDAD + BAJAS + WHATSAPP_WEB + ESCALAMIENTO + VOZ
+    IDENTIDAD + RESPUESTA + CALIDAD + BAJAS + WHATSAPP_WEB + ESCALAMIENTO + VOZ + COORDINADOR + AGENT_OS
 )
 POR_CLAVE: dict[str, Opcion] = {o.clave: o for o in OPCIONES}

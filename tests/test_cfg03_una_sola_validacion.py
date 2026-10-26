@@ -23,7 +23,8 @@ RAIZ = Path(__file__).resolve().parent.parent
 
 def test_toda_opcion_numerica_con_rango_sale_de_config_limites() -> None:
     for o in OPCIONES:
-        if o.tipo == "entero":
+        # Las del Coordinador (`ambito="conexion"`) toman su rango del contrato `kernelspec/1`.
+        if o.tipo == "entero" and o.ambito == "negocio":
             assert o.clave in RANGOS, f"{o.clave}: opción numérica sin rango en config_limites"
             assert (o.minimo, o.maximo) == tuple(RANGOS[o.clave]), o.clave
     assert set(RANGOS) <= {o.clave for o in OPCIONES}

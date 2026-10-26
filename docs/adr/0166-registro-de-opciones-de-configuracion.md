@@ -41,3 +41,16 @@ La configuración del asistente está repartida en tres lugares: columnas de `Ap
 - `core/config_registro/` (modelo, 31 opciones, catálogo).
 - `core/api/routers/settings.py` (`GET /admin/settings/catalog`) y `docs/openapi.json`.
 - Pruebas: `tests/test_cfg02_registro_opciones.py`, `tests/integration/test_cfg02_catalogo_api.py`.
+
+## Adenda 2026-10-25 · HU-CFG-07: el Coordinador (KernelSpec) y las banderas del Agent OS
+
+Esta adenda reemplaza «31 opciones de Identidad y comportamiento» de la decisión 1: el registro suma el Coordinador y las banderas. El resto del ADR sigue igual.
+
+1. **Se describe, no se escribe.** El `KernelSpec` (`kernelspec/1`, congelado) vive en la versión del agente `core` de cada **conexión** y solo cambia con una versión nueva y su release (gate pass^k de HU-AOS-21, aún abierto). Las banderas (`tenants.aos_runtime`, `aos_procedures`, `aos_routing`) las escribe una sola función, `aos_fijar_banderas`, que valida el orden y deja la fila de auditoría. El registro no añade ningún escritor: `almacen` solo apunta (`kernelspec:<ruta.punteada>` y `tenants:<columna>`).
+2. **Dos grupos nuevos:** `coordinador` (19 escalares del KernelSpec) y `agent_os` (3 banderas, solo master). Los clientes de hoy iteran por sus grupos conocidos, así que no los afectan; cambian la huella `version` del catálogo.
+3. **`ambito` se deriva del almacén** (`conexion` si es `kernelspec:`, `negocio` si no) y no se guarda aparte, para que no haya dos fuentes que se contradigan. La API lo expone como campo de solo lectura.
+4. **Rangos y defectos salen del contrato**, leyendo `Ge`/`Le` y `default` de `KernelSpec.model_fields`; los valores de las banderas salen de `RUNTIMES` (`core/admin/agent_os.py`) y `MODOS` (`core/kernel/router.py`). La cota que el contrato pone no es siempre la efectiva: cada enlace entre agentes puede bajar los límites de `a2a.*` (ADR-0116), y la regla `strongScore ≥ minScore` solo la valida el KernelSpec completo.
+5. **Lo que no se ofrece, con motivo y vigilado.** `EXCLUIDAS_DEL_KERNELSPEC` lista cada hoja del contrato fuera del registro: la voz (`voice.*`, duplicaría `persona_*`), los ids de modelo en texto libre (ADR-0086, ADR-0132), los playbooks (selección de prompt, invariante 3), `routing.defaultAgent` (necesita lista calculada por conexión), `routing.rules` (DSL), y los dos presupuestos que admiten «sin tope». Una prueba exige que toda hoja del KernelSpec esté registrada o excluida: un campo nuevo del contrato no pasa sin decisión.
+6. **Quién ve qué.** Los topes de costo (`routing.coprocessor.maxCostUsd`, `a2a.turnBudgetUsd`, `a2a.turnBudgetTokens`) y las banderas son `editable_por="master"`. El dueño ya fija un presupuesto por turno en el AgentSpec v2 (`policy_budget`); si debe poder fijar también estos, es una decisión de producto aparte.
+7. **Valores por conexión.** Servir los *valores* del KernelSpec exigirá leerlos bajo `tenant_scope` y con la conexión explícita, y distinguir los negocios `legacy` (donde el KernelSpec se deriva en memoria de la persona). Queda para la HU del formulario.
+8. **`AOS_CONNECTION_ROUTING`** (variable de despliegue) no es una opción: se explica en el texto de `aos_runtime`.

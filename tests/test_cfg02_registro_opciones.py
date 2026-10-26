@@ -39,10 +39,11 @@ CLAVES_ESPERADAS = {
 
 
 # ------------------------------------------------------------------ forma
-def test_son_las_31_opciones_del_primer_recorte_sin_repetidas() -> None:
+def test_las_opciones_de_identidad_siguen_siendo_las_31_del_primer_recorte() -> None:
     claves = [o.clave for o in OPCIONES]
-    assert len(claves) == len(set(claves)) == 31
-    assert set(claves) == CLAVES_ESPERADAS
+    assert len(claves) == len(set(claves))
+    identidad = {o.clave for o in OPCIONES if o.grupo not in ("coordinador", "agent_os")}
+    assert identidad == CLAVES_ESPERADAS and len(identidad) == 31
 
 
 def test_cada_opcion_tiene_etiqueta_y_explicacion_en_espanol() -> None:
@@ -144,8 +145,9 @@ def test_el_duenio_no_ve_las_waweb_y_el_master_si() -> None:
     dueno = catalogo_para(es_master=False, guardrails_disponibles=[])
     master = catalogo_para(es_master=True, guardrails_disponibles=[])
     assert not [o for o in dueno.opciones if o.clave.startswith("waweb_")]
-    assert len(dueno.opciones) == 26
-    assert len(master.opciones) == 31
+    # Identidad: 26 del dueño y 31 del master. Coordinador: 16 del dueño y 19 del master. Banderas: 3.
+    assert len(dueno.opciones) == 26 + 16
+    assert len(master.opciones) == 31 + 19 + 3
     assert {o.clave for o in master.opciones if o.clave.startswith("waweb_")} == {
         o.clave for o in OPCIONES if o.grupo == "whatsapp_web"
     }
@@ -312,3 +314,97 @@ def test_la_consistencia_detecta_una_clave_nueva_sin_registrar(tmp_path, monkeyp
     modulo.write_text('def f(behavior):\n    return behavior.get("clave_nueva_sin_registro", 1)\n')
     monkeypatch.setattr(sys.modules[__name__], "RAIZ", tmp_path)
     assert "clave_nueva_sin_registro" in _claves_leidas("lector.py", {"behavior"})["behavior_config"]
+
+
+# ------------------------------------------------------------------ Coordinador y banderas (HU-CFG-07)
+def test_toda_hoja_del_kernelspec_esta_registrada_o_excluida_con_motivo() -> None:
+    """El contrato no puede crecer sin que el registro se entere."""
+    from core.config_registro.opciones import EXCLUIDAS_DEL_KERNELSPEC, hojas_del_kernelspec
+
+    hojas = set(hojas_del_kernelspec())
+    registradas = {o.almacen.split(":", 1)[1] for o in OPCIONES if o.almacen.startswith("kernelspec:")}
+    excluidas = set(EXCLUIDAS_DEL_KERNELSPEC)
+    assert not hojas - registradas - excluidas, f"hojas del KernelSpec sin decidir: {sorted(hojas - registradas - excluidas)}"
+    assert not registradas - hojas, f"registradas que ya no existen en el contrato: {sorted(registradas - hojas)}"
+    assert not excluidas - hojas, f"excluidas que ya no existen en el contrato: {sorted(excluidas - hojas)}"
+    assert not registradas & excluidas
+    assert all(motivo.strip() for motivo in EXCLUIDAS_DEL_KERNELSPEC.values())
+
+
+def test_rangos_y_defectos_del_coordinador_salen_del_contrato() -> None:
+    from agentcore_contracts import KernelSpec
+
+    esperado = KernelSpec.model_validate({})
+    comprobadas = 0
+    for o in OPCIONES:
+        if o.grupo != "coordinador":
+            continue
+        valor = esperado
+        for parte in o.almacen.split(":", 1)[1].split("."):
+            valor = getattr(valor, parte)
+        assert o.por_defecto == valor, o.clave
+        if o.tipo in ("entero", "decimal"):
+            # Todo valor del rango se acepta; uno fuera, no (las dos cotas viven en el contrato).
+            ruta = o.almacen.split(":", 1)[1]
+            for cota in (o.minimo, o.maximo):
+                _kernelspec_con(ruta, cota)
+            with pytest.raises(ValidationError):
+                _kernelspec_con(ruta, o.maximo + 1)
+            comprobadas += 1
+    assert comprobadas >= 12
+
+
+def _kernelspec_con(ruta: str, valor: float):
+    from agentcore_contracts import KernelSpec
+
+    # `strongScore` no puede ser menor que `minScore` (regla entre campos del contrato): se parte de una
+    # pareja que la cumple con holgura para probar solo la cota del campo.
+    cuerpo: dict = {"routing": {"triggers": {"minScore": 0, "strongScore": 1}}}
+    nodo = cuerpo
+    partes = ruta.split(".")
+    for parte in partes[:-1]:
+        nodo = nodo.setdefault(parte, {})
+    nodo[partes[-1]] = valor
+    return KernelSpec.model_validate(cuerpo)
+
+
+def test_los_valores_de_las_opciones_de_elegir_del_coordinador_y_las_banderas_salen_del_codigo() -> None:
+    from core.admin.agent_os import RUNTIMES
+    from core.kernel.router import MODOS
+
+    assert [v.valor for v in POR_CLAVE["aos_runtime"].valores] == list(RUNTIMES)
+    assert [v.valor for v in POR_CLAVE["aos_routing"].valores] == list(MODOS)
+    confirmacion = POR_CLAVE["kernel_procedures_confirm_irreversible_with"]
+    assert {v.valor for v in confirmacion.valores} == {"interactive_button", "explicit"}
+
+
+def test_las_banderas_son_del_master_y_dependen_del_runtime_v3() -> None:
+    banderas = [o for o in OPCIONES if o.grupo == "agent_os"]
+    assert {o.clave for o in banderas} == {"aos_runtime", "aos_procedures", "aos_routing"}
+    assert all(o.editable_por == "master" and o.almacen.startswith("tenants:") for o in banderas)
+    for clave in ("aos_procedures", "aos_routing"):
+        dep = POR_CLAVE[clave].depende_de
+        assert dep and (dep.clave, dep.condicion, dep.valor) == ("aos_runtime", "igual", "v3")
+    # El valor «apagado» de cada bandera es el que ya usa el runtime (`APAGADAS`).
+    from core.kernel.banderas import APAGADAS
+
+    assert POR_CLAVE["aos_runtime"].por_defecto == APAGADAS.runtime
+    assert POR_CLAVE["aos_procedures"].por_defecto == APAGADAS.procedimientos
+    assert POR_CLAVE["aos_routing"].por_defecto == APAGADAS.ruteo
+
+
+def test_el_ambito_sale_del_almacen_y_el_dueno_no_ve_los_presupuestos_ni_las_banderas() -> None:
+    assert all(o.ambito == ("conexion" if o.almacen.startswith("kernelspec:") else "negocio") for o in OPCIONES)
+    dueno = {o.clave for o in catalogo_para(es_master=False, guardrails_disponibles=[]).opciones}
+    for clave in ("kernel_a2a_turn_budget_usd", "kernel_a2a_turn_budget_tokens", "kernel_routing_coprocessor_max_cost_usd"):
+        assert clave not in dueno
+    assert not dueno & {"aos_runtime", "aos_procedures", "aos_routing"}
+    assert "kernel_a2a_max_depth" in dueno
+
+
+def test_el_coordinador_no_repite_la_voz_ni_ofrece_ids_de_modelo_ni_playbooks() -> None:
+    from core.config_registro.opciones import EXCLUIDAS_DEL_KERNELSPEC
+
+    for ruta in ("voice.tone", "routing.coprocessor.model", "modelPolicy.highRiskStage.model", "responses"):
+        assert ruta in EXCLUIDAS_DEL_KERNELSPEC
+    assert not [o for o in OPCIONES if o.almacen.startswith("kernelspec:voice")]
