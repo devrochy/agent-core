@@ -32087,7 +32087,9 @@
               "horario",
               "calidad",
               "bajas",
-              "whatsapp_web"
+              "whatsapp_web",
+              "coordinador",
+              "agent_os"
             ],
             "title": "Grupo"
           },
@@ -32183,6 +32185,16 @@
           "almacen": {
             "type": "string",
             "title": "Almacen"
+          },
+          "ambito": {
+            "type": "string",
+            "enum": [
+              "negocio",
+              "conexion"
+            ],
+            "title": "Ambito",
+            "description": "Derivado del almacén (una sola fuente): lo del KernelSpec es de la conexión.",
+            "readOnly": true
           }
         },
         "additionalProperties": false,
@@ -32193,7 +32205,8 @@
           "tipo",
           "etiqueta",
           "explicacion",
-          "almacen"
+          "almacen",
+          "ambito"
         ],
         "title": "Opcion",
         "description": "Una opción de configuración. `extra=\"forbid\"`: un campo mal escrito falla al importar."

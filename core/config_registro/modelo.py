@@ -11,11 +11,23 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 Grupo = Literal[
-    "identidad", "voz", "respuesta", "escalamiento", "horario", "calidad", "bajas", "whatsapp_web"
+    "identidad",
+    "voz",
+    "respuesta",
+    "escalamiento",
+    "horario",
+    "calidad",
+    "bajas",
+    "whatsapp_web",
+    # HU-CFG-07: el Coordinador de la conexión (KernelSpec) y las banderas del Agent OS.
+    "coordinador",
+    "agent_os",
 ]
+# De quién es el valor: del negocio o de una conexión (un negocio tiene N). Sale del almacén.
+Ambito = Literal["negocio", "conexion"]
 Tipo = Literal[
     "texto",
     "texto_largo",
@@ -29,6 +41,7 @@ Tipo = Literal[
 ]
 EditablePor = Literal["dueno", "master"]
 
+_ALMACENES = frozenset({"columna", "behavior_config", "escalation_config", "spec", "kernelspec", "tenants"})
 _TIPOS_CON_VALORES = frozenset({"elegir_una", "elegir_varias"})
 _TIPOS_CON_RANGO = frozenset({"entero", "decimal"})
 
@@ -78,7 +91,8 @@ class Opcion(BaseModel):
     editable_por: EditablePor = "dueno"
     solo_lectura: bool = False
     # Dónde vive el valor: `columna:<nombre>`, `behavior_config:<clave>`,
-    # `escalation_config:<clave>[.<subclave>]` o `spec:persona.<campo>`.
+    # `escalation_config:<clave>[.<subclave>]`, `spec:persona.<campo>`, `kernelspec:<ruta.punteada>`
+    # (versión del agente Coordinador de la conexión) o `tenants:<columna>` (banderas del Agent OS).
     almacen: str
 
     @model_validator(mode="after")
@@ -92,9 +106,15 @@ class Opcion(BaseModel):
         if self.tipo not in _TIPOS_CON_RANGO and (self.minimo is not None or self.maximo is not None):
             raise ValueError(f"{self.clave}: solo los números llevan rango")
         prefijo = self.almacen.split(":", 1)[0]
-        if prefijo not in {"columna", "behavior_config", "escalation_config", "spec"}:
+        if prefijo not in _ALMACENES:
             raise ValueError(f"{self.clave}: almacén desconocido «{self.almacen}»")
         return self
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def ambito(self) -> Ambito:
+        """Derivado del almacén (una sola fuente): lo del KernelSpec es de la conexión."""
+        return "conexion" if self.almacen.startswith("kernelspec:") else "negocio"
 
     @property
     def valores_calculados(self) -> bool:
