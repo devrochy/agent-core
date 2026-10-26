@@ -221,6 +221,8 @@ async def test_feed_pagina_con_cursor_y_filtra_por_categoria(app_client) -> None
     assert [i["category"] for i in ventas["items"]] == ["ventas"]
     r = await app_client.get(f"{BASE}?category=nada", headers=h)
     assert r.status_code == 422
+    r = await app_client.get(f"{BASE}?cursor=no-es-un-cursor", headers=h)
+    assert r.status_code == 400 and r.json()["error"]["code"] == "cursor_invalido"
 
 
 @pytest.mark.aislamiento
@@ -359,6 +361,40 @@ async def test_push_se_envia_en_lotes_de_100(app_client, monkeypatch) -> None:
     assert [len(p) for p in posts] == [100, 100, 30]
 
 
+async def test_baja_de_token_en_el_segundo_lote_se_aplica(app_client, monkeypatch) -> None:
+    """El COMMIT del primer lote cierra la transacción (y el scope de RLS): el segundo lote debe
+    poder dar de baja sus tokens muertos."""
+    from core.db.models import PushToken
+    from core.db.session import get_session
+    from core.notifications import push
+    from core.notifications.push import enviar_push
+    from core.shared.tenant import tenant_scope
+
+    tid, admin_id, _email = await _tenant_con_owner(uniq("nt-lote2"))
+    tokens = [await _agregar_token(tid, admin_id) for _ in range(120)]
+    _push_habilitado(monkeypatch)
+    muerto = tokens[110]
+
+    async def fake_post(payloads: list[dict]) -> list[dict]:
+        return [
+            {"status": "error", "details": {"error": "DeviceNotRegistered"}}
+            if p["to"] == muerto
+            else {"status": "ok", "id": "t"}
+            for p in payloads
+        ]
+
+    monkeypatch.setattr(push, "_post_expo", fake_post)
+    async with tenant_scope(tid):
+        await enviar_push(tid, [admin_id], "T", "B", {"type": "x"})
+        async with get_session() as session:
+            activos = (
+                await session.execute(
+                    select(PushToken.token).where(PushToken.tenant_id == tid, PushToken.deleted_at.is_(None))
+                )
+            ).scalars().all()
+    assert len(activos) == 119 and muerto not in activos
+
+
 async def test_push_deshabilitado_marca_enviada_sin_llamar_a_expo(app_client, monkeypatch) -> None:
     from core.db.models import Notification
     from core.db.session import get_session
@@ -400,3 +436,60 @@ async def test_retencion_da_de_baja_las_viejas_leidas_o_no(app_client) -> None:
             v = (await session.execute(select(Notification).where(Notification.id == vieja))).scalar_one()
             nv = (await session.execute(select(Notification).where(Notification.id == nueva))).scalar_one()
     assert v.deleted_at is not None and nv.deleted_at is None
+
+
+async def test_notificacion_dirigida_a_una_persona_la_ve_sin_acceso_a_la_seccion(app_client, monkeypatch) -> None:
+    from core.notifications.service import enviar_push_de_notificacion
+    from core.shared.tenant import tenant_scope
+
+    tid, owner_id, _email = await _tenant_con_owner(uniq("nt-dir"))
+    asignado_id, email_asignado = await _colaborador(tid)  # sin acceso explícito a nada
+    otro_id, email_otro = await _colaborador(tid)
+    tokens = {n: await _agregar_token(tid, a) for n, a in {"asignado": asignado_id, "otro": otro_id, "owner": owner_id}.items()}
+    posts = _push_habilitado(monkeypatch)
+    nid = await _emitir(
+        tid,
+        "cita:1",
+        section="pack_calendar:notificaciones",
+        category="agenda",
+        severity="info",
+        audience_admin_id=asignado_id,
+    )
+    h_asignado = await api_headers(app_client, tid, email=email_asignado, password=PW)
+    h_otro = await api_headers(app_client, tid, email=email_otro, password=PW)
+    assert (await app_client.get(f"{BASE}/unread-count", headers=h_asignado)).json()["unread_count"] == 1
+    assert (await app_client.get(f"{BASE}/unread-count", headers=h_otro)).json()["unread_count"] == 0
+    async with tenant_scope(tid):
+        await enviar_push_de_notificacion(nid)
+    assert {m["to"] for lote in posts for m in lote} == {tokens["asignado"], tokens["owner"]}
+
+
+async def test_lead_y_pedido_nuevos_aparecen_en_el_feed_por_su_seccion(app_client) -> None:
+    """Los eventos que se crean en la transacción del negocio (lead, pedido) llegan al feed
+    de quien tiene la sección y no al de quien no."""
+    from pack_commerce.skills import _avisar_lead_nuevo, _avisar_pedido_nuevo
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid, _owner, owner_email = await _tenant_con_owner(uniq("nt-ev"))
+    _, con_leads = await _colaborador(tid, con_acceso=("leads",))
+    _, sin_acceso = await _colaborador(tid)
+    lead_id, order_id = uuid.uuid4(), uuid.uuid4()
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            await _avisar_lead_nuevo(session, lead_id)
+            await _avisar_pedido_nuevo(session, types.SimpleNamespace(id=order_id, public_order_number="P-1"))
+            # Reintento del mismo evento: no duplica.
+            await _avisar_lead_nuevo(session, lead_id)
+
+    async def claves(email: str) -> list[str]:
+        h = await api_headers(app_client, tid, email=email, password=PW)
+        r = await app_client.get(BASE, headers=h)
+        assert r.status_code == 200, r.text
+        return sorted(i["event_key"] for i in r.json()["items"])
+
+    assert await claves(owner_email) == ["commerce.lead_nuevo", "commerce.pedido_nuevo"]
+    assert await claves(con_leads) == ["commerce.lead_nuevo"]
+    assert await claves(sin_acceso) == []

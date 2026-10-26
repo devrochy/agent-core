@@ -53,6 +53,26 @@ class DebugTokenData(BaseModel):
     scopes: list[str] | None = None
 
 
+
+async def _avisar_al_negocio(
+    tenant_id: uuid.UUID | None, motivo: str, connection_id: uuid.UUID | None, *, vence: str = ""
+) -> None:
+    """Además de la alerta de plataforma (Slack), avisa al negocio en su centro de
+    notificaciones (ADR-0167): una vez al día por conexión (la clave lleva el día). Nunca lanza."""
+    if tenant_id is None or connection_id is None:
+        return
+    from core.notifications import catalog
+    from core.notifications.service import notify_standalone
+
+    dia = datetime.now(UTC).date().isoformat()
+    if motivo == "invalido":
+        spec = catalog.conexion_sin_acceso(connection_id, vencido=False, dia=dia)
+    elif motivo == "por_vencer":
+        spec = catalog.conexion_token_por_vencer(connection_id, vence=vence, dia=dia)
+    else:
+        spec = catalog.calidad_de_numero_roja(connection_id, dia=dia)
+    await notify_standalone(tenant_id, spec)
+
 async def check_token_valid(
     token: str,
     app_id: str,
@@ -110,6 +130,7 @@ async def check_token_valid(
                 f"{conexion}: debug_token.is_valid=false -- la conexión pasa a error, requiere reautorización.",
                 severity="critical",
             )
+            await _avisar_al_negocio(tenant_id, "invalido", connection_id)
         return PreflightCheck(
             key="token_valid", ok=False, detail="Meta reporta el token como inválido -- requiere reautorización.",
             checked_at=now, repair_action="reauthorize",
@@ -128,6 +149,7 @@ async def check_token_valid(
                     "se encoló refresco, avisar al tenant.",
                     severity="warning",
                 )
+                await _avisar_al_negocio(tenant_id, "por_vencer", connection_id, vence=expires_dt.date().isoformat())
             return PreflightCheck(
                 key="token_valid", ok=False,
                 detail=f"El token vence el {expires_dt.date().isoformat()} (menos de 7 días).",
@@ -234,6 +256,7 @@ async def check_number_registered(
             "quality_rating=RED -- riesgo de bloqueo por Meta.",
             severity="critical",
         )
+        await _avisar_al_negocio(tenant_id, "calidad_roja", connection_id)
 
     # `status` (registro en la Cloud API) es lo que decide si el número puede enviar.
     # `code_verification_status` solo dice si se validó con código SMS/voz: un número de

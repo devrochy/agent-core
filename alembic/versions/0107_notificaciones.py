@@ -48,6 +48,7 @@ def upgrade() -> None:
         sa.Column("category", sa.Text(), nullable=False),
         sa.Column("severity", sa.Text(), nullable=False),
         sa.Column("section", sa.Text(), nullable=True),
+        sa.Column("audience_admin_id", UUID(as_uuid=True), nullable=True),
         sa.Column("title", sa.Text(), nullable=False),
         sa.Column("body", sa.Text(), nullable=False, server_default=""),
         sa.Column("data", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),

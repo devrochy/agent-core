@@ -8,6 +8,7 @@ igual que ADR-0099) y `data` lleva solo ids, nunca PII.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -46,6 +47,9 @@ class NotificationSpec:
     body: str = ""
     # Sección de permiso que gobierna quién la ve (`None` = solo dueños y masters).
     section: str | None = None
+    # Dirigida a una persona: la ve ella aunque no tenga acceso a `section`. Suma, no restringe:
+    # también la ven dueños, masters y quien tenga acceso explícito a `section`.
+    audience_admin_id: uuid.UUID | None = None
     data: dict[str, Any] = field(default_factory=dict)
     # Destino neutro: {"entity": ..., "id": ..., "section": ...}.
     target: dict[str, Any] | None = None

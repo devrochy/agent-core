@@ -263,6 +263,22 @@ async def _dead_letter(
     await _ack_y_borrar(r, entry_id)
     await _revoke_claim(fields)
     log.error("message_dead_lettered", entry_id=entry_id, deliveries=deliveries)
+    await _avisar_mensaje_fallido(fields.get("tenant_id"), entry_id)
+
+
+async def _avisar_mensaje_fallido(tenant_id: str | None, entry_id: str) -> None:
+    """Aviso al equipo (centro de notificaciones, ADR-0167) de un mensaje en la DLQ. Nunca lanza."""
+    if not tenant_id:
+        return
+    try:
+        import uuid as _uuid
+
+        from core.notifications.catalog import mensaje_fallido
+        from core.notifications.service import notify_standalone
+
+        await notify_standalone(_uuid.UUID(tenant_id), mensaje_fallido(entry_id))
+    except Exception:
+        log.warning("aviso_mensaje_fallido_fallo", entry_id=entry_id, exc_info=True)
 
 
 async def _revoke_claim(fields: dict[str, str]) -> None:

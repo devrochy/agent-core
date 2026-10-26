@@ -80,17 +80,16 @@ async def _mensajes(tid: uuid.UUID, conversation_id: uuid.UUID):
 
 def _sin_ia(monkeypatch) -> list[str]:
     """La IA no debe correr: si corre, el test falla. Devuelve los pushes a los dueños."""
+    from _api_helpers import capturar_avisos
+
     import core.orchestrator.consumer as consumer_mod
-    import core.tasks.push_tasks as push_tasks
 
     async def _no_ia(*_a, **_k):
         raise AssertionError("corrió la IA con la conexión pausada")
 
     monkeypatch.setattr(consumer_mod, "process_conversation", _no_ia)
     monkeypatch.setattr(consumer_mod, "schedule_debounce", _no_ia)
-    pushes: list[str] = []
-    monkeypatch.setattr(push_tasks.notify_owners_push, "delay", lambda _tid, titulo, *_a, **_k: pushes.append(titulo))
-    return pushes
+    return capturar_avisos(monkeypatch, lambda _t, spec: spec.title)
 
 
 # ---------------------------------------------------------------- pausa real

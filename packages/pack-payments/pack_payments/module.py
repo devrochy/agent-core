@@ -211,18 +211,26 @@ async def _alertar_monto_distinto(alerta: dict[str, Any]) -> None:
     if tenant_id is None:
         return
     recibido = alerta["recibido"] if alerta["recibido"] is not None else "un monto sin verificar"
-    try:
-        from core.tasks.push_tasks import notify_owners_push
+    from core.notifications.service import notify_standalone
+    from core.notifications.spec import NotificationSpec
 
-        notify_owners_push.delay(
-            str(tenant_id),
-            "Pago en línea con monto distinto",
-            f"Llegó un pago de {recibido} para {alerta['reference']}, pero el cobro era de "
-            f"{alerta['esperado']}. No se confirmó: revísalo.",
-            {"kind": "payments_pago_monto_distinto", "transaction_id": alerta["transaction_id"]},
-        )
-    except Exception:
-        log.warning("payments_alerta_push_fallida", reference=alerta["reference"], exc_info=True)
+    await notify_standalone(
+        tenant_id,
+        NotificationSpec(
+            event_key="payments.pago_monto_distinto",
+            category="cobros",
+            severity="warning",
+            title="Pago en línea con monto distinto",
+            body=(
+                f"Llegó un pago de {recibido} para {alerta['reference']}, pero el cobro era de "
+                f"{alerta['esperado']}. No se confirmó: revísalo."
+            ),
+            dedupe_key=f"payments_monto_distinto:{alerta['transaction_id']}",
+            section="pack_payments",
+            data={"kind": "payments_pago_monto_distinto", "transaction_id": alerta["transaction_id"]},
+            target={"entity": "pago", "id": str(alerta["transaction_id"]), "section": "pack_payments"},
+        ),
+    )
 
 
 class PaymentsModule(BaseModule):

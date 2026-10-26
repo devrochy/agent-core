@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from core.config import get_settings
 from core.db.models import PushToken
@@ -166,10 +166,14 @@ async def enviar_push(
                     )
             # Una baja ya aplicada no se pierde si un lote posterior falla y se reintenta.
             await session.commit()
+            # El scope del negocio es de transacción y murió con el COMMIT: se vuelve a fijar
+            # para que el siguiente lote siga bajo la RLS del mismo negocio.
+            await session.execute(
+                text("select set_config('app.tenant_id', :t, true)"), {"t": str(tenant_id)}
+            )
 
     log.info(
         "push_sent",
         tenant_id=str(tenant_id),
         destinatarios=len(tokens),
-        title=title[:80],
     )

@@ -275,17 +275,23 @@ async def _alertar_pago_sin_aplicar(tenant_id: uuid.UUID, cargo: SubscriptionCha
         action="subs_pago_sin_aplicar",
         output_data={"charge_id": str(cargo.id), "tipo": cargo.tipo, "monto": str(cargo.monto), "motivo": motivo},
     )
-    try:
-        from core.tasks.push_tasks import notify_owners_push
+    from core.notifications.service import notify_standalone
+    from core.notifications.spec import NotificationSpec
 
-        notify_owners_push.delay(
-            str(tenant_id),
-            "Pago de suscripción sin aplicar",
-            f"Llegó el pago de {cargo.monto} ({cargo.periodo}) pero no se aplicó: {motivo}. Revísalo.",
-            {"kind": "subs_pago_sin_aplicar", "charge_id": str(cargo.id)},
-        )
-    except Exception:
-        log.warning("subs_alerta_push_fallida", charge_id=str(cargo.id), exc_info=True)
+    await notify_standalone(
+        tenant_id,
+        NotificationSpec(
+            event_key="subscriptions.pago_sin_aplicar",
+            category="cobros",
+            severity="warning",
+            title="Pago de suscripción sin aplicar",
+            body=f"Llegó el pago de {cargo.monto} ({cargo.periodo}) pero no se aplicó: {motivo}. Revísalo.",
+            dedupe_key=f"subs_pago_sin_aplicar:{cargo.id}",
+            section="pack_subscriptions",
+            data={"kind": "subs_pago_sin_aplicar", "charge_id": str(cargo.id)},
+            target={"entity": "cobro", "id": str(cargo.id), "section": "pack_subscriptions"},
+        ),
+    )
 
 
 async def _alertar_monto_distinto(
@@ -307,15 +313,23 @@ async def _alertar_monto_distinto(
     )
     if tenant_id is None:
         return
-    try:
-        from core.tasks.push_tasks import notify_owners_push
+    from core.notifications.service import notify_standalone
+    from core.notifications.spec import NotificationSpec
 
-        notify_owners_push.delay(
-            str(tenant_id),
-            "Pago de suscripción con monto distinto",
-            f"Llegó un pago de {recibido} para el período {cargo.periodo}, pero el cargo es de "
-            f"{cargo.monto}. No se marcó como pagado: revísalo.",
-            {"kind": "subs_pago_monto_distinto", "charge_id": str(cargo.id)},
-        )
-    except Exception:
-        log.warning("subs_alerta_push_fallida", charge_id=str(cargo.id), exc_info=True)
+    await notify_standalone(
+        tenant_id,
+        NotificationSpec(
+            event_key="subscriptions.pago_monto_distinto",
+            category="cobros",
+            severity="warning",
+            title="Pago de suscripción con monto distinto",
+            body=(
+                f"Llegó un pago de {recibido} para el período {cargo.periodo}, pero el cargo es de "
+                f"{cargo.monto}. No se marcó como pagado: revísalo."
+            ),
+            dedupe_key=f"subs_pago_monto_distinto:{cargo.id}:{provider_reference}",
+            section="pack_subscriptions",
+            data={"kind": "subs_pago_monto_distinto", "charge_id": str(cargo.id)},
+            target={"entity": "cobro", "id": str(cargo.id), "section": "pack_subscriptions"},
+        ),
+    )

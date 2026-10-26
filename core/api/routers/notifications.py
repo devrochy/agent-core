@@ -11,7 +11,7 @@ from __future__ import annotations
 import base64
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field
@@ -30,27 +30,33 @@ _MAX_SILENCIO_MIN = 7 * 24 * 60
 
 
 class NotificationTarget(BaseModel):
-    entity: str
-    id: str | None = None
-    section: str | None = None
+    """Destino neutro: el cliente lo traduce a su propia ruta. `section` es la sección de PERMISO
+    que gobierna la visibilidad (no una ruta). Un `entity` nuevo es aditivo: el cliente debe
+    tener un valor por defecto."""
+
+    entity: str = Field(description="conversacion, escalacion, lead, cliente, pedido, pago, suscripcion, cobro, cita, conexion, mensaje_fallido, cobranza")
+    id: str | None
+    section: str | None
 
 
 class NotificationItem(BaseModel):
     id: uuid.UUID
     event_key: str
-    category: str
-    severity: str
+    category: Literal["conversaciones", "ventas", "cobros", "agenda", "sistema"]
+    severity: Literal["info", "success", "warning", "critical"]
     title: str
     body: str
-    target: NotificationTarget | None = None
-    data: dict[str, Any] = Field(default_factory=dict)
+    target: NotificationTarget | None
+    # Datos de apoyo (ids, claves heredadas del push): usar `target` y `event_key`, no `data`.
+    data: dict[str, Any]
     created_at: datetime
     read: bool
 
 
 class NotificationPage(BaseModel):
     items: list[NotificationItem]
-    next_cursor: str | None = None
+    next_cursor: str | None
+    # Todas las no leídas visibles para el usuario: no respeta los filtros `category` ni `unread`.
     unread_count: int
 
 
@@ -64,9 +70,9 @@ class MarkReadRequest(BaseModel):
 
 
 class NotificationPreferences(BaseModel):
-    categories: list[str] = Field(default_factory=lambda: list(CATEGORIAS))
-    push_off_categories: list[str] = Field(default_factory=list)
-    muted_until: datetime | None = None
+    categories: list[str]
+    push_off_categories: list[str]
+    muted_until: datetime | None
 
 
 class PreferencesUpdate(BaseModel):
@@ -99,7 +105,13 @@ def _parse_cursor(raw: str) -> tuple[datetime, uuid.UUID]:
         ts, _, nid = base64.urlsafe_b64decode(raw.encode()).decode().partition("|")
         return datetime.fromisoformat(ts), uuid.UUID(nid)
     except ValueError as exc:
-        raise ApiError(422, "cursor_invalido", "El cursor de paginación no es válido.") from exc
+        raise ApiError(400, "cursor_invalido", "El cursor de paginación no es válido.") from exc
+
+
+def _destino(target: dict | None) -> NotificationTarget | None:
+    if not target:
+        return None
+    return NotificationTarget(entity=target["entity"], id=target.get("id"), section=target.get("section"))
 
 
 def _out(n: Notification, leida: bool) -> NotificationItem:
@@ -110,7 +122,7 @@ def _out(n: Notification, leida: bool) -> NotificationItem:
         severity=n.severity,
         title=n.title,
         body=n.body,
-        target=NotificationTarget(**n.target) if n.target else None,
+        target=_destino(n.target),
         data=n.data or {},
         created_at=n.created_at,
         read=leida,
@@ -190,7 +202,7 @@ async def mark_read(
                         Notification.tenant_id == tid,
                         Notification.deleted_at.is_(None),
                         Notification.id.in_(payload.ids or []),
-                        feed.filtro_de_visibilidad(secciones),
+                        feed.filtro_de_visibilidad(secciones, principal.admin.id),
                     )
                 )
             ).scalars().all()
@@ -212,12 +224,12 @@ async def archive_notification(
                     Notification.tenant_id == tid,
                     Notification.id == notification_id,
                     Notification.deleted_at.is_(None),
-                    feed.filtro_de_visibilidad(secciones),
+                    feed.filtro_de_visibilidad(secciones, principal.admin.id),
                 )
             )
         ).scalar_one_or_none()
         if existe is None:
-            raise ApiError(404, "no_encontrada", "La notificación no existe.")
+            raise ApiError(404, "not_found", "La notificación no existe.")
         await feed.archivar(session, tid, principal.admin.id, notification_id)
     return Response(status_code=204)
 
@@ -226,6 +238,7 @@ def _prefs(estado) -> NotificationPreferences:
     ahora = datetime.now(UTC)
     muted = estado.muted_until if estado and estado.muted_until and estado.muted_until > ahora else None
     return NotificationPreferences(
+        categories=list(CATEGORIAS),
         push_off_categories=list(estado.push_off_categories or []) if estado else [],
         muted_until=muted,
     )

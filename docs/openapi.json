@@ -49226,10 +49226,23 @@
           },
           "category": {
             "type": "string",
+            "enum": [
+              "conversaciones",
+              "ventas",
+              "cobros",
+              "agenda",
+              "sistema"
+            ],
             "title": "Category"
           },
           "severity": {
             "type": "string",
+            "enum": [
+              "info",
+              "success",
+              "warning",
+              "critical"
+            ],
             "title": "Severity"
           },
           "title": {
@@ -49273,6 +49286,8 @@
           "severity",
           "title",
           "body",
+          "target",
+          "data",
           "created_at",
           "read"
         ],
@@ -49306,6 +49321,7 @@
         "type": "object",
         "required": [
           "items",
+          "next_cursor",
           "unread_count"
         ],
         "title": "NotificationPage"
@@ -49340,13 +49356,19 @@
           }
         },
         "type": "object",
+        "required": [
+          "categories",
+          "push_off_categories",
+          "muted_until"
+        ],
         "title": "NotificationPreferences"
       },
       "NotificationTarget": {
         "properties": {
           "entity": {
             "type": "string",
-            "title": "Entity"
+            "title": "Entity",
+            "description": "conversacion, escalacion, lead, cliente, pedido, pago, suscripcion, cobro, cita, conexion, mensaje_fallido, cobranza"
           },
           "id": {
             "anyOf": [
@@ -49373,9 +49395,12 @@
         },
         "type": "object",
         "required": [
-          "entity"
+          "entity",
+          "id",
+          "section"
         ],
-        "title": "NotificationTarget"
+        "title": "NotificationTarget",
+        "description": "Destino neutro: el cliente lo traduce a su propia ruta. `section` es la sección de PERMISO\nque gobierna la visibilidad (no una ruta). Un `entity` nuevo es aditivo: el cliente debe\ntener un valor por defecto."
       },
       "PreferencesUpdate": {
         "properties": {

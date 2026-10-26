@@ -76,11 +76,9 @@ async def emitir_cambio(session, *, appointment_id: uuid.UUID, accion: str, titu
 async def avisar_al_equipo(appointment_id: str, accion: str, titulo: str, inicio: str | None) -> None:
     """Push al colaborador asignado a la cita o, si no tiene, a los dueños del negocio."""
     from core.db.session import get_session
-    from core.shared.logger import get_logger
     from core.shared.tenant import get_current_tenant_id
     from pack_calendar.models import Appointment
 
-    log = get_logger(__name__)
     tenant_id = get_current_tenant_id()
     if tenant_id is None:
         return
@@ -110,12 +108,23 @@ async def avisar_al_equipo(appointment_id: str, accion: str, titulo: str, inicio
     titulo_push = f"Cita {verbo}: {titulo or cita.title}"
     cuerpo = f"{cita.title}{cuando}."
     data = {"kind": "cita", "appointment_id": appointment_id, "accion": accion}
-    try:
-        from core.tasks.push_tasks import notify_owners_push, send_push_batch
+    from core.notifications.service import notify_standalone
+    from core.notifications.spec import NotificationSpec
 
-        if asignado:
-            send_push_batch.delay(str(tenant_id), [str(asignado)], titulo_push, cuerpo, data)
-        else:
-            notify_owners_push.delay(str(tenant_id), titulo_push, cuerpo, data)
-    except Exception:
-        log.warning("cita_aviso_equipo_fallido", appointment_id=appointment_id, exc_info=True)
+    # Centro de notificaciones (ADR-0167): va a la persona asignada (aunque no tenga la sección) y
+    # al equipo con acceso a las notificaciones de agenda; sin asignado, a los dueños.
+    await notify_standalone(
+        tenant_id,
+        NotificationSpec(
+            event_key=f"calendar.cita_{accion}",
+            category="agenda",
+            severity="warning" if accion == "cancelada" else "info",
+            title=titulo_push,
+            body=cuerpo,
+            dedupe_key=f"cita:{appointment_id}:{accion}:{inicio or ''}",
+            section="pack_calendar:notificaciones",
+            audience_admin_id=asignado,
+            data=data,
+            target={"entity": "cita", "id": appointment_id, "section": "pack_calendar"},
+        ),
+    )

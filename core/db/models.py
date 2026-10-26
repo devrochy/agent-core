@@ -662,6 +662,9 @@ class Notification(Base):
     category: Mapped[str] = mapped_column(Text, nullable=False)
     severity: Mapped[str] = mapped_column(Text, nullable=False)
     section: Mapped[str | None] = mapped_column(Text)
+    # Dirigida a una persona (p. ej. la cita asignada): además de dueños y masters, la ve ella
+    # aunque no tenga acceso a la sección.
+    audience_admin_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     title: Mapped[str] = mapped_column(Text, nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False, default="")
     data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)

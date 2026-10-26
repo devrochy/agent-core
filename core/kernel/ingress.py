@@ -263,32 +263,18 @@ async def _escalar_por_palabra(conversation_id: Any, resumen: str) -> None:
         log.error(
             "escalation_keyword_failed", conversation_id=str(conversation_id), error=type(exc).__name__
         )
-        _avisar_escalamiento_fallido(conversation_id)
+        await _avisar_escalamiento_fallido(conversation_id)
         raise
 
 
-def _avisar_escalamiento_fallido(conversation_id: Any) -> None:
-    """Push best-effort a los dueños: el reintento del consumer no rehace el turno, así que sin
-    este aviso nadie se entera de que un cliente pidió una persona."""
-    try:
-        from core.tasks.push_tasks import TITULO_ESCALACION, notify_owners_push
+async def _avisar_escalamiento_fallido(conversation_id: Any) -> None:
+    """Aviso best-effort al equipo: el reintento del consumer no rehace el turno, así que sin
+    este aviso nadie se entera de que un cliente pidió una persona (centro de notificaciones,
+    ADR-0167; nunca propaga)."""
+    tenant = get_current_tenant_id()
+    if tenant is None:
+        return
+    from core.notifications.catalog import escalacion_fallida
+    from core.notifications.service import notify_standalone
 
-        tenant = get_current_tenant_id()
-        if tenant is not None:
-            notify_owners_push.delay(
-                str(tenant),
-                TITULO_ESCALACION,
-                "Un cliente pidió atención humana y no se pudo escalar la conversación. "
-                "Atiéndela desde el panel.",
-                {
-                    "type": "core.escalation",
-                    "conversationId": str(conversation_id),
-                    "reason": "escalation_failed",
-                },
-            )
-    except Exception as exc:
-        log.warning(
-            "push_escalacion_fallida_fallo",
-            conversation_id=str(conversation_id),
-            error=type(exc).__name__,
-        )
+    await notify_standalone(tenant, escalacion_fallida(conversation_id))

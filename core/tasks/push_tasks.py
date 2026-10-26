@@ -95,3 +95,32 @@ def notify_owners_push(
     if not owner_ids:
         return
     send_push_batch.delay(tenant_id, owner_ids, title, body, data)
+
+
+@celery.task(
+    bind=True,
+    max_retries=MAX_ATTEMPTS,
+    default_retry_delay=30,
+    name="core.push.send_notification",
+)
+def send_notification_push(self, tenant_id: str, notification_id: str) -> None:
+    """Envío inmediato del push de una notificación urgente (ADR-0167).
+
+    Idempotente por `push_sent_at`: si el despachador del outbox se adelanta o reintenta, no
+    se repite. Un fallo de transporte reintenta; el outbox queda como red de seguridad."""
+    from core.notifications.service import enviar_push_de_notificacion
+
+    async def _send() -> None:
+        tid = uuid.UUID(tenant_id)
+        async with tenant_scope(tid):
+            await enviar_push_de_notificacion(uuid.UUID(notification_id))
+
+    try:
+        run_async(_send())
+    except PushTransportError as exc:
+        if self.request.retries >= MAX_ATTEMPTS:
+            log.warning("push_notificacion_fail_permanente", tenant_id=tenant_id, error=str(exc))
+            return
+        raise self.retry(exc=exc, countdown=30 * (self.request.retries + 1)) from exc
+    except Exception:
+        log.warning("push_notificacion_error", tenant_id=tenant_id, exc_info=True)

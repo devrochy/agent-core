@@ -1842,27 +1842,37 @@ def _ack(evento_id: str, estado: str, error: str | None = None) -> dict[str, Any
     return out
 
 
-def _notificar_actividad_campo(tenant_id: uuid.UUID, payload: dict[str, Any], tipos_aplicados: list[str]) -> None:
-    """Push al dueño cuando un GESTOR sincroniza eventos de campo (ADR-0099).
+async def _notificar_actividad_campo(tenant_id: uuid.UUID, payload: dict[str, Any], tipos_aplicados: list[str]) -> None:
+    """Aviso al equipo cuando un GESTOR sincroniza eventos de campo (ADR-0099, ADR-0167).
 
     Solo si el autor es un gestor (un dueño operando su propia app no se
-    auto-avisa) y se aplicó al menos un evento. Fire-and-forget por Celery; un
-    fallo del push nunca afecta el ack del sync.
+    auto-avisa) y se aplicó al menos un evento. Se agrupa por gestor y por media hora para no
+    inundar el feed; un fallo del aviso nunca afecta el ack del sync.
     """
     if not tipos_aplicados or str(payload.get("rol") or "") != "gestor":
         return
-    try:
-        from core.tasks.push_tasks import TITULO_CAMPO, notify_owners_push
+    from datetime import UTC, datetime
 
-        resumen = ", ".join(sorted(set(tipos_aplicados)))
-        notify_owners_push.delay(
-            str(tenant_id),
-            TITULO_CAMPO,
-            f"Tu gestor sincronizó actividad del día: {resumen}.",
-            {"type": "cobranza.sync", "tipos": sorted(set(tipos_aplicados))},
-        )
-    except Exception:
-        log.warning("push_campo_fallo", tenant_id=str(tenant_id), exc_info=True)
+    from core.notifications.service import notify_standalone
+    from core.notifications.spec import NotificationSpec
+
+    ahora = datetime.now(UTC)
+    ventana = f"{ahora:%Y%m%d%H}{0 if ahora.minute < 30 else 1}"
+    resumen = ", ".join(sorted(set(tipos_aplicados)))
+    await notify_standalone(
+        tenant_id,
+        NotificationSpec(
+            event_key="cobranza.actividad_de_campo",
+            category="cobros",
+            severity="info",
+            title="Actividad de campo",
+            body=f"Tu gestor sincronizó actividad del día: {resumen}.",
+            dedupe_key=f"cobranza_sync:{payload.get('sub') or payload.get('gestorId') or 'gestor'}:{ventana}",
+            section="pack_cobranza",
+            data={"type": "cobranza.sync", "tipos": sorted(set(tipos_aplicados))},
+            target={"entity": "cobranza", "id": None, "section": "pack_cobranza"},
+        ),
+    )
 
 
 async def _cartera_de_evento(session, tenant_id: uuid.UUID, payload: dict[str, Any], data: dict[str, Any]) -> uuid.UUID | None:
@@ -1958,7 +1968,7 @@ async def sync_offline(request: Request, authorization: str | None = Header(defa
                     session.add(SyncEvento(tenant_id=tenant_id, evento_id_cliente=eid, tipo=tipo, payload=data, estado="error"))
                     log.warning("sync_offline_error", tipo=tipo, error=type(exc).__name__)
                     acks.append(_ack(eid, "error", str(exc)))
-    _notificar_actividad_campo(tenant_id, payload, tipos_aplicados)
+    await _notificar_actividad_campo(tenant_id, payload, tipos_aplicados)
     return JSONResponse(acks)
 
 

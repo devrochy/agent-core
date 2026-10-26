@@ -10,4 +10,10 @@
 - Push: handler core de `notification.created` idempotente por `push_sent_at`; `enviar_push` ahora envía en lotes de
   100 con `badge`, `priority`, `ttl` y canal de Android por categoría (sin categoría, el canal general de siempre).
 - Tarea beat de retención: baja lógica a los 180 días.
-- Los disparadores de push actuales siguen con `notify_owners_push` hasta la siguiente entrega.
+- Disparadores del negocio migrados al centro (el push sale del mismo evento): escalación y escalación fallida,
+  conexión pausada, token de Meta vencido o por vencer, calidad de número en rojo, mensaje fallido (DLQ), plan
+  pagado sin activar, pagos sin aplicar o con monto distinto, suscripción pausada por mora o sin forma de pago,
+  actividad de campo de cobranza y citas (a la persona asignada). Eventos nuevos: lead nuevo y pedido nuevo.
+- Para `warning` y `critical` el push sale de inmediato (Celery, idempotente por `push_sent_at`); el outbox queda
+  como red de seguridad (≤30 s). `notify_owners_push` se conserva solo para los avisos de facturación de la
+  plataforma al vendedor.

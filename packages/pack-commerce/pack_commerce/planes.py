@@ -170,17 +170,27 @@ async def _activacion_pendiente(order: Order, motivo: str) -> None:
         action="activacion_plan_pendiente",
         output_data={"order": order.public_order_number, "motivo": motivo},
     )
-    try:
-        from core.tasks.push_tasks import notify_owners_push
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return
+    from core.notifications.service import notify_standalone
+    from core.notifications.spec import NotificationSpec
 
-        notify_owners_push.delay(
-            str(get_current_tenant_id()),
-            "Plan pagado sin activar",
-            f"El pedido {order.public_order_number} está pagado pero su plan no se activó: {motivo}",
-            {"kind": "activacion_plan_pendiente", "order_id": str(order.id)},
-        )
-    except Exception:
-        log.warning("activacion_plan_push_fallido", order_id=str(order.id), exc_info=True)
+    # Centro de notificaciones (ADR-0167): feed + push, nunca propaga.
+    await notify_standalone(
+        tenant_id,
+        NotificationSpec(
+            event_key="commerce.plan_pendiente",
+            category="ventas",
+            severity="warning",
+            title="Plan pagado sin activar",
+            body=f"El pedido {order.public_order_number} está pagado pero su plan no se activó: {motivo}",
+            dedupe_key=f"plan_pendiente:{order.id}",
+            section="pack_commerce",
+            data={"kind": "activacion_plan_pendiente", "order_id": str(order.id)},
+            target={"entity": "pedido", "id": str(order.id), "section": "pack_commerce"},
+        ),
+    )
 
 
 async def _avisar_trial_ignorado(variant: ProductVariant, order: Order) -> None:

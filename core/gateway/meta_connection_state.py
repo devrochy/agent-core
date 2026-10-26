@@ -211,9 +211,12 @@ async def motivo_pausa_de_conversacion(conversation: Any) -> str | None:
 
 
 _AVISO_PAUSA_TTL_S = 24 * 60 * 60
-TITULO_CONEXION_PAUSADA = "WhatsApp desactivado"
+# Los textos viven en el catálogo del centro de notificaciones (ADR-0167); se reexportan.
 # Conexión sin cuenta (manual, WhatsApp Web, correo): no es necesariamente WhatsApp.
-TITULO_CONEXION_PROPIA_PAUSADA = "Conexión pausada"
+from core.notifications import catalog as _notif_catalog  # noqa: E402
+
+TITULO_CONEXION_PAUSADA = _notif_catalog.TITULO_CONEXION_WHATSAPP
+TITULO_CONEXION_PROPIA_PAUSADA = _notif_catalog.TITULO_CONEXION_PROPIA
 
 
 async def avisar_mensaje_en_conexion_pausada(
@@ -241,15 +244,17 @@ async def avisar_mensaje_en_conexion_pausada(
         return
     if not primero:
         return
-    try:
-        from core.tasks.push_tasks import notify_owners_push
+    from datetime import UTC, datetime
 
-        notify_owners_push.delay(
-            str(tenant_id),
-            TITULO_CONEXION_PAUSADA if alcance == "meta_account" else TITULO_CONEXION_PROPIA_PAUSADA,
-            f"Llegaron mensajes de clientes y el asistente no los responde: {motivo.lower()}. "
-            "Reactívala en Conexiones.",
-            {"type": "core.connection_paused", "connectionId": str(meta_connection_id), "scope": alcance},
-        )
-    except Exception:
-        log.warning("aviso_conexion_pausada_fallo", meta_connection_id=str(meta_connection_id), exc_info=True)
+    from core.notifications.catalog import conexion_pausada
+    from core.notifications.service import notify_standalone
+
+    await notify_standalone(
+        tenant_id,
+        conexion_pausada(
+            meta_connection_id,
+            alcance=alcance,
+            motivo=motivo,
+            dia=datetime.now(UTC).date().isoformat(),
+        ),
+    )

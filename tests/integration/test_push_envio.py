@@ -174,46 +174,34 @@ async def test_escalate_dispara_push_a_duenos(app_client, monkeypatch) -> None:
             await session.flush()
             conv_id = conv.id
 
-    import core.tasks.push_tasks as push_tasks
+    from _api_helpers import capturar_avisos
 
-    llamadas: list[tuple] = []
-
-    class FakeTask:
-        def delay(self, *args, **kwargs):
-            llamadas.append((args, kwargs))
-
-    monkeypatch.setattr(push_tasks, "notify_owners_push", FakeTask())
+    avisos = capturar_avisos(monkeypatch, lambda t, spec: (str(t), spec.category, spec.section, spec.target))
 
     async with tenant_scope(tid):
         await escalate(conv_id, "keyword", "pidió humano")
 
-    assert len(llamadas) == 1
-    args, kwargs = llamadas[0]
-    assert args[0] == str(tid)
-    assert kwargs == {}
+    assert len(avisos) == 1
+    tenant, categoria, _seccion, destino = avisos[0]
+    assert tenant == str(tid)
+    assert categoria == "conversaciones"
+    assert destino["entity"] == "conversacion" and destino["id"] == str(conv_id)
 
 
 async def test_sync_campo_solo_avisa_si_el_autor_es_gestor(monkeypatch) -> None:
+    from _api_helpers import capturar_avisos
     from pack_cobranza.api_gestor import _notificar_actividad_campo
 
-    import core.tasks.push_tasks as push_tasks
-
-    llamadas: list[tuple] = []
-
-    class FakeTask:
-        def delay(self, *args, **kwargs):
-            llamadas.append((args, kwargs))
-
-    monkeypatch.setattr(push_tasks, "notify_owners_push", FakeTask())
+    avisos = capturar_avisos(monkeypatch, lambda t, spec: (str(t), spec.title, spec.data))
 
     tid = uuid.uuid4()
-    _notificar_actividad_campo(tid, {"rol": "gestor"}, ["pago", "pago", "gasto"])
-    assert len(llamadas) == 1
-    tenant_id, titulo, _cuerpo, data = llamadas[0][0]
+    await _notificar_actividad_campo(tid, {"rol": "gestor"}, ["pago", "pago", "gasto"])
+    assert len(avisos) == 1
+    tenant_id, titulo, data = avisos[0]
     assert tenant_id == str(tid)
     assert titulo == "Actividad de campo"
     assert data["tipos"] == ["gasto", "pago"]
 
-    _notificar_actividad_campo(tid, {"rol": "propietario"}, ["pago"])
-    _notificar_actividad_campo(tid, {"rol": "gestor"}, [])
-    assert len(llamadas) == 1
+    await _notificar_actividad_campo(tid, {"rol": "propietario"}, ["pago"])
+    await _notificar_actividad_campo(tid, {"rol": "gestor"}, [])
+    assert len(avisos) == 1

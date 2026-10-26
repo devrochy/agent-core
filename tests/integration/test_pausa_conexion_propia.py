@@ -103,11 +103,9 @@ async def _mensajes(tid: uuid.UUID, conv: uuid.UUID) -> list[tuple[str, str, str
 
 
 def _pushes(monkeypatch) -> list[tuple[str, dict]]:
-    import core.tasks.push_tasks as push_tasks
+    from _api_helpers import capturar_avisos
 
-    pushes: list[tuple[str, dict]] = []
-    monkeypatch.setattr(push_tasks.notify_owners_push, "delay", lambda _t, titulo, _c, datos: pushes.append((titulo, datos)))
-    return pushes
+    return capturar_avisos(monkeypatch, lambda _t, spec: (spec.title, spec.data))
 
 
 def _sin_cola(monkeypatch) -> list[str]:

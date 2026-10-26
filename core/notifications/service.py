@@ -31,7 +31,7 @@ from core.notifications.push import enviar_push
 from core.notifications.spec import NotificationSpec
 from core.shared.events import ON_NOTIFICATION_CREATED
 from core.shared.logger import get_logger
-from core.shared.tenant import tenant_scope
+from core.shared.tenant import get_current_tenant_id, tenant_scope
 
 log = get_logger(__name__)
 
@@ -50,6 +50,7 @@ async def notify(session, tenant_id: uuid.UUID, spec: NotificationSpec) -> uuid.
                     category=spec.category,
                     severity=spec.severity,
                     section=spec.section,
+                    audience_admin_id=spec.audience_admin_id,
                     title=spec.title,
                     body=spec.body,
                     data=spec.data,
@@ -74,20 +75,33 @@ async def notify(session, tenant_id: uuid.UUID, spec: NotificationSpec) -> uuid.
                 payload={"notification_id": str(nid)},
             )
         return nid
-    except Exception:
-        log.warning("notificacion_fallo", event_key=getattr(spec, "event_key", "?"), exc_info=True)
+    except Exception as exc:
+        # Solo el tipo del error: un error de SQLAlchemy trae los parámetros (título, cuerpo).
+        log.warning("notificacion_fallo", event_key=getattr(spec, "event_key", "?"), error=type(exc).__name__)
         return None
 
 
 async def notify_standalone(tenant_id: uuid.UUID, spec: NotificationSpec) -> uuid.UUID | None:
-    """Como `notify`, con su propio scope y sesión. Nunca lanza."""
+    """Como `notify`, con su propio scope y sesión. Nunca lanza.
+
+    Lo urgente (severidad `warning` o `critical`) no espera al despachador del outbox (30 s):
+    tras el commit encola el envío inmediato; `push_sent_at` lo mantiene idempotente.
+    """
     try:
         async with tenant_scope(tenant_id):
             async with get_session() as session:
-                return await notify(session, tenant_id, spec)
-    except Exception:
-        log.warning("notificacion_standalone_fallo", event_key=spec.event_key, exc_info=True)
+                nid = await notify(session, tenant_id, spec)
+    except Exception as exc:
+        log.warning("notificacion_standalone_fallo", event_key=spec.event_key, error=type(exc).__name__)
         return None
+    if nid is not None and spec.severity in ("warning", "critical"):
+        try:
+            from core.tasks.push_tasks import send_notification_push
+
+            send_notification_push.delay(str(tenant_id), str(nid))
+        except Exception as exc:
+            log.warning("notificacion_envio_inmediato_fallo", event_key=spec.event_key, error=type(exc).__name__)
+    return nid
 
 
 def notify_standalone_sync(tenant_id: uuid.UUID, spec: NotificationSpec) -> None:
@@ -97,8 +111,8 @@ def notify_standalone_sync(tenant_id: uuid.UUID, spec: NotificationSpec) -> None
 
     try:
         run_async(notify_standalone(tenant_id, spec))
-    except Exception:
-        log.warning("notificacion_sync_fallo", event_key=spec.event_key, exc_info=True)
+    except Exception as exc:
+        log.warning("notificacion_sync_fallo", event_key=spec.event_key, error=type(exc).__name__)
 
 
 async def destinatarios_de_push(
@@ -153,6 +167,7 @@ async def destinatarios_de_push(
             tenant_role=roles.get(admin_id),
             section=notificacion.section,
             explicitos=explicitos.get(admin_id, {}),
+            es_destinatario=notificacion.audience_admin_id == admin_id,
         ):
             continue
         estado = estados.get(admin_id)
@@ -191,7 +206,9 @@ async def enviar_push_de_notificacion(notification_id: uuid.UUID) -> None:
         n = (
             await session.execute(
                 select(Notification).where(
-                    Notification.id == notification_id, Notification.deleted_at.is_(None)
+                    Notification.id == notification_id,
+                    Notification.tenant_id == get_current_tenant_id(),
+                    Notification.deleted_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
@@ -216,7 +233,11 @@ async def enviar_push_de_notificacion(notification_id: uuid.UUID) -> None:
     async with get_session() as session:
         await session.execute(
             update(Notification)
-            .where(Notification.id == notification_id, Notification.push_sent_at.is_(None))
+            .where(
+                Notification.id == notification_id,
+                Notification.tenant_id == tenant_id,
+                Notification.push_sent_at.is_(None),
+            )
             .values(push_sent_at=datetime.now(UTC))
         )
         await session.commit()

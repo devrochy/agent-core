@@ -12,6 +12,19 @@ import uuid
 ADMIN_EMAIL = "admin@local"
 
 
+def capturar_avisos(monkeypatch, forma=lambda _tenant_id, spec: spec) -> list:
+    """Captura las notificaciones que emiten los disparadores (`notify_standalone`, ADR-0167) en
+    lugar de escribirlas: devuelve la lista de lo emitido, con la forma que pida `forma`."""
+    avisos: list = []
+
+    async def _emitir(tenant_id, spec):
+        avisos.append(forma(tenant_id, spec))
+        return uuid.uuid4()
+
+    monkeypatch.setattr("core.notifications.service.notify_standalone", _emitir)
+    return avisos
+
+
 def uniq(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:6]}"
 

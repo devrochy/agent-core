@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import ColumnElement, and_, false, func, select, true
+from sqlalchemy import ColumnElement, and_, false, func, or_, select, true
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from core.admin.permissions import resolver_explicito
@@ -35,16 +35,22 @@ def ve_notificacion(
     tenant_role: str | None,
     section: str | None,
     explicitos: Mapping[str, Iterable[str]],
+    es_destinatario: bool = False,
 ) -> bool:
     """¿Este admin ve una notificación de `section`? Función pura.
 
     Master (o tester habilitado) y dueño ven todo. Un colaborador, solo con una fila
     explícita que le dé acceso a la sección (sub-sección > pack; `none` deniega). Sin rol en
     el negocio y sin ser master, no ve nada. `section=None` = solo dueños y masters.
+    `es_destinatario`: la notificación va dirigida a este admin (la ve aunque no tenga la sección).
     """
     if actua_master or tenant_role == "owner":
         return True
-    if tenant_role is None or section is None:
+    if tenant_role is None:
+        return False
+    if es_destinatario:
+        return True
+    if section is None:
         return False
     hay_fila, acceso = resolver_explicito(explicitos, section)
     return hay_fila and acceso is not None
@@ -111,12 +117,18 @@ async def secciones_visibles(
     }
 
 
-def filtro_de_visibilidad(secciones: set[str] | None) -> ColumnElement[bool]:
+def filtro_de_visibilidad(
+    secciones: set[str] | None, admin_id: uuid.UUID | None = None
+) -> ColumnElement[bool]:
+    """Condición SQL de visibilidad: las secciones permitidas o las dirigidas al propio admin."""
     if secciones is None:
         return true()
+    propias = (
+        Notification.audience_admin_id == admin_id if admin_id is not None else false()
+    )
     if not secciones:
-        return false()
-    return Notification.section.in_(sorted(secciones))
+        return propias
+    return or_(Notification.section.in_(sorted(secciones)), propias)
 
 
 async def estado_de(session, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> NotificationState | None:
@@ -176,7 +188,7 @@ async def contar_no_leidas(
         .where(
             Notification.tenant_id == tenant_id,
             Notification.deleted_at.is_(None),
-            filtro_de_visibilidad(secciones),
+            filtro_de_visibilidad(secciones, admin_id),
             *_condiciones_no_leida(leida_hasta),
         )
     )
@@ -204,7 +216,7 @@ async def listar(
             Notification.tenant_id == tenant_id,
             Notification.deleted_at.is_(None),
             NotificationRead.archived_at.is_(None),
-            filtro_de_visibilidad(secciones),
+            filtro_de_visibilidad(secciones, admin_id),
         )
         .order_by(Notification.created_at.desc(), Notification.id.desc())
         .limit(limit)
