@@ -16,6 +16,11 @@
   activa (parte 4): 202 si se encoló o ya está en curso; 200 si no hace falta medir.
 - `GET  /api/v1/admin/connections/{id}/releases/{rid}/evaluation` — la medición contra la activa de
   ahora: veredicto por procedimiento, lo que quedó sin medir y el estado de la última corrida.
+- `GET  /api/v1/admin/connections/{id}/releases/{rid}/diff?against=` — qué cambia frente a otra
+  release de la conexión (por defecto la activa), agrupado por agentes, superpoderes y permisos, más
+  lo que medirá el gate (HU-AOS-27). Sin textos.
+- `POST /api/v1/admin/connections/{id}/releases/{rid}/stop` — el dueño detiene una candidata
+  (HU-AOS-27): no se podrá activar. 409 `ya_activa`, `es_canary` o `ya_detenida`.
 - `POST /api/v1/admin/connections/{id}/rollback` — vuelve a la anterior (o a `to_release_id`).
   Efecto en el siguiente turno de cada conversación.
 
@@ -78,6 +83,10 @@ class ReleaseSummary(BaseModel):
     canary: bool
     last_event: str | None
     last_event_at: datetime | None
+    lifecycle: str | None = Field(
+        default=None, description="Último evento de ciclo de vida: promoted, rolled_back, invalid…"
+    )
+    detenida: bool = Field(default=False, description="La detuvo el dueño (no se puede activar).")
 
 
 class ReleaseEvent(BaseModel):
@@ -149,6 +158,66 @@ class Evaluation(BaseModel):
     medicion: EvaluationRun | None
 
 
+class AgentChange(BaseModel):
+    key: str
+    nombre: str
+    rol: str
+    cambio: str = Field(description="`nuevo`, `retirado`, `actualizado` o `por_defecto`.")
+    version_antes: int | None
+    version_ahora: int | None
+    por_defecto: bool | None = None
+    secciones: list[str] = Field(default=[], description="Claves de primer nivel del contenido que cambiaron.")
+    herramientas_agregadas: list[str] = []
+    herramientas_quitadas: list[str] = []
+    procedimientos_agregados: list[str] = []
+    procedimientos_quitados: list[str] = []
+
+
+class SkillChange(BaseModel):
+    pack_id: str
+    nombre: str
+    cambio: str = Field(description="`agregada`, `quitada` o `nueva_version`.")
+    antes: str | None
+    ahora: str | None
+
+
+class SuperpowersDiff(BaseModel):
+    habilidades: list[SkillChange]
+    plugins_agregados: list[str]
+    plugins_quitados: list[str]
+
+
+class PermissionChange(BaseModel):
+    desde: str
+    hacia: str
+    cambio: str = Field(description="`agregado`, `quitado` o `modos`.")
+    modos_antes: list[str]
+    modos_ahora: list[str]
+
+
+class OtherChanges(BaseModel):
+    ajustes: list[str] = Field(description="Nombres de los ajustes del asistente que cambiaron.")
+    playbooks: list[str]
+    flujo: bool
+
+
+class MeasuredProcedure(BaseModel):
+    procedure_id: str
+    titulo: str | None
+    motivo: str
+
+
+class ReleaseDiff(BaseModel):
+    candidata: int
+    base: int | None
+    sin_linea_base: bool
+    agentes: list[AgentChange]
+    superpoderes: SuperpowersDiff
+    permisos: list[PermissionChange]
+    otros: OtherChanges
+    medira: list[MeasuredProcedure]
+
+
 class RollbackIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -199,6 +268,8 @@ def _summary(v: svc.ReleaseVista) -> ReleaseSummary:
         canary=v.canary,
         last_event=v.last_event,
         last_event_at=v.last_event_at,
+        lifecycle=v.lifecycle,
+        detenida=v.detenida,
     )
 
 
@@ -246,6 +317,13 @@ async def build_release(
             notas=payload.notes,
         )
         vista, _, _ = await svc.obtener(tid, connection_id, resultado.release_id)
+        if not resultado.creada and vista.detenida:
+            # El build es idempotente: lo mismo devuelve la release que el dueño detuvo.
+            raise ApiError(
+                409,
+                "version_detenida",
+                "Esa combinación de agentes y ajustes se detuvo antes. Cambia algo para crear una versión nueva.",
+            )
     except LookupError as exc:
         raise _no_encontrada(exc) from None
     except DBAPIError as exc:
@@ -368,6 +446,47 @@ async def get_evaluation(
     except LookupError:
         raise ApiError.not_found("Versión no encontrada.") from None
     return Evaluation.model_validate(datos)
+
+
+@router.get("/{connection_id}/releases/{release_id}/diff", response_model=ReleaseDiff)
+async def get_release_diff(
+    connection_id: uuid.UUID,
+    release_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections"))],
+    against: uuid.UUID | None = None,
+) -> ReleaseDiff:
+    """Qué cambia la release frente a `against` (por defecto, la activa) de la MISMA conexión
+    (HU-AOS-27). 404 si alguna no es de la conexión."""
+    from core.releases import diffs
+
+    try:
+        datos = await diffs.de_la_conexion(_tenant(principal), connection_id, release_id, against)
+    except LookupError as exc:
+        raise _no_encontrada(exc) from None
+    except DBAPIError as exc:
+        raise _error_de_base(exc, "diff") from None
+    return ReleaseDiff.model_validate(datos)
+
+
+@router.post("/{connection_id}/releases/{release_id}/stop", response_model=ReleaseSummary)
+async def stop_release(
+    connection_id: uuid.UUID,
+    release_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> ReleaseSummary:
+    """El dueño detiene una candidata (HU-AOS-27): queda retirada y no se podrá activar."""
+    require_owner_or_master(principal)
+    tid = await _puede_escribir(principal)
+    try:
+        await svc.detener(tid, connection_id, release_id, actor=_actor(principal))
+        vista, _, _ = await svc.obtener(tid, connection_id, release_id)
+    except LookupError as exc:
+        raise _no_encontrada(exc) from None
+    except DBAPIError as exc:
+        raise _error_de_base(exc, "release") from None
+    except svc.ConflictoDeRelease as exc:
+        raise ApiError(409, exc.codigo, str(exc)) from None
+    return _summary(vista)
 
 
 @router.post("/{connection_id}/rollback", response_model=ReleaseChange)

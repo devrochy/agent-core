@@ -11,6 +11,9 @@ binario (`ReleaseCongelada`):
   todos los procedimientos;
 - **playbook**: un override que declara un agente toca los de ese agente; uno que no declara ninguno
   (allowlist v2) toca todos;
+- **permisos** (adenda HU-AOS-27): un enlace A2A añadido, quitado o cambiado (modos, intenciones o
+  límites) toca los procedimientos de sus agentes `from` y `to` que están en la conexión; los enlaces
+  con un agente de fuera son inertes;
 - **app_settings**, **plugins del negocio** y **habilidad** (`manifest_hash` distinto) tocan todos.
   Para la habilidad es una aproximación conservadora: no hay un mapa fiable de qué agente usa cada
   pack.
@@ -116,6 +119,28 @@ def procedimientos_tocados(candidata: ReleaseCongelada, activa: ReleaseCongelada
     for previo in activa.componentes:
         if previo.instance_id not in vigentes and previo.role != "core":
             marcar(activa.procedimientos_de(previo.instance_id), f"agente_retirado:{previo.key}")
+
+    # Permisos entre agentes (HU-AOS-18/19): mismo `content_hash` = sin cambio.
+    grafo_antes, grafo_ahora = activa.a2a or {}, candidata.a2a or {}
+    if grafo_antes.get("content_hash") != grafo_ahora.get("content_hash"):
+        def enlaces(grafo: Mapping[str, Any]) -> dict[tuple[str, str], str]:
+            return {
+                (str(e.get("from_agent_id")), str(e.get("to_agent_id"))): json.dumps(e, sort_keys=True, default=str)
+                for e in grafo.get("links") or []
+                if isinstance(e, Mapping)
+            }
+
+        e_antes, e_ahora = enlaces(grafo_antes), enlaces(grafo_ahora)
+        por_agente = {str(c.agent_id): c for c in candidata.componentes}
+        for par in sorted(set(e_antes) | set(e_ahora)):
+            if e_antes.get(par) == e_ahora.get(par):
+                continue
+            desde, hacia = por_agente.get(par[0]), por_agente.get(par[1])
+            if desde is None or hacia is None:
+                continue  # inerte: un agente que no está en la conexión
+            motivo = f"permiso:{desde.key}>{hacia.key}"
+            marcar(candidata.procedimientos_de(desde.instance_id), motivo)
+            marcar(candidata.procedimientos_de(hacia.instance_id), motivo)
 
     # Overrides de playbooks.
     pb_antes, pb_ahora = activa.playbooks, candidata.playbooks

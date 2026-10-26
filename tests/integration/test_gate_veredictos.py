@@ -90,7 +90,16 @@ async def _registrar(tid: uuid.UUID, cid: uuid.UUID, rid: uuid.UUID, base: uuid.
         (v.Escenario("01", 4, 1.0, 1.0, True), v.Escenario("02", 4, 1.0, 1.0 if aprueba else 0.0, aprueba)),
         "sha-escenarios",
     )
+    from core.db.session import get_session
+    from core.releases.cargar import cargar_release
+    from core.releases.diferencias import procedimientos_tocados
+
     async with tenant_scope(tid):
+        # Como el corredor: lo tocado que no se midió va en `sin_medir` (el veredicto lo cubre).
+        async with get_session() as session:
+            tocados = procedimientos_tocados(
+                await cargar_release(session, tid, rid), await cargar_release(session, tid, base)
+            )
         return await v.registrar(
             tid,
             cid,
@@ -101,6 +110,7 @@ async def _registrar(tid: uuid.UUID, cid: uuid.UUID, rid: uuid.UUID, base: uuid.
             veredicto=v.calcular([medicion]),
             costo_usd=0.75,
             modelo="test-model",
+            sin_medir=sorted(set(tocados) - {"pack_commerce.contratar_plan"}),
         )
 
 
