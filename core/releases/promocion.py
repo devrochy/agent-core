@@ -4,7 +4,9 @@
   `promoted` (`from_release_id`, `reason`). La promoción es total: el canary con porcentaje
   llega en HU-AOS-32 y aquí no se toca `canary_release_id`. Antes pasa `gate_aprobado`, el gate
   de pass^k (HU-AOS-21): calcula qué procedimientos tocó la candidata frente a la activa y lo
-  anota en el evento (`gate`, `gate_tocados`). Hasta el corredor de pass^k no bloquea.
+  anota en el evento (`gate`, `gate_tocados`). Un veredicto `rejected` bloquea; sin veredicto, con la
+  bandera del negocio encendida (parte 4, `core/releases/gate.py`) responde 409 `gate_pendiente`, y
+  con la bandera apagada pasa con `sin_evaluar`.
 - **Rollback** vuelve el puntero a una release anterior: por defecto, la más reciente que estuvo
   activa (tiene `promoted`), no es la activa y no fue retirada por `rolled_back` después de ese
   `promoted`. Así dos clics seguidos no rebotan entre dos releases. Deja `rolled_back` en la
@@ -46,9 +48,10 @@ class ReleaseNoEncontrada(LookupError):
 
 
 class ConflictoDeRelease(RuntimeError):
-    def __init__(self, codigo: str, mensaje: str) -> None:
+    def __init__(self, codigo: str, mensaje: str, details: dict[str, Any] | None = None) -> None:
         super().__init__(mensaje)
         self.codigo = codigo
+        self.details = details or {}
 
 
 @dataclass(frozen=True)
@@ -85,9 +88,11 @@ async def gate_aprobado(
 
     Lee, no mide: corre dentro del `FOR UPDATE` de `promover` y solo cree el último veredicto de
     la candidata medido contra la release activa de ahora (`base_release_id`). Valores de `gate`:
-    `exento_release_1`, `exento_<exencion>`, `forzado`, `sin_cambios`, `aprobado`, `rechazado` y
-    `sin_evaluar`. Sin veredicto, la candidata pasa con `sin_evaluar` mientras el corredor no
-    cierre el gate (decisión del dueño, 2026-10-25); un veredicto `rejected` la bloquea."""
+    `exento_release_1`, `exento_<exencion>`, `forzado`, `sin_cambios`, `aprobado`, `rechazado`,
+    `sin_evaluar`, `sin_medir` y `pendiente`. Un veredicto `rejected` la bloquea. Sin veredicto:
+    con la bandera del negocio apagada pasa con `sin_evaluar`; encendida (parte 4) pasa con
+    `sin_medir` si la última medición no encontró escenarios (decisión del dueño, 2026-10-25) y
+    si no queda `pendiente` (no aprobada)."""
     if activa is None:
         return True, "exento_release_1", {}
     if forzado:
@@ -112,7 +117,14 @@ async def gate_aprobado(
 
     previo = await veredicto.ultimo(session, tenant_id, release_id, activa)
     if previo is None:
-        return True, "sin_evaluar", tocados
+        from core.releases import gate
+
+        if not await gate.cerrado(session, tenant_id):
+            return True, "sin_evaluar", tocados
+        medicion = await gate.ultima_medicion(session, tenant_id, release_id, activa)
+        if medicion is not None and medicion["estado"] == "sin_escenarios":
+            return True, "sin_medir", tocados
+        return False, "pendiente", tocados
     if previo["tipo"] == veredicto.RECHAZADO:
         return False, "rechazado", tocados
     return True, "aprobado", tocados
@@ -235,6 +247,20 @@ async def promover(
         aprobado, gate, tocados = await gate_aprobado(
             session, tenant_id, release_id, activa, exencion=exencion, forzado=forzado
         )
+        if not aprobado and gate == "pendiente":
+            from core.releases import gate as svc_gate
+
+            medicion = await svc_gate.ultima_medicion(session, tenant_id, release_id, activa)
+            raise ConflictoDeRelease(
+                "gate_pendiente",
+                "La versión todavía no se ha medido contra la activa. La medición está en camino; "
+                "vuelve a intentarlo cuando termine.",
+                {
+                    "estado": medicion["estado"] if medicion else "sin_medicion",
+                    "base_release_id": str(activa),
+                    "tocados": len(tocados),
+                },
+            )
         if not aprobado:
             raise ConflictoDeRelease(
                 "gate_rechazado",
@@ -250,6 +276,13 @@ async def promover(
         }
         if forzado:
             datos["gate_motivo"] = str(forzado_por_master).strip()[:200]
+        if gate == "aprobado":
+            from core.releases import veredicto as svc_veredicto
+
+            previo = await svc_veredicto.ultimo(session, tenant_id, release_id, activa)
+            sin_medir = previo.get("sin_medir") if previo else None
+            if sin_medir:
+                datos["gate_sin_medir"] = list(sin_medir)[:_MAX_TOCADOS_EN_EVENTO]
         await registrar_evento(session, tenant_id, connection_id, release_id, "promoted", actor, datos)
         if forzado:
             from core.db.models import AuditLog

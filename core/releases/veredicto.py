@@ -181,6 +181,7 @@ async def registrar(
     origen: str = "gate",
     actor: str = "system:gate",
     git_sha: str | None = None,
+    sin_medir: list[str] | None = None,
 ) -> uuid.UUID:
     """Escribe la corrida, sus resultados, el gasto y el evento del veredicto en una transacción.
 
@@ -253,6 +254,9 @@ async def registrar(
                 "tocados": dict(sorted(tocados.items())[:200]),
                 "por_procedimiento": veredicto.por_procedimiento,
                 "motivo": veredicto.motivo[:200],
+                # Parte 4: procedimientos tocados que no se pudieron medir (sin escenarios o no
+                # medibles). Un `approved` no los cubre; la promoción los anota.
+                "sin_medir": sorted(set(sin_medir or []))[:200],
             },
         )
         run_id: uuid.UUID = corrida.id

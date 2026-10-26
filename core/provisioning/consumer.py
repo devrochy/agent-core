@@ -692,7 +692,9 @@ async def _slug_de(tenant_id: uuid.UUID) -> str:
 async def _guardar_origen(tenant_id: uuid.UUID, origen: dict[str, Any]) -> None:
     """`tenants.settings["alta"]`: de dónde salió el negocio (para el onboarding, HU-SH-06)."""
     async with get_session() as session:
-        tenant = await session.get(Tenant, tenant_id)
+        # Con la fila bloqueada: reescribe el dict completo y no debe perder una clave escrita en
+        # paralelo (p. ej. la bandera del gate en `settings.evals`, ADR-0117 parte 4).
+        tenant = await session.get(Tenant, tenant_id, with_for_update=True)
         if tenant is None:
             return
         settings = dict(tenant.settings or {})

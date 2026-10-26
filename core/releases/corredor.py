@@ -14,9 +14,9 @@
    `approved`/`rejected`). Si la medición falló, NO hay veredicto: queda el gasto parcial (`kind = eval`, cuenta
    contra el tope) y un `evaluated` con `estado = fallida`. Una falla de infraestructura nunca rechaza.
 
-No cierra el gate: `gate_aprobado` sigue pasando con `sin_evaluar` sin veredicto. Cerrarlo (409
-`gate_pendiente`, encolado y botón «Evaluar») es el seguimiento, cuando existan la base, el worker y una
-corrida real medida.
+El gate lo cierra la parte 4 (`core/releases/gate.py`): con la bandera del negocio encendida, una candidata
+sin veredicto responde 409 `gate_pendiente` y encola esta medición en el worker
+(`core.releases.evaluar_candidata`).
 """
 
 from __future__ import annotations
@@ -95,6 +95,27 @@ Ejecutor = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 def _exigir_scope(tenant_id: uuid.UUID) -> None:
     if get_current_tenant_id() != tenant_id:
         raise PermissionError("corredor: fuera del tenant_scope del negocio")
+
+
+async def mediciones_contra(
+    session: Any, tenant_id: uuid.UUID, release_id: uuid.UUID, base_release_id: uuid.UUID, timeout: float
+) -> list[Any]:
+    """Los eventos `evaluated` de la candidata contra esa base, del más nuevo al más viejo, con `vencido`
+    (un reclamo `en_curso` más viejo que el tiempo máximo). La usan el corredor y el gate (parte 4)."""
+    return list(
+        (
+            await session.execute(
+                text(
+                    "select data, created_at, now() - created_at > make_interval(secs => :s) as vencido "
+                    "from release_events where tenant_id = :t and release_id = :r and type = 'evaluated' "
+                    "and data->>'base_release_id' = :b order by created_at desc"
+                ),
+                {"t": tenant_id, "r": release_id, "b": str(base_release_id), "s": timeout},
+            )
+        )
+        .mappings()
+        .all()
+    )
 
 
 # ------------------------------------------------------------------ entorno y subproceso
@@ -345,20 +366,7 @@ async def medir(
             return ResultadoMedicion("sin_cambios", "La candidata no tocó procedimientos.")
         if await veredicto.ultimo(session, tenant_id, release_id, activa) is not None:
             return ResultadoMedicion("ya_medida", "Ya hay un veredicto contra la release activa de ahora.")
-        eventos = (
-            (
-                await session.execute(
-                    text(
-                        "select data, created_at, now() - created_at > make_interval(secs => :s) as vencido "
-                        "from release_events where tenant_id = :t and release_id = :r and type = 'evaluated' "
-                        "and data->>'base_release_id' = :b order by created_at desc"
-                    ),
-                    {"t": tenant_id, "r": release_id, "b": str(activa), "s": timeout},
-                )
-            )
-            .mappings()
-            .all()
-        )
+        eventos = await mediciones_contra(session, tenant_id, release_id, activa, timeout)
         ultimo = eventos[0] if eventos else None
         if ultimo is not None and (ultimo["data"] or {}).get("estado") == "en_curso" and not ultimo["vencido"]:
             return ResultadoMedicion("en_curso", "Ya hay una medición en curso para esta release.")
@@ -434,6 +442,7 @@ async def medir(
         veredicto.Medicion(pid, m.escenarios, esc.sha256_de(medibles[pid])) for pid, m in sorted(por_pid.items())
     ]
     resultado = veredicto.calcular(mediciones, previo_activa)
+    sin_medir = sorted(set(sin_total) | set(no_medibles))
     run_id = await veredicto.registrar(
         tenant_id,
         connection_id,
@@ -447,6 +456,7 @@ async def medir(
         input_tokens=tin,
         output_tokens=tout,
         actor=actor,
+        sin_medir=sin_medir,
     )
     return ResultadoMedicion(
         "aprobada" if resultado.aprobado else "rechazada",

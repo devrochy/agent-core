@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select
 
 from core.admin.plan_view import subscription_overview_or_none
@@ -439,3 +439,63 @@ async def put_agent_os(
     orden), 409 `agent_os_bloqueado` (precondiciones; `details` trae bloqueos y avisos) o
     `agent_os_en_curso` (otro cambio en curso)."""
     return await _agent_os(tenant_id, payload, principal, aplicar=True)
+
+
+# ---------------------------------------------------------------- gate de pass^k (HU-AOS-21 parte 4)
+class GateBandera(BaseModel):
+    cerrado: bool = Field(description="Con el gate cerrado, una versión sin veredicto no se activa (409 `gate_pendiente`).")
+    tope_usd_mensual: float | None = Field(
+        default=None, description="Tope mensual de las mediciones (USD, lo paga la plataforma); null = el del entorno."
+    )
+
+
+class GateBanderaIn(GateBandera):
+    model_config = ConfigDict(extra="forbid")
+
+
+@router.get("/tenants/{tenant_id}/gate", response_model=GateBandera)
+async def get_gate(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> GateBandera:
+    """Bandera del gate de pass^k del negocio y su tope mensual. Solo el master."""
+    _require_master_agent_os(principal)
+    from core.releases import gate
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            bandera = await gate.leer(tenant_id)
+    except gate.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return GateBandera(cerrado=bandera.cerrado, tope_usd_mensual=bandera.tope_usd_mensual)
+
+
+@router.put("/tenants/{tenant_id}/gate", response_model=GateBandera)
+async def put_gate(
+    tenant_id: uuid.UUID,
+    payload: GateBanderaIn,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> GateBandera:
+    """Enciende o apaga el gate del negocio (auditado como `release_gate_bandera`). 409
+    `sin_base_de_eval` si se intenta cerrar sin la base de evaluación configurada en el entorno."""
+    _require_master_agent_os(principal)
+    from core.releases import gate
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            bandera = await gate.fijar(
+                tenant_id,
+                cerrado=payload.cerrado,
+                tope_usd_mensual=payload.tope_usd_mensual,
+                actor=f"admin:{principal.admin.email}",
+            )
+    except gate.SinBaseDeEval as exc:
+        raise ApiError(409, "sin_base_de_eval", str(exc)) from None
+    except gate.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    except ValueError as exc:
+        raise ApiError(422, "tope_invalido", str(exc)) from None
+    return GateBandera(cerrado=bandera.cerrado, tope_usd_mensual=bandera.tope_usd_mensual)
+

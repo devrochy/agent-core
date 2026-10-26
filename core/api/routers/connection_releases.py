@@ -10,6 +10,12 @@
   el canary llega con HU-AOS-32). Pasa por el gate de pass^k (HU-AOS-21): un veredicto
   rechazado contra la activa de ahora da 409 `gate_rechazado`; solo el master lo salta con
   `forzar` y `motivo_forzado`, que quedan en el evento y en la auditoría.
+  Con la bandera del gate encendida (parte 4), una candidata sin veredicto da 409
+  `gate_pendiente` y encola la medición (`details.estado`: la última medición; `details.encolado`).
+- `POST /api/v1/admin/connections/{id}/releases/{rid}/evaluate` — pide medir la candidata contra la
+  activa (parte 4): 202 si se encoló o ya está en curso; 200 si no hace falta medir.
+- `GET  /api/v1/admin/connections/{id}/releases/{rid}/evaluation` — la medición contra la activa de
+  ahora: veredicto por procedimiento, lo que quedó sin medir y el estado de la última corrida.
 - `POST /api/v1/admin/connections/{id}/rollback` — vuelve a la anterior (o a `to_release_id`).
   Efecto en el siguiente turno de cada conversación.
 
@@ -29,7 +35,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import DBAPIError
 
@@ -111,6 +117,36 @@ class PromoteIn(BaseModel):
     @classmethod
     def _reason(cls, valor: str) -> str:
         return _motivo_libre(valor)
+
+
+class EvaluationRequested(BaseModel):
+    estado: str = Field(
+        description="`encolada`, `en_curso`, `demasiados_intentos`, `no_encolada`, `sin_cambios`, `ya_medida`."
+    )
+
+
+class EvaluationVerdict(BaseModel):
+    aprobado: bool
+    motivo: str
+    k: int | None
+    umbral: float | None
+    por_procedimiento: dict[str, dict[str, Any]]
+    sin_medir: list[str]
+
+
+class EvaluationRun(BaseModel):
+    estado: str
+    codigo: str | None
+    creado: str | None
+    sin_escenarios: list[str]
+
+
+class Evaluation(BaseModel):
+    gate_cerrado: bool
+    base_release_id: uuid.UUID | None
+    es_la_activa: bool
+    veredicto: EvaluationVerdict | None
+    medicion: EvaluationRun | None
 
 
 class RollbackIn(BaseModel):
@@ -271,12 +307,67 @@ async def promote_release(
     except DBAPIError as exc:
         raise _error_de_base(exc, "release") from None
     except svc.ConflictoDeRelease as exc:
-        raise ApiError(409, exc.codigo, str(exc)) from None
+        details = dict(exc.details)
+        if exc.codigo == "gate_pendiente":
+            # Fuera del FOR UPDATE (el raise ya soltó la transacción): encola la medición.
+            from core.releases import gate
+
+            # `estado`: la última medición; `encolado`: qué pasó con este pedido.
+            details["encolado"] = await gate.solicitar_medicion(tid, connection_id, release_id, actor=_actor(principal))
+        raise ApiError(409, exc.codigo, str(exc), details=details or None) from None
     return ReleaseChange(
         connection_id=cambio.connection_id,
         from_release_id=cambio.from_release_id,
         to_release_id=cambio.to_release_id,
     )
+
+
+@router.post(
+    "/{connection_id}/releases/{release_id}/evaluate",
+    response_model=EvaluationRequested,
+    responses={202: {"model": EvaluationRequested}},
+)
+async def evaluate_release(
+    connection_id: uuid.UUID,
+    release_id: uuid.UUID,
+    response: Response,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> EvaluationRequested:
+    """Pide medir la candidata contra la activa (HU-AOS-21 parte 4). Exige la bandera del gate del
+    negocio (409 `gate_abierto` si está apagada) para no gastar el tope sin gate."""
+    from core.releases import gate
+
+    require_owner_or_master(principal)
+    tid = await _puede_escribir(principal)
+    try:
+        estado = await gate.pedir_evaluacion(tid, connection_id, release_id, actor=_actor(principal))
+    except LookupError:
+        raise ApiError.not_found("Versión no encontrada.") from None
+    if estado == "ya_activa":
+        raise ApiError(409, "ya_activa", "Esa versión ya es la activa.")
+    if estado == "gate_abierto":
+        raise ApiError(409, "gate_abierto", "El gate de pass^k no está activo en este negocio.")
+    if estado == "sin_release_activa":
+        raise ApiError(409, "sin_release_activa", "La conexión no tiene versión activa: la primera no se mide.")
+    if estado in ("encolada", "en_curso"):
+        response.status_code = status.HTTP_202_ACCEPTED
+    return EvaluationRequested(estado=estado)
+
+
+@router.get("/{connection_id}/releases/{release_id}/evaluation", response_model=Evaluation)
+async def get_evaluation(
+    connection_id: uuid.UUID,
+    release_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections"))],
+) -> Evaluation:
+    """La medición de la candidata contra la activa de ahora (HU-AOS-21 parte 4)."""
+    from core.releases import gate
+
+    try:
+        datos = await gate.estado_de_evaluacion(_tenant(principal), connection_id, release_id)
+    except LookupError:
+        raise ApiError.not_found("Versión no encontrada.") from None
+    return Evaluation.model_validate(datos)
 
 
 @router.post("/{connection_id}/rollback", response_model=ReleaseChange)
