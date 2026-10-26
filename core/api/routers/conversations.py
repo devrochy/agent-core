@@ -34,6 +34,7 @@ from core.db.models import (
     UsageLedger,
 )
 from core.db.session import get_owned, get_session
+from core.kernel import toma_humana
 from core.notifications import catalog
 from core.notifications.service import notify_by_actor
 from core.orchestrator import motivos_escalacion as motivos
@@ -713,6 +714,15 @@ async def toggle_conversation_bot(
     return BotState(bot_paused=paused)
 
 
+async def _soltar(
+    session: Any, tenant_id: uuid.UUID, conversation_id: uuid.UUID, escalations: list[Escalation], admin_id: uuid.UUID
+) -> None:
+    """`released` en las tareas abiertas si se cerró una escalación que alguien atendía (HU-AOS-28)."""
+    atendida = next((e for e in escalations if e.assigned_admin_id is not None), None)
+    if atendida is not None:
+        await toma_humana.anotar(session, tenant_id, conversation_id, "released", admin_id=admin_id, escalation_id=atendida.id)
+
+
 @router.post("/{conversation_id}/resolve", status_code=204)
 async def resolve_conversation(
     conversation_id: uuid.UUID,
@@ -721,7 +731,9 @@ async def resolve_conversation(
     """Resuelve la conversación: reactiva el agente y cierra sus escalaciones."""
     await _owned_conversation(conversation_id, principal.tenant_id)
     async with get_session() as session:
-        conversation = await session.get(Conversation, conversation_id)
+        # Primero la conversación (orden de bloqueos conversación → tareas, ADR-0169 §5).
+        conversation = await toma_humana.bloquear_conversacion(session, principal.tenant_id, conversation_id)
+        assert conversation is not None
         conversation.status = "open"
         conversation.bot_paused = False
         escalations = (
@@ -739,6 +751,7 @@ async def resolve_conversation(
         for escalation in escalations:
             escalation.status = "resuelta"
             escalation.resolved_at = datetime.now(UTC)
+        await _soltar(session, principal.tenant_id, conversation_id, escalations, principal.admin.id)
         if escalations:
             await notify_by_actor(
                 session,
@@ -769,6 +782,8 @@ async def take_conversation(
     admin_id = principal.admin.id
     async with get_session() as session:
         await _conversacion_visible(session, conversation_id, tenant_id)
+        # Primero la conversación (orden de bloqueos conversación → escalación → tareas).
+        conversation = await toma_humana.bloquear_conversacion(session, tenant_id, conversation_id)
         esc = (
             await session.execute(
                 select(Escalation)
@@ -792,11 +807,14 @@ async def take_conversation(
         recien_tomada = esc.assigned_admin_id is None
         esc.assigned_admin_id = admin_id
         esc.status = "asignada"
-        conversation = await get_owned(session, Conversation, conversation_id, tenant_id)
+        if conversation is None:
+            conversation = await get_owned(session, Conversation, conversation_id, tenant_id)
         conversation.status = "escalated"
         conversation.bot_paused = True
         await session.flush()
         if recien_tomada:
+            # HU-AOS-28: la toma queda en cada tarea abierta (solo la primera vez, `take` es idempotente).
+            await toma_humana.anotar(session, tenant_id, conversation_id, "taken", admin_id=admin_id, escalation_id=esc.id)
             await notify_by_actor(
                 session,
                 tenant_id,
@@ -818,7 +836,9 @@ async def return_conversation_to_bot(
     tenant_id = principal.tenant_id
     async with get_session() as session:
         await _conversacion_visible(session, conversation_id, tenant_id)
-        conversation = await get_owned(session, Conversation, conversation_id, tenant_id)
+        conversation = await toma_humana.bloquear_conversacion(session, tenant_id, conversation_id)
+        if conversation is None:
+            conversation = await get_owned(session, Conversation, conversation_id, tenant_id)
         conversation.status = "open"
         conversation.bot_paused = False
         escalations = (
@@ -837,6 +857,7 @@ async def return_conversation_to_bot(
         for escalation in escalations:
             escalation.status = "resuelta"
             escalation.resolved_at = datetime.now(UTC)
+        await _soltar(session, tenant_id, conversation_id, escalations, principal.admin.id)
         if escalations:
             await notify_by_actor(
                 session,

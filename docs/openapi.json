@@ -2715,6 +2715,67 @@
         }
       }
     },
+    "/api/v1/admin/conversations/{conversation_id}/en-curso": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · conversaciones"
+        ],
+        "summary": "In Progress",
+        "description": "«En curso» de la conversación para quien la toma (HU-AOS-28).",
+        "operationId": "in_progress_api_v1_admin_conversations__conversation_id__en_curso_get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InProgress"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/playground": {
       "get": {
         "tags": [
@@ -33038,6 +33099,321 @@
           "created"
         ],
         "title": "ImportResult"
+      },
+      "InProgress": {
+        "properties": {
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/InProgressTask"
+            },
+            "type": "array",
+            "title": "Tasks"
+          },
+          "escalation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InProgressEscalation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "sin_procedimientos"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "Sin tareas en la conversación."
+          }
+        },
+        "type": "object",
+        "required": [
+          "tasks",
+          "escalation"
+        ],
+        "title": "InProgress"
+      },
+      "InProgressAction": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "Código del fallo, si falló."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "action",
+          "ok",
+          "reason",
+          "at"
+        ],
+        "title": "InProgressAction"
+      },
+      "InProgressDatum": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "Rótulo humano del dato (de su habilidad); si no, el nombre."
+          },
+          "value": {
+            "title": "Value",
+            "description": "Los datos de pago van enmascarados."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "title": "Confirmed"
+          },
+          "data_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Class"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "label",
+          "value",
+          "confirmed",
+          "data_class"
+        ],
+        "title": "InProgressDatum"
+      },
+      "InProgressEscalation": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "assigned_admin_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned Admin Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "reason_code",
+          "summary",
+          "status",
+          "assigned_admin_id",
+          "created_at"
+        ],
+        "title": "InProgressEscalation"
+      },
+      "InProgressMissing": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "dato_cliente",
+              "dato_boton",
+              "dato_contenido",
+              "dato_accion",
+              "confirmar_dato",
+              "confirmar_etapa",
+              "accion"
+            ],
+            "title": "Kind"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "name",
+          "label"
+        ],
+        "title": "InProgressMissing"
+      },
+      "InProgressTask": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Task Id"
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "in_focus": {
+            "type": "boolean",
+            "title": "In Focus"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/InProgressDatum"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "missing": {
+            "items": {
+              "$ref": "#/components/schemas/InProgressMissing"
+            },
+            "type": "array",
+            "title": "Missing"
+          },
+          "pending_confirmation": {
+            "type": "boolean",
+            "title": "Pending Confirmation"
+          },
+          "last_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InProgressAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "missing_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "definicion_no_disponible"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missing Reason",
+            "description": "Por qué `missing` va vacío sin que la tarea esté completa."
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "procedure_id",
+          "title",
+          "status",
+          "status_reason",
+          "stage",
+          "in_focus",
+          "data",
+          "missing",
+          "pending_confirmation",
+          "last_action"
+        ],
+        "title": "InProgressTask"
       },
       "Injection": {
         "properties": {

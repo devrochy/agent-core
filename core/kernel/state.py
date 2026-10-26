@@ -56,9 +56,11 @@ TIPOS = frozenset(
         "started", "slot_set", "slot_cleared", "stage_entered", "precondition_failed",
         "action_requested", "action_succeeded", "action_failed", "confirmation_requested",
         "confirmed", "suspended", "resumed", "owner_changed", "revalidated", "episode_expired",
-        "completed", "cancelled", "failed", "escalated",
+        "completed", "cancelled", "failed", "escalated", "taken", "released",
     }
 )
+# Anotaciones de la toma humana (ADR-0169 §5): no cambian la proyección más allá de la secuencia.
+ANOTACIONES_HUMANAS = frozenset({"taken", "released"})
 ACTORES = frozenset({"llm", "kernel", "tool", "human", "backoffice"})
 ABIERTOS = frozenset({"active", "suspended"})
 TERMINALES = frozenset({"completed", "cancelled", "failed", "escalated"})
@@ -94,6 +96,8 @@ ACTORES_POR_TIPO: dict[str, frozenset[str]] = {
     "cancelled": frozenset({"llm", "kernel", "human"}),
     "failed": frozenset({"kernel", "tool"}),
     "escalated": frozenset({"kernel", "human"}),
+    "taken": frozenset({"human"}),
+    "released": frozenset({"human"}),
 }
 # Actores que pueden dar un dato por confirmado al fijarlo (nunca el LLM ni una tool).
 _CONFIRMAN = frozenset({"kernel", "human", "backoffice"})
@@ -381,6 +385,14 @@ def aplicar(p: Proyeccion | None, evento: Evento) -> Proyeccion:
 
     if tipo in {"cancelled", "failed", "escalated"}:
         return _cerrar(p, evento, tipo, _motivo(evento, data, obligatorio=True))
+
+    if tipo in ANOTACIONES_HUMANAS:
+        # Una persona tomó o soltó la conversación: queda en la línea de la tarea para quien la
+        # retome. `escalation_id` es opcional (la toma puede no venir de una escalación).
+        if _uuid(evento, data.get("admin_id"), "admin_id") is None:
+            raise _error(evento, "falta admin_id")
+        _uuid(evento, data.get("escalation_id"), "escalation_id")
+        return p
 
     # action_requested / action_succeeded / action_failed / precondition_failed: historia de la
     # tarea (auditoría, evals, verificador); no cambian la proyección más allá de la secuencia.
