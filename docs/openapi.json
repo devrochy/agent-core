@@ -10863,6 +10863,136 @@
         }
       }
     },
+    "/api/v1/admin/platform/tenants/{tenant_id}/colaboracion": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Get Colaboracion",
+        "description": "Banderas de la colaboración con pila de tareas del negocio. Solo el master.",
+        "operationId": "get_colaboracion_api_v1_admin_platform_tenants__tenant_id__colaboracion_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ColaboracionBanderas"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Put Colaboracion",
+        "description": "Cambia las banderas que vengan (auditado como `agent_os_colaboracion`). 409 `no_disponible`\ncon un valor que este despliegue todavía no aplica.",
+        "operationId": "put_colaboracion_api_v1_admin_platform_tenants__tenant_id__colaboracion_put",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ColaboracionBanderasIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ColaboracionBanderas"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/settings/declarative-tools": {
       "get": {
         "tags": [
@@ -50815,6 +50945,109 @@
           "vigentes"
         ],
         "title": "CohorteFila"
+      },
+      "ColaboracionBanderas": {
+        "properties": {
+          "pila": {
+            "type": "string",
+            "enum": [
+              "off",
+              "shadow",
+              "active"
+            ],
+            "title": "Pila",
+            "description": "Pila de tareas: «off», «shadow» (calcula y anota lo que abriría) o «active» (la abre)."
+          },
+          "verificar_horarios": {
+            "type": "string",
+            "enum": [
+              "shadow",
+              "active"
+            ],
+            "title": "Verificar Horarios",
+            "description": "Horarios sin respaldo: «shadow» solo cuenta; «active» rechaza y reintenta."
+          },
+          "verificar_preguntas": {
+            "type": "string",
+            "enum": [
+              "shadow",
+              "active"
+            ],
+            "title": "Verificar Preguntas",
+            "description": "Más preguntas que `composition.maxQuestions`: «shadow» solo cuenta; «active» rechaza."
+          },
+          "disponibles": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Disponibles",
+            "description": "Los valores que este despliegue ya aplica (la HU se entrega por partes)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "pila",
+          "verificar_horarios",
+          "verificar_preguntas"
+        ],
+        "title": "ColaboracionBanderas"
+      },
+      "ColaboracionBanderasIn": {
+        "properties": {
+          "pila": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "shadow",
+                  "active"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pila"
+          },
+          "verificar_horarios": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "shadow",
+                  "active"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verificar Horarios"
+          },
+          "verificar_preguntas": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "shadow",
+                  "active"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verificar Preguntas"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ColaboracionBanderasIn"
       },
       "HistorialItem": {
         "properties": {

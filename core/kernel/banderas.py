@@ -1,5 +1,6 @@
 """Banderas del Agent OS por negocio (ADR-0112): `tenants.aos_runtime`, `tenants.aos_procedures` y
-`tenants.aos_routing` (HU-AOS-17, ADR-0138).
+`tenants.aos_routing` (HU-AOS-17, ADR-0138), más las de la colaboración con pila de tareas en
+`tenants.settings.agent_os` (HU-AOS-20, adenda de ADR-0116).
 
 Las guarda la base (migración 0070, con el CHECK de orden `aos_procedures ⇒ aos_runtime = 'v3'`)
 y solo las edita el master. Se leen en cada turno, así un cambio surte efecto sin redeploy.
@@ -14,6 +15,31 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
+MODOS_PILA = ("off", "shadow", "active")
+MODOS_VERIFICACION = ("shadow", "active")
+
+
+@dataclass(frozen=True)
+class Colaboracion:
+    """Banderas de la colaboración con pila de tareas (HU-AOS-20, adenda de ADR-0116), en
+    `tenants.settings.agent_os`. Un valor desconocido cuenta como el más apagado."""
+
+    pila: str = "off"                    # off | shadow | active
+    verificar_horarios: str = "shadow"   # shadow | active
+    verificar_preguntas: str = "shadow"  # shadow | active
+
+    @classmethod
+    def desde(cls, crudo: object) -> Colaboracion:
+        d = crudo if isinstance(crudo, dict) else {}
+        pila = d.get("pila")
+        horarios = d.get("verificar_horarios")
+        preguntas = d.get("verificar_preguntas")
+        return cls(
+            pila=pila if pila in MODOS_PILA else "off",
+            verificar_horarios=horarios if horarios in MODOS_VERIFICACION else "shadow",
+            verificar_preguntas=preguntas if preguntas in MODOS_VERIFICACION else "shadow",
+        )
+
 
 @dataclass(frozen=True)
 class BanderasAOS:
@@ -21,6 +47,7 @@ class BanderasAOS:
     procedimientos: bool = False
     # Enrutamiento entre especialistas (HU-AOS-17, migración 0094, ADR-0138): off | shadow | active.
     ruteo: str = "off"
+    colaboracion: Colaboracion = Colaboracion()
 
 
 APAGADAS = BanderasAOS()
@@ -30,13 +57,18 @@ async def banderas_del_negocio(session: AsyncSession, tenant_id: uuid.UUID) -> B
     """Banderas del negocio; apagadas si el negocio no existe (fail-closed hacia lo de siempre)."""
     fila = (
         await session.execute(
-            text("SELECT aos_runtime, aos_procedures, aos_routing FROM tenants WHERE id = :t"),
+            text("SELECT aos_runtime, aos_procedures, aos_routing, settings->'agent_os' FROM tenants WHERE id = :t"),
             {"t": tenant_id},
         )
     ).first()
     if fila is None:
         return APAGADAS
-    return BanderasAOS(runtime=fila[0], procedimientos=bool(fila[1]), ruteo=str(fila[2] or "off"))
+    return BanderasAOS(
+        runtime=fila[0],
+        procedimientos=bool(fila[1]),
+        ruteo=str(fila[2] or "off"),
+        colaboracion=Colaboracion.desde(fila[3]),
+    )
 
 
 async def negocios_con_procedimientos(session: AsyncSession) -> list[uuid.UUID]:

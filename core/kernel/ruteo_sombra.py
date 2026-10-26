@@ -90,7 +90,8 @@ async def reporte_de_sombra(tenant_id: uuid.UUID, dias: int = 7) -> Reporte:
                     "      AND ct.parent_task_id IS NULL AND ct.created_at >= d.created_at "
                     "      AND (d.siguiente IS NULL OR ct.created_at < d.siguiente) "
                     "    ORDER BY ct.created_at LIMIT 1) "
-                    "FROM d WHERE d.shadow_route IS NOT NULL AND d.shadow_route->>'route_source' <> 'task'"
+                    # Las filas que solo traen la clave `pila` (HU-AOS-20, ruteo activo) no son una ruta en sombra.
+                    "FROM d WHERE d.shadow_route ? 'route_source' AND d.shadow_route->>'route_source' <> 'task'"
                 ),
                 {"t": tenant_id, "dias": dias},
             )
@@ -98,6 +99,76 @@ async def reporte_de_sombra(tenant_id: uuid.UUID, dias: int = 7) -> Reporte:
     return metricas(
         ((str(f[1]) if f[0] in _PREDICEN and f[1] else None), (str(f[2]) if f[2] else None)) for f in filas
     )
+
+
+# ------------------------------------------------------------------ pila de tareas (HU-AOS-20)
+VENTANA_PILA_HORAS = 12
+
+
+@dataclass
+class ReportePila:
+    """Lo que la pila habría abierto (`shadow_route.pila`, turnos sin foco) frente a los
+    procedimientos que de verdad se iniciaron en las `VENTANA_PILA_HORAS` siguientes."""
+
+    turnos: int = 0
+    predichos: int = 0
+    reales: int = 0
+    aciertos: int = 0
+    completos: int = 0  # turnos en que se inició todo lo que habría abierto
+
+    @property
+    def precision(self) -> float | None:
+        return self.aciertos / self.predichos if self.predichos else None
+
+    @property
+    def recall(self) -> float | None:
+        return self.aciertos / self.reales if self.reales else None
+
+
+def metricas_de_pila(filas: Iterable[tuple[Iterable[str], Iterable[str]]]) -> ReportePila:
+    """`(lo que habría abierto, lo que se inició)` por turno → métricas. Puro."""
+    reporte = ReportePila()
+    for predichos, reales in filas:
+        p, r = set(predichos), set(reales)
+        reporte.turnos += 1
+        reporte.predichos += len(p)
+        reporte.reales += len(r)
+        reporte.aciertos += len(p & r)
+        reporte.completos += int(bool(p) and p <= r)
+    return reporte
+
+
+async def reporte_de_pila(tenant_id: uuid.UUID, dias: int = 7) -> ReportePila:
+    """El bloque «pila» del reporte de sombra (bajo el `tenant_scope` del negocio). Solo turnos sin
+    tarea en foco: con foco, el modelo no puede iniciar otra tarea y no hay con qué comparar."""
+    from core.db.session import get_session
+    from core.shared.tenant import get_current_tenant_id
+
+    if get_current_tenant_id() != tenant_id:
+        raise PermissionError("ruteo: fuera del tenant_scope del negocio")
+    dias = max(1, min(int(dias), MAX_DIAS))
+    async with get_session() as session:
+        filas = (
+            await session.execute(
+                text(
+                    "SELECT d.shadow_route->'pila', "
+                    "  coalesce((SELECT array_agg(DISTINCT ct.procedure_id) FROM conversation_tasks ct "
+                    "    WHERE ct.tenant_id = :t AND ct.conversation_id = d.conversation_id "
+                    "      AND ct.parent_task_id IS NULL AND ct.created_at >= d.created_at "
+                    "      AND ct.created_at < d.created_at + make_interval(hours => :horas)), '{}') "
+                    "FROM core_decisions d "
+                    "WHERE d.tenant_id = :t AND d.outcome = 'routed' AND d.focus_task_id IS NULL "
+                    "  AND d.shadow_route ? 'pila' AND d.created_at >= now() - make_interval(days => :dias)"
+                ),
+                {"t": tenant_id, "dias": dias, "horas": VENTANA_PILA_HORAS},
+            )
+        ).all()
+
+    def predichos(pila: object) -> list[str]:
+        d = pila if isinstance(pila, dict) else {}
+        return [str(x) for x in [*(d.get("abre") or []), *(d.get("pausa") or [])]]
+
+    return metricas_de_pila((predichos(f[0]), [str(x) for x in (f[1] or [])]) for f in filas)
 
 
 async def escribir_modo(tenant_id: uuid.UUID, modo: str, database_url: str | None = None) -> None:
@@ -137,4 +208,14 @@ async def escribir_modo(tenant_id: uuid.UUID, modo: str, database_url: str | Non
         await engine.dispose()
 
 
-__all__ = ["MAX_DIAS", "Metrica", "Reporte", "escribir_modo", "metricas", "reporte_de_sombra"]
+__all__ = [
+    "MAX_DIAS",
+    "Metrica",
+    "Reporte",
+    "ReportePila",
+    "escribir_modo",
+    "metricas",
+    "metricas_de_pila",
+    "reporte_de_pila",
+    "reporte_de_sombra",
+]

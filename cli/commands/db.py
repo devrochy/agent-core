@@ -378,15 +378,15 @@ def reporte_ruteo(
     from rich.table import Table
 
     from cli.tenant_ref import resolve_tenant
-    from core.kernel.ruteo_sombra import Reporte, reporte_de_sombra
+    from core.kernel.ruteo_sombra import Reporte, ReportePila, reporte_de_pila, reporte_de_sombra
     from core.shared.tenant import tenant_scope
 
-    async def _run() -> Reporte:
+    async def _run() -> tuple[Reporte, ReportePila]:
         tenant_id = await resolve_tenant(tenant)
         async with tenant_scope(tenant_id):
-            return await reporte_de_sombra(tenant_id, dias)
+            return await reporte_de_sombra(tenant_id, dias), await reporte_de_pila(tenant_id, dias)
 
-    reporte = asyncio.run(_run())
+    reporte, pila = asyncio.run(_run())
     tabla = Table(title=f"Ruteo en sombra: {reporte.turnos} turnos en {dias} días")
     for columna in ("Procedimiento", "Predichos", "Reales", "Aciertos", "Precisión", "Recall"):
         tabla.add_column(columna)
@@ -397,6 +397,13 @@ def reporte_ruteo(
     for m in reporte.metricas:
         tabla.add_row(m.procedure_id, str(m.predichos), str(m.reales), str(m.verdaderos), _pct(m.precision), _pct(m.recall))
     console.print(tabla)
+    # HU-AOS-20: lo que la pila de tareas habría abierto (turnos sin foco). Meta: precisión ≥ 0,90.
+    if pila.turnos:
+        console.print(
+            f"Pila en sombra: {pila.turnos} turnos · predichos {pila.predichos} · iniciados {pila.reales} · "
+            f"aciertos {pila.aciertos} · completos {pila.completos} · precisión {_pct(pila.precision)} · "
+            f"recall {_pct(pila.recall)}"
+        )
 
 
 @app.command("backfill-agentes")

@@ -145,9 +145,9 @@ def test_el_duenio_no_ve_las_waweb_y_el_master_si() -> None:
     dueno = catalogo_para(es_master=False, guardrails_disponibles=[])
     master = catalogo_para(es_master=True, guardrails_disponibles=[])
     assert not [o for o in dueno.opciones if o.clave.startswith("waweb_")]
-    # Identidad: 26 del dueño y 31 del master. Coordinador: 16 del dueño y 19 del master. Banderas: 3.
+    # Identidad: 26 del dueño y 31 del master. Coordinador: 16 del dueño y 19 del master. Banderas: 6 (3 del Agent OS y 3 de la colaboración, HU-AOS-20).
     assert len(dueno.opciones) == 26 + 16
-    assert len(master.opciones) == 31 + 19 + 3
+    assert len(master.opciones) == 31 + 19 + 6
     assert {o.clave for o in master.opciones if o.clave.startswith("waweb_")} == {
         o.clave for o in OPCIONES if o.grupo == "whatsapp_web"
     }
@@ -380,9 +380,13 @@ def test_los_valores_de_las_opciones_de_elegir_del_coordinador_y_las_banderas_sa
 
 def test_las_banderas_son_del_master_y_dependen_del_runtime_v3() -> None:
     banderas = [o for o in OPCIONES if o.grupo == "agent_os"]
-    assert {o.clave for o in banderas} == {"aos_runtime", "aos_procedures", "aos_routing"}
+    assert {o.clave for o in banderas} == {
+        "aos_runtime", "aos_procedures", "aos_routing",
+        # HU-AOS-20: colaboración con pila de tareas.
+        "agent_os_pila", "agent_os_verificar_horarios", "agent_os_verificar_preguntas",
+    }
     assert all(o.editable_por == "master" and o.almacen.startswith("tenants:") for o in banderas)
-    for clave in ("aos_procedures", "aos_routing"):
+    for clave in ("aos_procedures", "aos_routing", "agent_os_pila", "agent_os_verificar_horarios", "agent_os_verificar_preguntas"):
         dep = POR_CLAVE[clave].depende_de
         assert dep and (dep.clave, dep.condicion, dep.valor) == ("aos_runtime", "igual", "v3")
     # El valor «apagado» de cada bandera es el que ya usa el runtime (`APAGADAS`).
@@ -391,6 +395,8 @@ def test_las_banderas_son_del_master_y_dependen_del_runtime_v3() -> None:
     assert POR_CLAVE["aos_runtime"].por_defecto == APAGADAS.runtime
     assert POR_CLAVE["aos_procedures"].por_defecto == APAGADAS.procedimientos
     assert POR_CLAVE["aos_routing"].por_defecto == APAGADAS.ruteo
+    assert POR_CLAVE["agent_os_pila"].por_defecto == APAGADAS.colaboracion.pila == "off"
+    assert POR_CLAVE["agent_os_verificar_horarios"].por_defecto == "shadow"
 
 
 def test_el_ambito_sale_del_almacen_y_el_dueno_no_ve_los_presupuestos_ni_las_banderas() -> None:

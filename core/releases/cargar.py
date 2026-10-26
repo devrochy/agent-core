@@ -182,6 +182,20 @@ class ReleaseCongelada:
             log.error("release_a2a_invalido", release_number=self.number)
             return A2ALimits()
 
+    def procedimientos_kernel(self) -> Any:
+        """`procedures` del KernelSpec congelado (`KernelProcedures`: `maxStack`, …); los valores por
+        defecto si no valida (HU-AOS-20)."""
+        from agentcore_contracts.kernelspec import KernelProcedures
+        from pydantic import ValidationError
+
+        kernel = self.kernel
+        crudo = kernel.content.get("procedures") if kernel is not None else None
+        try:
+            return KernelProcedures.model_validate(crudo if isinstance(crudo, Mapping) else {})
+        except ValidationError:
+            log.error("release_procedures_invalido", release_number=self.number)
+            return KernelProcedures()
+
     def indice_de_disparadores(self) -> tuple[Any, dict[str, str]]:
         """Índice léxico de los procedimientos publicados de los especialistas (con los ejemplos
         de `procedures[].overrides.examples` de cada agente) y la key del dueño de cada uno (el más
