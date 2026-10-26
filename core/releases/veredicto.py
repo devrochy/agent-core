@@ -306,6 +306,95 @@ async def de_la_activa(session: Any, tenant_id: uuid.UUID, activa: uuid.UUID) ->
     return dict(fila) if isinstance(fila, dict) else None
 
 
+MAX_CADENA = 10
+
+
+async def consistencia_vigente(session: Any, tenant_id: uuid.UUID, activa: uuid.UUID) -> list[dict[str, Any]]:
+    """Consistencia vigente de cada procedimiento de la release activa (adenda HU-AOS-29).
+
+    Recorre la cadena `base_release_id` desde la activa (hasta `MAX_CADENA` versiones). Para cada
+    procedimiento vale el último veredicto que lo midió, siempre que ninguna versión posterior lo haya
+    vuelto a tocar sin medirlo. Una versión promovida sin veredicto (exenta, gate apagado o forzada)
+    no corta la cadena: lo que tocó (`gate_tocados`) queda sin datos y se sigue por `from_release_id`.
+    Lo que queda sin medición sale con `pass_k = None` («sin datos»)."""
+    from core.releases.cargar import cargar_release
+
+    _exigir_scope(tenant_id)
+    release = await cargar_release(session, tenant_id, activa)
+    if release is None:
+        return []
+    pendientes = set(release.procedimientos())
+    medidos: dict[str, dict[str, Any]] = {}
+    actual: uuid.UUID | None = activa
+    vistos: set[uuid.UUID] = set()
+    while actual is not None and actual not in vistos and len(vistos) < MAX_CADENA and pendientes:
+        vistos.add(actual)
+        fila = (
+            await session.execute(
+                text(
+                    "SELECT e.type, e.data, r.number FROM release_events e "
+                    "JOIN connection_releases r ON r.tenant_id = e.tenant_id AND r.id = e.release_id "
+                    "WHERE e.tenant_id = :t AND e.release_id = :r AND e.type IN ('approved', 'rejected') "
+                    "ORDER BY e.created_at DESC LIMIT 1"
+                ),
+                {"t": tenant_id, "r": actual},
+            )
+        ).first()
+        if fila is None:
+            # Promovida sin veredicto (exenta, gate apagado o forzada): lo que tocó queda sin datos y
+            # la cadena sigue por la versión que reemplazó.
+            promovida = (
+                await session.execute(
+                    text(
+                        "SELECT data FROM release_events WHERE tenant_id = :t AND release_id = :r "
+                        "AND type = 'promoted' ORDER BY created_at DESC LIMIT 1"
+                    ),
+                    {"t": tenant_id, "r": actual},
+                )
+            ).scalar_one_or_none()
+            if not isinstance(promovida, dict) or not promovida.get("from_release_id"):
+                break
+            pendientes -= set(promovida.get("gate_tocados") or {})
+            try:
+                actual = uuid.UUID(str(promovida["from_release_id"]))
+            except ValueError:
+                break
+            continue
+        data = dict(fila[1] or {})
+        por = data.get("por_procedimiento") or {}
+        for pid in sorted(pendientes & set(por)):
+            p = por[pid] or {}
+            if p.get("pass_k") is None:
+                continue
+            medidos[pid] = {
+                "pass_k": float(p["pass_k"]),
+                "escenarios": int(p.get("escenarios") or 0),
+                "medido_en_release_id": actual,
+                "medido_en_version": fila[2],
+            }
+        pendientes -= set(medidos)
+        # Lo que esta versión tocó sin medir ya no puede heredar una medición más vieja.
+        pendientes -= set(data.get("tocados") or {}) | set(data.get("sin_medir") or [])
+        try:
+            actual = uuid.UUID(str(data["base_release_id"])) if data.get("base_release_id") else None
+        except ValueError:
+            actual = None
+    salida: list[dict[str, Any]] = []
+    for pid in sorted(release.procedimientos()):
+        m = medidos.get(pid)
+        salida.append(
+            {
+                "procedure_id": pid,
+                "pass_k": m["pass_k"] if m else None,
+                "ok": (m["pass_k"] >= UMBRAL) if m else None,
+                "escenarios": m["escenarios"] if m else 0,
+                "medido_en_release_id": m["medido_en_release_id"] if m else None,
+                "medido_en_version": m["medido_en_version"] if m else None,
+            }
+        )
+    return salida
+
+
 async def tope_del_mes(session: Any, tenant_id: uuid.UUID, ahora: datetime | None = None) -> tuple[float, float]:
     """`(gastado, tope)` en USD del mes en curso en evals del negocio."""
     _exigir_scope(tenant_id)

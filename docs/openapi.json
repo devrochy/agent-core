@@ -8810,6 +8810,620 @@
         }
       }
     },
+    "/api/v1/admin/reliability": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · fiabilidad"
+        ],
+        "summary": "Reliability",
+        "operationId": "reliability_api_v1_admin_reliability_get",
+        "parameters": [
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Desde"
+            }
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hasta"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "release_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Release Id"
+            }
+          },
+          {
+            "name": "lane",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "stable",
+                    "canary",
+                    "pinned",
+                    "legacy"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lane"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReliabilityResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/reliability/verifier": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · fiabilidad"
+        ],
+        "summary": "Verifier Rejections",
+        "operationId": "verifier_rejections_api_v1_admin_reliability_verifier_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[a-z0-9_]{1,60}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Desde"
+            }
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hasta"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "release_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Release Id"
+            }
+          },
+          {
+            "name": "lane",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "stable",
+                    "canary",
+                    "pinned",
+                    "legacy"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lane"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifierRejections"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/reliability/verifier/{turn_id}/false-positive": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · fiabilidad"
+        ],
+        "summary": "Mark False Positive",
+        "operationId": "mark_false_positive_api_v1_admin_reliability_verifier__turn_id__false_positive_post",
+        "parameters": [
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Turn Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FalsePositiveIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FalsePositiveOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/usage": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · fiabilidad"
+        ],
+        "summary": "Usage",
+        "operationId": "usage_api_v1_admin_usage_get",
+        "parameters": [
+          {
+            "name": "group_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "connection",
+                "agent",
+                "a2a",
+                "day"
+              ],
+              "type": "string",
+              "default": "agent",
+              "title": "Group By"
+            }
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Desde"
+            }
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hasta"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "release_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Release Id"
+            }
+          },
+          {
+            "name": "lane",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "stable",
+                    "canary",
+                    "pinned",
+                    "legacy"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lane"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/evals/runs": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · fiabilidad"
+        ],
+        "summary": "Eval Runs",
+        "operationId": "eval_runs_api_v1_admin_evals_runs_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvalRunsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/plan": {
       "get": {
         "tags": [
@@ -28915,6 +29529,77 @@
         ],
         "title": "ConnectionCategory"
       },
+      "ConnectionConsistency": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "connection": {
+            "type": "string",
+            "title": "Connection"
+          },
+          "release_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Id"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "threshold": {
+            "type": "number",
+            "title": "Threshold",
+            "description": "Umbral de pass^4 (0 a 1)."
+          },
+          "no_data": {
+            "type": "boolean",
+            "title": "No Data"
+          },
+          "below_threshold": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Below Threshold"
+          },
+          "procedures": {
+            "items": {
+              "$ref": "#/components/schemas/ProcedureConsistency"
+            },
+            "type": "array",
+            "title": "Procedures"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "connection",
+          "release_id",
+          "version",
+          "threshold",
+          "no_data",
+          "below_threshold",
+          "procedures"
+        ],
+        "title": "ConnectionConsistency"
+      },
       "ConnectionItem": {
         "properties": {
           "id": {
@@ -30289,6 +30974,22 @@
           "status"
         ],
         "title": "EvalRunItem"
+      },
+      "EvalRunsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReliabilityEvalRun"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "EvalRunsResponse"
       },
       "Evaluation": {
         "properties": {
@@ -33136,6 +33837,22 @@
         "title": "MinimoPagoEnLineaOut",
         "description": "Mínimo por cobro para pagar en línea (HU-SUB-25). El panel lo usa para avisar al guardar un plan."
       },
+      "MinimumSample": {
+        "properties": {
+          "turns": {
+            "type": "integer",
+            "title": "Turns",
+            "default": 20
+          },
+          "tasks": {
+            "type": "integer",
+            "title": "Tasks",
+            "default": 10
+          }
+        },
+        "type": "object",
+        "title": "MinimumSample"
+      },
       "Monitoring": {
         "properties": {
           "conversaciones": {
@@ -33409,6 +34126,101 @@
         ],
         "title": "Opcion",
         "description": "Una opción de configuración. `extra=\"forbid\"`: un campo mal escrito falla al importar."
+      },
+      "Operational": {
+        "properties": {
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "conversations": {
+            "type": "integer",
+            "title": "Conversations"
+          },
+          "escalated": {
+            "type": "integer",
+            "title": "Escalated"
+          },
+          "escalated_conversations": {
+            "type": "integer",
+            "title": "Escalated Conversations"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "without_outcome": {
+            "type": "integer",
+            "title": "Without Outcome"
+          },
+          "escalation_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Escalation Rate",
+            "description": "Fracción de 0 a 1; null bajo la muestra mínima."
+          },
+          "p95_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Ms"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "cost_per_conversation_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Per Conversation Usd"
+          },
+          "by_agent": {
+            "items": {
+              "$ref": "#/components/schemas/AgentReliability"
+            },
+            "type": "array",
+            "title": "By Agent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turns",
+          "conversations",
+          "escalated",
+          "escalated_conversations",
+          "failed",
+          "without_outcome",
+          "escalation_rate",
+          "p95_ms",
+          "cost_usd",
+          "cost_per_conversation_usd",
+          "by_agent"
+        ],
+        "title": "Operational"
       },
       "OrderLine": {
         "properties": {
@@ -35308,6 +36120,115 @@
           "pasos"
         ],
         "title": "PrimerosPasosResponse"
+      },
+      "ProcedureCompletion": {
+        "properties": {
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "finished": {
+            "type": "integer",
+            "title": "Finished"
+          },
+          "completed": {
+            "type": "integer",
+            "title": "Completed"
+          },
+          "escalated": {
+            "type": "integer",
+            "title": "Escalated"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate",
+            "description": "Fracción de 0 a 1; null bajo la muestra mínima."
+          }
+        },
+        "type": "object",
+        "required": [
+          "procedure_id",
+          "finished",
+          "completed",
+          "escalated",
+          "rate"
+        ],
+        "title": "ProcedureCompletion"
+      },
+      "ProcedureConsistency": {
+        "properties": {
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "pass_k": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pass K",
+            "description": "Fracción de escenarios estables en k = 4 (0 a 1); null sin datos."
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          },
+          "scenarios": {
+            "type": "integer",
+            "title": "Scenarios"
+          },
+          "measured_in_release_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured In Release Id"
+          },
+          "measured_in_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured In Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "procedure_id",
+          "pass_k",
+          "ok",
+          "scenarios",
+          "measured_in_release_id",
+          "measured_in_version"
+        ],
+        "title": "ProcedureConsistency"
       },
       "ProcedureIssue": {
         "properties": {
@@ -40969,6 +41890,101 @@
         ],
         "title": "VendedorAltas"
       },
+      "VerifierKind": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "rejections": {
+            "type": "integer",
+            "title": "Rejections"
+          },
+          "false_positives": {
+            "type": "integer",
+            "title": "False Positives"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "rejections",
+          "false_positives"
+        ],
+        "title": "VerifierKind"
+      },
+      "VerifierRejection": {
+        "properties": {
+          "turn_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Turn Id"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "false_positive": {
+            "type": "boolean",
+            "title": "False Positive"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "conversation_id",
+          "connection_id",
+          "created_at",
+          "kind",
+          "false_positive"
+        ],
+        "title": "VerifierRejection"
+      },
+      "VerifierRejections": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/VerifierRejection"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "VerifierRejections"
+      },
       "TestMessageOut": {
         "properties": {
           "message_id": {
@@ -42749,6 +43765,176 @@
         ],
         "title": "ReleaseSummary"
       },
+      "ReliabilityEvalRun": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "origin": {
+            "type": "string",
+            "title": "Origin"
+          },
+          "k": {
+            "type": "integer",
+            "title": "K"
+          },
+          "pass_1": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pass 1"
+          },
+          "pass_k_average": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pass K Average"
+          },
+          "passed": {
+            "type": "integer",
+            "title": "Passed"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "origin",
+          "k",
+          "pass_1",
+          "pass_k_average",
+          "passed",
+          "total",
+          "started_at",
+          "version",
+          "connection_id"
+        ],
+        "title": "ReliabilityEvalRun"
+      },
+      "ReliabilityPeriod": {
+        "properties": {
+          "desde": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Desde"
+          },
+          "hasta": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Hasta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "desde",
+          "hasta"
+        ],
+        "title": "ReliabilityPeriod"
+      },
+      "ReliabilityResponse": {
+        "properties": {
+          "period": {
+            "$ref": "#/components/schemas/ReliabilityPeriod"
+          },
+          "minimum_sample": {
+            "$ref": "#/components/schemas/MinimumSample"
+          },
+          "operational": {
+            "$ref": "#/components/schemas/Operational"
+          },
+          "verifier": {
+            "items": {
+              "$ref": "#/components/schemas/VerifierKind"
+            },
+            "type": "array",
+            "title": "Verifier"
+          },
+          "completion": {
+            "items": {
+              "$ref": "#/components/schemas/ProcedureCompletion"
+            },
+            "type": "array",
+            "title": "Completion"
+          },
+          "consistency": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionConsistency"
+            },
+            "type": "array",
+            "title": "Consistency",
+            "description": "Consistencia vigente de la versión activa; no se acota al periodo, versión ni carril."
+          },
+          "can_see_costs": {
+            "type": "boolean",
+            "title": "Can See Costs"
+          },
+          "can_see_conversations": {
+            "type": "boolean",
+            "title": "Can See Conversations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period",
+          "operational",
+          "verifier",
+          "completion",
+          "consistency",
+          "can_see_costs",
+          "can_see_conversations"
+        ],
+        "title": "ReliabilityResponse"
+      },
       "RollbackIn": {
         "properties": {
           "to_release_id": {
@@ -43775,6 +44961,79 @@
         ],
         "title": "AgentRecordItem"
       },
+      "AgentReliability": {
+        "properties": {
+          "instance_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instance Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "escalated": {
+            "type": "integer",
+            "title": "Escalated"
+          },
+          "escalation_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Escalation Rate",
+            "description": "Fracción de 0 a 1; null bajo la muestra mínima."
+          },
+          "p95_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Ms"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          }
+        },
+        "type": "object",
+        "required": [
+          "instance_id",
+          "name",
+          "turns",
+          "escalated",
+          "escalation_rate",
+          "p95_ms",
+          "cost_usd"
+        ],
+        "title": "AgentReliability"
+      },
       "AgentTask": {
         "properties": {
           "id": {
@@ -44277,6 +45536,96 @@
           "hasta"
         ],
         "title": "UsagePeriod"
+      },
+      "UsageResponse": {
+        "properties": {
+          "period": {
+            "$ref": "#/components/schemas/ReliabilityPeriod"
+          },
+          "group_by": {
+            "type": "string",
+            "enum": [
+              "connection",
+              "agent",
+              "a2a",
+              "day"
+            ],
+            "title": "Group By"
+          },
+          "can_see_costs": {
+            "type": "boolean",
+            "title": "Can See Costs"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UsageRow"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period",
+          "group_by",
+          "can_see_costs",
+          "items"
+        ],
+        "title": "UsageResponse"
+      },
+      "UsageRow": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "mode",
+          "rows",
+          "cost_usd"
+        ],
+        "title": "UsageRow"
       },
       "UsageTotals": {
         "properties": {
@@ -46774,6 +48123,56 @@
           "motivo"
         ],
         "title": "FallaOut"
+      },
+      "FalsePositiveIn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]{1,60}$",
+            "title": "Kind"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "FalsePositiveIn"
+      },
+      "FalsePositiveOut": {
+        "properties": {
+          "turn_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Turn Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "false_positive": {
+            "type": "boolean",
+            "title": "False Positive",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "kind"
+        ],
+        "title": "FalsePositiveOut"
       },
       "PlantillaDeEnvio": {
         "properties": {
