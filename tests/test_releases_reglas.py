@@ -89,8 +89,33 @@ def test_sticky_por_episodio_y_rollback_a_mitad_de_episodio() -> None:
     )
     # Su release fue retirada por un rollback: cambia ya en este turno.
     assert decidir_destino(R2, R1, None, episodio_nuevo=False, retirada=True) == (R1, "retirada")
-    # La del canary se queda.
-    assert decidir_destino(R3, R1, R3, episodio_nuevo=True, retirada=False) == (R3, None)
+    # Dentro del episodio, la del canary se queda.
+    assert decidir_destino(R3, R1, R3, episodio_nuevo=False, retirada=False) == (R3, None)
+    # Al empezar un episodio se vuelve a sortear (HU-AOS-32): con el canary al 0 %, a la activa.
+    assert decidir_destino(R3, R1, R3, episodio_nuevo=True, retirada=False) == (R1, "episodio_nuevo")
+
+
+def test_canary_reparto_sticky_y_retirada() -> None:
+    """HU-AOS-32: la cubeta es estable (sha256, no `hash()`), reparte cerca del porcentaje, cambia
+    con otro canary, y una release retirada a mitad de episodio va a la activa sin sortear."""
+    import uuid
+
+    from core.kernel.release_del_turno import LANE_CANARY, LANE_ESTABLE, carril, cubeta
+
+    convs = [uuid.UUID(int=i) for i in range(10_000)]
+    assert all(cubeta(R3, c) == cubeta(R3, c) for c in convs[:50])
+    al_canary = sum(1 for c in convs if decidir_destino(None, R1, R3, episodio_nuevo=False, retirada=False,
+                                                       canary_percent=10, conversation_id=c)[0] == R3)
+    assert 900 <= al_canary <= 1100, al_canary
+    otro = uuid.uuid4()
+    assert sum(1 for c in convs[:2000] if (cubeta(R3, c) < 10) != (cubeta(otro, c) < 10)) > 100
+    # Dentro del episodio no se sortea: sigue en la activa aunque su cubeta sea del canary.
+    c = next(c for c in convs if cubeta(R3, c) < 10)
+    assert decidir_destino(R1, R1, R3, episodio_nuevo=False, retirada=False, canary_percent=10, conversation_id=c) == (R1, None)
+    assert decidir_destino(R1, R1, R3, episodio_nuevo=True, retirada=False, canary_percent=10, conversation_id=c) == (R3, "episodio_nuevo")
+    # Retirada a mitad de episodio: a la activa, sin sorteo.
+    assert decidir_destino(R2, R1, R3, episodio_nuevo=False, retirada=True, canary_percent=50, conversation_id=c) == (R1, "retirada")
+    assert carril(R3, R1, R3) == LANE_CANARY and carril(R1, R1, R3) == LANE_ESTABLE and carril(R1, R1, None) == LANE_ESTABLE
 
 
 # ---------------------------------------------------------------- revalidación

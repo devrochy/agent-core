@@ -4329,6 +4329,326 @@
         }
       }
     },
+    "/api/v1/admin/connections/{connection_id}/releases/{release_id}/canary": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · releases"
+        ],
+        "summary": "Start Canary",
+        "description": "Prueba la versión con una parte de las conversaciones nuevas (HU-AOS-32). Mismas reglas que\npublicar: dueño o master, gate aprobado si está cerrado, `aos_runtime = v3` (409 `requiere_v3`).\nHasta la parte 2 (la reversión automática) responde 409 `canary_no_disponible`.",
+        "operationId": "start_canary_api_v1_admin_connections__connection_id__releases__release_id__canary_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "release_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Release Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CanaryIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/{connection_id}/canary": {
+      "patch": {
+        "tags": [
+          "api",
+          "admin · releases"
+        ],
+        "summary": "Change Canary Percent",
+        "description": "Cambia el porcentaje de la prueba (rige al empezar cada episodio).",
+        "operationId": "change_canary_percent_api_v1_admin_connections__connection_id__canary_patch",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CanaryPercentIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "api",
+          "admin · releases"
+        ],
+        "summary": "Get Canary",
+        "description": "La prueba en curso de la conexión con su muestra, la comparación por carril, el veredicto y la\nseñal dura; null si no hay. No escribe nada.",
+        "operationId": "get_canary_api_v1_admin_connections__connection_id__canary_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CanaryState"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Canary Api V1 Admin Connections  Connection Id  Canary Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/{connection_id}/canary/stop": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · releases"
+        ],
+        "summary": "Stop Canary",
+        "description": "Detiene la prueba (siempre como `detenida_por_dueno`: la versión se puede volver a probar).",
+        "operationId": "stop_canary_api_v1_admin_connections__connection_id__canary_stop_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/{connection_id}/canary/promote": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · releases"
+        ],
+        "summary": "Promote Canary",
+        "description": "Publica para todos la versión en prueba: exige el veredicto `listo` (o 7 días sin muestra) y\nque no haya señal dura (409 `canary_peor`, `canary_sin_muestra`, `canary_senal_dura`).",
+        "operationId": "promote_canary_api_v1_admin_connections__connection_id__canary_promote_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseChange"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/a2a/graph": {
       "get": {
         "tags": [
@@ -28720,6 +29040,349 @@
         ],
         "title": "Call"
       },
+      "CanaryIn": {
+        "properties": {
+          "percent": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Percent",
+            "description": "Porcentaje de las conversaciones nuevas que prueban la versión."
+          },
+          "forzar": {
+            "type": "boolean",
+            "title": "Forzar",
+            "description": "Solo master: saltar el gate de pass^k (con motivo).",
+            "default": false
+          },
+          "motivo_forzado": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Forzado"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "percent"
+        ],
+        "title": "CanaryIn"
+      },
+      "CanaryLane": {
+        "properties": {
+          "conversaciones": {
+            "type": "integer",
+            "title": "Conversaciones"
+          },
+          "escalamiento": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Escalamiento",
+            "description": "Fracción de 0 a 1 de conversaciones que pasaron a una persona."
+          },
+          "completitud": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completitud",
+            "description": "Fracción de 0 a 1 de recorridos completados (los que empezaron en la prueba)."
+          },
+          "tareas_terminadas": {
+            "type": "integer",
+            "title": "Tareas Terminadas"
+          },
+          "costo_por_conversacion_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Costo Por Conversacion Usd",
+            "description": "USD por conversación; null sin datos o sin la sección `costs` (ver `costos_visibles`)."
+          },
+          "p95_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conversaciones",
+          "escalamiento",
+          "completitud",
+          "tareas_terminadas",
+          "costo_por_conversacion_usd",
+          "p95_ms"
+        ],
+        "title": "CanaryLane"
+      },
+      "CanaryPercentIn": {
+        "properties": {
+          "percent": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Percent"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "percent"
+        ],
+        "title": "CanaryPercentIn"
+      },
+      "CanarySignal": {
+        "properties": {
+          "activa": {
+            "type": "boolean",
+            "title": "Activa"
+          },
+          "evaluadas": {
+            "type": "integer",
+            "title": "Evaluadas"
+          },
+          "llegaron_mal": {
+            "type": "integer",
+            "title": "Llegaron Mal"
+          },
+          "tasa": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tasa"
+          },
+          "tasa_estable": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tasa Estable"
+          },
+          "sin_resultado": {
+            "type": "integer",
+            "title": "Sin Resultado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "activa",
+          "evaluadas",
+          "llegaron_mal",
+          "tasa",
+          "tasa_estable",
+          "sin_resultado"
+        ],
+        "title": "CanarySignal"
+      },
+      "CanaryState": {
+        "properties": {
+          "release_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Release Id"
+          },
+          "release_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Number"
+          },
+          "base_release_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Release Id"
+          },
+          "base_release_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Release Number"
+          },
+          "percent": {
+            "type": "integer",
+            "title": "Percent",
+            "description": "Porcentaje vigente de las conversaciones nuevas que prueban la versión."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "horas": {
+            "type": "number",
+            "title": "Horas",
+            "description": "Horas desde el inicio de la prueba."
+          },
+          "umbral_conversaciones": {
+            "type": "integer",
+            "title": "Umbral Conversaciones",
+            "description": "Conversaciones en la versión nueva para juntar la muestra."
+          },
+          "umbral_horas": {
+            "type": "integer",
+            "title": "Umbral Horas",
+            "description": "Horas mínimas para juntar la muestra."
+          },
+          "dias_manual": {
+            "type": "integer",
+            "title": "Dias Manual"
+          },
+          "publicable_desde": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Publicable Desde",
+            "description": "Desde cuándo se puede publicar a mano sin muestra."
+          },
+          "veredicto": {
+            "type": "string",
+            "enum": [
+              "sin_muestra",
+              "peor",
+              "listo"
+            ],
+            "title": "Veredicto"
+          },
+          "motivos": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "escalamiento",
+                "completitud"
+              ]
+            },
+            "type": "array",
+            "title": "Motivos"
+          },
+          "advertencias": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "costo",
+                "lentitud"
+              ]
+            },
+            "type": "array",
+            "title": "Advertencias"
+          },
+          "costos_visibles": {
+            "type": "boolean",
+            "title": "Costos Visibles"
+          },
+          "veredicto_guardado": {
+            "type": "boolean",
+            "title": "Veredicto Guardado"
+          },
+          "senal_dura": {
+            "$ref": "#/components/schemas/CanarySignal"
+          },
+          "puede_publicar": {
+            "type": "boolean",
+            "title": "Puede Publicar"
+          },
+          "motivo_no_publicar": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "senal_dura",
+                  "peor",
+                  "sin_muestra"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo No Publicar"
+          },
+          "estable": {
+            "$ref": "#/components/schemas/CanaryLane"
+          },
+          "canary": {
+            "$ref": "#/components/schemas/CanaryLane"
+          }
+        },
+        "type": "object",
+        "required": [
+          "release_id",
+          "release_number",
+          "base_release_id",
+          "base_release_number",
+          "percent",
+          "started_at",
+          "horas",
+          "umbral_conversaciones",
+          "umbral_horas",
+          "dias_manual",
+          "publicable_desde",
+          "veredicto",
+          "motivos",
+          "advertencias",
+          "costos_visibles",
+          "veredicto_guardado",
+          "senal_dura",
+          "puede_publicar",
+          "motivo_no_publicar",
+          "estable",
+          "canary"
+        ],
+        "title": "CanaryState"
+      },
       "CashAdjustment": {
         "properties": {
           "valor_nuevo": {
@@ -43678,7 +44341,7 @@
           "detenida": {
             "type": "boolean",
             "title": "Detenida",
-            "description": "La detuvo el dueño (no se puede activar).",
+            "description": "Bloqueada: la detuvo el dueño (como candidata) o el sistema la retiró de una prueba por ir peor. No se puede activar.",
             "default": false
           },
           "manifest": {
@@ -43877,7 +44540,7 @@
           "detenida": {
             "type": "boolean",
             "title": "Detenida",
-            "description": "La detuvo el dueño (no se puede activar).",
+            "description": "Bloqueada: la detuvo el dueño (como candidata) o el sistema la retiró de una prueba por ir peor. No se puede activar.",
             "default": false
           }
         },
