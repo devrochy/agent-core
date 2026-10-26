@@ -47,7 +47,7 @@ CREATE OR REPLACE FUNCTION push_token_release_elsewhere(
 )
 RETURNS integer LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     WITH liberados AS (
-        UPDATE push_tokens
+        UPDATE public.push_tokens
         SET deleted_at = now(), updated_at = now()
         WHERE token = p_token
           AND deleted_at IS NULL

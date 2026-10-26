@@ -33,6 +33,12 @@ class PushTokenRequest(BaseModel):
 
 async def _registrar(principal: Principal, token: str, platform: str) -> None:
     async with get_session() as session:
+        # Serializa las altas del MISMO token (en cualquier negocio): sin esto, dos altas
+        # simultáneas no se ven entre sí (READ COMMITTED) y el token quedaría activo en dos
+        # negocios, o se liberarían mutuamente / en deadlock (auditoría ADR-0168).
+        await session.execute(
+            text("select pg_advisory_xact_lock(hashtextextended(:token, 0))"), {"token": token}
+        )
         existente = (
             await session.execute(
                 select(PushToken).where(

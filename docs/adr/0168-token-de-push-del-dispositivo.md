@@ -27,7 +27,10 @@ El riesgo que la regla quería cubrir no existe en este modelo: para registrar u
 - **Superficie mínima.** `search_path = public, pg_temp`, `REVOKE ALL … FROM PUBLIC` y `GRANT EXECUTE` solo a `app_runtime` (ADR-0039 §3). El dueño debe poder saltar la RLS (`BYPASSRLS`): la migración aborta si no (como 0104).
 - **Quién la llama.** Solo `_registrar`, con el negocio y la cuenta del `Principal` ya autenticado (no valores del cuerpo de la petición), después de registrar y antes del commit.
 
-Riesgo residual aceptado: quien conozca el token de Expo de otro teléfono podría apagar sus avisos en otros negocios (ya podía reasignarlo en el propio, punto 1). Dos altas simultáneas del mismo token en negocios distintos pueden liberarse mutuamente; la app vuelve a registrar al abrirse, así que se autocorrige.
+- **Concurrencia.** `_registrar` toma `pg_advisory_xact_lock(hashtextextended(token, 0))` al empezar, así que las altas del mismo token se serializan aunque sean de negocios distintos: sin el candado, dos altas simultáneas no se verían (READ COMMITTED) y el token quedaría activo en ambos, o se liberarían mutuamente o caerían en deadlock. Una colisión del hash solo serializa dos altas de tokens distintos; no tiene otro efecto.
+- **Cualificación.** La función escribe `public.push_tokens` con nombre completo.
+
+Riesgo residual aceptado: cualquier cuenta que conozca el token exacto de un teléfono ajeno puede apagar sus avisos en los demás negocios y dejarlo activo en el suyo (antes, el alcance se limitaba al propio negocio; ahora cruza negocios). No gana lectura de datos: los avisos de la víctima siguen yendo a su teléfono. Se acepta porque el token de Expo no aparece en ninguna respuesta de la API ni se registra en logs; si dejara de ser así hay que revisar esta decisión (ver «Qué haría que revisáramos esto»).
 
 ## Alternativas consideradas
 

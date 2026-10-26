@@ -338,3 +338,24 @@ async def test_la_funcion_no_hace_nada_con_parametros_vacios_y_la_rls_sigue_cerr
     # Con un negocio y cuenta a conservar distintos, la función sí libera (conteo = 1).
     assert await liberar(expo, tid_b, uuid.uuid4()) == 1
     assert [f.deleted_at is not None for f in await _filas(tid_a, expo)] == [True]
+
+
+@pytest.mark.aislamiento
+async def test_solo_app_runtime_ejecuta_la_funcion_de_liberacion(app_client) -> None:
+    from sqlalchemy import text
+
+    from core.db.session import get_session
+
+    sig = "push_token_release_elsewhere(text, uuid, uuid)"
+    async with get_session() as session:
+        runtime = (
+            await session.execute(text("select has_function_privilege(current_user, :s, 'execute')"), {"s": sig})
+        ).scalar_one()
+        publico = (
+            await session.execute(
+                text("select coalesce(bool_or(a.grantee = 0), false) from pg_proc p, aclexplode(p.proacl) a "
+                     "where p.proname = 'push_token_release_elsewhere'")
+            )
+        ).scalar_one()
+    assert runtime is True
+    assert publico is False
