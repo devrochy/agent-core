@@ -478,6 +478,14 @@ async def _apagar(negocio: ResultadoNegocio, *, dry_run: bool, apagar_procedimie
     if dry_run:
         negocio.accion = "listo"
         return
+    # HU-AOS-32: en legacy el runtime ignora las releases y un canary nunca juntaría muestra. Se
+    # detienen (`reemplazado`) antes de escribir la bandera, en otra transacción (no atómico).
+    from core.releases import canary
+
+    async with tenant_scope(tid):
+        detenidos = await canary.detener_todos(tid, actor="system:migrar_a_v3")
+    if detenidos:
+        negocio.avisos.append(f"{detenidos} versión(es) en prueba detenida(s) al volver a legacy")
     await escribir(tid, "legacy", False if negocio.procedimientos else None)
     negocio.accion = "apagado"
 

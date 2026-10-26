@@ -507,3 +507,138 @@ Propuesta revisada por el arquitecto. Decisión del dueño del 2026-10-25: la co
    - los errores de acción (`action_failed`) como señal dura, que llegan con HU-AOS-32;
    - las listas «frases que nadie reconoce» y «datos que el cliente tuvo que repetir»;
    - la vista master por negocio.
+
+## Adenda propuesta HU-AOS-32: canary sticky con no-inferioridad y auto-rollback (2026-10-26)
+
+**Estado:** propuesta, revisada por el arquitecto. **Enmienda §5 y «Consecuencias»** de este ADR:
+- costo y p95 avisan, pero no revierten;
+- la promoción del canary es siempre manual;
+- la señal dura es «lo que llegó mal al cliente».
+
+Decisiones del dueño del 2026-10-26:
+- (a) **muestra suficiente:** 200 conversaciones en la candidata **y** al menos 72 h. Cierra el pendiente nº 16;
+- (b) si sale bien, **avisa y habilita** «Publicar para todos»: no hay promoción automática;
+- (c) **métricas:** completitud (cae > 2 pp) y escalamiento por conversación (sube > 2 pp) revierten; costo por conversación (+20 %) y p95 (+30 %) solo avisan;
+- (d) **señal dura:** lo que llegó mal al cliente;
+- (e) solo la versión que **retira el sistema por ir peor** queda bloqueada. La que detiene el dueño, o la que se detiene porque hubo que publicar otra cosa, se puede volver a probar;
+- (f) se inicia **como publicar:** dueño o master, de 1 a 50 %, gate aprobado si está cerrado. Con canary vivo no se publica ni se vuelve atrás la activa; un canary por conexión;
+- (g) **alcance:** backend y panel. Las candidatas de plataforma quedan para cuando exista su generador (pendiente nº 15). Los umbrales son fijos y quedan congelados en el evento al iniciar.
+
+Se entrega en partes:
+- **1:** reparto, servicios, evaluación a demanda, API y la migración;
+- **2:** el job, el auto-rollback y los avisos;
+- **panel**, aparte.
+
+**La parte 1 no se despliega sola:** sin el job, un canary vivo nunca se revierte, y eso contradice la enmienda de §5. En la parte 1, `iniciar` responde 409 `canary_no_disponible` (constante `CANARY_DISPONIBLE = False`) y la parte 2 lo habilita.
+
+1. **Reparto sticky** (`core/kernel/release_del_turno.py`).
+   - **Cubeta:** `cubeta(canary_id, conversation_id) = int(sha256(f"{canary_id}|{conversation_id}")[:8], 16) % 100`. Se usa sha256 y no `hash()` de Python, que cambia entre procesos. Con otro canary el reparto cambia.
+   - **`decidir_destino`** recibe `canary_percent` y solo sortea en la primera asignación o en un episodio nuevo: va a la candidata si `cubeta < canary_percent`; si no, a la activa.
+   - Una release **retirada a mitad de episodio** va siempre a la activa, sin volver a sortear: una conversación no cambia dos veces en un episodio.
+   - Dentro del episodio, la conversación conserva su release.
+   - Una conversación sin episodio (`abrir_episodio` devuelve None) conserva la suya.
+   - **`carril()`** devuelve `canary` si el destino es la candidata.
+   - **`asignar`** lee `canary_percent` y `release_lane` en su `FOR UPDATE` y escribe `release_lane` también cuando cambia **solo** el carril. Así el ex-canary vuelve a `stable` cuando se publica.
+   - Bajar el porcentaje no reasigna a mitad de episodio: se drena al fin de cada uno.
+   - Un turno que leyó los punteros antes de que un stop hiciera commit queda un turno más en el canary. Es la misma ventana de ≤ 5 s del rollback (§6).
+2. **Servicios** (`core/releases/canary.py`, mismo `FOR UPDATE` de la conexión que `promocion._bloquear`).
+   - **`iniciar(rid, percent)`:**
+     - 409 `requiere_v3` sin `aos_runtime = v3`, **también para el master** (en legacy el runtime ignora las releases y el canary nunca juntaría muestra);
+     - 409 `canary_en_curso` si ya hay uno;
+     - 409 `ya_activa` si `rid` es la activa;
+     - 409 `sin_release_activa` si la conexión no tiene activa: no habría `base_release_id` y `asignar` no correría. Así `release_uno.promover` tampoco choca con un canary vivo;
+     - `_exigir_utilizable` y `gate_aprobado`, como `promover`, con el forzado del master. Si el gate está pendiente, se reutiliza `gate.solicitar_medicion`, como el router de promover.
+     - Fija los punteros y registra `canary_started` con `{percent, base_release_id, umbrales, gate, gate_motivo}`.
+   - **`cambiar_porcentaje(percent)`:** de 1 a 50 %. Se audita (`audit_log`) y no hay evento nuevo.
+   - **`detener(motivo)`:**
+     - Motivos: `detenida_por_dueno` (la constante de siempre, `promocion.DETENIDA_POR_DUENO`), `reemplazado`, `no_inferioridad` o `senal_dura`.
+     - Registra `canary_stopped` con `{reason, metricas}` y deja los punteros en NULL y 0. La clave es `reason`, como en `invalid`, porque la lee `_exigir_utilizable`.
+     - Como está en `RETIRAN`, las conversaciones de la candidata pasan a la activa en su siguiente turno, con la revalidación de tareas que ya existe.
+   - **`_exigir_utilizable`** bloquea `canary_stopped` solo con el motivo `no_inferioridad` o `senal_dura` (decisión e). Con `detenida_por_dueno` o `reemplazado` la versión se puede volver a probar o publicar.
+   - La misma regla aplica en tres lugares, para que una versión bloqueada no se reconstruya ni quede incoherente:
+     - `esta_detenida` / el 409 `version_detenida` del build;
+     - `ReleaseVista.detenida`;
+     - el 409 `ya_detenida` de `detener` (HU-AOS-27), que hoy usa `RETIRAN - {rolled_back}`.
+   - **`publicar()`:**
+     - **El veredicto se decide una sola vez:** si no hay `canary_evaluated`, `publicar` calcula bajo el lock. Cuando junta la muestra, escribe `canary_evaluated` (`listo` o `peor`), y en la parte 2 también lo puede escribir el job. Desde ahí `publicar` usa ese veredicto guardado y no se puede reintentar hasta que un `peor` cambie a `listo`.
+     - Exige `listo`, o 7 días desde `canary_started` sin muestra (ADR §5), y además **que no haya señal dura activa**, que se recalcula siempre.
+     - `GET .../canary` no escribe nada.
+     - Promueve por `promover(..., interno=True)`, una palabra clave que la API nunca envía; así no aplica el 409 `canary_en_curso`.
+     - Hereda **el resultado completo** del gate guardado en `canary_started.data.gate`, incluidos el forzado y `gate_motivo`: es válido porque la base no cambia (f). Si la bandera del gate se apaga y se enciende durante el canary, no aparece un `gate_pendiente` a las 72 h.
+     - Limpia el puntero canary en la misma transacción y registra `promoted` con `{desde_canary: true, veredicto}`.
+     - Las conversaciones `stable` siguen en la release vieja hasta su fin de episodio.
+   - **`promover` y `rollback`:** con canary vivo responden 409 `canary_en_curso`.
+   - **Llamadores internos con exención:** la detención con `reemplazado` la hace **el propio `promover` cuando `exencion is not None`**, dentro de su transacción, antes de apuntar. Son tres:
+     - «Preparar mis datos» (`qa_datos`);
+     - `migrar-a-v3 --construir`;
+     - el futuro hotfix `yanked`.
+
+     Si `qa_datos` reconstruye lo mismo y recibe el `release_id` del canary vivo, queda `canary_stopped(reemplazado)` y luego `promoted` sobre esa release, en orden (`clock_timestamp()`).
+   - **`migrar-a-v3 --volver`** no pasa por `promover` (escribe las banderas con otro engine). Detiene con `reemplazado` los canaries de todas las conexiones del negocio, en una transacción aparte y **antes** de escribir la bandera. No es atómico y se acepta así.
+3. **Evaluación** (`core/releases/canary_evaluacion.py`, pura sobre lecturas de `core/metricas/fiabilidad.py`).
+   - **Ventana:** desde `canary_started`.
+   - **Carriles:** canary es `release_lane = canary` con `release_id` igual a la candidata; estable es `release_id = base_release_id`, sin las releases anteriores que siguen en su episodio.
+   - **Muestra:** conversaciones distintas con turnos `routed`/`escalated` en el carril canary.
+   - **Escalamiento por conversación:** `conversaciones_escaladas / conversaciones`.
+   - **Completitud global:** tareas de primer nivel cerradas cuyo `started_turn` es de la ventana (`created_at >= canary_started`), por el carril de ese turno. Así el estable no cuenta embudos empezados antes, que están más cerca de completarse. Solo cuenta con **≥ 100 tareas por carril**; si no, decide el escalamiento.
+   - **Costo por conversación y p95**, solo para avisos.
+   - **Veredicto:**
+     - `sin_muestra` (menos de 200 conversaciones o menos de 72 h);
+     - `peor`, si la completitud o el escalamiento quedan fuera de margen;
+     - `listo`, con las advertencias de costo y p95 aparte.
+   - La no-inferioridad **se decide una sola vez**, al juntar la muestra, y queda en `canary_evaluated`. Después solo sigue la señal dura: mirar una y otra vez acumularía falsos «peor».
+   - **Señal dura:**
+     - Con **≥ 20 conversaciones** en el canary se toman las últimas 20 (por último turno).
+     - Una conversación **llegó mal** si tuvo un turno `failed`, uno con `status IN ('neutral', 'escalated')` y algún `verdict = 'fail'` en `turn_outcomes.verifier` (el verificador no pudo corregir, sin depender de `guardrail_fail_action`) o un `action_failed`. Los turnos sin `turn_outcomes` salen del denominador y se reportan.
+     - Se revierte si ≥ 25 % de esas 20 llegaron mal **y** la tasa es ≥ 2 veces la del estable, medido en el mismo tramo de tiempo que cubren esas 20.
+     - Sin un estable comparable (menos de 20 conversaciones), basta el 25 %, pero **sin contar `action_failed`**: una caída de la pasarela no debe retirar la versión.
+   - **Constantes** (`UMBRALES` en `canary.py`): quedan congeladas en `canary_started.data.umbrales`, y la evaluación usa las del evento.
+   - **Lecturas nuevas en `core/metricas/fiabilidad.py`** (el servicio único de HU-AOS-29), aditivas:
+     - `Filtro.inicio_desde` (turno de inicio de la tarea);
+     - completitud total por carril;
+     - las «últimas N conversaciones» de un carril con sus resultados.
+
+     `canary_evaluacion.py` solo decide.
+4. **Migración** (aditiva): `canary_evaluated` en el CHECK de `release_events.type`, fuera del ciclo de vida. Lleva `{veredicto, metricas}` y se escribe solo al decidir (`listo` / `peor`). No se reutilizan `evaluated` (la medición del gate, `corredor`) ni `approved`/`rejected` (los veredictos de pass^k que leen el gate y el tablero).
+5. **Job** (parte 2, Celery beat, patrón de `cliente_esperando`):
+   - dos entradas: `*/5` para la señal dura y `minute=0` para la no-inferioridad. No hace falta estado para saber «una vez por hora»;
+   - solo negocios con `aos_runtime = v3` que tengan alguna conexión con canary vivo;
+   - por conexión: decide y actúa bajo el `FOR UPDATE`, verificando que el canary sigue siendo el mismo;
+   - es idempotente, con `tenant_scope` y `try` por negocio;
+   - una habilidad marcada `yanked` con un canary que la usa lo detiene (motivo `habilidad_retirada`, que tampoco bloquea).
+6. **Avisos** (parte 2, ADR-0167, categoría `sistema`, sección `connections`, entidad `conexion`, `data` solo con ids y números, `dedupe_key = canary_<motivo>:<release_id>`), en la misma transacción que la acción:
+   - `canary_revertido` (`critical`);
+   - `canary_listo` (`info`);
+   - `canary_sin_muestra` (`warning`, a los 7 días);
+   - `canary_costo` y `canary_lentitud` (`warning`).
+7. **API** (`connection_releases`, permisos de `promote`):
+   - `POST .../releases/{rid}/canary {percent}`;
+   - `PATCH .../canary {percent}`;
+   - `POST .../canary/stop`;
+   - `POST .../canary/promote`;
+   - `GET .../canary`: estado, muestra, comparación por carril, veredicto, señal dura y si se puede publicar.
+
+   `_MOTIVOS_RESERVADOS` suma `no_inferioridad`, `senal_dura`, `reemplazado` y `habilidad_retirada`. `POST .../canary/stop` no acepta motivo: siempre es `detenida_por_dueno`. Las rutas van a `docs/openapi.json`.
+8. **Panel** (aparte, `/conexiones/[id]/versiones`):
+   - en una candidata: «Probar con una parte», con el porcentaje;
+   - con canary vivo: el bloque del canary (la muestra, la comparación, «Publicar para todos» y «Detener»);
+   - «Publicar» y «Volver atrás» de la activa se deshabilitan con un aviso.
+9. **Escenarios:**
+   - reparto cercano al porcentaje, sticky en el episodio y recálculo en uno nuevo;
+   - un canary distinto cambia el reparto;
+   - una release retirada va a la activa;
+   - 409 al publicar o volver atrás con canary vivo;
+   - `requiere_v3`;
+   - detener a mano y reintentar;
+   - publicar con el veredicto recalculado y a los 7 días, con el ex-canary de vuelta a `stable`;
+   - exención que detiene con `reemplazado`;
+   - una tarea iniciada antes del canary que no cuenta;
+   - aislamiento entre negocios.
+   - **Parte 2:** `peor` revierte y avisa, `listo` avisa, y la señal dura con un fallo provocado.
+
+**Fuera de esta HU:**
+- las candidatas de plataforma;
+- los umbrales editables;
+- las pruebas estadísticas: es una diferencia simple de puntos con muestra mínima;
+- avisar aparte a las conversaciones escaladas por el cambio de release;
+- endurecer `ck_cc_canary`.

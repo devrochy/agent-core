@@ -310,6 +310,68 @@ async def completitud(session: Any, tenant_id: uuid.UUID, f: Filtro) -> list[dic
     ]
 
 
+async def completitud_total(session: Any, tenant_id: uuid.UUID, f: Filtro) -> tuple[int, int]:
+    """`(terminadas, completadas)` de las tareas de primer nivel cerradas **que empezaron en la
+    ventana** (por su turno de inicio, con su conexión, versión y carril). El canary (HU-AOS-32) lo
+    usa así: una tarea empezada antes no cuenta, y así el carril estable no se infla con embudos que
+    ya estaban por terminar."""
+    _exigir_scope(tenant_id)
+    donde, params = _turnos(f)
+    params.update({"t": tenant_id, "terminales": list(TERMINALES)})
+    fila = (
+        await session.execute(
+            text(
+                "SELECT count(*), count(*) FILTER (WHERE t.status = 'completed') FROM conversation_tasks t "
+                "JOIN core_decisions d ON d.tenant_id = t.tenant_id AND d.id = t.started_turn_id "
+                f"WHERE t.tenant_id = :t AND t.parent_task_id IS NULL AND t.status = ANY(:terminales) AND {donde}"
+            ),
+            params,
+        )
+    ).one()
+    return int(fila[0] or 0), int(fila[1] or 0)
+
+
+@dataclass(frozen=True)
+class ConversacionReciente:
+    conversation_id: uuid.UUID
+    ultimo: datetime
+    # Un turno `failed`, o `neutral`/`escalated` con un rechazo del verificador (no lo pudo corregir).
+    llego_mal: bool
+    # Un `action_failed` de una acción gobernada en alguno de sus turnos.
+    accion_fallida: bool
+    # Ningún turno dejó `turn_outcomes` (ledger best-effort): sale del denominador.
+    sin_resultado: bool
+
+
+async def conversaciones_recientes(
+    session: Any, tenant_id: uuid.UUID, f: Filtro, *, limite: int = 20
+) -> list[ConversacionReciente]:
+    """Las últimas conversaciones del filtro (por su último turno) y lo que les llegó mal (la señal
+    dura del canary, HU-AOS-32)."""
+    _exigir_scope(tenant_id)
+    donde, params = _turnos(f)
+    params.update({"t": tenant_id, "n": max(1, min(limite, 1000))})
+    filas = (
+        await session.execute(
+            text(
+                "WITH tt AS ("
+                "  SELECT d.conversation_id, d.created_at, o.turn_id IS NULL AS sin,"
+                "    (o.status = 'failed' OR (o.status IN ('neutral', 'escalated') AND EXISTS ("
+                "      SELECT 1 FROM jsonb_array_elements(coalesce(o.verifier, '[]'::jsonb)) v"
+                "      WHERE v->>'verdict' = 'fail'))) AS mal,"
+                "    EXISTS (SELECT 1 FROM task_events te WHERE te.tenant_id = d.tenant_id AND te.turn_id = d.id"
+                "      AND te.type = 'action_failed') AS accion"
+                "  FROM core_decisions d LEFT JOIN turn_outcomes o ON o.tenant_id = d.tenant_id AND o.turn_id = d.id"
+                f"  WHERE {donde}"
+                ") SELECT conversation_id, max(created_at), coalesce(bool_or(mal), false), bool_or(accion), bool_and(sin) "
+                "FROM tt GROUP BY conversation_id ORDER BY 2 DESC LIMIT :n"
+            ),
+            params,
+        )
+    ).all()
+    return [ConversacionReciente(r[0], r[1], bool(r[2]), bool(r[3]), bool(r[4])) for r in filas]
+
+
 async def consistencia(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None) -> list[dict[str, Any]]:
     """Por conexión conversacional: la consistencia vigente de su versión activa (`veredicto.
     consistencia_vigente`). Sin versión activa o sin mediciones, `sin_datos`."""
@@ -447,10 +509,13 @@ __all__ = [
     "FALSO_POSITIVO",
     "MIN_TAREAS",
     "MIN_TURNOS",
+    "ConversacionReciente",
     "Filtro",
     "Operativas",
     "completitud",
+    "completitud_total",
     "consistencia",
+    "conversaciones_recientes",
     "corridas",
     "costo",
     "marcar_falso_positivo",

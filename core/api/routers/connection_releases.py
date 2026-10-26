@@ -58,7 +58,11 @@ log = get_logger(__name__)
 # Motivos que escriben los caminos internos (exentos del gate, HU-AOS-21): la API no los acepta,
 # aunque la exención no se deduce del motivo sino de un parámetro que la API nunca envía.
 _MOTIVOS_RESERVADOS = frozenset(
-    {"rollback", "release_1", "yanked", "hotfix_yanked", "migrar_a_v3", "qa_datos"}
+    {
+        "rollback", "release_1", "yanked", "hotfix_yanked", "migrar_a_v3", "qa_datos",
+        # HU-AOS-32: los del canary.
+        "canary", "no_inferioridad", "senal_dura", "reemplazado", "habilidad_retirada",
+    }
 )
 
 
@@ -516,3 +520,218 @@ async def rollback_release(
         from_release_id=cambio.from_release_id,
         to_release_id=cambio.to_release_id,
     )
+
+
+# ---------------------------------------------------------------- canary (HU-AOS-32)
+class CanaryIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    percent: int = Field(ge=1, le=50, description="Porcentaje de las conversaciones nuevas que prueban la versión.")
+    forzar: bool = Field(default=False, description="Solo master: saltar el gate de pass^k (con motivo).")
+    motivo_forzado: str | None = Field(default=None, max_length=200)
+
+
+class CanaryPercentIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    percent: int = Field(ge=1, le=50)
+
+
+class CanaryLane(BaseModel):
+    conversaciones: int
+    escalamiento: float | None = Field(description="Fracción de 0 a 1 de conversaciones que pasaron a una persona.")
+    completitud: float | None = Field(description="Fracción de 0 a 1 de recorridos completados (los que empezaron en la prueba).")
+    tareas: int
+    # En USD: solo con la sección `costs`; si no, null.
+    costo_por_conversacion_usd: float | None
+    p95_ms: int | None
+
+
+class CanarySignal(BaseModel):
+    activa: bool
+    evaluadas: int
+    llegaron_mal: int
+    tasa: float | None
+    tasa_estable: float | None
+    sin_resultado: int
+
+
+class CanaryState(BaseModel):
+    release_id: uuid.UUID
+    base_release_id: uuid.UUID | None
+    percent: int
+    started_at: datetime
+    horas: float
+    muestra_conversaciones: int
+    muestra_horas: int
+    dias_manual: int
+    veredicto: Literal["sin_muestra", "peor", "listo"]
+    motivos: list[str]
+    advertencias: list[str]
+    veredicto_guardado: bool
+    senal_dura: CanarySignal
+    puede_publicar: bool
+    motivo_no_publicar: Literal["senal_dura", "peor", "sin_muestra"] | None
+    estable: CanaryLane
+    canary: CanaryLane
+
+
+async def _ver_costos(principal: Principal) -> bool:
+    from core.admin.permissions import effective_access
+
+    return await effective_access(principal.admin, "costs", principal.tenant_id) is not None
+
+
+def _lane(c: Any, ver_costos: bool) -> CanaryLane:
+    return CanaryLane(
+        conversaciones=c.conversaciones,
+        escalamiento=c.escalamiento,
+        completitud=c.completitud,
+        tareas=c.tareas_terminadas,
+        costo_por_conversacion_usd=c.costo_por_conversacion if ver_costos else None,
+        p95_ms=c.p95_ms,
+    )
+
+
+def _conflicto(exc: svc.ConflictoDeRelease) -> ApiError:
+    return ApiError(409, exc.codigo, str(exc), details=dict(exc.details) or None)
+
+
+@router.post("/{connection_id}/releases/{release_id}/canary", status_code=204)
+async def start_canary(
+    connection_id: uuid.UUID,
+    release_id: uuid.UUID,
+    payload: CanaryIn,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> None:
+    """Prueba la versión con una parte de las conversaciones nuevas (HU-AOS-32). Mismas reglas que
+    publicar: dueño o master, gate aprobado si está cerrado, `aos_runtime = v3` (409 `requiere_v3`)."""
+    from core.releases import canary
+
+    require_owner_or_master(principal)
+    tid = await _puede_escribir(principal)
+    forzado: str | None = None
+    if payload.forzar:
+        if not es_master(principal.admin):
+            raise ApiError(403, "solo_master", "Solo el master puede saltar el gate de pass^k.")
+        forzado = (payload.motivo_forzado or "").strip()
+        if not forzado:
+            raise ApiError(422, "motivo_requerido", "Para saltar el gate hay que escribir el motivo.")
+    try:
+        await canary.iniciar(
+            tid, connection_id, release_id, percent=payload.percent, actor=_actor(principal), forzado_por_master=forzado
+        )
+    except LookupError as exc:
+        raise _no_encontrada(exc) from None
+    except DBAPIError as exc:
+        raise _error_de_base(exc, "canary") from None
+    except svc.ConflictoDeRelease as exc:
+        details = dict(exc.details)
+        if exc.codigo == "gate_pendiente":
+            from core.releases import gate
+
+            details["encolado"] = await gate.solicitar_medicion(tid, connection_id, release_id, actor=_actor(principal))
+        raise ApiError(409, exc.codigo, str(exc), details=details or None) from None
+
+
+@router.patch("/{connection_id}/canary", status_code=204)
+async def change_canary_percent(
+    connection_id: uuid.UUID,
+    payload: CanaryPercentIn,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> None:
+    """Cambia el porcentaje de la prueba (rige al empezar cada episodio)."""
+    from core.releases import canary
+
+    require_owner_or_master(principal)
+    tid = await _puede_escribir(principal)
+    try:
+        await canary.cambiar_porcentaje(tid, connection_id, percent=payload.percent, actor=_actor(principal))
+    except LookupError as exc:
+        raise _no_encontrada(exc) from None
+    except svc.ConflictoDeRelease as exc:
+        raise _conflicto(exc) from None
+
+
+@router.post("/{connection_id}/canary/stop", status_code=204)
+async def stop_canary(
+    connection_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> None:
+    """Detiene la prueba (siempre como `detenida_por_dueno`: la versión se puede volver a probar)."""
+    from core.releases import canary
+
+    require_owner_or_master(principal)
+    tid = await _puede_escribir(principal)
+    try:
+        await canary.detener(tid, connection_id, actor=_actor(principal))
+    except LookupError as exc:
+        raise _no_encontrada(exc) from None
+    except svc.ConflictoDeRelease as exc:
+        raise _conflicto(exc) from None
+
+
+@router.post("/{connection_id}/canary/promote", response_model=ReleaseChange)
+async def promote_canary(
+    connection_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> ReleaseChange:
+    """Publica para todos la versión en prueba: exige el veredicto `listo` (o 7 días sin muestra) y
+    que no haya señal dura (409 `canary_peor`, `canary_sin_muestra`, `canary_senal_dura`)."""
+    from core.releases import canary
+
+    require_owner_or_master(principal)
+    tid = await _puede_escribir(principal)
+    try:
+        cambio = await canary.publicar(tid, connection_id, actor=_actor(principal))
+    except LookupError as exc:
+        raise _no_encontrada(exc) from None
+    except DBAPIError as exc:
+        raise _error_de_base(exc, "canary") from None
+    except svc.ConflictoDeRelease as exc:
+        raise _conflicto(exc) from None
+    return ReleaseChange(
+        connection_id=cambio.connection_id, from_release_id=cambio.from_release_id, to_release_id=cambio.to_release_id
+    )
+
+
+@router.get("/{connection_id}/canary", response_model=CanaryState | None)
+async def get_canary(
+    connection_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections"))],
+) -> CanaryState | None:
+    """La prueba en curso de la conexión con su muestra, la comparación por carril, el veredicto y la
+    señal dura; null si no hay. No escribe nada."""
+    from core.releases import canary
+
+    try:
+        e = await canary.estado(_tenant(principal), connection_id)
+    except LookupError as exc:
+        raise _no_encontrada(exc) from None
+    if e is None:
+        return None
+    ver = await _ver_costos(principal)
+    d = e.senal_dura
+    return CanaryState(
+        release_id=e.release_id,
+        base_release_id=e.base_release_id,
+        percent=e.percent,
+        started_at=e.desde,
+        horas=round(e.horas, 1),
+        muestra_conversaciones=int(e.umbrales["muestra_conversaciones"]),
+        muestra_horas=int(e.umbrales["muestra_horas"]),
+        dias_manual=int(e.umbrales["dias_manual"]),
+        veredicto=e.veredicto.estado,  # type: ignore[arg-type]
+        motivos=e.veredicto.motivos,
+        advertencias=e.veredicto.advertencias,
+        veredicto_guardado=e.guardado,
+        senal_dura=CanarySignal(
+            activa=d.activa, evaluadas=d.evaluadas, llegaron_mal=d.llegaron_mal, tasa=d.tasa,
+            tasa_estable=d.tasa_estable, sin_resultado=d.sin_resultado,
+        ),
+        puede_publicar=e.puede_publicar,
+        motivo_no_publicar=e.motivo_no_publicar,  # type: ignore[arg-type]
+        estable=_lane(e.estable, ver),
+        canary=_lane(e.canary, ver),
+    )
+

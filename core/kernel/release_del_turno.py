@@ -5,14 +5,15 @@ Solo con `tenants.aos_runtime = 'v3'` (y `AOS_CONNECTION_ROUTING` encendida, que
 consulta) y el runtime lee `agent_specs`, el disco y `AppSettings` como siempre.
 
 **Asignación** (en una transacción, con la fila de la conversación bloqueada):
-- Sin release → la activa de la conexión.
-- Con la activa (o la del canary) → se queda.
-- Con otra: si empieza un episodio nuevo (`episode.idleMinutes` del KernelSpec de su release,
-  `core.kernel.episodio`, la única definición) → la activa; si su release fue **retirada**
+- Sin release, o al empezar un episodio nuevo (`episode.idleMinutes` del KernelSpec de su release,
+  `core.kernel.episodio`, la única definición) → se sortea entre la activa y el canary (HU-AOS-32).
+- Dentro del episodio, con la activa (o la del canary) → se queda.
+- Con otra: si su release fue **retirada**
   (su último evento de ciclo de vida es `rolled_back`, `canary_stopped` o `invalid`) → la
   activa ya en este turno (el rollback llega al siguiente turno, ≤ 5 s); si no → se queda hasta
   el fin del episodio (una promoción normal no corta un episodio en curso).
-- El carril es `stable`: el reparto del canary (`carril`) es el punto de enganche de HU-AOS-32.
+- El carril es `canary` si el turno va a la candidata en prueba (HU-AOS-32): al empezar el episodio
+  (o en la primera asignación) se sortea `cubeta(canary, conversación) < canary_percent`.
 
 **Al cambiar de release** (después de expirar las tareas del episodio viejo, que lo hace
 `abrir_episodio`): cada tarea abierta se revalida contra el procedimiento de la release nueva.
@@ -48,6 +49,7 @@ Efecto en el turno: deja la release en `core.shared.release_vigente` (la ranura 
 from __future__ import annotations
 
 import functools
+import hashlib
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -73,6 +75,7 @@ log = get_logger(__name__)
 
 MOTIVO_CAMBIO = "release_changed"
 LANE_ESTABLE = "stable"
+LANE_CANARY = "canary"
 # = core.releases.promocion.CICLO_DE_VIDA / RETIRAN (sin importar promoción desde el kernel).
 _CICLO_DE_VIDA = ("promoted", "canary_started", "rolled_back", "canary_stopped", "invalid")
 _RETIRAN = frozenset({"rolled_back", "canary_stopped", "invalid"})
@@ -130,6 +133,13 @@ class ContextoRuteo:
 
 
 # ------------------------------------------------------------------ reglas (puras)
+def cubeta(canary_id: uuid.UUID, conversation_id: uuid.UUID) -> int:
+    """La cubeta 0..99 de una conversación para un canary (HU-AOS-32, adenda de ADR-0117 §4).
+    sha256 y no `hash()`: la de Python cambia entre procesos. Otro canary, otro reparto."""
+    digest = hashlib.sha256(f"{canary_id}|{conversation_id}".encode()).hexdigest()
+    return int(digest[:8], 16) % 100
+
+
 def decidir_destino(
     actual: uuid.UUID | None,
     activa: uuid.UUID,
@@ -137,23 +147,35 @@ def decidir_destino(
     *,
     episodio_nuevo: bool,
     retirada: bool,
+    canary_percent: int = 0,
+    conversation_id: uuid.UUID | None = None,
 ) -> tuple[uuid.UUID, str | None]:
+    """La release del turno. Solo se sortea entre la activa y el canary en la primera asignación y al
+    empezar un episodio (`cubeta < canary_percent` → canary); dentro del episodio la conversación
+    conserva su release, y una retirada a mitad de episodio va a la activa sin volver a sortear."""
+
+    def sorteo() -> uuid.UUID:
+        if canary is not None and canary_percent > 0 and conversation_id is not None:
+            if cubeta(canary, conversation_id) < canary_percent:
+                return canary
+        return activa
+
     if actual is None:
-        return activa, "primera"
+        return sorteo(), "primera"
+    if episodio_nuevo:
+        destino = sorteo()
+        return (destino, "episodio_nuevo") if destino != actual else (actual, None)
     if actual == activa or (canary is not None and actual == canary):
         return actual, None
-    if episodio_nuevo:
-        return activa, "episodio_nuevo"
     if retirada:
         return activa, "retirada"
     return actual, None
 
 
 def carril(release_id: uuid.UUID, activa: uuid.UUID, canary: uuid.UUID | None) -> str:
-    """Punto de enganche del canary (HU-AOS-32: `hash(canary_release_id ‖ conversación) % 100`
-    al empezar el episodio). Hoy toda conversación va por el carril estable."""
-    del release_id, activa, canary
-    return LANE_ESTABLE
+    """`canary` si el turno va a la candidata en prueba (HU-AOS-32); si no, el estable."""
+    del activa
+    return LANE_CANARY if canary is not None and release_id == canary else LANE_ESTABLE
 
 
 def tuvo_efecto_irreversible(eventos: Iterable[Any], catalogo: Mapping[str, Any]) -> bool:
@@ -293,7 +315,7 @@ async def asignar(
     punteros = (
         await session.execute(
             text(
-                "SELECT active_release_id, canary_release_id FROM channel_connections "
+                "SELECT active_release_id, canary_release_id, canary_percent FROM channel_connections "
                 "WHERE tenant_id = :t AND id = :c AND deleted_at IS NULL"
             ),
             {"t": tenant_id, "c": connection_id},
@@ -301,11 +323,11 @@ async def asignar(
     ).first()
     if punteros is None or punteros[0] is None:
         return None
-    activa, canary = punteros
+    activa, canary, canary_percent = punteros[0], punteros[1], int(punteros[2] or 0)
     fila_conv = (
         await session.execute(
             text(
-                "SELECT release_id, active_agent_instance_id, customer_id, channel FROM conversations "
+                "SELECT release_id, active_agent_instance_id, customer_id, channel, release_lane FROM conversations "
                 "WHERE tenant_id = :t AND id = :c FOR UPDATE"
             ),
             {"t": tenant_id, "c": conversation_id},
@@ -315,6 +337,7 @@ async def asignar(
         return None
     actual, dueno = fila_conv[0], fila_conv[1]
     customer_id, channel = fila_conv[2], str(fila_conv[3] or "")
+    lane_actual = fila_conv[4]
     del_episodio = await cargar_release(session, tenant_id, actual or activa)
     if del_episodio is None:  # la FK compuesta lo impide; por si acaso, la activa
         del_episodio = await cargar_release(session, tenant_id, activa)
@@ -331,7 +354,8 @@ async def asignar(
     if actual is not None and actual not in (activa, canary) and not nuevo:
         retirada = await _retirada(session, tenant_id, actual)
     destino, motivo = decidir_destino(
-        actual, activa, canary, episodio_nuevo=nuevo, retirada=retirada
+        actual, activa, canary, episodio_nuevo=nuevo, retirada=retirada,
+        canary_percent=canary_percent, conversation_id=conversation_id,
     )
     lane = carril(destino, activa, canary)
     hacia = (
@@ -344,7 +368,8 @@ async def asignar(
     revalidadas: list[uuid.UUID] = []
     canceladas: list[uuid.UUID] = []
     escaladas: list[uuid.UUID] = []
-    if destino != actual:
+    if destino != actual or lane != lane_actual:
+        # HU-AOS-32: también cuando cambia solo el carril (el ex-canary vuelve a `stable` al publicarse).
         await session.execute(
             text(
                 "UPDATE conversations SET release_id = :r, release_lane = :l "
@@ -352,6 +377,7 @@ async def asignar(
             ),
             {"t": tenant_id, "c": conversation_id, "r": destino, "l": lane},
         )
+    if destino != actual:
         if actual is not None:
             revalidadas, canceladas, escaladas = await revalidar_tareas(
                 session,
@@ -665,6 +691,7 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "") -> Asignac
 
 
 __all__ = [
+    "LANE_CANARY",
     "LANE_ESTABLE",
     "MOTIVO_CAMBIO",
     "Asignacion",
@@ -672,6 +699,7 @@ __all__ = [
     "asignar",
     "carril",
     "con_release",
+    "cubeta",
     "decidir_destino",
     "fijar_release_del_turno",
     "plan_revalidacion",

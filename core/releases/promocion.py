@@ -2,7 +2,9 @@
 
 - **Promover** cambia el puntero `channel_connections.active_release_id` y deja un evento
   `promoted` (`from_release_id`, `reason`). La promoción es total: el canary con porcentaje
-  llega en HU-AOS-32 y aquí no se toca `canary_release_id`. Antes pasa `gate_aprobado`, el gate
+  llega en HU-AOS-32 (`core/releases/canary.py`): con un canary vivo, promover y volver atrás
+  responden 409 `canary_en_curso`, salvo las exenciones internas, que lo detienen con
+  `reemplazado`. Antes pasa `gate_aprobado`, el gate
   de pass^k (HU-AOS-21): calcula qué procedimientos tocó la candidata frente a la activa y lo
   anota en el evento (`gate`, `gate_tocados`). Un veredicto `rejected` bloquea; sin veredicto, con la
   bandera del negocio encendida (parte 4, `core/releases/gate.py`) responde 409 `gate_pendiente`, y
@@ -44,6 +46,29 @@ RETIRAN = frozenset({"rolled_back", "canary_stopped", "invalid"})
 # HU-AOS-27: el dueño detiene una candidata (`invalid` con este `reason`); `retired` queda para el
 # drenado del §4 de ADR-0117.
 DETENIDA_POR_DUENO = "detenida_por_dueno"
+# HU-AOS-32: motivos de `canary_stopped`. Solo los del sistema (la versión fue peor) la bloquean para
+# siempre; la detenida por el dueño o reemplazada por una exención se puede volver a probar.
+REEMPLAZADO = "reemplazado"
+BLOQUEAN = frozenset({"no_inferioridad", "senal_dura"})
+
+
+def bloqueada(tipo: str | None, reason: str | None) -> bool:
+    """¿El último evento de ciclo de vida deja la release inservible? `invalid` (incluida la detenida
+    por el dueño, HU-AOS-27) o un canary retirado por el sistema por ir peor (HU-AOS-32)."""
+    return tipo == "invalid" or (tipo == "canary_stopped" and reason in BLOQUEAN)
+
+
+async def ultimo_ciclo(session: Any, tenant_id: uuid.UUID, release_id: uuid.UUID) -> tuple[str | None, str | None]:
+    fila = (
+        await session.execute(
+            text(
+                "SELECT type, data->>'reason' FROM release_events WHERE tenant_id = :t AND release_id = :r "
+                "AND type = ANY(:tipos) ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"t": tenant_id, "r": release_id, "tipos": list(CICLO_DE_VIDA)},
+        )
+    ).first()
+    return (fila[0], fila[1]) if fila is not None else (None, None)
 
 
 class ReleaseNoEncontrada(LookupError):
@@ -190,19 +215,10 @@ async def _release(
 
 
 async def _exigir_utilizable(session: Any, tenant_id: uuid.UUID, release_id: uuid.UUID) -> None:
-    """409 si la release fue invalidada (también la detenida por el dueño, `invalid` con
-    `reason = detenida_por_dueno`) o su canary se detuvo (`rolled_back` sí se puede reactivar), o si
-    fija una versión de habilidad retirada por seguridad (`yanked`, ADR-0117 §3)."""
-    ultimo = (
-        await session.execute(
-            text(
-                "SELECT type FROM release_events WHERE tenant_id = :t AND release_id = :r "
-                "AND type = ANY(:tipos) ORDER BY created_at DESC LIMIT 1"
-            ),
-            {"t": tenant_id, "r": release_id, "tipos": list(CICLO_DE_VIDA)},
-        )
-    ).scalar_one_or_none()
-    if ultimo in RETIRAN - {"rolled_back"}:
+    """409 si la release está bloqueada (`bloqueada`: invalidada, también la detenida por el dueño, o
+    un canary retirado por el sistema; `rolled_back` y un canary detenido a mano sí se pueden
+    reactivar), o si fija una versión de habilidad retirada por seguridad (`yanked`, ADR-0117 §3)."""
+    if bloqueada(*await ultimo_ciclo(session, tenant_id, release_id)):
         raise ConflictoDeRelease(
             "release_retirada", "Esa versión fue retirada y no se puede activar."
         )
@@ -234,6 +250,33 @@ async def _apuntar(
     )
 
 
+async def detener_canary(
+    session: Any,
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    canary_id: uuid.UUID,
+    *,
+    motivo: str,
+    actor: str,
+    metricas: dict[str, Any] | None = None,
+) -> None:
+    """`canary_stopped` con su motivo (`reason`) y los punteros del canary en NULL y 0, en la
+    transacción de quien llama (con la conexión ya bloqueada). Como `canary_stopped` está en
+    `RETIRAN`, sus conversaciones pasan a la activa en el siguiente turno."""
+    await session.execute(
+        text(
+            "UPDATE channel_connections SET canary_release_id = NULL, canary_percent = 0 "
+            "WHERE tenant_id = :t AND id = :c"
+        ),
+        {"t": tenant_id, "c": connection_id},
+    )
+    datos: dict[str, Any] = {"reason": motivo[:40]}
+    if metricas:
+        datos["metricas"] = metricas
+    await registrar_evento(session, tenant_id, connection_id, canary_id, "canary_stopped", actor, datos)
+    log.info("release_canary_detenido", connection_id=str(connection_id), reason=motivo)
+
+
 async def promover(
     tenant_id: uuid.UUID,
     connection_id: uuid.UUID,
@@ -244,78 +287,117 @@ async def promover(
     exencion: str | None = None,
     forzado_por_master: str | None = None,
 ) -> Cambio:
-    """Activa la release (promoción total). 409 si ya es la activa o el gate la rechaza.
+    """Activa la release (promoción total). 409 si ya es la activa, el gate la rechaza o hay un
+    canary en curso (HU-AOS-32; las exenciones lo detienen con `reemplazado`).
 
     `exencion` solo la pasan los llamadores internos (`migrar_a_v3`, `qa_datos`,
     `hotfix_yanked`); la API nunca la envía. `forzado_por_master` es el motivo escrito con el
     que un master salta el gate (la API lo exige de un master); queda en el evento."""
     _exigir_scope(tenant_id)
-    forzado = bool(forzado_por_master and forzado_por_master.strip())
     async with get_session() as session:
-        activa, _ = await _bloquear(session, tenant_id, connection_id)
-        release = await _release(session, tenant_id, connection_id, release_id)
-        if activa == release_id:
-            raise ConflictoDeRelease("ya_activa", "Esa versión ya es la activa.")
-        await _exigir_utilizable(session, tenant_id, release_id)
+        activa, canary = await _bloquear(session, tenant_id, connection_id)
+        if canary is not None:
+            if exencion is None:
+                raise ConflictoDeRelease(
+                    "canary_en_curso",
+                    "Hay una versión en prueba con una parte de los clientes: detenla o publícala primero.",
+                )
+            await detener_canary(session, tenant_id, connection_id, canary, motivo=REEMPLAZADO, actor=actor)
+        return await promover_en(
+            session, tenant_id, connection_id, release_id, activa,
+            actor=actor, motivo=motivo, exencion=exencion, forzado_por_master=forzado_por_master,
+        )
+
+
+async def promover_en(
+    session: Any,
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    release_id: uuid.UUID,
+    activa: uuid.UUID | None,
+    *,
+    actor: str,
+    motivo: str = "manual",
+    exencion: str | None = None,
+    forzado_por_master: str | None = None,
+    gate_heredado: dict[str, Any] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> Cambio:
+    """El cuerpo de la promoción, en la sesión de quien llama (con la conexión bloqueada y la
+    `activa` leída bajo ese lock). `gate_heredado`: el resultado del gate guardado al iniciar el
+    canary (HU-AOS-32), válido porque la base no cambió; `extra` se suma al evento `promoted`."""
+    forzado = bool(forzado_por_master and forzado_por_master.strip())
+    release = await _release(session, tenant_id, connection_id, release_id)
+    if activa == release_id:
+        raise ConflictoDeRelease("ya_activa", "Esa versión ya es la activa.")
+    await _exigir_utilizable(session, tenant_id, release_id)
+    if gate_heredado is not None:
+        aprobado, gate = True, str(gate_heredado.get("gate") or "sin_evaluar")
+        tocados = dict(gate_heredado.get("gate_tocados") or {})
+        if gate_heredado.get("gate_motivo"):
+            forzado, forzado_por_master = True, str(gate_heredado["gate_motivo"])
+    else:
         aprobado, gate, tocados = await gate_aprobado(
             session, tenant_id, release_id, activa, exencion=exencion, forzado=forzado
         )
-        if not aprobado and gate == "pendiente":
-            from core.releases import gate as svc_gate
+    if not aprobado and gate == "pendiente":
+        from core.releases import gate as svc_gate
 
-            # `pendiente` solo sale con una activa (sin activa el gate es `exento_release_1`).
-            medicion = (
-                await svc_gate.ultima_medicion(session, tenant_id, release_id, activa) if activa is not None else None
-            )
-            raise ConflictoDeRelease(
-                "gate_pendiente",
-                "La versión todavía no se ha medido contra la activa. La medición está en camino; "
-                "vuelve a intentarlo cuando termine.",
-                {
-                    "estado": medicion["estado"] if medicion else "sin_medicion",
-                    "base_release_id": str(activa),
-                    "tocados": len(tocados),
+        # `pendiente` solo sale con una activa (sin activa el gate es `exento_release_1`).
+        medicion = (
+            await svc_gate.ultima_medicion(session, tenant_id, release_id, activa) if activa is not None else None
+        )
+        raise ConflictoDeRelease(
+            "gate_pendiente",
+            "La versión todavía no se ha medido contra la activa. La medición está en camino; "
+            "vuelve a intentarlo cuando termine.",
+            {
+                "estado": medicion["estado"] if medicion else "sin_medicion",
+                "base_release_id": str(activa),
+                "tocados": len(tocados),
+            },
+        )
+    if not aprobado:
+        raise ConflictoDeRelease(
+            "gate_rechazado",
+            "La versión no pasó el gate de pass^k: algún procedimiento quedó bajo el umbral "
+            "o peor que la versión activa.",
+        )
+    await _apuntar(session, tenant_id, connection_id, release_id)
+    datos: dict[str, Any] = {
+        "from_release_id": str(activa) if activa else None,
+        "reason": motivo[:40],
+        "gate": gate,
+        "gate_tocados": dict(sorted(tocados.items())[:_MAX_TOCADOS_EN_EVENTO]),
+    }
+    if forzado:
+        datos["gate_motivo"] = str(forzado_por_master).strip()[:200]
+    if gate == "aprobado":
+        from core.releases import veredicto as svc_veredicto
+
+        previo = await svc_veredicto.ultimo(session, tenant_id, release_id, activa)
+        sin_medir = previo.get("sin_medir") if previo else None
+        if sin_medir:
+            datos["gate_sin_medir"] = list(sin_medir)[:_MAX_TOCADOS_EN_EVENTO]
+    if extra:
+        datos.update(extra)
+    await registrar_evento(session, tenant_id, connection_id, release_id, "promoted", actor, datos)
+    if forzado:
+        from core.db.models import AuditLog
+
+        # En la misma transacción que la promoción: no queda un forzado sin auditoría.
+        session.add(
+            AuditLog(
+                tenant_id=tenant_id,
+                actor=actor,
+                action="release_gate_forzado",
+                input={
+                    "connection_id": str(connection_id),
+                    "release_id": str(release_id),
+                    "motivo": datos["gate_motivo"],
                 },
             )
-        if not aprobado:
-            raise ConflictoDeRelease(
-                "gate_rechazado",
-                "La versión no pasó el gate de pass^k: algún procedimiento quedó bajo el umbral "
-                "o peor que la versión activa.",
-            )
-        await _apuntar(session, tenant_id, connection_id, release_id)
-        datos: dict[str, Any] = {
-            "from_release_id": str(activa) if activa else None,
-            "reason": motivo[:40],
-            "gate": gate,
-            "gate_tocados": dict(sorted(tocados.items())[:_MAX_TOCADOS_EN_EVENTO]),
-        }
-        if forzado:
-            datos["gate_motivo"] = str(forzado_por_master).strip()[:200]
-        if gate == "aprobado":
-            from core.releases import veredicto as svc_veredicto
-
-            previo = await svc_veredicto.ultimo(session, tenant_id, release_id, activa)
-            sin_medir = previo.get("sin_medir") if previo else None
-            if sin_medir:
-                datos["gate_sin_medir"] = list(sin_medir)[:_MAX_TOCADOS_EN_EVENTO]
-        await registrar_evento(session, tenant_id, connection_id, release_id, "promoted", actor, datos)
-        if forzado:
-            from core.db.models import AuditLog
-
-            # En la misma transacción que la promoción: no queda un forzado sin auditoría.
-            session.add(
-                AuditLog(
-                    tenant_id=tenant_id,
-                    actor=actor,
-                    action="release_gate_forzado",
-                    input={
-                        "connection_id": str(connection_id),
-                        "release_id": str(release_id),
-                        "motivo": datos["gate_motivo"],
-                    },
-                )
-            )
+        )
     log.info(
         "release_promoted",
         connection_id=str(connection_id),
@@ -361,10 +443,15 @@ async def rollback(
     posible, o si el destino es la activa o nunca estuvo activa."""
     _exigir_scope(tenant_id)
     async with get_session() as session:
-        activa, _ = await _bloquear(session, tenant_id, connection_id)
+        activa, canary = await _bloquear(session, tenant_id, connection_id)
         if activa is None:
             raise ConflictoDeRelease(
                 "sin_release_activa", "La conexión no tiene una versión activa."
+            )
+        if canary is not None:
+            raise ConflictoDeRelease(
+                "canary_en_curso",
+                "Hay una versión en prueba con una parte de los clientes: detenla primero.",
             )
         if to_release_id is None:
             destino = await destino_de_rollback(session, tenant_id, connection_id, activa)
@@ -483,7 +570,7 @@ async def listar(
     return [
         ReleaseVista(
             f[0], f[1], f[2], f[3], f[4], f[0] == activa, f[0] == canary, f[5], f[6], f[7],
-            f[7] == "invalid" and f[8] == DETENIDA_POR_DUENO,
+            bloqueada(f[7], f[8]),
         )
         for f in filas
     ]
@@ -532,7 +619,7 @@ async def obtener(
         ultimo["type"] if ultimo else None,
         ultimo["created_at"] if ultimo else None,
         ciclo["type"] if ciclo else None,
-        bool(ciclo and ciclo["type"] == "invalid" and (ciclo["data"] or {}).get("reason") == DETENIDA_POR_DUENO),
+        bool(ciclo and bloqueada(ciclo["type"], (ciclo["data"] or {}).get("reason"))),
     )
     return vista, fila[5], eventos
 
@@ -550,16 +637,7 @@ async def detener(
             raise ConflictoDeRelease("ya_activa", "Esa versión es la activa: para dejarla, vuelve a la anterior.")
         if release_id == canary:
             raise ConflictoDeRelease("es_canary", "Esa versión está en prueba con una parte de los clientes.")
-        ultimo = (
-            await session.execute(
-                text(
-                    "SELECT type FROM release_events WHERE tenant_id = :t AND release_id = :r "
-                    "AND type = ANY(:tipos) ORDER BY created_at DESC LIMIT 1"
-                ),
-                {"t": tenant_id, "r": release_id, "tipos": list(CICLO_DE_VIDA)},
-            )
-        ).scalar_one_or_none()
-        if ultimo in RETIRAN - {"rolled_back"}:
+        if bloqueada(*await ultimo_ciclo(session, tenant_id, release_id)):
             raise ConflictoDeRelease("ya_detenida", "Esa versión ya está detenida.")
         await registrar_evento(
             session, tenant_id, connection_id, release_id, "invalid", actor, {"reason": DETENIDA_POR_DUENO}
@@ -568,35 +646,33 @@ async def detener(
 
 
 async def esta_detenida(tenant_id: uuid.UUID, release_id: uuid.UUID) -> bool:
-    """¿La release la detuvo el dueño? (el build idempotente la devuelve si se reconstruye lo mismo)."""
+    """¿La release está bloqueada (detenida por el dueño o retirada por el sistema por ir peor)? El
+    build idempotente la devuelve si se reconstruye lo mismo y responde 409 `version_detenida`."""
     _exigir_scope(tenant_id)
     async with get_session() as session:
-        fila = (
-            await session.execute(
-                text(
-                    "SELECT type, data->>'reason' FROM release_events WHERE tenant_id = :t AND release_id = :r "
-                    "AND type = ANY(:tipos) ORDER BY created_at DESC LIMIT 1"
-                ),
-                {"t": tenant_id, "r": release_id, "tipos": list(CICLO_DE_VIDA)},
-            )
-        ).first()
-    return fila is not None and fila[0] == "invalid" and fila[1] == DETENIDA_POR_DUENO
+        return bloqueada(*await ultimo_ciclo(session, tenant_id, release_id))
 
 
 __all__ = [
+    "BLOQUEAN",
     "CICLO_DE_VIDA",
     "DETENIDA_POR_DUENO",
+    "REEMPLAZADO",
     "RETIRAN",
     "Cambio",
     "ConflictoDeRelease",
     "ReleaseNoEncontrada",
     "ReleaseVista",
+    "bloqueada",
     "destino_de_rollback",
     "detener",
+    "detener_canary",
     "esta_detenida",
     "gate_aprobado",
     "listar",
     "obtener",
     "promover",
+    "promover_en",
     "rollback",
+    "ultimo_ciclo",
 ]
