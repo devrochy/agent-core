@@ -9744,6 +9744,66 @@
         }
       }
     },
+    "/api/v1/admin/turns/{turn_id}": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · depurador"
+        ],
+        "summary": "Turn Detail",
+        "operationId": "turn_detail_api_v1_admin_turns__turn_id__get",
+        "parameters": [
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Turn Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/plan": {
       "get": {
         "tags": [
@@ -33992,6 +34052,19 @@
             },
             "type": "array",
             "title": "Tool Calls"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id",
+            "description": "Turno del agente que lo envió; null en los del cliente."
           }
         },
         "type": "object",
@@ -41249,6 +41322,139 @@
           "text"
         ],
         "title": "TurnOut"
+      },
+      "TurnStep": {
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "comando",
+              "accion",
+              "motor",
+              "escalacion",
+              "verificador",
+              "guardrail",
+              "otro"
+            ],
+            "title": "Kind"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Nombre de la acción, el comando o el componente."
+          },
+          "action": {
+            "type": "string",
+            "title": "Action",
+            "description": "execute | denied | confirmation_required | el comando | el código del paso."
+          },
+          "input": {
+            "title": "Input",
+            "description": "Solo con la sección `observability`. Redactado: los datos personales van enmascarados (ADR-0169)."
+          },
+          "output": {
+            "title": "Output",
+            "description": "Solo con la sección `observability`. Redactado: los datos personales van enmascarados (ADR-0169)."
+          },
+          "detalle_oculto": {
+            "type": "boolean",
+            "title": "Detalle Oculto",
+            "description": "Hay entrada o salida pero falta `observability` para verla.",
+            "default": false
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok",
+            "description": "¿Salió bien? Visible siempre; null si el paso no lo dice."
+          },
+          "error_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Error Codes",
+            "description": "Códigos de error (sin valores)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "at",
+          "kind",
+          "actor",
+          "name",
+          "action"
+        ],
+        "title": "TurnStep"
+      },
+      "TurnTaskEvent": {
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "task_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Task Id"
+          },
+          "procedure_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Id"
+          },
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Data",
+            "description": "Los datos de pago siempre van enmascarados."
+          }
+        },
+        "type": "object",
+        "required": [
+          "at",
+          "task_id",
+          "procedure_id",
+          "seq",
+          "type",
+          "actor",
+          "data"
+        ],
+        "title": "TurnTaskEvent"
       },
       "TypeOut": {
         "properties": {
@@ -52370,6 +52576,589 @@
           "monto"
         ],
         "title": "TramoDeMora"
+      },
+      "TurnA2A": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "calls": {
+            "type": "integer",
+            "title": "Calls"
+          },
+          "spent_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spent Usd",
+            "description": "Solo con la sección `costs`."
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/TurnA2AEvent"
+            },
+            "type": "array",
+            "title": "Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "mode",
+          "calls",
+          "events"
+        ],
+        "title": "TurnA2A"
+      },
+      "TurnA2AEvent": {
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent"
+          },
+          "from_instance_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Instance Id"
+          },
+          "to_instance_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Instance Id"
+          },
+          "payload": {
+            "title": "Payload",
+            "description": "Solo la forma (redactado al escribir, HU-AOS-18)."
+          },
+          "result": {
+            "title": "Result"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd",
+            "description": "Solo con la sección `costs`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "seq",
+          "type",
+          "mode",
+          "intent",
+          "from_instance_id",
+          "to_instance_id",
+          "reason"
+        ],
+        "title": "TurnA2AEvent"
+      },
+      "TurnAgent": {
+        "properties": {
+          "instance_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Instance Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "instance_id",
+          "name"
+        ],
+        "title": "TurnAgent"
+      },
+      "TurnCost": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "turn | agent_run | classifier | composer | embedding | eval"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "calls": {
+            "type": "integer",
+            "title": "Calls"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd",
+            "description": "Solo con la sección `costs`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "model",
+          "calls",
+          "input_tokens",
+          "output_tokens"
+        ],
+        "title": "TurnCost"
+      },
+      "TurnDecision": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "title": "Outcome",
+            "description": "routed | blocked | escalated | ignored"
+          },
+          "blocked_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked By"
+          },
+          "route_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Source"
+          },
+          "rule_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Id"
+          },
+          "candidates": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Candidates",
+            "description": "Procedimientos candidatos: `{procedure_id, owner, score}`."
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "active_agent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TurnAgent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "final_agent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TurnAgent"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Quien terminó el turno (distinto si hubo un traspaso)."
+          },
+          "shadow_stack": {
+            "title": "Shadow Stack",
+            "description": "Plan de la pila de tareas en sombra (HU-AOS-20), si lo hubo."
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome",
+          "blocked_by",
+          "route_source",
+          "rule_id",
+          "candidates",
+          "confidence",
+          "active_agent",
+          "final_agent"
+        ],
+        "title": "TurnDecision"
+      },
+      "TurnDelivery": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "template_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Name"
+          },
+          "error_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "at",
+          "status",
+          "text",
+          "template_name",
+          "error_reason"
+        ],
+        "title": "TurnDelivery"
+      },
+      "TurnDetail": {
+        "properties": {
+          "turn_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Turn Id"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "release_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Id"
+          },
+          "release_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Number"
+          },
+          "lane": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lane",
+            "description": "stable | canary | pinned | legacy"
+          },
+          "inbound_message_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Inbound Message Ids"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/TurnDecision"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status",
+            "description": "Resultado del turno: replied | neutral | escalated | silent | failed."
+          },
+          "verifier": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Verifier",
+            "description": "Comprobaciones del verificador: `{kind, verdict, count}`."
+          },
+          "verifier_retries": {
+            "type": "integer",
+            "title": "Verifier Retries"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/TurnStep"
+            },
+            "type": "array",
+            "title": "Steps"
+          },
+          "task_events": {
+            "items": {
+              "$ref": "#/components/schemas/TurnTaskEvent"
+            },
+            "type": "array",
+            "title": "Task Events"
+          },
+          "a2a": {
+            "items": {
+              "$ref": "#/components/schemas/TurnA2A"
+            },
+            "type": "array",
+            "title": "A2A"
+          },
+          "delivery": {
+            "items": {
+              "$ref": "#/components/schemas/TurnDelivery"
+            },
+            "type": "array",
+            "title": "Delivery"
+          },
+          "cost": {
+            "items": {
+              "$ref": "#/components/schemas/TurnCost"
+            },
+            "type": "array",
+            "title": "Cost"
+          },
+          "can_see_detail": {
+            "type": "boolean",
+            "title": "Can See Detail",
+            "description": "¿Tiene la sección `observability`?"
+          },
+          "can_see_costs": {
+            "type": "boolean",
+            "title": "Can See Costs",
+            "description": "¿Tiene la sección `costs`?"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "conversation_id",
+          "connection_id",
+          "at",
+          "latency_ms",
+          "release_id",
+          "release_number",
+          "lane",
+          "inbound_message_ids",
+          "decision",
+          "status",
+          "verifier",
+          "verifier_retries",
+          "steps",
+          "task_events",
+          "a2a",
+          "delivery",
+          "cost",
+          "can_see_detail",
+          "can_see_costs"
+        ],
+        "title": "TurnDetail"
       },
       "Page_Requirement_": {
         "properties": {

@@ -16,10 +16,10 @@ from sqlalchemy import delete, func, select, update
 from core.admin.auth import hash_password, revocar_sesiones
 from core.admin.permissions import (
     ACCESS_NONE,
-    GLOBAL_ONLY_SECTIONS,
     OWNER_GRANTABLE_SECTIONS,
     OWNER_ONLY_SECTIONS,
     VALID_ACCESS,
+    acceso_por_rol,
     catalog,
     pack_section_keys,
     seccion_padre,
@@ -395,12 +395,8 @@ async def revoke_permission(
                     )
                 )
             ).scalar_one_or_none()
-        hereda = (
-            tenant_id is not None
-            and role in ("owner", "colaborador")
-            and section not in GLOBAL_ONLY_SECTIONS
-            and section not in OWNER_ONLY_SECTIONS
-        )
+        # La misma regla que la resolución (ADR-0169 §1: el colaborador no hereda las opt-in).
+        hereda = acceso_por_rol(section, role, tenant_id) is not None and section not in OWNER_ONLY_SECTIONS
         row = (
             await session.execute(
                 select(AdminPermission).where(
@@ -481,12 +477,7 @@ async def set_permissions(
 
         for section, access in permissions.items():
             if access == ACCESS_NONE:
-                hereda = (
-                    tenant_id is not None
-                    and role in ("owner", "colaborador")
-                    and section not in GLOBAL_ONLY_SECTIONS
-                    and section not in OWNER_ONLY_SECTIONS
-                )
+                hereda = acceso_por_rol(section, role, tenant_id) is not None and section not in OWNER_ONLY_SECTIONS
                 if not hereda:
                     # Sin fila ya queda denegado.
                     continue
