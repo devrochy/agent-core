@@ -5,8 +5,8 @@ un evento propio: no se reutilizan `evaluated` (la medición del gate, que lee e
 `approved`/`rejected` (los veredictos de pass^k que leen el gate y el tablero). No entra en el ciclo
 de vida (`promocion.CICLO_DE_VIDA`).
 
-Aditiva: se reemplaza el CHECK por uno con el tipo nuevo (`NOT VALID` y luego `VALIDATE`, que no
-bloquea escrituras). La tabla es chica.
+Aditiva: se reemplaza el CHECK por uno con el tipo nuevo. Dentro de la transacción de Alembic el
+`ADD CONSTRAINT` toma un bloqueo exclusivo hasta el commit; la tabla es chica y es inocuo.
 
 Revision ID: 0109
 Revises: 0108

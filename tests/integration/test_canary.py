@@ -206,8 +206,10 @@ async def test_api_canary_y_aislamiento(app_client) -> None:
     assert r.status_code == 204, r.text
     assert (await app_client.post(f"{base}/releases/{dos}/canary", headers=h, json={"percent": 80})).status_code == 422
     estado = (await app_client.get(f"{base}/canary", headers=h)).json()
-    assert estado["percent"] == 10 and estado["veredicto"] == "sin_muestra" and estado["muestra_conversaciones"] == 200
+    assert estado["percent"] == 10 and estado["veredicto"] == "sin_muestra" and estado["umbral_conversaciones"] == 200
+    assert estado["release_number"] == 2 and estado["base_release_number"] == 1 and estado["costos_visibles"] is True
     assert (await app_client.patch(f"{base}/canary", headers=h, json={"percent": 25})).status_code == 204
+    assert (await app_client.get(f"{base}/canary", headers=h)).json()["percent"] == 25  # el vigente, no el inicial
     r = await app_client.post(f"{base}/canary/promote", headers=h)
     assert r.status_code == 409 and r.json()["error"]["code"] == "canary_sin_muestra"
     # Otro negocio no ve ni toca el canary de esta conexión.

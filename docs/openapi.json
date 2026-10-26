@@ -4336,7 +4336,7 @@
           "admin · releases"
         ],
         "summary": "Start Canary",
-        "description": "Prueba la versión con una parte de las conversaciones nuevas (HU-AOS-32). Mismas reglas que\npublicar: dueño o master, gate aprobado si está cerrado, `aos_runtime = v3` (409 `requiere_v3`).",
+        "description": "Prueba la versión con una parte de las conversaciones nuevas (HU-AOS-32). Mismas reglas que\npublicar: dueño o master, gate aprobado si está cerrado, `aos_runtime = v3` (409 `requiere_v3`).\nHasta la parte 2 (la reversión automática) responde 409 `canary_no_disponible`.",
         "operationId": "start_canary_api_v1_admin_connections__connection_id__releases__release_id__canary_post",
         "parameters": [
           {
@@ -29105,9 +29105,9 @@
             "title": "Completitud",
             "description": "Fracción de 0 a 1 de recorridos completados (los que empezaron en la prueba)."
           },
-          "tareas": {
+          "tareas_terminadas": {
             "type": "integer",
-            "title": "Tareas"
+            "title": "Tareas Terminadas"
           },
           "costo_por_conversacion_usd": {
             "anyOf": [
@@ -29118,7 +29118,8 @@
                 "type": "null"
               }
             ],
-            "title": "Costo Por Conversacion Usd"
+            "title": "Costo Por Conversacion Usd",
+            "description": "USD por conversación; null sin datos o sin la sección `costs` (ver `costos_visibles`)."
           },
           "p95_ms": {
             "anyOf": [
@@ -29137,7 +29138,7 @@
           "conversaciones",
           "escalamiento",
           "completitud",
-          "tareas",
+          "tareas_terminadas",
           "costo_por_conversacion_usd",
           "p95_ms"
         ],
@@ -29218,6 +29219,17 @@
             "format": "uuid",
             "title": "Release Id"
           },
+          "release_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Number"
+          },
           "base_release_id": {
             "anyOf": [
               {
@@ -29230,9 +29242,21 @@
             ],
             "title": "Base Release Id"
           },
+          "base_release_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Release Number"
+          },
           "percent": {
             "type": "integer",
-            "title": "Percent"
+            "title": "Percent",
+            "description": "Porcentaje vigente de las conversaciones nuevas que prueban la versión."
           },
           "started_at": {
             "type": "string",
@@ -29241,19 +29265,28 @@
           },
           "horas": {
             "type": "number",
-            "title": "Horas"
+            "title": "Horas",
+            "description": "Horas desde el inicio de la prueba."
           },
-          "muestra_conversaciones": {
+          "umbral_conversaciones": {
             "type": "integer",
-            "title": "Muestra Conversaciones"
+            "title": "Umbral Conversaciones",
+            "description": "Conversaciones en la versión nueva para juntar la muestra."
           },
-          "muestra_horas": {
+          "umbral_horas": {
             "type": "integer",
-            "title": "Muestra Horas"
+            "title": "Umbral Horas",
+            "description": "Horas mínimas para juntar la muestra."
           },
           "dias_manual": {
             "type": "integer",
             "title": "Dias Manual"
+          },
+          "publicable_desde": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Publicable Desde",
+            "description": "Desde cuándo se puede publicar a mano sin muestra."
           },
           "veredicto": {
             "type": "string",
@@ -29266,17 +29299,29 @@
           },
           "motivos": {
             "items": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "escalamiento",
+                "completitud"
+              ]
             },
             "type": "array",
             "title": "Motivos"
           },
           "advertencias": {
             "items": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "costo",
+                "lentitud"
+              ]
             },
             "type": "array",
             "title": "Advertencias"
+          },
+          "costos_visibles": {
+            "type": "boolean",
+            "title": "Costos Visibles"
           },
           "veredicto_guardado": {
             "type": "boolean",
@@ -29315,16 +29360,20 @@
         "type": "object",
         "required": [
           "release_id",
+          "release_number",
           "base_release_id",
+          "base_release_number",
           "percent",
           "started_at",
           "horas",
-          "muestra_conversaciones",
-          "muestra_horas",
+          "umbral_conversaciones",
+          "umbral_horas",
           "dias_manual",
+          "publicable_desde",
           "veredicto",
           "motivos",
           "advertencias",
+          "costos_visibles",
           "veredicto_guardado",
           "senal_dura",
           "puede_publicar",
@@ -44491,7 +44540,7 @@
           "detenida": {
             "type": "boolean",
             "title": "Detenida",
-            "description": "La detuvo el dueño (no se puede activar).",
+            "description": "Bloqueada: la detuvo el dueño (como candidata) o el sistema la retiró de una prueba por ir peor. No se puede activar.",
             "default": false
           }
         },

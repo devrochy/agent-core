@@ -64,7 +64,8 @@ def _porcentaje(percent: int) -> int:
 
 async def _exigir_v3(session: Any, tenant_id: uuid.UUID) -> None:
     runtime = (
-        await session.execute(text("SELECT aos_runtime FROM tenants WHERE id = :t"), {"t": tenant_id})
+        # FOR SHARE: no se cruza con un `migrar-a-v3 --volver` que escribe la bandera en paralelo.
+        await session.execute(text("SELECT aos_runtime FROM tenants WHERE id = :t FOR SHARE"), {"t": tenant_id})
     ).scalar_one_or_none()
     if runtime != "v3":
         raise ConflictoDeRelease(
@@ -140,7 +141,7 @@ async def iniciar(
 
             session.add(
                 AuditLog(
-                    tenant_id=tenant_id, actor=actor, action="release_gate_forzado",
+                    tenant_id=tenant_id, actor=actor[:120], action="release_gate_forzado",
                     input={"connection_id": str(connection_id), "release_id": str(release_id), "motivo": datos["gate_motivo"]},
                 )
             )
@@ -211,6 +212,8 @@ class Estado:
     estable: ev.Carril = field(default_factory=ev.Carril)
     canary: ev.Carril = field(default_factory=ev.Carril)
     umbrales: dict[str, Any] = field(default_factory=dict)
+    release_number: int | None = None
+    base_release_number: int | None = None
 
 
 async def _inicio(session: Any, tenant_id: uuid.UUID, release_id: uuid.UUID) -> tuple[datetime, dict[str, Any]]:
@@ -263,6 +266,8 @@ async def evaluar(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID, 
     """Calcula el estado del canary (sin escribir). Usa el veredicto guardado si ya se decidió."""
     from core.metricas import fiabilidad as m
 
+    _exigir_scope(tenant_id)
+
     desde, datos = await _inicio(session, tenant_id, canary)
     u = ev.umbrales(datos.get("umbrales"))
     base = uuid.UUID(str(datos["base_release_id"])) if datos.get("base_release_id") else None
@@ -293,8 +298,22 @@ async def evaluar(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID, 
         else []
     )
     dura = ev.senal_dura(recientes, estables, u)
+    # El porcentaje vigente es el de la conexión (se puede cambiar después de iniciar).
+    fila = (
+        await session.execute(
+            text(
+                "SELECT cc.canary_percent, rc.number, rb.number FROM channel_connections cc "
+                "LEFT JOIN connection_releases rc ON rc.tenant_id = cc.tenant_id AND rc.id = :canary "
+                "LEFT JOIN connection_releases rb ON rb.tenant_id = cc.tenant_id AND rb.id = :base "
+                "WHERE cc.tenant_id = :t AND cc.id = :c"
+            ),
+            {"t": tenant_id, "c": connection_id, "canary": canary, "base": base},
+        )
+    ).first()
     estado = Estado(
-        release_id=canary, base_release_id=base, percent=int(datos.get("percent") or 0), desde=desde, horas=horas,
+        release_id=canary, base_release_id=base, percent=int(fila[0] if fila else datos.get("percent") or 0),
+        desde=desde, horas=horas,
+        release_number=fila[1] if fila else None, base_release_number=fila[2] if fila else None,
         veredicto=veredicto, senal_dura=dura, guardado=guardado is not None, estable=estable, canary=candidato, umbrales=u,
     )
     vencido = ahora - desde >= timedelta(days=int(u["dias_manual"]))
@@ -347,6 +366,20 @@ async def estado(tenant_id: uuid.UUID, connection_id: uuid.UUID, *, ahora: datet
         return await evaluar(session, tenant_id, connection_id, fila[0], ahora or datetime.now(UTC))
 
 
+async def _veredicto_posterior(session: Any, tenant_id: uuid.UUID, release_id: uuid.UUID, desde: datetime) -> bool:
+    """¿Llegó un veredicto de pass^k (`approved`/`rejected`) de la release después de iniciar el canary?"""
+    fila = (
+        await session.execute(
+            text(
+                "SELECT 1 FROM release_events WHERE tenant_id = :t AND release_id = :r "
+                "AND type IN ('approved', 'rejected') AND created_at > :desde LIMIT 1"
+            ),
+            {"t": tenant_id, "r": release_id, "desde": desde},
+        )
+    ).first()
+    return fila is not None
+
+
 _MENSAJES = {
     "senal_dura": "La versión en prueba está teniendo fallos con los clientes: no se puede publicar.",
     "peor": "La versión en prueba quedó peor que la actual: no se puede publicar.",
@@ -360,6 +393,7 @@ async def publicar(tenant_id: uuid.UUID, connection_id: uuid.UUID, *, actor: str
     rechazo: ConflictoDeRelease | None = None
     async with get_session() as session:
         activa, canary = await _sin_canary(session, tenant_id, connection_id)
+        inicio_visto, _datos = await _inicio(session, tenant_id, canary)
         estado_ = await evaluar(session, tenant_id, connection_id, canary, ahora or datetime.now(UTC))
         # El veredicto se guarda aunque no se pueda publicar: el 409 se lanza después del commit.
         await _guardar_veredicto(session, tenant_id, connection_id, estado_, actor=actor)
@@ -374,14 +408,19 @@ async def publicar(tenant_id: uuid.UUID, connection_id: uuid.UUID, *, actor: str
     async with get_session() as session:
         # Se vuelve a tomar el lock y a confirmar que el canary sigue siendo el mismo.
         activa, canary_ahora = await _sin_canary(session, tenant_id, connection_id)
-        if canary_ahora != canary:
+        desde, datos = await _inicio(session, tenant_id, canary)
+        if canary_ahora != canary or desde != inicio_visto:
             raise ConflictoDeRelease("canary_cambiado", "La versión en prueba cambió mientras se publicaba.")
         # El veredicto ya está guardado; esto solo vuelve a mirar la señal dura bajo el lock.
         final = await evaluar(session, tenant_id, connection_id, canary, ahora or datetime.now(UTC))
         if not final.puede_publicar:
             motivo = final.motivo_no_publicar or "sin_muestra"
             raise ConflictoDeRelease(f"canary_{motivo}", _MENSAJES[motivo])
-        _desde, datos = await _inicio(session, tenant_id, canary)
+        # El gate guardado al iniciar vale si la base sigue siendo la activa y no llegó un veredicto de
+        # pass^k después; si no, `promover_en` lo recalcula.
+        heredado: dict[str, Any] | None = datos
+        if str(datos.get("base_release_id")) != str(activa) or await _veredicto_posterior(session, tenant_id, canary, desde):
+            heredado = None
         await session.execute(
             text(
                 "UPDATE channel_connections SET canary_release_id = NULL, canary_percent = 0 "
@@ -391,7 +430,7 @@ async def publicar(tenant_id: uuid.UUID, connection_id: uuid.UUID, *, actor: str
         )
         cambio = await promover_en(
             session, tenant_id, connection_id, canary, activa, actor=actor, motivo="canary",
-            gate_heredado=datos, extra={"desde_canary": True, "veredicto": estado_.veredicto.estado},
+            gate_heredado=heredado, extra={"desde_canary": True, "veredicto": final.veredicto.estado},
         )
     log.info("release_canary_publicado", connection_id=str(connection_id), veredicto=estado_.veredicto.estado)
     return cambio

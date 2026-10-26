@@ -90,7 +90,10 @@ class ReleaseSummary(BaseModel):
     lifecycle: str | None = Field(
         default=None, description="Último evento de ciclo de vida: promoted, rolled_back, invalid…"
     )
-    detenida: bool = Field(default=False, description="La detuvo el dueño (no se puede activar).")
+    detenida: bool = Field(
+        default=False,
+        description="Bloqueada: la detuvo el dueño (como candidata) o el sistema la retiró de una prueba por ir peor. No se puede activar.",
+    )
 
 
 class ReleaseEvent(BaseModel):
@@ -541,9 +544,10 @@ class CanaryLane(BaseModel):
     conversaciones: int
     escalamiento: float | None = Field(description="Fracción de 0 a 1 de conversaciones que pasaron a una persona.")
     completitud: float | None = Field(description="Fracción de 0 a 1 de recorridos completados (los que empezaron en la prueba).")
-    tareas: int
-    # En USD: solo con la sección `costs`; si no, null.
-    costo_por_conversacion_usd: float | None
+    tareas_terminadas: int
+    costo_por_conversacion_usd: float | None = Field(
+        description="USD por conversación; null sin datos o sin la sección `costs` (ver `costos_visibles`)."
+    )
     p95_ms: int | None
 
 
@@ -558,16 +562,20 @@ class CanarySignal(BaseModel):
 
 class CanaryState(BaseModel):
     release_id: uuid.UUID
+    release_number: int | None
     base_release_id: uuid.UUID | None
-    percent: int
+    base_release_number: int | None
+    percent: int = Field(description="Porcentaje vigente de las conversaciones nuevas que prueban la versión.")
     started_at: datetime
-    horas: float
-    muestra_conversaciones: int
-    muestra_horas: int
+    horas: float = Field(description="Horas desde el inicio de la prueba.")
+    umbral_conversaciones: int = Field(description="Conversaciones en la versión nueva para juntar la muestra.")
+    umbral_horas: int = Field(description="Horas mínimas para juntar la muestra.")
     dias_manual: int
+    publicable_desde: datetime = Field(description="Desde cuándo se puede publicar a mano sin muestra.")
     veredicto: Literal["sin_muestra", "peor", "listo"]
-    motivos: list[str]
-    advertencias: list[str]
+    motivos: list[Literal["escalamiento", "completitud"]]
+    advertencias: list[Literal["costo", "lentitud"]]
+    costos_visibles: bool
     veredicto_guardado: bool
     senal_dura: CanarySignal
     puede_publicar: bool
@@ -587,7 +595,7 @@ def _lane(c: Any, ver_costos: bool) -> CanaryLane:
         conversaciones=c.conversaciones,
         escalamiento=c.escalamiento,
         completitud=c.completitud,
-        tareas=c.tareas_terminadas,
+        tareas_terminadas=c.tareas_terminadas,
         costo_por_conversacion_usd=c.costo_por_conversacion if ver_costos else None,
         p95_ms=c.p95_ms,
     )
@@ -605,7 +613,8 @@ async def start_canary(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> None:
     """Prueba la versión con una parte de las conversaciones nuevas (HU-AOS-32). Mismas reglas que
-    publicar: dueño o master, gate aprobado si está cerrado, `aos_runtime = v3` (409 `requiere_v3`)."""
+    publicar: dueño o master, gate aprobado si está cerrado, `aos_runtime = v3` (409 `requiere_v3`).
+    Hasta la parte 2 (la reversión automática) responde 409 `canary_no_disponible`."""
     from core.releases import canary
 
     require_owner_or_master(principal)
@@ -712,18 +721,24 @@ async def get_canary(
         return None
     ver = await _ver_costos(principal)
     d = e.senal_dura
+    from datetime import timedelta
+
     return CanaryState(
         release_id=e.release_id,
+        release_number=e.release_number,
         base_release_id=e.base_release_id,
+        base_release_number=e.base_release_number,
         percent=e.percent,
         started_at=e.desde,
         horas=round(e.horas, 1),
-        muestra_conversaciones=int(e.umbrales["muestra_conversaciones"]),
-        muestra_horas=int(e.umbrales["muestra_horas"]),
+        umbral_conversaciones=int(e.umbrales["muestra_conversaciones"]),
+        umbral_horas=int(e.umbrales["muestra_horas"]),
         dias_manual=int(e.umbrales["dias_manual"]),
+        publicable_desde=e.desde + timedelta(days=int(e.umbrales["dias_manual"])),
         veredicto=e.veredicto.estado,  # type: ignore[arg-type]
-        motivos=e.veredicto.motivos,
-        advertencias=e.veredicto.advertencias,
+        motivos=e.veredicto.motivos,  # type: ignore[arg-type]
+        advertencias=e.veredicto.advertencias,  # type: ignore[arg-type]
+        costos_visibles=ver,
         veredicto_guardado=e.guardado,
         senal_dura=CanarySignal(
             activa=d.activa, evaluadas=d.evaluadas, llegaron_mal=d.llegaron_mal, tasa=d.tasa,
