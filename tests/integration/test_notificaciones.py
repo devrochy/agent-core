@@ -371,14 +371,21 @@ async def test_baja_de_token_en_el_segundo_lote_se_aplica(app_client, monkeypatc
     from core.shared.tenant import tenant_scope
 
     tid, admin_id, _email = await _tenant_con_owner(uniq("nt-lote2"))
-    tokens = [await _agregar_token(tid, admin_id) for _ in range(120)]
+    for _ in range(120):
+        await _agregar_token(tid, admin_id)
     _push_habilitado(monkeypatch)
-    muerto = tokens[110]
+    # El orden de los tokens lo decide la base: el «muerto» es el primero que llega en la
+    # SEGUNDA llamada a Expo, así la prueba cubre el segundo lote pase lo que pase.
+    llamadas: list[list[dict]] = []
+    muerto: list[str] = []
 
     async def fake_post(payloads: list[dict]) -> list[dict]:
+        llamadas.append(payloads)
+        if len(llamadas) == 2 and not muerto:
+            muerto.append(payloads[0]["to"])
         return [
             {"status": "error", "details": {"error": "DeviceNotRegistered"}}
-            if p["to"] == muerto
+            if muerto and p["to"] == muerto[0]
             else {"status": "ok", "id": "t"}
             for p in payloads
         ]
@@ -392,7 +399,7 @@ async def test_baja_de_token_en_el_segundo_lote_se_aplica(app_client, monkeypatc
                     select(PushToken.token).where(PushToken.tenant_id == tid, PushToken.deleted_at.is_(None))
                 )
             ).scalars().all()
-    assert len(activos) == 119 and muerto not in activos
+    assert len(llamadas) == 2 and len(activos) == 119 and muerto[0] not in activos
 
 
 async def test_push_deshabilitado_marca_enviada_sin_llamar_a_expo(app_client, monkeypatch) -> None:
