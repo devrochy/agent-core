@@ -117,3 +117,34 @@ async def test_la_bandera_la_cambia_solo_el_master(app_client) -> None:
         session.add(TenantUser(tenant_id=tid, admin_id=admin.id, role="owner"))
     dueno = await api_headers(app_client, tid, email=email, password="clave-segura-123")
     assert (await app_client.put(url, headers=dueno, json={"pila": "off"})).status_code == 403
+
+
+async def test_aislamiento_entre_negocios(_ruteo: None, monkeypatch: Any) -> None:
+    """Las tareas abiertas, la sombra y la bandera de un negocio no se ven ni cambian en otro."""
+    from core.db.session import get_session
+    from core.kernel import banderas_pila
+    from core.kernel.router import procedimientos_abiertos
+    from core.kernel.ruteo_sombra import reporte_de_pila
+    from core.shared.tenant import tenant_scope
+
+    a, cid_a, _ = await _con_dos_especialistas("active")
+    b, cid_b, _ = await _con_dos_especialistas("active")
+    await _pila(a, "shadow")
+    await _pila(b, "shadow")
+    conv_b = await _conversacion(b, cid_b)
+    await _turno(b, conv_b, monkeypatch, [("iniciar_procedimiento", {"procedure_id": PLAN}), "¿Qué plan?"], texto="quiero el plan premium")
+    conv_a = await _conversacion(a, cid_a)
+    await _turno(a, conv_a, monkeypatch, ["¿Qué plan te interesa?"], texto=DOS)
+    async with tenant_scope(a):
+        async with get_session() as session:
+            # La conversación de B leída bajo el scope de A: nada (filtro por negocio y RLS).
+            assert await procedimientos_abiertos(session, a, conv_b) == ()
+        reporte = await reporte_de_pila(a)
+        assert reporte.turnos == 1
+        await banderas_pila.fijar(a, {"pila": "off"}, actor="test")
+    async with tenant_scope(b):
+        async with get_session() as session:
+            assert await procedimientos_abiertos(session, b, conv_b) == (PLAN,)
+        assert (await banderas_pila.leer(b)).pila == "shadow"
+        assert (await reporte_de_pila(b)).turnos == 0  # su turno tenía foco nuevo, no pila
+
