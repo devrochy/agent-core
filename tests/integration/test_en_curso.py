@@ -108,6 +108,7 @@ async def _escenario() -> dict[str, Any]:
     plan = await _iniciar(tid, conv, PLAN, "1.3.0", "elegir_plan")
     await _registrar(tid, conv, plan, "slot_set", actor="llm", slot="full_name", value="Ana Pérez", source="llm", data_class="pii")
     await _registrar(tid, conv, plan, "slot_set", actor="llm", slot="email", value="ana@correo.co", source="llm", data_class="pii")
+    await _registrar(tid, conv, plan, "slot_set", actor="kernel", slot="quote_id", value="WOMPI-REF-4821", source="llm", data_class="payment")
     return {"tid": tid, "cid": cid, "conv": conv, "plan": plan, "pedido": pedido}
 
 
@@ -120,7 +121,9 @@ async def test_en_curso_dice_que_falta_e_incluye_la_tarea_escalada(app_client) -
     assert d["escalation"]["reason_code"] and d["escalation"]["status"] == "pendiente" and d["reason"] is None
     plan, pedido = d["tasks"]
     assert plan["task_id"] == str(e["plan"]) and plan["in_focus"] and plan["title"]
-    assert {x["name"]: x["value"] for x in plan["data"]} == {"full_name": "Ana Pérez", "email": "ana@correo.co"}
+    assert {x["name"]: x["value"] for x in plan["data"]} == {
+        "full_name": "Ana Pérez", "email": "ana@correo.co", "quote_id": "•••",  # pago: siempre oculto
+    }
     faltan = {x["name"] for x in plan["missing"]}
     assert faltan == {"variant_id"} and plan["missing_reason"] is None
     assert all(x["label"] for x in plan["missing"])
@@ -162,3 +165,13 @@ async def test_aislamiento_y_playground(app_client) -> None:
     assert (await app_client.get(url, headers=await api_headers(app_client, otro))).status_code == 404
     await _sql(e["tid"], "update conversations set channel = :canal where id = :c", canal=TEST_CHANNEL, c=e["conv"])
     assert (await app_client.get(url, headers=await api_headers(app_client, e["tid"]))).status_code == 404
+
+
+async def test_otro_negocio_no_toma_ni_suelta_las_tareas(app_client) -> None:
+    e = await _escenario()
+    otro, _s, _c = await _negocio()
+    ho = await api_headers(app_client, otro)
+    base = f"/api/v1/admin/conversations/{e['conv']}"
+    for accion in ("take", "return-to-bot", "resolve"):
+        assert (await app_client.post(f"{base}/{accion}", headers=ho)).status_code == 404
+    assert await _eventos(e["tid"], e["plan"], "taken") == [] and await _eventos(e["tid"], e["plan"], "released") == []

@@ -729,8 +729,9 @@ async def resolve_conversation(
     principal: Annotated[Principal, Depends(require("conversations", write=True))],
 ) -> Response:
     """Resuelve la conversación: reactiva el agente y cierra sus escalaciones."""
-    await _owned_conversation(conversation_id, principal.tenant_id)
     async with get_session() as session:
+        # Como `take` y `return-to-bot`: ni del playground ni borrada (no anota sus tareas).
+        await _conversacion_visible(session, conversation_id, principal.tenant_id)
         # Primero la conversación (orden de bloqueos conversación → tareas, ADR-0169 §5).
         conversation = await toma_humana.bloquear_conversacion(session, principal.tenant_id, conversation_id)
         assert conversation is not None
@@ -740,8 +741,10 @@ async def resolve_conversation(
             (
                 await session.execute(
                     select(Escalation).where(
+                        Escalation.tenant_id == principal.tenant_id,
                         Escalation.conversation_id == conversation_id,
                         Escalation.status != "resuelta",
+                        Escalation.deleted_at.is_(None),
                     )
                 )
             )
@@ -848,6 +851,7 @@ async def return_conversation_to_bot(
                         Escalation.tenant_id == tenant_id,
                         Escalation.conversation_id == conversation_id,
                         Escalation.status != "resuelta",
+                        Escalation.deleted_at.is_(None),
                     )
                 )
             )

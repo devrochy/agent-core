@@ -15,6 +15,7 @@ no para la persona. Los motivos van como códigos. Solo lectura: no abre episodi
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -31,6 +32,8 @@ SIN_PROCEDIMIENTOS = "sin_procedimientos"
 DEFINICION_NO_DISPONIBLE = "definicion_no_disponible"
 _ACCIONES = ("action_succeeded", "action_failed")
 MAX_TAREAS = 20
+_ACCION = re.compile(r"^[a-zA-Z0-9_]{1,80}$")  # = state._ACCION
+_MOTIVO = re.compile(r"^[a-z_]{1,40}$")  # = state._MOTIVO
 
 
 @dataclass(frozen=True)
@@ -139,7 +142,7 @@ async def leer(session: Any, tenant_id: uuid.UUID, conversation_id: uuid.UUID) -
         await session.execute(
             text(
                 "SELECT release_id FROM conversations "
-                "WHERE tenant_id = :t AND id = :c AND channel <> :prueba"
+                "WHERE tenant_id = :t AND id = :c AND channel <> :prueba AND deleted_at IS NULL"
             ),
             {"t": tenant_id, "c": conversation_id, "prueba": TEST_CHANNEL},
         )
@@ -205,11 +208,14 @@ async def leer(session: Any, tenant_id: uuid.UUID, conversation_id: uuid.UUID) -
         )
     ).scalars():
         data = e.data or {}
-        motivo = data.get("reason")
-        # Solo el nombre de la acción y un código: nunca `candidates` ni valores.
+        accion, motivo = data.get("action"), data.get("reason")
+        # Solo el nombre de la acción y un código validados: nunca `candidates`, valores ni texto
+        # libre (`task_events` es append-only y no se puede redactar después).
+        if not (isinstance(accion, str) and _ACCION.fullmatch(accion)):
+            continue
         ultimas[e.task_id] = UltimaAccion(
-            str(data.get("action") or "")[:80], e.type == "action_succeeded",
-            str(motivo)[:60] if isinstance(motivo, str) else None, e.created_at,
+            accion, e.type == "action_succeeded",
+            motivo if isinstance(motivo, str) and _MOTIVO.fullmatch(motivo) else None, e.created_at,
         )
 
     salida: list[TareaEnCurso] = []
