@@ -602,3 +602,19 @@ async def test_primer_qr_de_una_sesion_nueva_no_es_sesion_perdida(tmp_path: Path
 
     assert esc.alertas == []
     assert not esc.registro.last_error
+
+
+async def test_logged_out_no_vuelve_a_guardar_las_credenciales_revocadas(tmp_path: Path) -> None:
+    async def _logged_out(sock, on_qr, on_status) -> None:  # type: ignore[no-untyped-def]
+        await on_status("logged_out", "cerró la sesión")
+
+    esc = Escenario(
+        tmp_path, estado=status.CONNECTED, conectada_alguna_vez=True, blob=BLOB_VINCULADO,
+        script=_logged_out,
+    )
+
+    await esc.correr()
+
+    assert esc.store.cleared == [TENANT]
+    assert esc.store.persisted == []
+    assert esc.store.blob is None

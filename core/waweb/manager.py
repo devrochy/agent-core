@@ -292,7 +292,7 @@ class WaWebConnector:
                         try:
                             await handoff.set_ready(str(ctx.tenant_id))
                         except Exception:
-                            log.exception("waweb_set_ready_failed")
+                            log.exception("waweb_set_ready_failed", tenant_id=str(ctx.tenant_id))
                 if ctx.tenant_id not in self._connected:
                     ultimo = max(self._qr_at.get(ctx.tenant_id, 0.0), inicio)
                     ya_emitio_qr = ctx.tenant_id in self._qr_cycles
@@ -337,7 +337,7 @@ class WaWebConnector:
         try:
             await self.store.persist(ctx.tenant_id, work_dir)
         except Exception:
-            log.exception("waweb_session_persist_failed")
+            log.exception("waweb_session_persist_failed", tenant_id=str(ctx.tenant_id))
 
     async def _on_qr_vencido(self, ctx: SessionContext) -> None:
         """El QR emitido venció sin escanearse y Neonize dejó de emitir: reciclar."""
@@ -453,6 +453,9 @@ class WaWebConnector:
         elif mapped == status.LOGGED_OUT:
             self._stop.add(ctx.tenant_id)
             self._linked.discard(ctx.tenant_id)
+            # Credenciales revocadas: el `finally` de `run_session` no debe volver a
+            # guardar el directorio de la sesión cerrada.
+            self._can_persist.discard(ctx.tenant_id)
             # Descartar envíos encolados: que no se despachen contra una sesión muerta.
             try:
                 purged = await purge_outbox(ctx.tenant_id, "sesión de WhatsApp cerrada")
