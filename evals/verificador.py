@@ -112,16 +112,27 @@ def _estado(caso: dict[str, Any], con_estado: bool) -> Any:
     return estado_derivado(caso) if con_estado else None
 
 
-def medir(casos: list[dict[str, Any]], con_estado: bool = False) -> Medicion:
-    from core.orchestrator.verificador import Evidencia, verificar
+def medir(casos: list[dict[str, Any]], con_estado: bool = False, modos: Any = None) -> Medicion:
+    """`modos` (`verificador.Modos`) pisa los del caso; un caso puede traer los suyos (`modos`), su
+    reloj (`ahora`, ISO) y el contexto del sistema y del cliente (HU-AOS-20 parte 3)."""
+    from datetime import datetime
+
+    from core.orchestrator.verificador import Evidencia, Modos, verificar
 
     afirmaciones = afirmaciones_incorporadas()
     medicion = Medicion()
     for caso in casos:
         evidencia = Evidencia.desde(
-            caso.get("resultados") or [], caso.get("contexto") or "", _estado(caso, con_estado)
+            caso.get("resultados") or [],
+            caso.get("contexto") or "",
+            _estado(caso, con_estado),
+            contexto_sistema=caso.get("contexto_sistema") or "",
+            contexto_cliente=caso.get("contexto_cliente") or "",
+            zona=caso.get("zona"),
+            ahora=datetime.fromisoformat(caso["ahora"]) if caso.get("ahora") else None,
         )
-        veredicto = verificar(caso["texto"], evidencia, afirmaciones)
+        propios = Modos(**caso["modos"]) if isinstance(caso.get("modos"), dict) else None
+        veredicto = verificar(caso["texto"], evidencia, afirmaciones, modos=modos or propios)
         detalle = {
             "id": caso["id"],
             "motivo": veredicto.motivo,

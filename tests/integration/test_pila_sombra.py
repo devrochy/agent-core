@@ -103,9 +103,7 @@ async def test_la_bandera_la_cambia_solo_el_master(app_client) -> None:
     assert r.status_code == 200 and r.json()["pila"] == "shadow", r.text
     ((agent_os, evals),) = await _sql(tid, "select settings->'agent_os', settings->'evals' from tenants where id = :t", t=tid)
     assert agent_os == {"pila": "shadow"} and evals == {"gate": "cerrado"}
-    # Lo que llega en partes posteriores de la HU todavía no se enciende.
-    r = await app_client.put(url, headers=master, json={"verificar_horarios": "active"})
-    assert r.status_code == 409 and r.json()["error"]["code"] == "no_disponible"
+    # Un valor fuera del contrato es 422 (todo lo de la HU ya se puede encender).
     assert (await app_client.put(url, headers=master, json={"pila": "turbo"})).status_code == 422
     assert await _sql(tid, "select count(*) from audit_log where action = 'agent_os_colaboracion'") == [(1,)]
 

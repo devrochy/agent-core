@@ -257,6 +257,15 @@ def max_stack(defecto: int = 2) -> int:
     return max(1, min(5, valor)) if isinstance(valor, int) and not isinstance(valor, bool) else defecto
 
 
+def max_questions(defecto: int = 1) -> int:
+    """`composition.maxQuestions` del Coordinador de la release del turno (HU-AOS-20 parte 3), entre
+    0 y 5; `defecto` (el del contrato) sin release o si no se puede leer."""
+    kernel = kernel_del_turno()
+    crudo = kernel.content.get("composition") if kernel is not None else None
+    valor = crudo.get("maxQuestions") if isinstance(crudo, Mapping) else None
+    return max(0, min(5, valor)) if isinstance(valor, int) and not isinstance(valor, bool) else defecto
+
+
 def nombre_de_agente(instance_id: uuid.UUID | None) -> str | None:
     """El nombre (o la key) de un agente de la release del turno; None si no está."""
     actual = vigente()
@@ -303,6 +312,7 @@ __all__ = [
     "idle_minutes",
     "kernel_del_turno",
     "marcar_v3_sin_release",
+    "max_questions",
     "max_stack",
     "nombre_de_agente",
     "procedimientos_del_agente",

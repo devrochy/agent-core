@@ -595,8 +595,12 @@ class ContextoMotor:
         packs_de_la_release: frozenset[str] | None = None,
         declaradas_por_el_agente: frozenset[str] | None = None,
         a2a: Any = None,
+        colaboracion: Any = None,
     ) -> None:
         self.modo: Modo = modo
+        # HU-AOS-20: banderas de la colaboración del negocio (`banderas.Colaboracion`), ya leídas
+        # con el resto de banderas del turno; las usa el verificador (horarios y preguntas).
+        self.colaboracion = colaboracion
         self.tenant_id = tenant_id
         self.conversation_id = conversation_id
         self.customer_id = customer_id
@@ -2600,7 +2604,7 @@ async def contexto_del_motor(
             modo="activo", procedimientos=registro.disponibles(enabled, disabled), tarjeta=tarjeta,
             foco=foco, texto_cliente=texto_cliente, por_boton=por_boton, seq_al_empezar={f.id: f.last_seq for f in filas},
             confirmar_tambien=confirmar_tambien, abiertas=frozenset(f.procedure_id for f in filas),
-            abiertas_propias=_propias(filas),
+            abiertas_propias=_propias(filas), colaboracion=banderas.colaboracion,
             sin_gobierno=_sin_gobierno(filas, foco), **comunes,
         )
     if banderas.runtime == "v3" and registro.hay_procedimientos():

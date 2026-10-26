@@ -169,14 +169,44 @@ class Evidencia:
     familias_estado: set[str] = field(default_factory=set)
     # Datos de la tarea en foco que el motor fijó en este turno (comando aceptado).
     datos_fijados: set[str] = field(default_factory=set)
+    # Con estado (HU-AOS-20 parte 3): horas y fechas que respaldan lo que el borrador ofrece, y hoy.
+    horario: Any = None
+    hoy: Any = None
 
     @classmethod
     def desde(
-        cls, resultados: list[dict[str, Any]], contexto: str = "", estado: EstadoTareas | None = None
+        cls,
+        resultados: list[dict[str, Any]],
+        contexto: str = "",
+        estado: EstadoTareas | None = None,
+        *,
+        contexto_sistema: str = "",
+        contexto_cliente: str = "",
+        zona: str | None = None,
+        ahora: Any = None,
     ) -> Evidencia:
+        """`contexto_sistema` (prompt del sistema sin el bloque dinámico) respalda horarios; las
+        horas de `contexto_cliente` solo cuentan como eco de un dato que la tarea fijó del cliente."""
         ev = cls(urls_contexto=_claves(contexto))
         if estado is not None:
             ev._sumar_estado(estado)
+            from core.orchestrator.verificador.horarios import respaldo_de
+
+            try:
+                ev.horario, ev.hoy = respaldo_de(
+                    resultados,
+                    estado.tareas,
+                    contexto_sistema=contexto_sistema,
+                    contexto_cliente=contexto_cliente,
+                    zona=zona,
+                    ahora=ahora,
+                )
+            except Exception:
+                # Solo se pierde esta validación (queda sin horario); montos y cierres siguen.
+                from core.shared.logger import get_logger
+
+                get_logger(__name__).exception("verificador_horarios_respaldo_fallo")
+                ev.horario, ev.hoy = None, None
         for resultado in resultados:
             if not isinstance(resultado, dict):
                 continue

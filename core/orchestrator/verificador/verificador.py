@@ -76,6 +76,16 @@ _FECHA = re.compile(
 )
 
 
+@dataclass(frozen=True)
+class Modos:
+    """Validaciones de HU-AOS-20 parte 3 (banderas `settings.agent_os` del negocio): `shadow` solo
+    cuenta en `sombra`; `active` rechaza con reintento. Solo aplican con el estado de las tareas."""
+
+    horarios: str = "shadow"
+    preguntas: str = "shadow"
+    max_preguntas: int = 1
+
+
 def normalizar_desactivados(nombres: Iterable[Any] | None) -> list[str]:
     """Nombres de `disabled_guardrails` con los alias del verificador resueltos.
 
@@ -89,7 +99,7 @@ class Veredicto:
     texto: str
     passed: bool = True
     # Código del motivo: `monto_sin_evidencia`, `status_sin_evidencia` o (con estado)
-    # `referencia_sin_evidencia`.
+    # `referencia_sin_evidencia`, `horario_sin_evidencia` o `demasiadas_preguntas` (HU-AOS-20).
     motivo: str = ""
     # Etiqueta de la afirmación de cierre que falló (para métricas).
     afirmacion: str = ""
@@ -106,7 +116,8 @@ class Veredicto:
 
     @property
     def extrajo_algo(self) -> bool:
-        return any(self.conteo.values()) or bool(self.urls_quitadas)
+        # La sombra también se registra: sin ella no se puede medir antes de activar (HU-AOS-20).
+        return any(self.conteo.values()) or any(self.sombra.values()) or bool(self.urls_quitadas)
 
 
 def _quitar_urls(texto: str, respaldada) -> tuple[str, int]:  # type: ignore[no-untyped-def]
@@ -134,6 +145,7 @@ def verificar(
     evidencia: Evidencia,
     afirmaciones: Iterable[Afirmacion],
     desactivados: Iterable[str] = (),
+    modos: Modos | None = None,
 ) -> Veredicto:
     """Compara el borrador con la evidencia. Puro: no lee base ni red."""
     apagados = set(desactivados)
@@ -191,6 +203,37 @@ def verificar(
     veredicto.sombra["referencias_sin_evidencia"] = len(referencias - evidencia.referencias)
     referencia_fallida = _referencia_sin_evidencia(oraciones, evidencia) if evidencia.con_estado else ""
 
+    # 5 y 6. Horarios y preguntas (HU-AOS-20 parte 3), solo con estado: en sombra se cuentan.
+    horario_fallido = ""
+    preguntas_de_mas = 0
+    if evidencia.con_estado and evidencia.horario is not None:
+        from core.orchestrator.verificador.horarios import (
+            contar_preguntas,
+            horarios_sin_respaldo,
+            normalizar,
+        )
+
+        m = modos or Modos()
+        try:
+            fallas, sin_normalizar = horarios_sin_respaldo(
+                oraciones_afirmativas(normalizar(texto)), evidencia.horario, evidencia.hoy
+            )
+            preguntas = contar_preguntas(texto)
+        except Exception:
+            # Solo se pierden estas dos validaciones; montos, cierres y referencias siguen.
+            log.exception("verificador_horarios_fallo")
+            fallas, sin_normalizar, preguntas = [], 0, 0
+        veredicto.sombra["horarios_sin_normalizar"] = sin_normalizar
+        if m.horarios == "active":
+            horario_fallido = fallas[0] if fallas else ""
+        else:
+            veredicto.sombra["horarios_sin_evidencia"] = len(fallas)
+        exceso = max(0, preguntas - max(0, m.max_preguntas))
+        if m.preguntas == "active":
+            preguntas_de_mas = exceso
+        else:
+            veredicto.sombra["preguntas_de_mas"] = exceso
+
     if cierre_fallido and "verificador_cierre" not in apagados:
         veredicto.afirmacion = cierre_fallido
     if sin_evidencia and "verificador_montos" not in apagados:
@@ -203,6 +246,12 @@ def verificar(
     elif referencia_fallida:
         veredicto.passed = False
         veredicto.motivo = "referencia_sin_evidencia"
+    elif horario_fallido:
+        veredicto.passed = False
+        veredicto.motivo = "horario_sin_evidencia"
+    elif preguntas_de_mas:
+        veredicto.passed = False
+        veredicto.motivo = "demasiadas_preguntas"
     return veredicto
 
 
@@ -231,13 +280,21 @@ def verificar_seguro(
     afirmaciones: Iterable[Afirmacion],
     desactivados: Iterable[str] = (),
     estado: EstadoTareas | None = None,
+    *,
+    contexto_sistema: str = "",
+    contexto_cliente: str = "",
+    zona: str | None = None,
+    modos: Modos | None = None,
 ) -> Veredicto:
     """Arma la evidencia y verifica, sin tumbar nunca el turno (mismo criterio que un
     guardrail que lanza, `run_guardrails`). Si algo falla, montos y cierres pasan
     (fail-open), pero los links se quitan todos: un link inventado no llega al cliente
     porque el verificador se rompió. El link exacto lo sigue entregando `_safe_append`."""
     try:
-        return verificar(borrador, Evidencia.desde(resultados, contexto, estado), afirmaciones, desactivados)
+        evidencia = Evidencia.desde(
+            resultados, contexto, estado, contexto_sistema=contexto_sistema, contexto_cliente=contexto_cliente, zona=zona
+        )
+        return verificar(borrador, evidencia, afirmaciones, desactivados, modos)
     except Exception:
         log.exception("verificador_fallo")
     texto = borrador

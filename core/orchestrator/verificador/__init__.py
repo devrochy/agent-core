@@ -3,6 +3,7 @@
 from core.orchestrator.verificador.evidencia import EstadoTareas, Evidencia
 from core.orchestrator.verificador.verificador import (
     TOGGLES,
+    Modos,
     Veredicto,
     cargar_afirmaciones,
     instruccion_correctiva,
@@ -16,6 +17,7 @@ __all__ = [
     "TOGGLES",
     "EstadoTareas",
     "Evidencia",
+    "Modos",
     "Veredicto",
     "cargar_afirmaciones",
     "instruccion_correctiva",

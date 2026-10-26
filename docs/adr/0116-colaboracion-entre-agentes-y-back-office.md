@@ -296,6 +296,15 @@ Se entrega en tres partes: **1**, detección y sombra (§1, §5 y §6); **2**, l
      - `shadow`: cuenta en `veredicto.sombra` (`unverifiable` en `turn_outcomes.verifier`);
      - `active`: `fail` con reintento.
    - Montos y cierres no cambian.
+   - **Lo que resolvió la implementación** (parte 3, `core/orchestrator/verificador/horarios.py`):
+     - **Respaldo:**
+       - cualquier instante o fecha ISO que devolvió el servidor respalda: un `proximo_cargo` o el `start` de una cita;
+       - las horas sueltas «HH:MM» solo respaldan bajo las claves que ofrecen horarios (`free_slots`, `hora`);
+       - nunca respaldan `busy_slots`, `business_hours` ni el texto de un error.
+     - **Fechas:** una fecha sin día del mes («el jueves», «mañana») solo da contexto a una hora; una fecha que no se puede fijar va a sombra.
+     - **Preguntas:** pedir datos en serie es una sola pregunta. La que arranca con «¿Y…?» u «¿O…?» se suma a la anterior, y una lista numerada cuenta una vez.
+     - **Registro:** la sombra también se registra en `turn_outcomes.verifier` (si no, no habría cómo medir).
+     - **Medición con las dos en `active` sobre las 217 respuestas reales del eval:** 1 falso positivo (0,5 %), y es una doble pregunta de verdad.
 8. **Escenarios simulados sin LLM** (modelo guionado):
    - **Parte 1:** golden con dos intenciones y negativos; bandera en `shadow`, donde nada cambia y queda `shadow_route.pila`; con `aos_routing = off`, no hay sombra.
    - **Parte 2:**

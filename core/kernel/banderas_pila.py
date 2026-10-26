@@ -21,11 +21,11 @@ from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
-# Lo que se puede encender hoy (parte 2: la pila activa; la verificación llega en la parte 3).
+# Lo que se puede encender (la HU completa: pila activa y verificación de horarios y preguntas).
 DISPONIBLES: dict[str, tuple[str, ...]] = {
     "pila": ("off", "shadow", "active"),
-    "verificar_horarios": ("shadow",),
-    "verificar_preguntas": ("shadow",),
+    "verificar_horarios": ("shadow", "active"),
+    "verificar_preguntas": ("shadow", "active"),
 }
 
 
