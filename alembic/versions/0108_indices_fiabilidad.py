@@ -12,8 +12,8 @@ Todo fuera de la transacción (`autocommit_block`), sin bloquear escrituras (pat
 
 Idempotente: un índice válido se salta y uno INVALID de un intento interrumpido se rehace.
 
-Revision ID: 0107
-Revises: 0106
+Revision ID: 0108
+Revises: 0107
 Create Date: 2026-10-25
 """
 
@@ -21,8 +21,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0107"
-down_revision = "0106"
+revision = "0108"
+down_revision = "0107"
 branch_labels = None
 depends_on = None
 

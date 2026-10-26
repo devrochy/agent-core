@@ -12,4 +12,4 @@ Es la base de la página «Calidad» del panel. El diseño está en la adenda HU
 - **`GET /api/v1/admin/reliability/verifier`** lista los turnos con un rechazo. **`POST .../verifier/{turn_id}/false-positive`** (escritura en `agents`) lo marca como falso positivo: es idempotente, no se desmarca y responde 404 si el turno no tiene ese rechazo.
 - **`GET /api/v1/admin/usage?group_by=connection|agent|a2a|day`.** Gasto del ledger sin evals ni generación. El modo `a2a` agrupa por quién pide, a quién y en qué modo.
 - **`GET /api/v1/admin/evals/runs`.** Últimas corridas de evaluación con su versión y `pass_k_average`, sin su costo.
-- **Migración 0107:** índices concurrentes para las métricas por versión y por fecha de cierre de tareas, y el índice único de los falsos positivos.
+- **Migración 0108:** índices concurrentes para las métricas por versión y por fecha de cierre de tareas, y el índice único de los falsos positivos.
