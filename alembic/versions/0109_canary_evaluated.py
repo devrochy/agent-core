@@ -29,12 +29,13 @@ _ANTES = (
 _AHORA = _ANTES + ", 'canary_evaluated'"
 
 
-def _check(tipos: str) -> None:
+def _check(tipos: str, *, validar: bool = True) -> None:
     op.execute("ALTER TABLE release_events DROP CONSTRAINT IF EXISTS release_events_type_check")
     op.execute(
         f"ALTER TABLE release_events ADD CONSTRAINT release_events_type_check CHECK (type IN ({tipos})) NOT VALID"
     )
-    op.execute("ALTER TABLE release_events VALIDATE CONSTRAINT release_events_type_check")
+    if validar:
+        op.execute("ALTER TABLE release_events VALIDATE CONSTRAINT release_events_type_check")
 
 
 def upgrade() -> None:
@@ -42,10 +43,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Sin borrado físico (invariante 8): con eventos `canary_evaluated` el downgrade no procede.
-    hay = op.get_bind().exec_driver_sql(
-        "SELECT 1 FROM release_events WHERE type = 'canary_evaluated' LIMIT 1"
-    ).first()
-    if hay is not None:
-        raise RuntimeError("Hay eventos canary_evaluated: el downgrade de 0109 no los borra.")
-    _check(_ANTES)
+    # Sin borrado físico (invariante 8): el CHECK anterior vuelve como NOT VALID, así los eventos
+    # `canary_evaluated` que ya existen se conservan y las filas nuevas se validan con la regla vieja.
+    _check(_ANTES, validar=False)
