@@ -34064,7 +34064,7 @@
               }
             ],
             "title": "Turn Id",
-            "description": "Turno del agente que lo envió; null en los del cliente."
+            "description": "Turno del agente que lo envió; null salvo en los mensajes del agente."
           }
         },
         "type": "object",
@@ -41333,13 +41333,13 @@
           "kind": {
             "type": "string",
             "enum": [
-              "comando",
-              "accion",
-              "motor",
-              "escalacion",
-              "verificador",
+              "command",
+              "action",
+              "engine",
+              "escalation",
+              "verifier",
               "guardrail",
-              "otro"
+              "other"
             ],
             "title": "Kind"
           },
@@ -41359,17 +41359,16 @@
           },
           "input": {
             "title": "Input",
-            "description": "Solo con la sección `observability`. Redactado: los datos personales van enmascarados (ADR-0169)."
+            "description": "Solo con la sección `observability`; si no, null. Redactado: los datos personales van enmascarados (ADR-0169)."
           },
           "output": {
             "title": "Output",
-            "description": "Solo con la sección `observability`. Redactado: los datos personales van enmascarados (ADR-0169)."
+            "description": "Solo con la sección `observability`; si no, null. Redactado: los datos personales van enmascarados (ADR-0169)."
           },
-          "detalle_oculto": {
+          "detail_hidden": {
             "type": "boolean",
-            "title": "Detalle Oculto",
-            "description": "Hay entrada o salida pero falta `observability` para verla.",
-            "default": false
+            "title": "Detail Hidden",
+            "description": "Hay entrada o salida pero falta `observability` para verla."
           },
           "ok": {
             "anyOf": [
@@ -41389,7 +41388,7 @@
             },
             "type": "array",
             "title": "Error Codes",
-            "description": "Códigos de error (sin valores)."
+            "description": "Códigos de error, sin valores (solo los que tienen forma de código)."
           }
         },
         "type": "object",
@@ -41398,7 +41397,12 @@
           "kind",
           "actor",
           "name",
-          "action"
+          "action",
+          "input",
+          "output",
+          "detail_hidden",
+          "ok",
+          "error_codes"
         ],
         "title": "TurnStep"
       },
@@ -41455,6 +41459,30 @@
           "data"
         ],
         "title": "TurnTaskEvent"
+      },
+      "TurnVerifierCheck": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "verdict": {
+            "type": "string",
+            "title": "Verdict",
+            "description": "pass | fail | unverifiable | error"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "verdict",
+          "count"
+        ],
+        "title": "TurnVerifierCheck"
       },
       "TypeOut": {
         "properties": {
@@ -52694,7 +52722,8 @@
             "description": "Solo la forma (redactado al escribir, HU-AOS-18)."
           },
           "result": {
-            "title": "Result"
+            "title": "Result",
+            "description": "Solo la forma (redactado al escribir, HU-AOS-18)."
           },
           "reason": {
             "anyOf": [
@@ -52750,6 +52779,50 @@
           "name"
         ],
         "title": "TurnAgent"
+      },
+      "TurnCandidate": {
+        "properties": {
+          "procedure_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Id"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "procedure_id",
+          "owner",
+          "score"
+        ],
+        "title": "TurnCandidate"
       },
       "TurnCost": {
         "properties": {
@@ -52809,7 +52882,7 @@
           "outcome": {
             "type": "string",
             "title": "Outcome",
-            "description": "routed | blocked | escalated | ignored"
+            "description": "Decisión del Coordinador: routed | blocked | escalated | ignored."
           },
           "blocked_by": {
             "anyOf": [
@@ -52846,12 +52919,11 @@
           },
           "candidates": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/TurnCandidate"
             },
             "type": "array",
             "title": "Candidates",
-            "description": "Procedimientos candidatos: `{procedure_id, owner, score}`."
+            "description": "Procedimientos candidatos con su puntaje."
           },
           "confidence": {
             "anyOf": [
@@ -53016,7 +53088,8 @@
                 "type": "null"
               }
             ],
-            "title": "Latency Ms"
+            "title": "Latency Ms",
+            "description": "Latencia del turno completo (la de la decisión si no terminó)."
           },
           "release_id": {
             "anyOf": [
@@ -53044,14 +53117,19 @@
           "lane": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "enum": [
+                  "stable",
+                  "canary",
+                  "pinned",
+                  "legacy"
+                ]
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Lane",
-            "description": "stable | canary | pinned | legacy"
+            "title": "Lane"
           },
           "inbound_message_ids": {
             "items": {
@@ -53059,7 +53137,8 @@
               "format": "uuid"
             },
             "type": "array",
-            "title": "Inbound Message Ids"
+            "title": "Inbound Message Ids",
+            "description": "Mensajes del cliente que atendió el turno."
           },
           "decision": {
             "$ref": "#/components/schemas/TurnDecision"
@@ -53074,16 +53153,15 @@
               }
             ],
             "title": "Status",
-            "description": "Resultado del turno: replied | neutral | escalated | silent | failed."
+            "description": "Resultado final del turno (`turn_outcomes`): replied | neutral | escalated | silent | failed."
           },
           "verifier": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/TurnVerifierCheck"
             },
             "type": "array",
             "title": "Verifier",
-            "description": "Comprobaciones del verificador: `{kind, verdict, count}`."
+            "description": "Comprobaciones del verificador."
           },
           "verifier_retries": {
             "type": "integer",
