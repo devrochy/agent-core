@@ -278,7 +278,8 @@ async def test_permisos_de_colaborador(app_client) -> None:
     )
     datos = (await app_client.get(f"{_BASE}/reliability", headers=restringido)).json()
     assert datos["operational"]["turns"] == 25
-    assert datos["operational"]["cost_usd"] is None and datos["operational"]["cost_per_conversation"] is None
+    assert datos["operational"]["cost_usd"] is None and datos["operational"]["cost_per_conversation_usd"] is None
+    assert datos["can_see_costs"] is False and datos["can_see_conversations"] is False
     assert all(a["cost_usd"] is None for a in datos["operational"]["by_agent"])
     uso = (await app_client.get(f"{_BASE}/usage", headers=restringido)).json()
     assert uso["items"] and all(i["cost_usd"] is None for i in uso["items"])
@@ -298,6 +299,20 @@ async def test_aislamiento_entre_negocios(app_client) -> None:
     uso = (await app_client.get(f"{_BASE}/usage", headers=hb, params={"connection_id": str(e["cid"])})).json()
     assert uso["items"] == []
     assert (await app_client.get(f"{_BASE}/reliability/verifier", headers=hb)).json()["items"] == []
+    # Una versión ajena (también en completitud) y un carril: vacío, sin eco del id.
+    for ruta, params in (
+        ("/reliability", {"release_id": str(e["rid"])}),
+        ("/usage", {"release_id": str(e["rid"])}),
+        ("/usage", {"lane": "stable"}),
+        ("/evals/runs", {"connection_id": str(e["cid"])}),
+    ):
+        r = await app_client.get(f"{_BASE}{ruta}", headers=hb, params=params)
+        assert r.status_code == 200 and str(e["rid"]) not in r.text and str(e["cid"]) not in r.text
+        cuerpo = r.json()
+        if ruta == "/reliability":
+            assert cuerpo["operational"]["turns"] == 0 and cuerpo["completion"] == []
+        else:
+            assert cuerpo["items"] == []
     url = f"{_BASE}/reliability/verifier/{e['con_rechazo']}/false-positive"
     r = await app_client.post(url, headers=hb, json={"kind": "precio"})
     assert r.status_code == 404 and str(e["con_rechazo"]) not in r.text

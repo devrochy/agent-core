@@ -33,6 +33,7 @@ from core.metricas import fiabilidad as svc
 router = APIRouter(prefix="/admin", tags=["admin · fiabilidad"])
 
 _TIPO_PATTERN = r"^[a-z0-9_]{1,60}$"
+_FRACCION = "Fracción de 0 a 1; null bajo la muestra mínima."
 Lane = Literal["stable", "canary", "pinned", "legacy"]
 
 
@@ -52,7 +53,7 @@ class AgentReliability(BaseModel):
     name: str
     turns: int
     escalated: int
-    escalation_rate: float | None
+    escalation_rate: float | None = Field(description=_FRACCION)
     p95_ms: int | None
     # En USD: solo con la sección `costs`; si no, null.
     cost_usd: float | None
@@ -65,11 +66,11 @@ class Operational(BaseModel):
     escalated_conversations: int
     failed: int
     without_outcome: int
-    escalation_rate: float | None
+    escalation_rate: float | None = Field(description=_FRACCION)
     p95_ms: int | None
     # En USD: solo con la sección `costs`; si no, null.
     cost_usd: float | None
-    cost_per_conversation: float | None
+    cost_per_conversation_usd: float | None
     by_agent: list[AgentReliability]
 
 
@@ -84,12 +85,12 @@ class ProcedureCompletion(BaseModel):
     finished: int
     completed: int
     escalated: int
-    rate: float | None
+    rate: float | None = Field(description=_FRACCION)
 
 
 class ProcedureConsistency(BaseModel):
     procedure_id: str
-    pass_k: float | None
+    pass_k: float | None = Field(description="Fracción de escenarios estables en k = 4 (0 a 1); null sin datos.")
     ok: bool | None
     scenarios: int
     measured_in_release_id: uuid.UUID | None
@@ -101,7 +102,7 @@ class ConnectionConsistency(BaseModel):
     connection: str
     release_id: uuid.UUID | None
     version: int | None
-    threshold: float
+    threshold: float = Field(description="Umbral de pass^4 (0 a 1).")
     no_data: bool
     below_threshold: list[str]
     procedures: list[ProcedureConsistency]
@@ -113,7 +114,12 @@ class ReliabilityResponse(BaseModel):
     operational: Operational
     verifier: list[VerifierKind]
     completion: list[ProcedureCompletion]
-    consistency: list[ConnectionConsistency]
+    # Lo vigente de la versión activa de cada conexión: no se acota al periodo, versión ni carril.
+    consistency: list[ConnectionConsistency] = Field(
+        description="Consistencia vigente de la versión activa; no se acota al periodo, versión ni carril."
+    )
+    can_see_costs: bool
+    can_see_conversations: bool
 
 
 class VerifierRejection(BaseModel):
@@ -152,7 +158,8 @@ class UsageRow(BaseModel):
 
 class UsageResponse(BaseModel):
     period: ReliabilityPeriod
-    group_by: str
+    group_by: Literal["connection", "agent", "a2a", "day"]
+    can_see_costs: bool
     items: list[UsageRow]
 
 
@@ -227,7 +234,7 @@ async def reliability(
             escalation_rate=op.tasa_escalamiento,
             p95_ms=op.p95_ms,
             cost_usd=dinero(op.costo_usd),
-            cost_per_conversation=dinero(op.costo_por_conversacion),
+            cost_per_conversation_usd=dinero(op.costo_por_conversacion),
             by_agent=[
                 AgentReliability(
                     instance_id=a["instance_id"],
@@ -247,7 +254,7 @@ async def reliability(
         ],
         completion=[
             ProcedureCompletion(
-                procedure_id=c["procedure_id"] or "sin_procedimiento",
+                procedure_id=c["procedure_id"],
                 finished=c["terminadas"],
                 completed=c["completadas"],
                 escalated=c["escaladas"],
@@ -256,6 +263,8 @@ async def reliability(
             for c in completitud
         ],
         consistency=[_consistencia(c) for c in consistencia],
+        can_see_costs=ver_costos,
+        can_see_conversations=await _puede(principal, "conversations"),
     )
 
 
@@ -334,6 +343,7 @@ async def usage(
     return UsageResponse(
         period=ReliabilityPeriod(desde=filtro.desde, hasta=filtro.hasta),
         group_by=group_by,
+        can_see_costs=ver_costos,
         items=[
             UsageRow(
                 key=f["clave"],

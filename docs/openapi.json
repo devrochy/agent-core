@@ -29565,7 +29565,8 @@
           },
           "threshold": {
             "type": "number",
-            "title": "Threshold"
+            "title": "Threshold",
+            "description": "Umbral de pass^4 (0 a 1)."
           },
           "no_data": {
             "type": "boolean",
@@ -34161,7 +34162,8 @@
                 "type": "null"
               }
             ],
-            "title": "Escalation Rate"
+            "title": "Escalation Rate",
+            "description": "Fracción de 0 a 1; null bajo la muestra mínima."
           },
           "p95_ms": {
             "anyOf": [
@@ -34185,7 +34187,7 @@
             ],
             "title": "Cost Usd"
           },
-          "cost_per_conversation": {
+          "cost_per_conversation_usd": {
             "anyOf": [
               {
                 "type": "number"
@@ -34194,7 +34196,7 @@
                 "type": "null"
               }
             ],
-            "title": "Cost Per Conversation"
+            "title": "Cost Per Conversation Usd"
           },
           "by_agent": {
             "items": {
@@ -34215,7 +34217,7 @@
           "escalation_rate",
           "p95_ms",
           "cost_usd",
-          "cost_per_conversation",
+          "cost_per_conversation_usd",
           "by_agent"
         ],
         "title": "Operational"
@@ -36146,7 +36148,8 @@
                 "type": "null"
               }
             ],
-            "title": "Rate"
+            "title": "Rate",
+            "description": "Fracción de 0 a 1; null bajo la muestra mínima."
           }
         },
         "type": "object",
@@ -36174,7 +36177,8 @@
                 "type": "null"
               }
             ],
-            "title": "Pass K"
+            "title": "Pass K",
+            "description": "Fracción de escenarios estables en k = 4 (0 a 1); null sin datos."
           },
           "ok": {
             "anyOf": [
@@ -43907,7 +43911,16 @@
               "$ref": "#/components/schemas/ConnectionConsistency"
             },
             "type": "array",
-            "title": "Consistency"
+            "title": "Consistency",
+            "description": "Consistencia vigente de la versión activa; no se acota al periodo, versión ni carril."
+          },
+          "can_see_costs": {
+            "type": "boolean",
+            "title": "Can See Costs"
+          },
+          "can_see_conversations": {
+            "type": "boolean",
+            "title": "Can See Conversations"
           }
         },
         "type": "object",
@@ -43916,7 +43929,9 @@
           "operational",
           "verifier",
           "completion",
-          "consistency"
+          "consistency",
+          "can_see_costs",
+          "can_see_conversations"
         ],
         "title": "ReliabilityResponse"
       },
@@ -44981,7 +44996,8 @@
                 "type": "null"
               }
             ],
-            "title": "Escalation Rate"
+            "title": "Escalation Rate",
+            "description": "Fracción de 0 a 1; null bajo la muestra mínima."
           },
           "p95_ms": {
             "anyOf": [
@@ -45528,7 +45544,17 @@
           },
           "group_by": {
             "type": "string",
+            "enum": [
+              "connection",
+              "agent",
+              "a2a",
+              "day"
+            ],
             "title": "Group By"
+          },
+          "can_see_costs": {
+            "type": "boolean",
+            "title": "Can See Costs"
           },
           "items": {
             "items": {
@@ -45542,6 +45568,7 @@
         "required": [
           "period",
           "group_by",
+          "can_see_costs",
           "items"
         ],
         "title": "UsageResponse"

@@ -96,6 +96,7 @@ async def _dinero_por_turno(session: Any, tenant_id: uuid.UUID, f: Filtro) -> tu
     """Gasto del ledger de los turnos del filtro: total y por instancia de agente."""
     from core.billing.tipos_de_uso import NO_ES_ACTIVIDAD
 
+    _exigir_scope(tenant_id)
     donde, params = _turnos(f)
     params.update({"t": tenant_id, "fuera": list(NO_ES_ACTIVIDAD)})
     filas = (
@@ -184,7 +185,7 @@ async def verificador(session: Any, tenant_id: uuid.UUID, f: Filtro) -> list[dic
                 "  CROSS JOIN LATERAL jsonb_array_elements(coalesce(o.verifier, '[]'::jsonb)) v "
                 f"  WHERE {donde} AND v->>'verdict' = 'fail'"
                 ") SELECT r.kind, count(*), count(*) FILTER (WHERE EXISTS (SELECT 1 FROM turn_feedback fb "
-                "  WHERE fb.tenant_id = :t AND fb.turn_id = r.turn_id AND fb.signal = :fp || r.kind)) "
+                "  WHERE fb.tenant_id = :t AND fb.source = 'owner' AND fb.turn_id = r.turn_id AND fb.signal = :fp || r.kind)) "
                 "FROM rechazos r GROUP BY r.kind ORDER BY 2 DESC"
             ),
             params,
@@ -205,7 +206,7 @@ async def rechazos_del_verificador(
             text(
                 "SELECT DISTINCT ON (d.created_at, d.id, v->>'kind') d.id, d.conversation_id, d.connection_id, "
                 "  d.created_at, v->>'kind', EXISTS (SELECT 1 FROM turn_feedback fb WHERE fb.tenant_id = :t "
-                "  AND fb.turn_id = d.id AND fb.signal = :fp || (v->>'kind')) "
+                "  AND fb.source = 'owner' AND fb.turn_id = d.id AND fb.signal = :fp || (v->>'kind')) "
                 "FROM core_decisions d JOIN turn_outcomes o ON o.tenant_id = d.tenant_id AND o.turn_id = d.id "
                 "CROSS JOIN LATERAL jsonb_array_elements(coalesce(o.verifier, '[]'::jsonb)) v "
                 f"WHERE {donde} AND v->>'verdict' = 'fail' "
