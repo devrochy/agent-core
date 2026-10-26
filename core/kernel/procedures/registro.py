@@ -116,16 +116,23 @@ def disponibles(enabled: Iterable[str], disabled: Iterable[str] = ()) -> dict[st
     return salida
 
 
-def definicion(procedure_id: str, version: str) -> Procedure | None:
+def definicion(procedure_id: str, version: str, congelados: Mapping[tuple[str, str], Procedure] | None = None) -> Procedure | None:
     """Definición exacta de una tarea (id y versión): la de la release del turno si la congela
-    con esa versión, si no la del binario; None si ninguna la trae."""
-    from core.shared import release_vigente
-
-    release = release_vigente.vigente()
-    if release is not None:
-        proc = release.procedimientos.get(procedure_id)
-        if proc is not None and proc.version == version:
+    con esa versión, si no la del binario; None si ninguna la trae. Fuera del turno (la tarjeta
+    «En curso», HU-AOS-28) se pasan los `congelados` de la release de la conversación: la clave
+    es exacta, nunca por major."""
+    if congelados is not None:
+        proc = congelados.get((procedure_id, version))
+        if proc is not None:
             return proc if _valido(proc) else None
+    else:
+        from core.shared import release_vigente
+
+        release = release_vigente.vigente()
+        if release is not None:
+            proc = release.procedimientos.get(procedure_id)
+            if proc is not None and proc.version == version:
+                return proc if _valido(proc) else None
     for proc in _todos():
         if proc.id == procedure_id and proc.version == version:
             return proc if _valido(proc) else None
