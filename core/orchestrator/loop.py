@@ -496,8 +496,10 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # fecha, `build_system_blocks`): lo escribe en parte el propio asistente
     # (`remember_fact`, memorias de turnos previos), así que no cuenta.
     contexto_sistema = "\n".join(system_blocks[:-1])
-    contexto_cliente = "\n".join(m.content for m in messages if m.role == "user" and isinstance(m.content, str))
-    contexto_urls = "\n".join(x for x in (contexto_sistema, contexto_cliente) if x)
+    del_cliente = [m.content for m in messages if m.role == "user" and isinstance(m.content, str)]
+    contexto_urls = "\n".join([contexto_sistema, *del_cliente])
+    # Para el eco de horarios (HU-AOS-20) solo cuenta el último mensaje del cliente.
+    contexto_cliente = del_cliente[-1] if del_cliente else ""
     afirmaciones = None
     motivos_verificador: list[str] = []
     veredicto = None

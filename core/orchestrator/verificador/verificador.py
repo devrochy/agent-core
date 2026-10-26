@@ -214,15 +214,20 @@ def verificar(
         )
 
         m = modos or Modos()
-        fallas, sin_normalizar = horarios_sin_respaldo(
-            oraciones_afirmativas(normalizar(texto)), evidencia.horario, evidencia.hoy
-        )
+        try:
+            fallas, sin_normalizar = horarios_sin_respaldo(
+                oraciones_afirmativas(normalizar(texto)), evidencia.horario, evidencia.hoy
+            )
+            preguntas = contar_preguntas(texto)
+        except Exception:
+            # Solo se pierden estas dos validaciones; montos, cierres y referencias siguen.
+            log.exception("verificador_horarios_fallo")
+            fallas, sin_normalizar, preguntas = [], 0, 0
         veredicto.sombra["horarios_sin_normalizar"] = sin_normalizar
         if m.horarios == "active":
             horario_fallido = fallas[0] if fallas else ""
         else:
             veredicto.sombra["horarios_sin_evidencia"] = len(fallas)
-        preguntas = contar_preguntas(texto)
         exceso = max(0, preguntas - max(0, m.max_preguntas))
         if m.preguntas == "active":
             preguntas_de_mas = exceso

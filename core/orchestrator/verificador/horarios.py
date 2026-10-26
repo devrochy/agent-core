@@ -7,9 +7,12 @@
 - **Fechas:** «30 de octubre [de 2026]», «el jueves 30», «el jueves» (la próxima), ISO, «hoy», «mañana»
   (no «en la mañana») y «pasado mañana», con el reloj y la zona del negocio. Un día de la semana que no
   coincide con la fecha deja la mención «sin normalizar»: nunca bloquea.
-- **Respaldo:** de los resultados de las acciones, solo las claves que ofrecen horarios (`free_slots`,
-  `hora`, `start`, `date`, `fecha`, `days`, el texto de `_safe_append`); nunca `busy_slots` (horas
-  ocupadas), `business_hours` ni el texto de un error.
+- **Respaldo:** todo instante o fecha ISO que devolvió el servidor y las horas sueltas bajo las claves
+  que ofrecen horarios (`free_slots`, `hora`, el texto de `_safe_append`); nunca `busy_slots` (horas
+  ocupadas), `business_hours` ni el texto de un error, y de una acción fallida solo `free_slots`.
+- **Eco:** una hora que el cliente dijo al final de la conversación y que una tarea tiene fijada sin
+  una acción (`source` distinto de `action:*`: en la práctica, el dato que anotó el modelo de lo que
+  pidió el cliente). No pasa por la agenda: la valida el resolver del dato (`horario_ofrecido`).
 - **Preguntas:** cada `?` (una racha cuenta una vez) y cada `¿` sin cierre.
 """
 
@@ -24,6 +27,12 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 ZONA_POR_DEFECTO = "America/Bogota"
+ANIO_MIN, ANIO_MAX = 1900, 2100
+# Tope de menciones por texto: un mensaje armado a propósito («3pm 3pm 3pm…») no debe bloquear el
+# event loop (mismo criterio que `polaridad.MAX_COINCIDENCIAS`).
+MAX_MENCIONES = 40
+# Del contexto del cliente solo se mira el final (el eco es del mensaje que fijó el dato).
+MAX_CONTEXTO_CLIENTE = 1000
 _MESES = {
     "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
     "septiembre": 9, "setiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
@@ -102,9 +111,9 @@ class Mencion:
 
 
 def _sin_solapes(menciones: Iterable[Mencion]) -> list[Mencion]:
-    """Las menciones sin solaparse: gana la más larga (y la primera)."""
+    """Las menciones sin solaparse: gana la más larga (y la primera). Con tope (`MAX_MENCIONES`)."""
     elegidas: list[Mencion] = []
-    for m in sorted(menciones, key=lambda x: (-(x.fin - x.inicio), x.inicio)):
+    for m in sorted(menciones, key=lambda x: (-(x.fin - x.inicio), x.inicio))[: MAX_MENCIONES * 6]:
         if all(m.fin <= e.inicio or m.inicio >= e.fin for e in elegidas):
             elegidas.append(m)
     return sorted(elegidas, key=lambda x: x.inicio)
@@ -128,10 +137,12 @@ def horas_en(plano: str) -> list[Mencion]:
         halladas.append(Mencion(m.start(), m.end(), _candidatas(int(m.group(1)), 0, parte=m.group(2))))
     for m in _MEDIODIA.finditer(plano):
         halladas.append(Mencion(m.start(), m.end(), frozenset({"12:00"})))
-    return [h for h in _sin_solapes(halladas) if h.horas]
+    return [h for h in _sin_solapes(halladas) if h.horas][:MAX_MENCIONES]
 
 
 def _fecha(anio: int, mes: int, dia: int) -> date | None:
+    if not ANIO_MIN <= anio <= ANIO_MAX:
+        return None
     try:
         return date(anio, mes, dia)
     except ValueError:
@@ -185,7 +196,7 @@ def fechas_en(plano: str, hoy: date) -> list[Mencion]:
             continue  # «en la mañana», «de la mañana», «por la mañana»: parte del día, no fecha
         dias = {"hoy": 0, "manana": 1, "pasado manana": 2}[palabra]
         halladas.append(Mencion(m.start(), m.end(), fechas=frozenset({hoy + timedelta(days=dias)})))
-    return _sin_solapes(halladas)
+    return _sin_solapes(halladas)[:MAX_MENCIONES]
 
 
 _COORDINADA = re.compile(r"^¿\s*(?:y|o|e|u)\b", re.IGNORECASE)
@@ -243,12 +254,16 @@ _CLAVES_TEXTO = frozenset({"_safe_append"})
 
 
 def _instante(valor: str, zona: ZoneInfo) -> tuple[date, str] | None:
+    """Un instante ISO en la zona del negocio. Fuera de 1900-2100 (o si no se puede convertir) no
+    cuenta: un año extremo que dictó el modelo no puede tumbar el verificador."""
     try:
         dt = datetime.fromisoformat(valor.strip().replace("Z", "+00:00"))
-    except ValueError:
+        if not ANIO_MIN <= dt.year <= ANIO_MAX:
+            return None
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(zona)
+    except (ValueError, OverflowError):
         return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(zona)
     return dt.date(), f"{dt.hour:02d}:{dt.minute:02d}"
 
 
@@ -282,13 +297,15 @@ def _sumar_texto(respaldo: Respaldo, texto: str, hoy: date) -> None:
                 respaldo.pares.add((f, h))
 
 
-def _recorrer(nodo: Any, respaldo: Respaldo, zona: ZoneInfo, hoy: date, fecha_ctx: date | None = None) -> None:
+def _recorrer(
+    nodo: Any, respaldo: Respaldo, zona: ZoneInfo, hoy: date, fecha_ctx: date | None = None, *, solo_libres: bool = False
+) -> None:
     """Todo instante o fecha ISO que devolvió el servidor respalda (un `proximo_cargo`, el `start` de
     una cita), salvo bajo las claves excluidas (`busy_slots`: horas ocupadas; texto de un error). Las
     horas sueltas «HH:MM» solo bajo las claves que ofrecen horarios (`free_slots`, `hora`)."""
     if isinstance(nodo, list):
         for item in nodo:
-            _recorrer(item, respaldo, zona, hoy, fecha_ctx)
+            _recorrer(item, respaldo, zona, hoy, fecha_ctx, solo_libres=solo_libres)
         return
     if not isinstance(nodo, dict):
         return
@@ -301,7 +318,9 @@ def _recorrer(nodo: Any, respaldo: Respaldo, zona: ZoneInfo, hoy: date, fecha_ct
         if k in _EXCLUIDAS:
             continue
         if isinstance(valor, dict | list) and k not in _CLAVES_HORA:
-            _recorrer(valor, respaldo, zona, hoy, fecha_local)
+            _recorrer(valor, respaldo, zona, hoy, fecha_local, solo_libres=solo_libres)
+            continue
+        if solo_libres and k != "free_slots":
             continue
         if k in _CLAVES_HORA:
             for texto in _cadenas(valor):
@@ -352,7 +371,10 @@ def respaldo_de(
     hoy = (ahora.astimezone(tz) if ahora and ahora.tzinfo else (ahora or datetime.now(tz))).date()
     respaldo = Respaldo(fechas={hoy})
     for resultado in resultados:
-        _recorrer(resultado, respaldo, tz, hoy)
+        # De una acción que falló, solo las alternativas que ofrece el servidor (`free_slots`): podría
+        # repetir el argumento que inventó el modelo.
+        fallida = isinstance(resultado, dict) and resultado.get("_ok", True) is False
+        _recorrer(resultado, respaldo, tz, hoy, solo_libres=fallida)
     if contexto_sistema:
         _sumar_texto(respaldo, contexto_sistema, hoy)
     del_cliente: set[str] = set()
@@ -369,7 +391,7 @@ def respaldo_de(
                 _valor_de_dato(meta["value"], propio, tz, hoy)
                 del_cliente |= propio.horas
     if contexto_cliente and del_cliente:
-        dichas = {h for m in horas_en(normalizar(contexto_cliente)) for h in m.horas}
+        dichas = {h for m in horas_en(normalizar(contexto_cliente[-MAX_CONTEXTO_CLIENTE:])) for h in m.horas}
         respaldo.eco = dichas & del_cliente
     return respaldo, hoy
 
@@ -395,7 +417,7 @@ def horarios_sin_respaldo(oraciones: Iterable[str], respaldo: Respaldo, hoy: dat
     `normalizar` antes de partirlas (si no, «p. m.» corta la oración). Una hora se
     compara con el par (fecha, hora) cuando la oración trae una fecha que el respaldo tiene con horas;
     si no, contra las horas sueltas. Una fecha sin hora, contra las fechas (y hoy)."""
-    from core.shared.polaridad import afirma
+    from core.shared.polaridad import MAX_COINCIDENCIAS, afirma
 
     fallas: list[str] = []
     sin_normalizar = 0
@@ -406,7 +428,7 @@ def horarios_sin_respaldo(oraciones: Iterable[str], respaldo: Respaldo, hoy: dat
         sin_normalizar += sum(1 for m in fechas_m if m.sin_normalizar)
         fechas = {f for m in fechas_m for f in m.fechas}
         con_horas = {f for f, _h in respaldo.pares}
-        for m in horas_m:
+        for m in horas_m[:MAX_COINCIDENCIAS]:
             if not afirma(plano, _match(plano, m)):
                 continue
             if m.horas & respaldo.eco:
@@ -418,7 +440,7 @@ def horarios_sin_respaldo(oraciones: Iterable[str], respaldo: Respaldo, hoy: dat
             if not ok:
                 fallas.append(plano[m.inicio : m.fin])
         if not horas_m:
-            for m in fechas_m:
+            for m in fechas_m[:MAX_COINCIDENCIAS]:
                 if not m.explicita or m.sin_normalizar or not afirma(plano, _match(plano, m)):
                     continue
                 if not (m.fechas & respaldo.fechas):
@@ -426,9 +448,12 @@ def horarios_sin_respaldo(oraciones: Iterable[str], respaldo: Respaldo, hoy: dat
     return fallas, sin_normalizar
 
 
+_TODO = re.compile(r".+", re.DOTALL)
+
+
 def _match(texto: str, m: Mencion) -> re.Match[str]:
-    """Un `re.Match` sobre la mención (lo que pide `polaridad.afirma`)."""
-    hallado = re.compile(re.escape(texto[m.inicio : m.fin])).search(texto, m.inicio)
+    """Un `re.Match` sobre la mención (lo que pide `polaridad.afirma`), sin compilar nada."""
+    hallado = _TODO.match(texto, m.inicio, m.fin)
     assert hallado is not None
     return hallado
 

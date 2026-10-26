@@ -192,14 +192,21 @@ class Evidencia:
             ev._sumar_estado(estado)
             from core.orchestrator.verificador.horarios import respaldo_de
 
-            ev.horario, ev.hoy = respaldo_de(
-                resultados,
-                estado.tareas,
-                contexto_sistema=contexto_sistema,
-                contexto_cliente=contexto_cliente,
-                zona=zona,
-                ahora=ahora,
-            )
+            try:
+                ev.horario, ev.hoy = respaldo_de(
+                    resultados,
+                    estado.tareas,
+                    contexto_sistema=contexto_sistema,
+                    contexto_cliente=contexto_cliente,
+                    zona=zona,
+                    ahora=ahora,
+                )
+            except Exception:
+                # Solo se pierde esta validación (queda sin horario); montos y cierres siguen.
+                from core.shared.logger import get_logger
+
+                get_logger(__name__).exception("verificador_horarios_respaldo_fallo")
+                ev.horario, ev.hoy = None, None
         for resultado in resultados:
             if not isinstance(resultado, dict):
                 continue

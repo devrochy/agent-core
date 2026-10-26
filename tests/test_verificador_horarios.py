@@ -141,3 +141,27 @@ def test_el_monto_va_primero() -> None:
     texto = "El plan cuesta $99.000 y te agendo a las 7 de la noche."
     v = verificar(texto, _ev([AGENDA]), [], modos=Modos(horarios="active"))
     assert v.motivo == "monto_sin_evidencia"
+
+
+# ---------------------------------------------------------------- robustez (auditoría multitenant)
+def test_un_anio_extremo_no_apaga_el_verificador() -> None:
+    tarea = {"slots": {"horario": {"value": "9999-12-31T23:00:00-05:00", "source": "llm"}}}
+    ev = Evidencia.desde([AGENDA], "", EstadoTareas(tareas=(tarea,)), ahora=AHORA)
+    v = verificar("El plan cuesta $99.000.", ev, [], modos=Modos(horarios="active"))
+    assert not v.error and v.motivo == "monto_sin_evidencia"  # montos se siguen verificando
+
+
+def test_de_una_accion_fallida_solo_cuentan_los_libres() -> None:
+    fallida = {"_tool_name": "create_calendar_event", "_ok": False, "start": "2026-10-29T19:00:00-05:00", "free_slots": ["09:00"]}
+    assert _fallas("Te agendo el jueves 29 a las 7 de la noche.", [fallida])
+    assert _fallas("Te puedo agendar a las 9 de la mañana.", [fallida]) == []
+
+
+def test_un_mensaje_con_cientos_de_horas_tiene_tope() -> None:
+    import time
+
+    texto = "3pm " * 5000
+    inicio = time.perf_counter()
+    assert len(horas_en(normalizar(texto))) <= 40
+    respaldo_de([], ({"slots": {"h": {"value": "15:00", "source": "llm"}}},), contexto_cliente=texto, ahora=AHORA)
+    assert time.perf_counter() - inicio < 2
