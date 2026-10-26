@@ -103,7 +103,7 @@ Casos especiales:
 
 ### 5. «En curso» y la toma humana (enmienda ADR-0114)
 
-`GET /api/v1/admin/conversations/{id}/en-curso` (`require("conversations")`, 404 en el playground) devuelve, con la tarea en foco primero:
+`GET /api/v1/admin/conversations/{id}/in-progress` (`require("conversations")`, 404 en el playground) devuelve, con la tarea en foco primero:
 - las tareas **abiertas**;
 - también, en solo lectura, las **cerradas como `escalated`** desde que se creó la escalación activa. El error de acción con relevo humano y el cambio de versión con un efecto irreversible cierran la tarea como `escalated` justo antes de escalar: sin ellas, la tarjeta saldría vacía en el caso en que más se necesita.
 
@@ -157,7 +157,7 @@ Queda fuera de este ADR; tendrá su adenda propia. Va sobre la infraestructura a
 - **`core/shared/redaccion.py`:** redactor; `conversation_tasks` usa su `OCULTO`.
 - **`core/observability/turno.py`** (servicio: lee y redacta) y **`core/api/routers/turnos.py`**; `turn_id` en `MessageItem` (`conversations.py`).
 - **Parte 2:**
-  - `/en-curso` en `conversation_tasks.py`;
+  - `/in-progress` en `conversation_tasks.py`;
   - `registro.definicion` con la release como parámetro;
   - `taken` y `released` en `core/kernel/state.py`;
   - `take`, `return-to-bot` y `resolve` en `conversations.py`;

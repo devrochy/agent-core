@@ -1,6 +1,6 @@
 """HU-AOS-28 · «En curso» y la toma humana (ADR-0169 §5).
 
-- `GET /admin/conversations/{id}/en-curso`: tareas abiertas y, en solo lectura, las cerradas como
+- `GET /admin/conversations/{id}/in-progress`: tareas abiertas y, en solo lectura, las cerradas como
   `escalated` desde la escalación activa; datos dados (pagos enmascarados), lo que falta estructurado
   sobre la definición EXACTA (`definicion_no_disponible` si no está) y `sin_procedimientos` sin tareas;
 - `take` escribe `taken` una sola vez en cada tarea abierta (no en las cerradas); devolverla al agente
@@ -115,10 +115,10 @@ async def _escenario() -> dict[str, Any]:
 async def test_en_curso_dice_que_falta_e_incluye_la_tarea_escalada(app_client) -> None:
     e = await _escenario()
     h = await api_headers(app_client, e["tid"])
-    r = await app_client.get(f"/api/v1/admin/conversations/{e['conv']}/en-curso", headers=h)
+    r = await app_client.get(f"/api/v1/admin/conversations/{e['conv']}/in-progress", headers=h)
     assert r.status_code == 200, r.text
     d = r.json()
-    assert d["escalation"]["reason_code"] and d["escalation"]["status"] == "pendiente" and d["reason"] is None
+    assert d["escalation"]["reason_code"] and d["escalation"]["status"] == "pendiente" and d["empty_reason"] is None
     plan, pedido = d["tasks"]
     assert plan["task_id"] == str(e["plan"]) and plan["in_focus"] and plan["title"]
     assert {x["name"]: x["value"] for x in plan["data"]} == {
@@ -149,8 +149,8 @@ async def test_sin_definicion_exacta_y_sin_tareas(app_client) -> None:
     tid, _slug, cid = await _negocio()
     conv = await _conversacion_unica(tid, cid)
     h = await api_headers(app_client, tid)
-    url = f"/api/v1/admin/conversations/{conv}/en-curso"
-    assert (await app_client.get(url, headers=h)).json() == {"tasks": [], "escalation": None, "reason": "sin_procedimientos"}
+    url = f"/api/v1/admin/conversations/{conv}/in-progress"
+    assert (await app_client.get(url, headers=h)).json() == {"tasks": [], "escalation": None, "empty_reason": "sin_procedimientos"}
     await _iniciar(tid, conv, PLAN, "9.9.9", "datos")  # una versión que ni la release ni el binario traen
     tarea = (await app_client.get(url, headers=h)).json()["tasks"][0]
     assert tarea["missing"] == [] and tarea["missing_reason"] == "definicion_no_disponible" and tarea["title"] is None
@@ -161,7 +161,7 @@ async def test_aislamiento_y_playground(app_client) -> None:
 
     e = await _escenario()
     otro, _s, _c = await _negocio()
-    url = f"/api/v1/admin/conversations/{e['conv']}/en-curso"
+    url = f"/api/v1/admin/conversations/{e['conv']}/in-progress"
     assert (await app_client.get(url, headers=await api_headers(app_client, otro))).status_code == 404
     await _sql(e["tid"], "update conversations set channel = :canal where id = :c", canal=TEST_CHANNEL, c=e["conv"])
     assert (await app_client.get(url, headers=await api_headers(app_client, e["tid"]))).status_code == 404

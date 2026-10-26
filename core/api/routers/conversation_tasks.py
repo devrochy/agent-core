@@ -5,7 +5,7 @@
 - `GET /api/v1/admin/conversations/{id}/tasks/{task_id}/events` — historia de la tarea
   (`task_events`) por `seq`, paginada.
 
-- `GET /api/v1/admin/conversations/{id}/en-curso` — «En curso» (HU-AOS-28, ADR-0169 §5): por tarea,
+- `GET /api/v1/admin/conversations/{id}/in-progress` — «En curso» (HU-AOS-28, ADR-0169 §5): por tarea,
   los datos dados, lo que falta (estructurado, con el rótulo humano), la última acción y la
   escalación activa; incluye en solo lectura las tareas cerradas como `escalated` desde esa
   escalación.
@@ -33,6 +33,7 @@ from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
 from core.db.models import Conversation, ConversationTask, TaskEvent
 from core.db.session import get_session
+from core.kernel import en_curso
 from core.shared.redaccion import OCULTO
 from core.shared.test_mode import TEST_CHANNEL
 
@@ -215,15 +216,20 @@ class InProgressDatum(BaseModel):
 
 
 class InProgressMissing(BaseModel):
-    kind: Literal["dato_cliente", "dato_boton", "dato_contenido", "dato_accion", "confirmar_dato", "confirmar_etapa", "accion"]
+    kind: en_curso.ClaseFalta = Field(
+        description="Qué falta: un dato (del cliente, de un botón, de un contenido o de una acción), confirmar un "
+        "dato, confirmar la etapa o una acción. Los clientes deben tolerar valores nuevos."
+    )
     name: str
-    label: str
+    label: str = Field(
+        description="Rótulo humano del dato (de su habilidad); para `accion` y `confirmar_etapa`, el nombre con espacios."
+    )
 
 
 class InProgressAction(BaseModel):
     action: str
     ok: bool
-    reason: str | None = Field(description="Código del fallo, si falló.")
+    reason_code: str | None = Field(description="Código del fallo, si falló.")
     at: datetime
 
 
@@ -231,22 +237,24 @@ class InProgressTask(BaseModel):
     task_id: uuid.UUID
     procedure_id: str
     title: str | None
-    status: str
+    status: str = Field(
+        description="active | suspended, o `escalated` (en solo lectura: se cerró al escalar la escalación activa)."
+    )
     status_reason: str | None
-    stage: str
-    in_focus: bool
+    stage: str = Field(description="Etapa vigente del procedimiento (id).")
+    in_focus: bool = Field(description="¿Es la tarea en foco de la conversación?")
     data: list[InProgressDatum]
     missing: list[InProgressMissing]
     pending_confirmation: bool
     last_action: InProgressAction | None
     missing_reason: Literal["definicion_no_disponible"] | None = Field(
-        None, description="Por qué `missing` va vacío sin que la tarea esté completa."
+        description="Por qué `missing` va vacío sin que la tarea esté completa."
     )
 
 
 class InProgressEscalation(BaseModel):
     id: uuid.UUID
-    reason_code: str | None
+    reason_code: str | None = Field(description="Código del motivo (el mismo de la bandeja de escalaciones).")
     summary: str | None
     status: str
     assigned_admin_id: uuid.UUID | None
@@ -256,17 +264,15 @@ class InProgressEscalation(BaseModel):
 class InProgress(BaseModel):
     tasks: list[InProgressTask]
     escalation: InProgressEscalation | None
-    reason: Literal["sin_procedimientos"] | None = Field(None, description="Sin tareas en la conversación.")
+    empty_reason: Literal["sin_procedimientos"] | None = Field(description="Por qué `tasks` va vacío.")
 
 
-@router.get("/{conversation_id}/en-curso", response_model=InProgress)
+@router.get("/{conversation_id}/in-progress", response_model=InProgress)
 async def in_progress(
     conversation_id: uuid.UUID,
     principal: Annotated[Principal, Depends(require("conversations"))],
 ) -> InProgress:
     """«En curso» de la conversación para quien la toma (HU-AOS-28)."""
-    from core.kernel import en_curso
-
     if principal.tenant_id is None:
         raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
     async with get_session() as session:
@@ -279,13 +285,13 @@ async def in_progress(
                 task_id=t.task_id, procedure_id=t.procedure_id, title=t.titulo, status=t.estado,
                 status_reason=t.motivo_estado, stage=t.etapa, in_focus=t.en_foco,
                 data=[InProgressDatum(name=d.nombre, label=d.rotulo, value=d.valor, confirmed=d.confirmado, data_class=d.clase) for d in t.datos],
-                missing=[InProgressMissing(kind=f.clase, name=f.nombre, label=f.rotulo) for f in t.falta],  # type: ignore[arg-type]
+                missing=[InProgressMissing(kind=f.clase, name=f.nombre, label=f.rotulo) for f in t.falta],
                 pending_confirmation=t.confirmacion_pendiente,
                 last_action=(
-                    InProgressAction(action=t.ultima_accion.accion, ok=t.ultima_accion.ok, reason=t.ultima_accion.motivo, at=t.ultima_accion.at)
+                    InProgressAction(action=t.ultima_accion.accion, ok=t.ultima_accion.ok, reason_code=t.ultima_accion.motivo, at=t.ultima_accion.at)
                     if t.ultima_accion else None
                 ),
-                missing_reason=t.motivo,  # type: ignore[arg-type]
+                missing_reason=t.motivo,
             )
             for t in e.tareas
         ],
@@ -296,5 +302,5 @@ async def in_progress(
             )
             if e.escalacion else None
         ),
-        reason=e.motivo,  # type: ignore[arg-type]
+        empty_reason=e.motivo,
     )

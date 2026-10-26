@@ -19,7 +19,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal, get_args
 
 from sqlalchemy import select, text
 
@@ -28,8 +28,12 @@ from core.shared.redaccion import OCULTO
 from core.shared.tenant import get_current_tenant_id
 from core.shared.test_mode import TEST_CHANNEL
 
-SIN_PROCEDIMIENTOS = "sin_procedimientos"
-DEFINICION_NO_DISPONIBLE = "definicion_no_disponible"
+SIN_PROCEDIMIENTOS: Literal["sin_procedimientos"] = "sin_procedimientos"
+DEFINICION_NO_DISPONIBLE: Literal["definicion_no_disponible"] = "definicion_no_disponible"
+# Las clases de `motor.Falta` que se muestran (si el motor suma una, se omite hasta agregarla aquí:
+# nunca un 500 al validar la respuesta).
+ClaseFalta = Literal["dato_cliente", "dato_boton", "dato_contenido", "dato_accion", "confirmar_dato", "confirmar_etapa", "accion"]
+_CLASES: frozenset[str] = frozenset(get_args(ClaseFalta))
 _ACCIONES = ("action_succeeded", "action_failed")
 MAX_TAREAS = 20
 _ACCION = re.compile(r"^[a-zA-Z0-9_]{1,80}$")  # = state._ACCION
@@ -47,7 +51,7 @@ class Dato:
 
 @dataclass(frozen=True)
 class Faltante:
-    clase: str  # dato_cliente | dato_boton | dato_contenido | dato_accion | confirmar_dato | confirmar_etapa | accion
+    clase: ClaseFalta
     nombre: str
     rotulo: str
 
@@ -73,7 +77,7 @@ class TareaEnCurso:
     falta: list[Faltante]
     confirmacion_pendiente: bool
     ultima_accion: UltimaAccion | None
-    motivo: str | None = None  # código: por qué `falta` va vacío (p. ej. definicion_no_disponible)
+    motivo: Literal["definicion_no_disponible"] | None = None  # por qué `falta` va vacío
 
 
 @dataclass(frozen=True)
@@ -90,7 +94,7 @@ class Escalacion:
 class EnCurso:
     tareas: list[TareaEnCurso] = field(default_factory=list)
     escalacion: Escalacion | None = None
-    motivo: str | None = None  # SIN_PROCEDIMIENTOS si no hay ninguna tarea
+    motivo: Literal["sin_procedimientos"] | None = None  # si no hay ninguna tarea
 
 
 def _exigir_scope(tenant_id: uuid.UUID) -> None:
@@ -102,7 +106,9 @@ def _rotulo(rotulos: dict[str, str], nombre: str) -> str:
     return rotulos.get(nombre) or nombre.replace("_", " ")
 
 
-def describir(tarea: ConversationTask, proc: Any, rotulos: dict[str, str]) -> tuple[list[Dato], list[Faltante], str | None]:
+def describir(
+    tarea: ConversationTask, proc: Any, rotulos: dict[str, str]
+) -> tuple[list[Dato], list[Faltante], Literal["definicion_no_disponible"] | None]:
     """Datos dados y lo que falta de una tarea (pura, salvo que recibe la definición ya resuelta)."""
     from core.kernel.procedures.motor import etapa, faltas_de_salida
     from core.kernel.state import proyeccion_de
@@ -124,8 +130,9 @@ def describir(tarea: ConversationTask, proc: Any, rotulos: dict[str, str]) -> tu
     if stage is None:
         return datos, [], DEFINICION_NO_DISPONIBLE
     falta = [
-        Faltante(f.clase, f.nombre, f.nombre.replace("_", " ") if f.clase in ("accion", "confirmar_etapa") else _rotulo(rotulos, f.nombre))
+        Faltante(f.clase, f.nombre, f.nombre.replace("_", " ") if f.clase in ("accion", "confirmar_etapa") else _rotulo(rotulos, f.nombre))  # type: ignore[arg-type]
         for f in faltas_de_salida(proc, stage, proyeccion_de(tarea))
+        if f.clase in _CLASES
     ]
     return datos, falta, None
 

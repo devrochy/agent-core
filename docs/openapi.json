@@ -2715,7 +2715,7 @@
         }
       }
     },
-    "/api/v1/admin/conversations/{conversation_id}/en-curso": {
+    "/api/v1/admin/conversations/{conversation_id}/in-progress": {
       "get": {
         "tags": [
           "api",
@@ -2723,7 +2723,7 @@
         ],
         "summary": "In Progress",
         "description": "«En curso» de la conversación para quien la toma (HU-AOS-28).",
-        "operationId": "in_progress_api_v1_admin_conversations__conversation_id__en_curso_get",
+        "operationId": "in_progress_api_v1_admin_conversations__conversation_id__in_progress_get",
         "parameters": [
           {
             "name": "conversation_id",
@@ -33119,7 +33119,7 @@
               }
             ]
           },
-          "reason": {
+          "empty_reason": {
             "anyOf": [
               {
                 "type": "string",
@@ -33129,14 +33129,15 @@
                 "type": "null"
               }
             ],
-            "title": "Reason",
-            "description": "Sin tareas en la conversación."
+            "title": "Empty Reason",
+            "description": "Por qué `tasks` va vacío."
           }
         },
         "type": "object",
         "required": [
           "tasks",
-          "escalation"
+          "escalation",
+          "empty_reason"
         ],
         "title": "InProgress"
       },
@@ -33150,7 +33151,7 @@
             "type": "boolean",
             "title": "Ok"
           },
-          "reason": {
+          "reason_code": {
             "anyOf": [
               {
                 "type": "string"
@@ -33159,7 +33160,7 @@
                 "type": "null"
               }
             ],
-            "title": "Reason",
+            "title": "Reason Code",
             "description": "Código del fallo, si falló."
           },
           "at": {
@@ -33172,7 +33173,7 @@
         "required": [
           "action",
           "ok",
-          "reason",
+          "reason_code",
           "at"
         ],
         "title": "InProgressAction"
@@ -33234,7 +33235,8 @@
                 "type": "null"
               }
             ],
-            "title": "Reason Code"
+            "title": "Reason Code",
+            "description": "Código del motivo (el mismo de la bandeja de escalaciones)."
           },
           "summary": {
             "anyOf": [
@@ -33293,7 +33295,8 @@
               "confirmar_etapa",
               "accion"
             ],
-            "title": "Kind"
+            "title": "Kind",
+            "description": "Qué falta: un dato (del cliente, de un botón, de un contenido o de una acción), confirmar un dato, confirmar la etapa o una acción. Los clientes deben tolerar valores nuevos."
           },
           "name": {
             "type": "string",
@@ -33301,7 +33304,8 @@
           },
           "label": {
             "type": "string",
-            "title": "Label"
+            "title": "Label",
+            "description": "Rótulo humano del dato (de su habilidad); para `accion` y `confirmar_etapa`, el nombre con espacios."
           }
         },
         "type": "object",
@@ -33336,7 +33340,8 @@
           },
           "status": {
             "type": "string",
-            "title": "Status"
+            "title": "Status",
+            "description": "active | suspended, o `escalated` (en solo lectura: se cerró al escalar la escalación activa)."
           },
           "status_reason": {
             "anyOf": [
@@ -33351,11 +33356,13 @@
           },
           "stage": {
             "type": "string",
-            "title": "Stage"
+            "title": "Stage",
+            "description": "Etapa vigente del procedimiento (id)."
           },
           "in_focus": {
             "type": "boolean",
-            "title": "In Focus"
+            "title": "In Focus",
+            "description": "¿Es la tarea en foco de la conversación?"
           },
           "data": {
             "items": {
@@ -33411,7 +33418,8 @@
           "data",
           "missing",
           "pending_confirmation",
-          "last_action"
+          "last_action",
+          "missing_reason"
         ],
         "title": "InProgressTask"
       },
