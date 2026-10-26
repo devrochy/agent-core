@@ -75,6 +75,22 @@ async def ensure_tenant_link(admin_id: uuid.UUID, tenant_id: uuid.UUID, role: st
             session.add(TenantUser(tenant_id=tenant_id, admin_id=admin_id, role=role))
 
 
+async def es_miembro_del_negocio(admin_id: uuid.UUID, tid: uuid.UUID | None) -> bool:
+    """La cuenta está vinculada al negocio `tid` (cualquier rol). Es la comprobación mínima para
+    LEER su estado desde ese negocio; las escrituras exigen además `target_allowed_for_owner`."""
+    if tid is None:
+        return False
+    async with get_session() as session:
+        vinculo = (
+            await session.execute(
+                select(TenantUser.admin_id).where(
+                    TenantUser.admin_id == admin_id, TenantUser.tenant_id == tid
+                )
+            )
+        ).scalar_one_or_none()
+    return vinculo is not None
+
+
 async def target_allowed_for_owner(
     admin_id: uuid.UUID, tid: uuid.UUID | None, *, actor: Admin | None = None
 ) -> bool:

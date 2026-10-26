@@ -127,7 +127,9 @@ En el core es igual, con `revision = "00NN"` y sin prefijo de pack.
 Solo cuando la tabla se lee **antes** de que exista un tenant en contexto (login,
 invitaciones, webhooks antes de resolver el tenant) o es un catálogo global. Ejemplos
 vigentes: `webhook_events` (`0017`), `meta_app_subscriptions` (`0022`),
-`admin_permissions` (`0035`), `connection_types` (`0038`) y `tenant_invitations` (`0042`).
+`admin_permissions` (`0035`), `connection_types` (`0038`), `tenant_invitations` (`0042`),
+`tenant_user` (`0003`) y `qa_tester_datasets` (`0089`). Si la tabla nueva tiene `tenant_id`, súmala
+al permitido de `tests/integration/test_rls_tablas_con_tenant_id.py` y a `docs/MULTITENANT.md`.
 
 Requisitos:
 - La docstring empieza con **"Tabla de SISTEMA (sin RLS…)"** y explica por qué, con la

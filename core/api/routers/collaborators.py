@@ -19,6 +19,7 @@ from sqlalchemy import select
 from core.admin.collaborators_service import (
     audit,
     create_collaborator,
+    es_miembro_del_negocio,
     grant_permission,
     link_tenant,
     pack_collaborator_roles,
@@ -375,6 +376,10 @@ async def read_collaborator_permissions(
             raise ApiError.bad_request("tenant no encontrado", "collaborator_error")
     else:
         tenant_id = principal.tenant_id
+        # Un owner/tester solo lee cuentas de su negocio activo. Misma respuesta que para un UUID
+        # inexistente: no revela qué cuentas existen en otros negocios ni sus permisos globales.
+        if not await es_miembro_del_negocio(admin_id, tenant_id):
+            raise ApiError.bad_request("admin no encontrado", "collaborator_error")
 
     async with get_session() as session:
         target = await session.get(Admin, admin_id)

@@ -186,3 +186,34 @@ async def test_dueno_no_toca_otro_negocio_ni_secciones_de_plataforma(app_client)
         json={"permissions": {"collaborators": "write"}},
     )
     assert r.status_code == 400, r.text
+
+
+async def test_dueno_solo_lee_permisos_de_cuentas_de_su_negocio(app_client) -> None:
+    """Auditoría multitenant 2026-10-26: `GET /{id}/permissions` ya no responde por cualquier
+    admin de la plataforma. Una cuenta de otro negocio y una inexistente dan la misma respuesta."""
+    s = uniq("lec")
+    owner_a, owner_b = f"a-{s}@p0.test", f"b-{s}@p0.test"
+    ta = await _negocio(f"{s}a", owner_a)
+    tb = await _negocio(f"{s}b", owner_b)
+    colab_a, colab_b = f"colab-a-{s}@p0.test", f"colab-b-{s}@p0.test"
+    cid_a, cid_b = await _admin(colab_a), await _admin(colab_b)
+    await _vincular(cid_a, ta, "colaborador")
+    await _vincular(cid_b, tb, "colaborador")
+    h_owner_a = await _headers(app_client, owner_a, ta)
+
+    # Su colaborador: sí lo lee.
+    propio = await app_client.get(PERMISOS.format(cid=cid_a), headers=h_owner_a)
+    assert propio.status_code == 200, propio.text
+    assert propio.json(), "devuelve el acceso por sección"
+
+    # El de otro negocio y un UUID inexistente: 400 idéntico, sin revelar si la cuenta existe.
+    ajeno = await app_client.get(PERMISOS.format(cid=cid_b), headers=h_owner_a)
+    inexistente = await app_client.get(PERMISOS.format(cid=uuid.uuid4()), headers=h_owner_a)
+    assert ajeno.status_code == inexistente.status_code == 400, (ajeno.text, inexistente.text)
+    assert ajeno.json() == inexistente.json()
+
+    # El master sigue pudiendo leer el estado de cualquier cuenta eligiendo el negocio.
+    from _api_helpers import api_headers
+
+    h_master = await api_headers(app_client, tb)
+    assert (await app_client.get(PERMISOS.format(cid=cid_b), headers=h_master)).status_code == 200

@@ -44,10 +44,14 @@ aunque el código se equivoque (ADR-0116 §4). Las append-only (versiones, relea
 ledgers) usan el trigger `prevent_mutation()` y `app_runtime` solo tiene `SELECT`/`INSERT` en
 ellas; ninguna tabla nueva le da `DELETE` (invariante 8).
 
-### Tablas de sistema (sin `tenant_id` ni RLS)
+### Tablas de sistema (sin RLS)
 
 Excepciones documentadas a la invariante #1: catálogos globales o datos que se leen antes de
-tener un negocio en contexto. La migración que las crea lleva la marca "Tabla de SISTEMA" (la
+tener un negocio en contexto. Algunas **sí tienen columna `tenant_id`** (`tenant_user`,
+`webhook_events`, `admin_permissions`, `tenant_invitations`, `qa_tester_datasets`) pero sin RLS:
+el código que las consulta filtra por negocio o por `admin_id` del principal, y la lista exacta
+la vigila `tests/integration/test_rls_tablas_con_tenant_id.py` (una tabla nueva con `tenant_id`
+y sin RLS forzada hace fallar el CI hasta que se justifique aquí). La migración que las crea lleva la marca "Tabla de SISTEMA" (la
 reconoce `.claude/hooks/guards.py`) y explica el motivo.
 
 | Tabla | Por qué es de sistema |
@@ -57,6 +61,8 @@ reconoce `.claude/hooks/guards.py`) y explica el motivo.
 | `connection_types` | catálogo de tipos de conexión (ADR-0069) |
 | `pack_versions` (+ vista `agent_templates`) | contenido versionado de las habilidades de la plataforma (ADR-0118 §1); los plugins del negocio no entran. Inmutable salvo `yanked`; `app_runtime` solo tiene `SELECT` |
 | `webhook_events`, `meta_app_subscriptions`, `admin_permissions`, `tenant_invitations`, `platform_meta_app_requirements` | se leen antes de resolver el negocio o son de la plataforma |
+| `tenant_user` | membresía admin→negocio: se consulta antes de conocer el negocio (ADR-0012) y es la base de la autorización |
+| `qa_tester_datasets` | datos de prueba de cada tester (ADR-0135 §4), como el resto de `qa_*`; solo el master accede |
 
 Ninguna **vista** de `public` puede tener columna `tenant_id`: `purge_tenant` recorre
 `information_schema.columns` y la trataría como tabla (lo verifica
