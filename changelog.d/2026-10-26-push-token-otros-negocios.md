@@ -1,0 +1,3 @@
+## Un teléfono recibe los avisos de un solo negocio y una sola cuenta (ADR-0168, migración 0109)
+
+Al registrar el token de push (`POST /api/v1/me/push-token`), el servidor da de baja (soft delete) las filas activas de ese mismo token en otros negocios y a nombre de otras cuentas, con la función `SECURITY DEFINER` `push_token_release_elsewhere` (solo marca `deleted_at`, solo por token exacto, solo `app_runtime`). Antes, un teléfono con sesión en un negocio seguía recibiendo los avisos de otro bajo la cuenta anterior (visto en test el 2026-10-26). Se registra `push_token_liberado` con el conteo. La migración exige que el rol que la corre pueda saltar la RLS (como 0104).
