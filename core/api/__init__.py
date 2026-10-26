@@ -59,6 +59,7 @@ from core.api.routers import (
     skill_installations,
     sync,
     tenants,
+    turnos,
     web_chat,
 )
 
@@ -103,6 +104,7 @@ api_router.include_router(invitations.router)
 api_router.include_router(files.router)
 api_router.include_router(costs.router)
 api_router.include_router(fiabilidad.router)
+api_router.include_router(turnos.router)
 api_router.include_router(plan.router)
 api_router.include_router(platform.router)
 api_router.include_router(platform_altas.router)

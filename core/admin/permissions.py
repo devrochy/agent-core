@@ -12,7 +12,8 @@ acceso efectivo combinando, por orden de prioridad:
    (`write > read`).
 3. Rol por defecto del `tenant_user` del tenant activo: `owner` → `write`,
    `colaborador` → `read`, salvo en las secciones de plataforma (`tenants`) y en
-   las de gestión de cuentas (`collaborators`), que exigen owner o master.
+   las de gestión de cuentas (`collaborators`), que exigen owner o master, y en las
+   `OPT_IN_SECTIONS` (`observability`, ADR-0169), que el colaborador no hereda.
 
 El catálogo de secciones vive en código (no en tabla): las del core más una por
 pack (el `id` del plugin) y sus sub-secciones (ADR-0063). La resolución es una función
@@ -48,6 +49,8 @@ CORE_SECTIONS: dict[str, str] = {
     "settings": "Configuración",
     "tenants": "Tenants",
     "collaborators": "Colaboradores",
+    # Depurador del turno (HU-AOS-28, ADR-0169): entradas y salidas de las acciones, redactadas.
+    "observability": "Observabilidad",
     # Centro de pruebas de la plataforma (SPEC-30, ADR-0133): global, de master y testers.
     "qa": "Pruebas",
 }
@@ -59,6 +62,10 @@ GLOBAL_ONLY_SECTIONS: frozenset[str] = frozenset({"tenants", "qa"})
 # Secciones que solo el `owner` del tenant (o master) puede usar: el `colaborador`
 # no las hereda. Gestionar cuentas no es una capacidad de colaborador.
 OWNER_ONLY_SECTIONS: frozenset[str] = frozenset({"collaborators"})
+
+# Secciones que el `owner` hereda pero el `colaborador` no (ADR-0169 §1): el colaborador las tiene
+# solo con un permiso explícito que le da el dueño (ver datos de las acciones de los clientes).
+OPT_IN_SECTIONS: frozenset[str] = frozenset({"observability"})
 
 # Secciones que un `owner` puede otorgar a un colaborador de su tenant: el
 # catálogo menos las de plataforma y la propia gestión de cuentas.
@@ -103,7 +110,7 @@ def acceso_por_rol(section: str, role: str | None, tenant_id: uuid.UUID | None) 
         return None
     if role == "owner":
         return "write"
-    if role == "colaborador":
+    if role == "colaborador" and section not in OPT_IN_SECTIONS:
         return "read"
     return None
 

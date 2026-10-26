@@ -16,10 +16,11 @@ from sqlalchemy import delete, func, select, update
 from core.admin.auth import hash_password, revocar_sesiones
 from core.admin.permissions import (
     ACCESS_NONE,
-    GLOBAL_ONLY_SECTIONS,
+    OPT_IN_SECTIONS,
     OWNER_GRANTABLE_SECTIONS,
     OWNER_ONLY_SECTIONS,
     VALID_ACCESS,
+    acceso_por_rol,
     catalog,
     pack_section_keys,
     seccion_padre,
@@ -345,6 +346,31 @@ async def grant_permission(
     return None
 
 
+async def _hay_acceso_que_tapar(
+    session: Any, admin_id: uuid.UUID, section: str, role: str | None, tenant_id: uuid.UUID | None
+) -> bool:
+    """¿Denegar en este alcance necesita una fila `none`? Sí si el rol hereda la sección (la misma
+    regla que la resolución, ADR-0169 §1) o, en una sección opt-in, si una fila global (de un master)
+    le da acceso en todos los negocios: el `none` del negocio la tapa (`resolver_explicito`)."""
+    if section in OWNER_ONLY_SECTIONS:
+        return False
+    if acceso_por_rol(section, role, tenant_id) is not None:
+        return True
+    if tenant_id is None or section not in OPT_IN_SECTIONS:
+        return False
+    global_ = (
+        await session.execute(
+            select(AdminPermission.id).where(
+                AdminPermission.admin_id == admin_id,
+                AdminPermission.section == section,
+                AdminPermission.tenant_id.is_(None),
+                AdminPermission.access != ACCESS_NONE,
+            )
+        )
+    ).first()
+    return global_ is not None
+
+
 async def revoke_permission(
     *,
     actor: Admin,
@@ -395,12 +421,7 @@ async def revoke_permission(
                     )
                 )
             ).scalar_one_or_none()
-        hereda = (
-            tenant_id is not None
-            and role in ("owner", "colaborador")
-            and section not in GLOBAL_ONLY_SECTIONS
-            and section not in OWNER_ONLY_SECTIONS
-        )
+        hereda = await _hay_acceso_que_tapar(session, admin_id, section, role, tenant_id)
         row = (
             await session.execute(
                 select(AdminPermission).where(
@@ -481,12 +502,7 @@ async def set_permissions(
 
         for section, access in permissions.items():
             if access == ACCESS_NONE:
-                hereda = (
-                    tenant_id is not None
-                    and role in ("owner", "colaborador")
-                    and section not in GLOBAL_ONLY_SECTIONS
-                    and section not in OWNER_ONLY_SECTIONS
-                )
+                hereda = await _hay_acceso_que_tapar(session, admin_id, section, role, tenant_id)
                 if not hereda:
                     # Sin fila ya queda denegado.
                     continue

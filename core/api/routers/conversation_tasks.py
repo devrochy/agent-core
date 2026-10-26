@@ -28,12 +28,12 @@ from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
 from core.db.models import Conversation, ConversationTask, TaskEvent
 from core.db.session import get_session
+from core.shared.redaccion import OCULTO
 from core.shared.test_mode import TEST_CHANNEL
 
 router = APIRouter(prefix="/admin/conversations", tags=["admin · conversaciones"])
 
 MAX_TAREAS = 50
-OCULTO = "•••"
 
 
 def _visible(valor: Any, data_class: Any) -> Any:

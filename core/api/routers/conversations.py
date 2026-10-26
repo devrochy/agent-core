@@ -86,6 +86,8 @@ class MessageItem(BaseModel):
     # HU-UX-15: herramientas que usó el agente en el turno de este mensaje (en el primero
     # del turno), de `usage_ledger.tool_calls`.
     tool_calls: list[str] = Field(default_factory=list)
+    # HU-AOS-28: el turno que produjo el mensaje del agente (abre el depurador, `GET /turns/{id}`).
+    turn_id: uuid.UUID | None = Field(default=None, description="Turno del agente que lo envió; null salvo en los mensajes del agente.")
 
 
 class MessagesSince(BaseModel):
@@ -270,6 +272,7 @@ async def _message_items(session: Any, tenant_id: uuid.UUID, conversation_id: uu
             template_name=m.template_name,
             error_reason=m.error_reason,
             tool_calls=herramientas.get(m.turn_id, []) if m.turn_id and primero.get(m.turn_id) == m.id else [],
+            turn_id=m.turn_id if m.sender_type == "agent" else None,
         )
         for m in messages
     ]

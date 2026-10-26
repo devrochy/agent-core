@@ -67,3 +67,13 @@ def test_colaboradores_no_se_deniega_por_fila() -> None:
     filas = {"collaborators": [ACCESS_NONE]}
     assert resolver_seccion("collaborators", "owner", TID, filas) == "write"
     assert resolver_seccion("collaborators", "colaborador", TID, {"collaborators": ["write"]}) is None
+
+
+def test_observabilidad_el_colaborador_no_la_hereda() -> None:
+    """ADR-0169 §1: el dueño la hereda; el colaborador solo con permiso explícito; `none` deniega."""
+    assert resolver_seccion("observability", "owner", TID, {}) == "write"
+    assert resolver_seccion("observability", "colaborador", TID, {}) is None
+    assert resolver_seccion("observability", "colaborador", TID, {"observability": ["read"]}) == "read"
+    assert resolver_seccion("observability", "owner", TID, {"observability": [ACCESS_NONE]}) is None
+    # Las demás secciones del colaborador siguen heredando lectura.
+    assert resolver_seccion("conversations", "colaborador", TID, {}) == "read"
