@@ -28,8 +28,19 @@ log = get_logger(__name__)
 CERRADO = "cerrado"
 TAREA = "core.releases.evaluar_candidata"
 TOPE_MAXIMO_USD = 100.0
-# Estados de la última medición que NO se vuelven a pedir solos.
-_NO_ENCOLAR = frozenset({"en_curso", "demasiados_intentos"})
+# Una sola tarea pendiente por (candidata, base): la clave vive hasta que la tarea termina o vence.
+PENDIENTE = "gate:pendiente:{tenant}:{release}:{base}"
+
+
+def clave_pendiente(tenant_id: uuid.UUID | str, release_id: uuid.UUID | str, base_release_id: uuid.UUID | str) -> str:
+    return PENDIENTE.format(tenant=tenant_id, release=release_id, base=base_release_id)
+
+
+def vida_pendiente_s() -> int:
+    """Lo que puede tardar una tarea entre esperar el candado y medir."""
+    from core.config import get_settings
+
+    return get_settings().eval_timeout_segundos * 3 + 600
 
 
 class SinBaseDeEval(RuntimeError):
@@ -133,9 +144,12 @@ async def fijar(tenant_id: uuid.UUID, *, cerrado: bool, tope_usd_mensual: float 
 async def ultima_medicion(
     session: Any, tenant_id: uuid.UUID, release_id: uuid.UUID, base_release_id: uuid.UUID
 ) -> dict[str, Any] | None:
-    """El último `evaluated` de la candidata contra esa base: `{estado, vencido, data}`, o None."""
+    """El último `evaluated` de la candidata contra esa base: `{estado, data, creado}`, o None. Con las
+    fallidas del día en el tope del corredor, el estado es `demasiados_intentos` (no se vuelve a pedir)."""
+    from datetime import UTC, datetime
+
     from core.config import get_settings
-    from core.releases.corredor import mediciones_contra
+    from core.releases.corredor import MAX_FALLIDAS_DIA, mediciones_contra
 
     eventos = await mediciones_contra(
         session, tenant_id, release_id, base_release_id, get_settings().eval_timeout_segundos
@@ -146,6 +160,12 @@ async def ultima_medicion(
     estado = str(data.get("estado") or "")
     if estado == "en_curso" and eventos[0]["vencido"]:
         estado = "vencida"
+    hace_un_dia = datetime.now(UTC).timestamp() - 86400
+    fallidas = sum(
+        1 for e in eventos if (e["data"] or {}).get("estado") == "fallida" and e["created_at"].timestamp() > hace_un_dia
+    )
+    if estado == "fallida" and fallidas >= MAX_FALLIDAS_DIA:
+        estado = "demasiados_intentos"
     return {"estado": estado, "data": data, "creado": eventos[0]["created_at"]}
 
 
@@ -172,8 +192,16 @@ async def solicitar_medicion(
         if activa is None:
             return "sin_release_activa"
         previa = await ultima_medicion(session, tenant_id, release_id, activa)
-    if previa is not None and previa["estado"] in _NO_ENCOLAR:
+    if previa is not None and previa["estado"] in ("en_curso", "demasiados_intentos"):
         return previa["estado"]
+    try:
+        # Idempotente: con una tarea ya pendiente para esta candidata y base no se encola otra.
+        from core.memory.working import get_redis
+
+        if not await get_redis().set(clave_pendiente(tenant_id, release_id, activa), "1", nx=True, ex=vida_pendiente_s()):
+            return "encolada"
+    except Exception as exc:  # sin Redis: se encola igual (el corredor sigue siendo idempotente)
+        log.warning("release_gate_dedupe_fallo", error=type(exc).__name__)
     try:
         task_queue.enqueue(
             TAREA,
@@ -289,6 +317,7 @@ __all__ = [
     "SinBaseDeEval",
     "base_de_eval_configurada",
     "cerrado",
+    "clave_pendiente",
     "estado_de_evaluacion",
     "fijar",
     "leer",

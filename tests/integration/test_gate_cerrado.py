@@ -152,6 +152,9 @@ async def test_evaluar_encola_o_responde_sin_medir(entorno_de_eval: Path, cola: 
     await _cerrar(tid)
     r = await app_client.post(f"{url}/{candidata}/evaluate", headers=h)
     assert r.status_code == 202 and r.json()["estado"] == "encolada", r.text
+    # Un segundo pedido no encola otra tarea (una sola pendiente por candidata y base).
+    r = await app_client.post(f"{url}/{candidata}/evaluate", headers=h)
+    assert r.status_code == 202 and r.json()["estado"] == "encolada"
     r = await app_client.post(f"{url}/{activa}/evaluate", headers=h)
     assert r.status_code == 409 and r.json()["error"]["code"] == "ya_activa"
     assert len(cola.pedidos) == 1
@@ -198,6 +201,17 @@ async def test_la_bandera_es_del_master_no_pisa_settings_y_exige_la_base(entorno
         session.add(TenantUser(tenant_id=tid, admin_id=admin.id, role="owner"))
     dueno = await api_headers(app_client, tid, email=email, password="clave-segura-123")
     assert (await app_client.put(url, headers=dueno, json={"cerrado": False})).status_code == 403
+
+
+async def test_al_agotar_la_espera_queda_corredor_ocupado(entorno_de_eval: Path) -> None:
+    from core.tasks.gate_tasks import agotada
+
+    tid, cid, _activa, candidata = await _negocio_y_candidata("Ocupado")
+    await agotada(str(tid), str(cid), str(candidata), "test")
+    ((codigo,),) = await _sql(
+        tid, "select data->>'codigo' from release_events where release_id = :r and type = 'evaluated'", r=candidata
+    )
+    assert codigo == "corredor_ocupado"
 
 
 async def test_sin_base_de_eval_la_tarea_no_mide(entorno_de_eval: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -425,9 +425,10 @@ Propuesta revisada por el arquitecto. El dueño aprobó el plan el 2026-10-25 (c
    - Lee la última medición con la misma consulta del corredor, factorizada.
    - No encola si hay una `en_curso` vigente o si está en `demasiados_intentos`. `tope_alcanzado` y `sin_escenarios` se vuelven a pedir: el corredor los recalcula sin gastar LLM (mes nuevo, tope subido, escenarios nuevos).
    - Si falla el encolado, queda en el log y se responde igual el 409 con `estado = no_encolada`.
+   - El encolado es idempotente: hay una sola tarea pendiente por `(negocio, candidata, base)` (clave de Redis `gate:pendiente:…` con `SET NX`, que suelta la tarea al terminar). Repetir clics no llena el worker.
 4. **Tarea `core.releases.evaluar_candidata`**, en la cola y el worker de siempre (no hay servicio nuevo en Coolify):
    - `time_limit` y `soft_time_limit` por encima de `EVAL_TIMEOUT_SEGUNDOS`, y `acks_late=False`. Así Celery no mata la medición a los 300 s ni deja huérfano el subproceso, y Redis no la vuelve a entregar cuando vence el reclamo.
-   - La «concurrencia 1» la da un **candado de Redis** (`gate:corredor`, `NX`, con vencimiento `EVAL_TIMEOUT_SEGUNDOS + 60`) tomado antes de `corredor.medir`. Si está ocupado, la tarea se reprograma con `countdown` sin escribir nada.
+   - La «concurrencia 1» la da un **candado de Redis** (`gate:corredor`, `NX`, que vence con el límite duro de la tarea y se suelta con «comparar y borrar») tomado antes de `corredor.medir`. Si está ocupado, la tarea se reprograma con `countdown` sin escribir nada. Al agotar la espera (2 h), deja `fallida/corredor_ocupado` para que el panel lo muestre y se pueda volver a pedir.
    - Sin las variables `EVAL_*` en el worker, deja `evaluated` con `fallida/sin_base_de_eval` sin reclamo ni foto.
    - Comprueba que el negocio exista y no esté suspendido, y el módulo entra en el `include` de `celery_app`.
    - Un worker dedicado (`-Q gate -c 1`) queda para cuando haya volumen y el dueño lo apruebe.

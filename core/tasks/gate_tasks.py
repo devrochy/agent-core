@@ -30,16 +30,57 @@ REINTENTO_S = 120
 MAX_ESPERAS = 60  # dos horas esperando el candado
 
 
+# Suelta el candado solo si sigue siendo de quien lo tomó (comparar y borrar en un paso).
+_SOLTAR = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+
+
 def _limites() -> tuple[int, int]:
     timeout = get_settings().eval_timeout_segundos
     return timeout + 300, timeout + 180
 
 
-async def _registrar_sin_base(tenant_id: uuid.UUID, connection_id: uuid.UUID, release_id: uuid.UUID, actor: str) -> None:
+async def _registrar_fallida(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID, release_id: uuid.UUID, actor: str, codigo: str
+) -> uuid.UUID | None:
+    """Un `evaluated` con `estado = fallida` (nunca un rechazo). Devuelve la base, o None si la release
+    no es de esa conexión o no hay activa."""
     from sqlalchemy import text
 
     from core.db.session import get_session
     from core.releases.build import registrar_evento
+
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                text(
+                    "SELECT c.active_release_id FROM channel_connections c JOIN connection_releases r "
+                    "ON r.tenant_id = c.tenant_id AND r.connection_id = c.id "
+                    "WHERE c.tenant_id = :t AND c.id = :c AND r.id = :r"
+                ),
+                {"t": tenant_id, "c": connection_id, "r": release_id},
+            )
+        ).first()
+        if fila is None:
+            return None
+        await registrar_evento(
+            session,
+            tenant_id,
+            connection_id,
+            release_id,
+            "evaluated",
+            actor,
+            {"estado": "fallida", "codigo": codigo, "base_release_id": str(fila[0]) if fila[0] else None},
+        )
+        return fila[0]
+
+
+async def _soltar_pendiente(tenant_id: uuid.UUID, connection_id: uuid.UUID, release_id: uuid.UUID) -> None:
+    """Libera la marca de «tarea pendiente» de la candidata contra la activa de ahora."""
+    from sqlalchemy import text
+
+    from core.db.session import get_session
+    from core.memory.working import get_redis
+    from core.releases.gate import clave_pendiente
 
     async with get_session() as session:
         activa = (
@@ -48,19 +89,19 @@ async def _registrar_sin_base(tenant_id: uuid.UUID, connection_id: uuid.UUID, re
                 {"t": tenant_id, "c": connection_id},
             )
         ).scalar_one_or_none()
-        await registrar_evento(
-            session,
-            tenant_id,
-            connection_id,
-            release_id,
-            "evaluated",
-            actor,
-            {
-                "estado": "fallida",
-                "codigo": "sin_base_de_eval",
-                "base_release_id": str(activa) if activa else None,
-            },
-        )
+    if activa is not None:
+        try:
+            await get_redis().delete(clave_pendiente(tenant_id, release_id, activa))
+        except Exception as exc:
+            log.warning("release_gate_soltar_pendiente_fallo", error=type(exc).__name__)
+
+
+async def agotada(tenant_id: str, connection_id: str, release_id: str, actor: str) -> None:
+    """Se agotó la espera del candado: queda `fallida/corredor_ocupado` y se puede volver a pedir."""
+    tid, cid, rid = uuid.UUID(tenant_id), uuid.UUID(connection_id), uuid.UUID(release_id)
+    async with tenant_scope(tid):
+        await _registrar_fallida(tid, cid, rid, actor, "corredor_ocupado")
+        await _soltar_pendiente(tid, cid, rid)
 
 
 async def _negocio_activo(tenant_id: uuid.UUID) -> bool:
@@ -87,21 +128,23 @@ async def evaluar(tenant_id: str, connection_id: str, release_id: str, actor: st
     async with tenant_scope(tid):
         if not await _negocio_activo(tid):
             log.info("release_gate_negocio_inactivo", tenant_id=tenant_id)
+            await _soltar_pendiente(tid, cid, rid)
             return "negocio_inactivo"
         if not base_de_eval_configurada():
-            await _registrar_sin_base(tid, cid, rid, actor)
+            await _registrar_fallida(tid, cid, rid, actor, "sin_base_de_eval")
+            await _soltar_pendiente(tid, cid, rid)
             log.warning("release_gate_sin_base_de_eval", release_id=release_id)
             return "sin_base_de_eval"
         redis = get_redis()
         dueno = uuid.uuid4().hex
-        if not await redis.set(CANDADO, dueno, nx=True, ex=get_settings().eval_timeout_segundos + 60):
+        # Vence con el límite duro de la tarea: no puede arrancar otra medición mientras esta viva.
+        if not await redis.set(CANDADO, dueno, nx=True, ex=_LIMITE):
             return "ocupado"
         try:
             resultado = await corredor.medir(tid, cid, rid, actor=actor)
         finally:
-            # Solo lo suelta quien lo tomó (si venció, otro proceso pudo tomarlo).
-            if await redis.get(CANDADO) == dueno:
-                await redis.delete(CANDADO)
+            await redis.eval(_SOLTAR, 1, CANDADO, dueno)
+            await _soltar_pendiente(tid, cid, rid)
     log.info("release_gate_medida", release_id=release_id, estado=resultado.estado, costo=resultado.costo_usd)
     return resultado.estado
 
@@ -120,6 +163,9 @@ _LIMITE, _LIMITE_SUAVE = _limites()
 def evaluar_candidata(self, tenant_id: str, connection_id: str, release_id: str, actor: str = "system:gate") -> str:  # type: ignore[no-untyped-def]
     estado = run_async(evaluar(tenant_id, connection_id, release_id, actor))
     if estado == "ocupado":
+        if self.request.retries >= MAX_ESPERAS:
+            run_async(agotada(tenant_id, connection_id, release_id, actor))
+            return "corredor_ocupado"
         # Otra medición en curso: se espera sin escribir nada (el corredor sigue siendo idempotente).
         raise self.retry(countdown=REINTENTO_S)
     return estado
