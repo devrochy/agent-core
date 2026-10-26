@@ -469,3 +469,41 @@ Propuesta, revisada por el arquitecto. Decisiones del dueño del 2026-10-25:
    - Errores 409: `ya_activa` (para eso está volver atrás), `ya_detenida` y `es_canary`. Detener la canary es `canary_stopped` con el puntero a NULL, y llega con HU-AOS-32.
    - **Es definitivo para ese contenido:** como el build es idempotente por `manifest_hash`, volver a construir lo mismo devuelve la release detenida. La API responde 409 `version_detenida` («esa combinación se detuvo: cambia algo para crear una versión nueva»), en lugar de dejar una candidata que nunca se podrá publicar.
 4. **Listado y detalle:** `ReleaseSummary` suma `lifecycle`, el último evento de ciclo de vida, porque `last_event` lo pisan los eventos del gate. Una release con una habilidad `yanked` no se refleja ahí: el panel muestra el 409 `habilidad_retirada` al intentarlo.
+
+## Adenda propuesta HU-AOS-29: métricas de fiabilidad por conexión y versión (2026-10-25)
+
+Propuesta revisada por el arquitecto. Decisión del dueño del 2026-10-25: la consistencia sale de las mediciones del gate, porque todavía no hay nightly. Un nightly real por negocio (con LLM, `origen = 'nightly'`) queda como HU aparte.
+
+1. **Un solo servicio de métricas** (`core/metricas/fiabilidad.py`), de solo lectura, con un `Filtro` (negocio, ventana, conexión y, opcionalmente, versión y carril) que se aplica a **todas** las métricas. El canary de HU-AOS-32 las compara entre carriles de una conexión con este mismo servicio.
+   - **Turnos:** filas de `core_decisions` con `outcome` `routed` o `escalated` (las de palabra de escalamiento cuentan). No cuentan los bloqueos por política (pausa, cuota, horario).
+   - **Escalamiento:** `outcome = 'escalated'` o `turn_outcomes.status = 'escalated'`. Se reporta por turno y también en conversaciones distintas; el canary cuenta su muestra en conversaciones.
+   - **Ledger best-effort:** un turno sin `turn_outcomes` (la escritura del resultado falló) no cuenta como fallido ni escalado. Se reporta aparte como `sin_resultado`, para que el canary lo trate como señal y no como éxito.
+   - **Dinero, de una sola fuente:** `usage_ledger` (filas `turn` y `agent_run`, sin `NO_ES_ACTIVIDAD`). La versión sale de `usage_ledger.release_id` y el carril, por `turn_id → core_decisions`. `turn_outcomes` queda para latencia y status.
+   - **Operaciones entre agentes:** el costo de las filas `agent_run` se agrupa por (agente que pide, agente que responde, modo), uniendo `a2a_call_id` con `a2a_events`. El dinero viene del ledger.
+   - **Rechazos del verificador por tipo** (`verdict = 'fail'`, incluidos los borradores que el reintento corrigió: es lo que el verificador frenó, no siempre lo que vio el cliente), menos los falsos positivos marcados.
+   - **Completitud por procedimiento:** tareas cerradas en la ventana (`completed_at`), completadas sobre terminadas. La versión y el carril salen por `started_turn_id → core_decisions`.
+   - **Muestra mínima:** con menos de 20 turnos, o de 10 tareas terminadas por procedimiento, la tasa sale como `null` y el panel dice «sin datos suficientes».
+2. **Consistencia vigente** (`veredicto.consistencia_vigente`, una sola función). Para cada procedimiento de la versión activa vale el último veredicto de la cadena `base_release_id` (como mucho 10 versiones hacia atrás) que lo midió, siempre que en las versiones posteriores no se haya vuelto a tocar.
+   - Si lo tocó una versión posterior sin medirlo, o la cadena se corta sin medición, sale «sin datos».
+   - El número es `por_procedimiento.pass_k`: la fracción de escenarios estables en k = 4. `/evals/runs` expone el promedio de la corrida con otro nombre (`pass_k_promedio`) y nunca su costo, que es de la plataforma.
+   - Aparecen todas las conexiones conversacionales: las que no tienen versión activa también, con «sin datos».
+3. **Falsos positivos del verificador:** `turn_feedback(source = 'owner', signal = 'verifier_false_positive:<tipo>')`, con `note` libre para el dueño.
+   - Exige escritura en `agents`.
+   - Es idempotente con un índice único parcial y `ON CONFLICT DO NOTHING`.
+   - No se desmarca: `turn_feedback` es append-only y sin borrado. Si hiciera falta, sería una señal inversa más adelante.
+4. **API:**
+   - `GET /api/v1/admin/reliability`: métricas, consistencia y completitud;
+   - `GET /api/v1/admin/usage?group_by=connection|agent|a2a|day`;
+   - `GET /api/v1/admin/evals/runs`;
+   - `GET/POST /api/v1/admin/reliability/verifier[...]`: rechazos y la marca de falso positivo.
+
+   «Calidad» y «Consumo» cuelgan de la sección `agents`; no se crea una sección nueva. Sin permiso de `costs`, los campos de dinero van en null. Sin permiso de `conversations`, la lista de rechazos no trae `conversation_id`.
+5. **Migración concurrente** (como la 0071):
+   - `core_decisions (tenant_id, release_id, created_at) WHERE release_id IS NOT NULL` (el tablero filtra por versión);
+   - `conversation_tasks (tenant_id, completed_at) WHERE completed_at IS NOT NULL`;
+   - el índice único parcial de los falsos positivos.
+6. **Fuera de esta HU:**
+   - que la consistencia de la consola de conexiones y de «Mi agente y su data» use `consistencia_vigente`: cambia sus contratos y su panel;
+   - los errores de acción (`action_failed`) como señal dura, que llegan con HU-AOS-32;
+   - las listas «frases que nadie reconoce» y «datos que el cliente tuvo que repetir»;
+   - la vista master por negocio.
