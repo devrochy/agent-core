@@ -74,7 +74,7 @@ Eso deja cuatro problemas abiertos que este ADR resuelve:
 
 - Nueva tabla de sistema **`tenant_invitations`** (sin RLS, patrón `tenant_user`,
   ADR-0012): el invitado debe poder ver la invitación **antes** de tener acceso al tenant.
-  Acceso por funciones/métodos SECURITY DEFINER.
+  Acceso por consultas directas de `app_runtime` filtradas por el principal (corregido 2026-10-26: no existen funciones SECURITY DEFINER para esta tabla).
 - Alta de colaborador/gestor:
   - **Identidad nueva** (email/usuario no existe) → se crea `Admin` y se vincula directo
     (comportamiento actual).
