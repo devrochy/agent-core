@@ -69,3 +69,21 @@ def test_con_el_estado_de_las_tareas_no_suben_los_falsos_positivos() -> None:
     assert sum(c["etiqueta"] == "falsa" for c in con_estado) >= 4
     medicion = medir(con_estado)
     assert medicion.falsos_positivos == [] and medicion.falsos_negativos == []
+
+
+def test_horarios_y_preguntas_en_active() -> None:
+    """HU-AOS-20 parte 3: con las dos validaciones en `active` y el estado derivado, las respuestas
+    reales siguen bajo el umbral de falsos positivos, y los casos `sintetico-horario` /
+    `sintetico-preguntas` (con sus modos, reloj y contexto) no fallan ninguno."""
+    from core.orchestrator.verificador import Modos
+
+    casos = cargar()
+    reales = [c for c in casos if not str(c["origen"]).startswith("sintetico")]
+    activo = medir(reales, con_estado=True, modos=Modos(horarios="active", preguntas="active"))
+    assert activo.tasa_falsos_positivos <= UMBRAL_FALSOS_POSITIVOS, activo.falsos_positivos
+    for origen in ("sintetico-horario", "sintetico-preguntas"):
+        propios = [c for c in casos if c["origen"] == origen]
+        assert sum(c["etiqueta"] == "falsa" for c in propios) >= 4, origen
+        medicion = medir(propios)
+        assert medicion.falsos_positivos == [] and medicion.falsos_negativos == [], (origen, medicion)
+

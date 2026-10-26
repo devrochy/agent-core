@@ -82,6 +82,7 @@ from core.orchestrator.safe_renderer import (
 from core.orchestrator.skill_router import select_relevant_skills
 from core.orchestrator.verificador import (
     EstadoTareas,
+    Modos,
     Veredicto,
     cargar_afirmaciones,
     instruccion_correctiva,
@@ -494,9 +495,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # El último bloque del prompt es el dinámico (perfil del cliente, memorias y
     # fecha, `build_system_blocks`): lo escribe en parte el propio asistente
     # (`remember_fact`, memorias de turnos previos), así que no cuenta.
-    contexto_urls = "\n".join(
-        [*system_blocks[:-1], *(m.content for m in messages if m.role == "user" and isinstance(m.content, str))]
-    )
+    contexto_sistema = "\n".join(system_blocks[:-1])
+    contexto_cliente = "\n".join(m.content for m in messages if m.role == "user" and isinstance(m.content, str))
+    contexto_urls = "\n".join(x for x in (contexto_sistema, contexto_cliente) if x)
     afirmaciones = None
     motivos_verificador: list[str] = []
     veredicto = None
@@ -701,6 +702,11 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                 afirmaciones,
                 disabled_guardrails,
                 estado=await _estado_del_verificador(motor, referencias),
+                # HU-AOS-20 parte 3: horarios y preguntas (solo con el estado del motor activo).
+                contexto_sistema=contexto_sistema,
+                contexto_cliente=contexto_cliente,
+                zona=prompt_ctx.timezone,
+                modos=_modos_del_verificador(motor),
             )
             borrador = veredicto.texto
             if not veredicto.passed:
@@ -1003,6 +1009,19 @@ def _etiqueta_del_bloqueo(reason: str, veredicto: Veredicto | None) -> str:
     detalle = reason.split(":", 1)[1].strip() if ":" in reason else ""
     encontrada = _ETIQUETA_DEL_GUARDRAIL.match(detalle)
     return encontrada.group(1) if encontrada else ""
+
+
+def _modos_del_verificador(motor: Any) -> Modos:
+    """Modos de horarios y preguntas (banderas `settings.agent_os` que el motor ya leyó) y el tope
+    de preguntas del Coordinador congelado (HU-AOS-20 parte 3)."""
+    from core.shared import release_vigente
+
+    colaboracion = getattr(motor, "colaboracion", None)
+    return Modos(
+        horarios=getattr(colaboracion, "verificar_horarios", "shadow"),
+        preguntas=getattr(colaboracion, "verificar_preguntas", "shadow"),
+        max_preguntas=release_vigente.max_questions(),
+    )
 
 
 async def _estado_del_verificador(motor: ContextoMotor | None, referencias: list[str]) -> EstadoTareas | None:
