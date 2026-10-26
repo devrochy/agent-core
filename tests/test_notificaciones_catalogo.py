@@ -29,6 +29,13 @@ CONSTRUCTORES = {
     "cliente_esperando": lambda: catalog.cliente_esperando(
         uuid.uuid4(), CID, desde=datetime(2026, 10, 26, tzinfo=UTC), umbral_minutos=15
     ),
+    # HU-AOS-32: canary.
+    "canary_revertido": lambda: catalog.canary_revertido(CID, uuid.uuid4(), 5, motivo="no_inferioridad", metricas=["escalamiento"]),
+    "canary_revertido_dura": lambda: catalog.canary_revertido(CID, uuid.uuid4(), None, motivo="senal_dura"),
+    "canary_listo": lambda: catalog.canary_listo(CID, uuid.uuid4(), 5),
+    "canary_sin_muestra": lambda: catalog.canary_sin_muestra(CID, uuid.uuid4(), 5),
+    "canary_costo": lambda: catalog.canary_costo(CID, uuid.uuid4(), 5),
+    "canary_lentitud": lambda: catalog.canary_lentitud(CID, uuid.uuid4(), 5),
 }
 
 

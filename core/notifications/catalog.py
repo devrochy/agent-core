@@ -218,3 +218,82 @@ def cliente_esperando(
         },
         target={"entity": "conversacion", "id": str(conversation_id), "section": "escalations"},
     )
+
+
+# ---------------------------------------------------------------- canary (HU-AOS-32, adenda de ADR-0117 §6)
+_MOTIVOS_CANARY = {
+    "senal_dura": "varias conversaciones recientes le llegaron mal a los clientes",
+    "no_inferioridad": "atendía peor que la versión actual",
+    "habilidad_retirada": "usa una habilidad que se retiró por seguridad",
+}
+_METRICA_PEOR = {
+    "escalamiento": "pasaban más conversaciones a una persona",
+    "completitud": "se completaban menos recorridos",
+}
+
+
+def _version(numero: int | None) -> str:
+    return f"La versión {numero}" if numero else "La versión en prueba"
+
+
+def _canary(
+    connection_id: uuid.UUID | str, release_id: uuid.UUID | str, clave: str, *, severity: str, title: str, body: str,
+    extra: dict[str, object] | None = None,
+) -> NotificationSpec:
+    return NotificationSpec(
+        event_key=f"core.canary_{clave}",
+        category="sistema",
+        severity=severity,  # type: ignore[arg-type]
+        title=title,
+        body=body,
+        dedupe_key=f"canary_{clave}:{release_id}",
+        section="connections",
+        data={"type": f"core.canary_{clave}", "connectionId": str(connection_id), "releaseId": str(release_id), **(extra or {})},
+        target={"entity": "conexion", "id": str(connection_id), "section": "connections"},
+    )
+
+
+def canary_revertido(
+    connection_id: uuid.UUID | str, release_id: uuid.UUID | str, numero: int | None, *, motivo: str,
+    metricas: list[str] | None = None,
+) -> NotificationSpec:
+    """El sistema retiró una versión de la prueba (señal dura, no-inferioridad o habilidad retirada)."""
+    razon = ", ".join(_METRICA_PEOR[m] for m in (metricas or []) if m in _METRICA_PEOR) or _MOTIVOS_CANARY.get(motivo, motivo)
+    return _canary(
+        connection_id, release_id, "revertido", severity="critical", title="Versión retirada de la prueba",
+        body=f"{_version(numero)} se retiró de la prueba: {razon}. Todos los clientes vuelven a la versión actual.",
+        extra={"reason": motivo},
+    )
+
+
+def canary_listo(connection_id: uuid.UUID | str, release_id: uuid.UUID | str, numero: int | None) -> NotificationSpec:
+    """La prueba juntó la muestra y la versión no atiende peor: se puede publicar para todos."""
+    return _canary(
+        connection_id, release_id, "listo", severity="info", title="La versión en prueba va bien",
+        body=f"{_version(numero)} juntó la muestra y no atiende peor que la actual. Ya puedes publicarla para todos en Versiones.",
+    )
+
+
+def canary_sin_muestra(connection_id: uuid.UUID | str, release_id: uuid.UUID | str, numero: int | None) -> NotificationSpec:
+    """Pasaron 7 días sin juntar la muestra: el dueño puede publicar a mano."""
+    return _canary(
+        connection_id, release_id, "sin_muestra", severity="warning", title="La prueba no junta la muestra",
+        body=f"{_version(numero)} lleva 7 días en prueba sin juntar la muestra mínima. Revisa la comparación y, si te convence, publícala a mano.",
+    )
+
+
+def canary_costo(connection_id: uuid.UUID | str, release_id: uuid.UUID | str, numero: int | None) -> NotificationSpec:
+    """La versión en prueba cuesta bastante más por conversación (solo aviso, no revierte)."""
+    return _canary(
+        connection_id, release_id, "costo", severity="warning", title="La versión en prueba cuesta más",
+        body=f"{_version(numero)} cuesta más de un 20 % más por conversación que la actual. No se retira por esto: decide antes de publicarla.",
+    )
+
+
+def canary_lentitud(connection_id: uuid.UUID | str, release_id: uuid.UUID | str, numero: int | None) -> NotificationSpec:
+    """La versión en prueba responde bastante más lento (solo aviso, no revierte)."""
+    return _canary(
+        connection_id, release_id, "lentitud", severity="warning", title="La versión en prueba responde más lento",
+        body=f"{_version(numero)} tarda más de un 30 % más en responder que la actual. No se retira por esto: decide antes de publicarla.",
+    )
+

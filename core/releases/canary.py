@@ -13,8 +13,8 @@ adenda de ADR-0117 que enmienda §5).
 - **Estado:** muestra, comparación por carril, veredicto y señal dura (solo lectura).
 
 Todo bajo el `FOR UPDATE` de la conexión (`promocion._bloquear`), dentro del `tenant_scope` del
-negocio y filtrando por `tenant_id`. La reversión automática y los avisos son la parte 2: hasta
-entonces `iniciar` responde 409 `canary_no_disponible` (`CANARY_DISPONIBLE`).
+negocio y filtrando por `tenant_id`. La reversión automática y los avisos los hace el job
+(`core/releases/canary_job.py`); `CANARY_DISPONIBLE` permite apagar `iniciar` si hiciera falta.
 """
 
 from __future__ import annotations
@@ -44,8 +44,8 @@ from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
-# Parte 1 sin el job: un canary vivo no se revertiría solo (contradice la enmienda de §5).
-CANARY_DISPONIBLE = False
+# Con el job de la parte 2 (`core/releases/canary_job.py`) un canary que empeora se retira solo.
+CANARY_DISPONIBLE = True
 PORCENTAJE_MIN, PORCENTAJE_MAX = 1, 50
 
 
