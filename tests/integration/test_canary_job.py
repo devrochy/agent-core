@@ -12,8 +12,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from test_canary import _con_candidata, _svc
-from test_releases_por_conexion import _activa, _conversacion, _negocio, _release_uno, _sql
+from test_canary import _con_candidata, _conversacion_unica, _svc
+from test_releases_por_conexion import _activa, _negocio, _release_uno, _sql
 
 pytestmark = [
     pytest.mark.aislamiento,
@@ -40,7 +40,7 @@ async def _sembrar(
     escaladas: int = 0, fallidas: int = 0, costo: float = 0.0,
 ) -> None:
     for i in range(n):
-        conv = await _conversacion(tid, cid)
+        conv = await _conversacion_unica(tid, cid)
         turno = uuid.uuid4()
         await _sql(
             tid,
