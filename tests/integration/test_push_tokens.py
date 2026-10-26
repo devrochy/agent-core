@@ -135,10 +135,12 @@ async def test_token_invalido_es_422(app_client) -> None:
     assert r.status_code == 422
 
 
-async def test_token_de_otra_cuenta_da_409(app_client) -> None:
+async def test_token_de_otra_cuenta_se_reasigna_al_dispositivo(app_client) -> None:
+    """ADR-0168: el token identifica el dispositivo; quien lo registra ahora lo recibe."""
     from core.admin.auth import hash_password
-    from core.db.models import Admin, TenantUser
+    from core.db.models import Admin, PushToken, TenantUser
     from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
 
     slug = uniq("push-otro")
     email_a = f"{slug}-a@test.local"
@@ -150,6 +152,7 @@ async def test_token_de_otra_cuenta_da_409(app_client) -> None:
         await session.flush()
         session.add(TenantUser(tenant_id=tid, admin_id=admin_b.id, role="colaborador"))
         await session.commit()
+        id_b = admin_b.id
 
     token_a = await _login(app_client, email_a)
     token_b = await _login(app_client, email_b)
@@ -162,8 +165,17 @@ async def test_token_de_otra_cuenta_da_409(app_client) -> None:
     r = await app_client.post(
         "/api/v1/me/push-token", json={"token": expo_token}, headers=_headers(token_b, tid)
     )
-    assert r.status_code == 409
-    assert r.json()["error"]["code"] == "token_de_otra_cuenta"
+    assert r.status_code == 204
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            filas = (
+                await session.execute(select(PushToken).where(PushToken.token == expo_token))
+            ).scalars().all()
+    # Una sola fila viva, ahora de la cuenta B: la cuenta A deja de recibir en ese teléfono.
+    assert len(filas) == 1
+    assert filas[0].admin_id == id_b
+    assert filas[0].deleted_at is None
 
 
 async def test_sin_sesion_es_401(app_client) -> None:
