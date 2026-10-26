@@ -21,9 +21,9 @@ from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
-# Lo que se puede encender hoy (parte 1: solo medir en sombra).
+# Lo que se puede encender hoy (parte 2: la pila activa; la verificación llega en la parte 3).
 DISPONIBLES: dict[str, tuple[str, ...]] = {
-    "pila": ("off", "shadow"),
+    "pila": ("off", "shadow", "active"),
     "verificar_horarios": ("shadow",),
     "verificar_preguntas": ("shadow",),
 }

@@ -145,3 +145,67 @@ def test_metricas_de_pila() -> None:
     r = metricas_de_pila([([PLAN, CITA], [PLAN, CITA]), ([PLAN, CITA], [PLAN]), ([CITA], [])])
     assert (r.turnos, r.predichos, r.reales, r.aciertos, r.completos) == (3, 5, 3, 3, 1)
     assert r.precision == pytest.approx(0.6) and r.recall == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------- parte 2: tarjeta, handoff y tope
+def test_tarjeta_con_pila_guia_faltas_en_pausa_y_sobrantes() -> None:
+    from test_kernel_tarjeta import PROC, _slot, _tarea
+
+    from core.kernel.tarjeta import renderizar_tarjeta, rotulos
+
+    procs = {("pack_commerce.contratar_plan", "1.0.0"): PROC}
+    foco = _tarea(slots={"plan": _slot("Premium")})
+    pausa = _tarea(status="suspended", stack_position=1, procedure_id="pack_commerce.contratar_plan", stage="elegir")
+    tarjeta = renderizar_tarjeta(
+        [foco, pausa], procedimientos=lambda i, v: procs.get((i, v)), sobrantes=["Tomar un pedido"]
+    )
+    r = rotulos()
+    assert r["guia_pila"] in tarjeta
+    # En pausa: lo que falta se dice, pero no se pide.
+    assert "  plan: falta (se pide cuando siga esta tarea)" in tarjeta
+    assert r["sobrantes"].format(procedimientos='"Tomar un pedido"') in tarjeta
+    # Sin pausadas no hay guía (el prompt de siempre no cambia).
+    assert r["guia_pila"] not in renderizar_tarjeta([foco], procedimientos=lambda i, v: procs.get((i, v)))
+
+
+def test_tarjeta_con_el_foco_de_otro_agente_no_da_instrucciones() -> None:
+    from test_kernel_tarjeta import PROC, _tarea
+
+    from core.kernel.tarjeta import renderizar_tarjeta, rotulos
+
+    procs = {("pack_commerce.contratar_plan", "1.0.0"): PROC}
+    tarjeta = renderizar_tarjeta([_tarea()], procedimientos=lambda i, v: procs.get((i, v)), foco_de_otro="Agenda")
+    assert rotulos()["retomada_de_otro"].format(agente='"Agenda"') in tarjeta
+    assert "FALTA · pedirlo" not in tarjeta and "Acciones de esta etapa" not in tarjeta
+
+
+def test_el_handoff_no_se_lleva_las_pausadas_de_otro_agente() -> None:
+    import uuid
+
+    from core.kernel.handoff import propias
+
+    yo, otro = uuid.uuid4(), uuid.uuid4()
+    filas = [
+        SimpleNamespace(id=1, status="active", stack_position=0, owner_instance_id=yo),
+        SimpleNamespace(id=2, status="suspended", stack_position=1, owner_instance_id=otro),
+        SimpleNamespace(id=3, status="suspended", stack_position=2, owner_instance_id=None),
+        SimpleNamespace(id=4, status="suspended", stack_position=3, owner_instance_id=yo),
+    ]
+    assert [f.id for f in propias(filas, yo)] == [1, 3, 4]
+
+
+def test_max_stack_de_la_release_del_turno(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.shared import release_vigente
+
+    def con(contenido: Any) -> None:
+        kernel = SimpleNamespace(content=contenido)
+        monkeypatch.setattr(release_vigente, "kernel_del_turno", lambda: kernel)
+
+    con({"procedures": {"maxStack": 3}})
+    assert release_vigente.max_stack() == 3
+    con({"procedures": {"maxStack": 9}})
+    assert release_vigente.max_stack() == 5
+    con({})
+    assert release_vigente.max_stack() == 2
+    monkeypatch.setattr(release_vigente, "kernel_del_turno", lambda: None)
+    assert release_vigente.max_stack() == 2

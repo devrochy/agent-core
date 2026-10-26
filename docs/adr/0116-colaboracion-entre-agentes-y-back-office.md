@@ -237,6 +237,7 @@ Se entrega en tres partes: **1**, detección y sombra (§1, §5 y §6); **2**, l
      - Si `estabilizar` frena el cambio de dueño, **no hay pila en ese turno**: se decide como hoy, sin `start` ni `pila`.
      - Así el agente que habla es siempre el dueño de la tarea en foco, con las acciones de su etapa.
    - **Con foco:** `Ruta.pila` lleva las intenciones nuevas y el agente no cambia.
+   - **Con una regla:** si es `start`, la regla va en foco y las intenciones detrás. Si la regla elige agente (sin `start`), manda la regla y no hay pila en ese turno.
    - **Viaje al motor:** `fijar_inicio` / `tomar_inicio` pasan a llevar `(start, pila)`.
    - **Apertura:** el motor (`_abrir_pila`, que reemplaza a `_iniciar_por_regla` cuando hay pila) abre todo en **una sola transacción `_con_lock`**. Bajo el lock relee las tareas abiertas y recalcula qué va en foco, qué va en pausa, qué está duplicado y qué no cabe. Del router solo usa la lista ordenada. Reglas:
      - sin foco, la primera se abre en `stack_position = 0` y las siguientes con `started` en `max + 1` (el reductor ya las crea `suspended`);

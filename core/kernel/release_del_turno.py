@@ -118,8 +118,15 @@ class ContextoRuteo:
     modo: str
     texto: str = ""
     payload: str = ""
-    # Pila de tareas (HU-AOS-20): off | shadow | active. En la parte 1 solo se mide en sombra.
+    # Pila de tareas (HU-AOS-20): off | shadow | active. `active` exige además los procedimientos
+    # (`aos_procedures`) y el ruteo efectivo en `active`; si no, se mide en sombra.
     pila: str = "off"
+    procedimientos: bool = False
+
+    def pila_activa(self, routing: Any) -> bool:
+        from core.kernel.router import modo_efectivo
+
+        return self.pila == "active" and self.procedimientos and modo_efectivo(self.modo, routing) == "active"
 
 
 # ------------------------------------------------------------------ reglas (puras)
@@ -364,6 +371,11 @@ async def asignar(
     dueno_vigente = None if nuevo else dueno
     foco = hacia.foco(dueno_vigente)
     modo, ruta = "off", None
+    if ruteo is not None and ruteo.pila_activa(hacia.ruteo()):
+        # HU-AOS-20: sin tarea en foco y con tareas en pausa, el Coordinador retoma la primera
+        # (después de completar, cancelar, escalar, un cambio de release o un cierre fuera del
+        # turno). El router la lleva enseguida a su dueño (`source = task`).
+        await retomar_pausada(session, tenant_id=tenant_id, conversation_id=conversation_id)
     if ruteo is not None:
         modo, ruta = await _enrutar(
             session,
@@ -452,7 +464,10 @@ async def _enrutar(
         cambios = await router.cambios_de_dueno(session, tenant_id, conversation_id)
         ruta = router.estabilizar(ruta, entrada, legacy, routing, cambios)
     if ruteo.pila != "off":
-        ruta = _pila_en_sombra(release, routing, entrada, ruta)
+        ruta = await _pila(
+            session, release, routing, entrada, ruta, legacy,
+            tenant_id=tenant_id, conversation_id=conversation_id, activa=ruteo.pila_activa(routing),
+        )
     log.info(
         "kernel_route",
         mode=modo,
@@ -465,28 +480,104 @@ async def _enrutar(
     return modo, ruta
 
 
-def _pila_en_sombra(release: ReleaseCongelada, routing: Any, entrada: Any, ruta: Ruta) -> Ruta:
-    """Lo que la pila de tareas habría abierto en este turno (HU-AOS-20, parte 1: solo sombra; la
-    pila activa llega en la parte 2). Nunca rompe el turno: un error queda en el log."""
+async def retomar_pausada(session: AsyncSession, *, tenant_id: uuid.UUID, conversation_id: uuid.UUID) -> uuid.UUID | None:
+    """Sin tarea en foco, la primera en pausa (por posición y antigüedad) vuelve al foco (`resumed`,
+    actor `kernel`). Las posiciones no se renumeran: todo ordena por `(stack_position, created_at)`.
+    Corre con la conversación bloqueada por `asignar`. Devuelve la tarea retomada, si hubo."""
+    from core.kernel import state
+
+    filas = await state.tareas_abiertas(session, tenant_id=tenant_id, conversation_id=conversation_id)
+    if any(f.status == "active" and f.stack_position == 0 for f in filas):
+        return None
+    pausada = next((f for f in filas if f.status == "suspended"), None)
+    if pausada is None:
+        return None
+    await state.registrar(
+        session, tenant_id=tenant_id, conversation_id=conversation_id, task_id=pausada.id, tipo="resumed",
+        data={"reason": "pila"}, actor="kernel",
+    )
+    log.info("kernel_pila_retomada", procedure_id=pausada.procedure_id)
+    return pausada.id
+
+
+async def _pila(
+    session: AsyncSession,
+    release: ReleaseCongelada,
+    routing: Any,
+    entrada: Any,
+    ruta: Ruta,
+    legacy: AgenteCongelado,
+    *,
+    tenant_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    activa: bool,
+) -> Ruta:
+    """La pila de tareas en la ruta (adenda HU-AOS-20 de ADR-0116). En sombra solo anota el plan
+    (`pila_sombra`). Activa:
+
+    - **sin foco:** atiende el dueño de la primera intención, que se abre en foco (`start`), y las
+      demás van en pausa con su dueño. Si la estabilidad del dueño frena ese cambio, no hay pila
+      en el turno. Una regla `start` va primero y las intenciones detrás; una regla que elige
+      agente (sin `start`) manda y no hay pila;
+    - **con foco** (digresión): todas en pausa; el agente no cambia.
+
+    Lo que se abre y lo que sobra lo recalcula el motor bajo el lock. Nunca rompe el turno."""
     import dataclasses
 
     from core.kernel import router
 
     try:
         intenciones = router.detectar_intenciones(release, routing, entrada)
+        max_stack = release.procedimientos_kernel().maxStack
         plan = router.plan_de_pila(
-            intenciones,
-            con_foco=entrada.tarea is not None,
-            abiertas=len(entrada.abiertas),
-            max_stack=release.procedimientos_kernel().maxStack,
+            intenciones, con_foco=entrada.tarea is not None, abiertas=len(entrada.abiertas), max_stack=max_stack
         )
     except Exception:
-        log.exception("kernel_pila_sombra_error")
+        log.exception("kernel_pila_error")
         return ruta
     if plan is None:
         return ruta
-    log.info("kernel_pila_sombra", abre=len(plan["abre"]), pausa=len(plan["pausa"]), sobrantes=len(plan["sobrantes"]))
-    return dataclasses.replace(ruta, pila_sombra=plan)
+    log.info(
+        "kernel_pila", activa=activa, abre=len(plan["abre"]), pausa=len(plan["pausa"]), sobrantes=len(plan["sobrantes"])
+    )
+    if not activa:
+        return dataclasses.replace(ruta, pila_sombra=plan)
+
+    def con_dueno(pids: Iterable[str]) -> tuple[tuple[str, uuid.UUID | None], ...]:
+        salida: list[tuple[str, uuid.UUID | None]] = []
+        for pid in pids:
+            agente = router.dueno_de(release, routing, pid, entrada.dueno)
+            salida.append((pid, agente.instance_id if agente is not None else None))
+        return tuple(salida)
+
+    if entrada.tarea is not None:
+        return dataclasses.replace(ruta, pila=con_dueno(intenciones), max_stack=max_stack)
+    if ruta.source == "rule":
+        if ruta.start is None:
+            return ruta
+        return dataclasses.replace(ruta, pila=con_dueno(p for p in intenciones if p != ruta.start), max_stack=max_stack)
+    if not plan["abre"]:  # la pila ya está llena: el motor lo anota todo como sobrante
+        return dataclasses.replace(ruta, pila=con_dueno(intenciones), max_stack=max_stack)
+    primero = intenciones[0]
+    agente = router.dueno_de(release, routing, primero, entrada.dueno)
+    if agente is None:
+        return ruta
+    candidata = router.Ruta(
+        agente=agente,
+        source="trigger",
+        procedure_id=primero,
+        start=primero,
+        confidence=next((c["score"] for c in ruta.candidates if c["procedure_id"] == primero), None),
+        candidates=ruta.candidates,
+        pila=con_dueno(intenciones[1:]),
+        max_stack=max_stack,
+    )
+    if entrada.dueno is not None and agente.instance_id != entrada.dueno:
+        cambios = await router.cambios_de_dueno(session, tenant_id, conversation_id)
+        if router.estabilizar(candidata, entrada, legacy, routing, cambios).frenada_por_estabilidad:
+            log.info("kernel_pila_frenada_por_estabilidad")
+            return ruta
+    return candidata
 
 
 async def _es_conexion_de_pruebas(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> bool:
@@ -532,7 +623,11 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "") -> Asignac
 
             payload = await tomar_payload(tenant_id, conversation.id)
             ruteo = ContextoRuteo(
-                modo=banderas.ruteo, texto=texto or "", payload=payload, pila=banderas.colaboracion.pila
+                modo=banderas.ruteo,
+                texto=texto or "",
+                payload=payload,
+                pila=banderas.colaboracion.pila,
+                procedimientos=banderas.procedimientos,
             )
         resultado = await asignar(
             session,
@@ -561,8 +656,9 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "") -> Asignac
     )
     if asignacion.ruta is not None:
         anotar_ruta(asignacion.ruta, activa=asignacion.modo_ruteo == "active")
-        if asignacion.modo_ruteo == "active" and asignacion.ruta.start is not None:
-            release_vigente.fijar_inicio(tenant_id, asignacion.ruta.start)
+        ruta = asignacion.ruta
+        if asignacion.modo_ruteo == "active" and (ruta.start is not None or ruta.pila):
+            release_vigente.fijar_inicio(tenant_id, ruta.start, pila=ruta.pila, max_stack=ruta.max_stack)
     return asignacion
 
 
@@ -577,6 +673,7 @@ __all__ = [
     "decidir_destino",
     "fijar_release_del_turno",
     "plan_revalidacion",
+    "retomar_pausada",
     "revalidar_tareas",
     "tuvo_efecto_irreversible",
 ]

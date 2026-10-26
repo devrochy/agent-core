@@ -115,6 +115,18 @@ class ArtefactosDeRelease:
     a2a_graph: Mapping[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class Inicio:
+    """Lo que el router pide abrir al empezar el turno: el `start` de una regla o la primera
+    intención (en foco) y, con la pila de tareas (HU-AOS-20), las demás en pausa con su dueño
+    (`(procedure_id, owner_instance_id)`) hasta `max_stack` tareas abiertas."""
+
+    tenant_id: uuid.UUID
+    start: str | None = None
+    pila: tuple[tuple[str, uuid.UUID | None], ...] = ()
+    max_stack: int = 1
+
+
 @dataclass
 class _Ranura:
     valor: ArtefactosDeRelease | None = None
@@ -123,7 +135,7 @@ class _Ranura:
     v3_sin_release: uuid.UUID | None = None
     # HU-AOS-17: procedimiento que una regla `start` del router pide iniciar en este turno
     # (lo consume el motor activo al empezar el turno, con sus guardas). Negocio + id.
-    inicio_de_regla: tuple[uuid.UUID, str] | None = None
+    inicio_de_regla: Inicio | None = None
 
 
 _ranura: ContextVar[_Ranura | None] = ContextVar("release_vigente", default=None)
@@ -161,22 +173,28 @@ def marcar_v3_sin_release(tenant_id: uuid.UUID) -> None:
         ranura.v3_sin_release = tenant_id
 
 
-def fijar_inicio(tenant_id: uuid.UUID, procedure_id: str) -> None:
-    """Una regla `start` del router (HU-AOS-17): el motor inicia ese procedimiento al empezar el
-    turno. No hace nada fuera de un turno."""
+def fijar_inicio(
+    tenant_id: uuid.UUID,
+    procedure_id: str | None,
+    *,
+    pila: tuple[tuple[str, uuid.UUID | None], ...] = (),
+    max_stack: int = 1,
+) -> None:
+    """Una regla `start` del router (HU-AOS-17) o la pila de tareas (HU-AOS-20): el motor lo abre al
+    empezar el turno. No hace nada fuera de un turno."""
     ranura = _ranura.get()
-    if ranura is not None:
-        ranura.inicio_de_regla = (tenant_id, procedure_id)
+    if ranura is not None and (procedure_id or pila):
+        ranura.inicio_de_regla = Inicio(tenant_id, procedure_id, tuple(pila), max_stack)
 
 
-def tomar_inicio() -> str | None:
-    """El procedimiento a iniciar por regla, una sola vez y solo para el negocio del `tenant_scope`."""
+def tomar_inicio() -> Inicio | None:
+    """Lo que hay que abrir, una sola vez y solo para el negocio del `tenant_scope`."""
     ranura = _ranura.get()
     if ranura is None or ranura.inicio_de_regla is None:
         return None
-    tenant_id, procedure_id = ranura.inicio_de_regla
+    inicio = ranura.inicio_de_regla
     ranura.inicio_de_regla = None
-    return procedure_id if tenant_id == get_current_tenant_id() else None
+    return inicio if inicio.tenant_id == get_current_tenant_id() else None
 
 
 def vigente() -> ArtefactosDeRelease | None:
@@ -230,6 +248,27 @@ def procedimientos_del_agente() -> Mapping[str, Any] | None:
     return actual.procedimientos_por_agente.get(actual.foco.instance_id, {})
 
 
+def max_stack(defecto: int = 2) -> int:
+    """`procedures.maxStack` del Coordinador de la release del turno (HU-AOS-20), entre 1 y 5;
+    `defecto` (el del contrato) sin release o si no se puede leer."""
+    kernel = kernel_del_turno()
+    crudo = kernel.content.get("procedures") if kernel is not None else None
+    valor = crudo.get("maxStack") if isinstance(crudo, Mapping) else None
+    return max(1, min(5, valor)) if isinstance(valor, int) and not isinstance(valor, bool) else defecto
+
+
+def nombre_de_agente(instance_id: uuid.UUID | None) -> str | None:
+    """El nombre (o la key) de un agente de la release del turno; None si no está."""
+    actual = vigente()
+    if actual is None or instance_id is None:
+        return None
+    agente = next((a for a in actual.agentes if a.instance_id == instance_id), None)
+    if agente is None:
+        return None
+    nombre = agente.content.get("name") if isinstance(agente.content, Mapping) else None
+    return str(nombre or agente.key)
+
+
 def idle_minutes(defecto: int) -> int:
     """`episode.idleMinutes` de la release del turno; `defecto` sin release."""
     actual = vigente()
@@ -254,6 +293,7 @@ __all__ = [
     "CAMPOS_DE_PROMPT",
     "AgenteCongelado",
     "ArtefactosDeRelease",
+    "Inicio",
     "abrir",
     "agente_del_turno",
     "cerrar",
@@ -263,6 +303,8 @@ __all__ = [
     "idle_minutes",
     "kernel_del_turno",
     "marcar_v3_sin_release",
+    "max_stack",
+    "nombre_de_agente",
     "procedimientos_del_agente",
     "tomar_inicio",
     "vigente",

@@ -113,6 +113,17 @@ def declara(agente: Any, procedure_ids: Iterable[str]) -> bool:
     return agente.procedimientos is not None and set(procedure_ids) <= propios
 
 
+def propias(filas: Iterable[Any], desde: uuid.UUID | None) -> list[Any]:
+    """Las tareas abiertas que viajan con un handoff de `desde` (HU-AOS-20): la tarea en foco y las
+    pausadas sin dueño o de `desde`. Una pausada de otro especialista (la pila de tareas) conserva
+    su dueño."""
+    return [
+        f
+        for f in filas
+        if (f.status == "active" and f.stack_position == 0) or f.owner_instance_id in (None, desde)
+    ]
+
+
 def destinos_de_handoff(ctx: ContextoA2A, abiertas: Iterable[str]) -> dict[str, Any]:
     procedimientos = set(abiertas)
     return {k: c for k, c in ctx.destinos("handoff").items() if declara(c, procedimientos)}
@@ -191,7 +202,7 @@ async def _aplicar(turno: Any, p: Pendiente) -> bool:
             ),
             {"t": tid, "c": p.conversation_id, "to": p.hacia},
         )
-        for fila in abiertas:
+        for fila in propias(abiertas, p.desde):
             if fila.owner_instance_id == p.hacia:
                 continue
             datos: dict[str, Any] = {"to_instance_id": str(p.hacia)}
