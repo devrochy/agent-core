@@ -4100,6 +4100,165 @@
         }
       }
     },
+    "/api/v1/admin/connections/{connection_id}/releases/{release_id}/diff": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · releases"
+        ],
+        "summary": "Get Release Diff",
+        "description": "Qué cambia la release frente a `against` (por defecto, la activa) de la MISMA conexión\n(HU-AOS-27). 404 si alguna no es de la conexión.",
+        "operationId": "get_release_diff_api_v1_admin_connections__connection_id__releases__release_id__diff_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "release_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Release Id"
+            }
+          },
+          {
+            "name": "against",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Against"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseDiff"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/{connection_id}/releases/{release_id}/stop": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · releases"
+        ],
+        "summary": "Stop Release",
+        "description": "El dueño detiene una candidata (HU-AOS-27): queda retirada y no se podrá activar.",
+        "operationId": "stop_release_api_v1_admin_connections__connection_id__releases__release_id__stop_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "release_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Release Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/connections/{connection_id}/rollback": {
       "post": {
         "tags": [
@@ -25794,6 +25953,111 @@
         ],
         "title": "AdvancedResponse"
       },
+      "AgentChange": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "rol": {
+            "type": "string",
+            "title": "Rol"
+          },
+          "cambio": {
+            "type": "string",
+            "title": "Cambio",
+            "description": "`nuevo`, `retirado`, `actualizado` o `por_defecto`."
+          },
+          "version_antes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Antes"
+          },
+          "version_ahora": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Ahora"
+          },
+          "por_defecto": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Por Defecto"
+          },
+          "secciones": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Secciones",
+            "description": "Claves de primer nivel del contenido que cambiaron.",
+            "default": []
+          },
+          "herramientas_agregadas": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Herramientas Agregadas",
+            "default": []
+          },
+          "herramientas_quitadas": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Herramientas Quitadas",
+            "default": []
+          },
+          "procedimientos_agregados": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Procedimientos Agregados",
+            "default": []
+          },
+          "procedimientos_quitados": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Procedimientos Quitados",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "nombre",
+          "rol",
+          "cambio",
+          "version_antes",
+          "version_ahora"
+        ],
+        "title": "AgentChange"
+      },
       "Alerts": {
         "properties": {
           "total": {
@@ -31658,6 +31922,36 @@
         ],
         "title": "MeResponse"
       },
+      "MeasuredProcedure": {
+        "properties": {
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "titulo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Titulo"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "procedure_id",
+          "titulo",
+          "motivo"
+        ],
+        "title": "MeasuredProcedure"
+      },
       "MemorySettings": {
         "properties": {
           "short_term_turns": {
@@ -32810,6 +33104,36 @@
           "status"
         ],
         "title": "OrderStatusUpdate"
+      },
+      "OtherChanges": {
+        "properties": {
+          "ajustes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ajustes",
+            "description": "Nombres de los ajustes del asistente que cambiaron."
+          },
+          "playbooks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Playbooks"
+          },
+          "flujo": {
+            "type": "boolean",
+            "title": "Flujo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ajustes",
+          "playbooks",
+          "flujo"
+        ],
+        "title": "OtherChanges"
       },
       "OwnerCharge": {
         "properties": {
@@ -37513,6 +37837,54 @@
         ],
         "title": "SkillBinding"
       },
+      "SkillChange": {
+        "properties": {
+          "pack_id": {
+            "type": "string",
+            "title": "Pack Id"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "cambio": {
+            "type": "string",
+            "title": "Cambio",
+            "description": "`agregada`, `quitada` o `nueva_version`."
+          },
+          "antes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Antes"
+          },
+          "ahora": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ahora"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pack_id",
+          "nombre",
+          "cambio",
+          "antes",
+          "ahora"
+        ],
+        "title": "SkillChange"
+      },
       "SkillsUpdate": {
         "properties": {
           "tools": {
@@ -41693,6 +42065,24 @@
             ],
             "title": "Last Event At"
           },
+          "lifecycle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle",
+            "description": "Último evento de ciclo de vida: promoted, rolled_back, invalid…"
+          },
+          "detenida": {
+            "type": "boolean",
+            "title": "Detenida",
+            "description": "La detuvo el dueño (no se puede activar).",
+            "default": false
+          },
           "manifest": {
             "additionalProperties": true,
             "type": "object",
@@ -41722,6 +42112,68 @@
           "events"
         ],
         "title": "ReleaseDetail"
+      },
+      "ReleaseDiff": {
+        "properties": {
+          "candidata": {
+            "type": "integer",
+            "title": "Candidata"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base"
+          },
+          "sin_linea_base": {
+            "type": "boolean",
+            "title": "Sin Linea Base"
+          },
+          "agentes": {
+            "items": {
+              "$ref": "#/components/schemas/AgentChange"
+            },
+            "type": "array",
+            "title": "Agentes"
+          },
+          "superpoderes": {
+            "$ref": "#/components/schemas/SuperpowersDiff"
+          },
+          "permisos": {
+            "items": {
+              "$ref": "#/components/schemas/PermissionChange"
+            },
+            "type": "array",
+            "title": "Permisos"
+          },
+          "otros": {
+            "$ref": "#/components/schemas/OtherChanges"
+          },
+          "medira": {
+            "items": {
+              "$ref": "#/components/schemas/MeasuredProcedure"
+            },
+            "type": "array",
+            "title": "Medira"
+          }
+        },
+        "type": "object",
+        "required": [
+          "candidata",
+          "base",
+          "sin_linea_base",
+          "agentes",
+          "superpoderes",
+          "permisos",
+          "otros",
+          "medira"
+        ],
+        "title": "ReleaseDiff"
       },
       "ReleaseEvent": {
         "properties": {
@@ -41811,6 +42263,24 @@
               }
             ],
             "title": "Last Event At"
+          },
+          "lifecycle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle",
+            "description": "Último evento de ciclo de vida: promoted, rolled_back, invalid…"
+          },
+          "detenida": {
+            "type": "boolean",
+            "title": "Detenida",
+            "description": "La detuvo el dueño (no se puede activar).",
+            "default": false
           }
         },
         "type": "object",
@@ -44526,6 +44996,38 @@
         ],
         "title": "Superpower"
       },
+      "SuperpowersDiff": {
+        "properties": {
+          "habilidades": {
+            "items": {
+              "$ref": "#/components/schemas/SkillChange"
+            },
+            "type": "array",
+            "title": "Habilidades"
+          },
+          "plugins_agregados": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Plugins Agregados"
+          },
+          "plugins_quitados": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Plugins Quitados"
+          }
+        },
+        "type": "object",
+        "required": [
+          "habilidades",
+          "plugins_agregados",
+          "plugins_quitados"
+        ],
+        "title": "SuperpowersDiff"
+      },
       "QaDatosAgentOS": {
         "properties": {
           "estado": {
@@ -46410,6 +46912,46 @@
         },
         "type": "object",
         "title": "PerfilUpdate"
+      },
+      "PermissionChange": {
+        "properties": {
+          "desde": {
+            "type": "string",
+            "title": "Desde"
+          },
+          "hacia": {
+            "type": "string",
+            "title": "Hacia"
+          },
+          "cambio": {
+            "type": "string",
+            "title": "Cambio",
+            "description": "`agregado`, `quitado` o `modos`."
+          },
+          "modos_antes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Modos Antes"
+          },
+          "modos_ahora": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Modos Ahora"
+          }
+        },
+        "type": "object",
+        "required": [
+          "desde",
+          "hacia",
+          "cambio",
+          "modos_antes",
+          "modos_ahora"
+        ],
+        "title": "PermissionChange"
       },
       "PasswordChange": {
         "properties": {

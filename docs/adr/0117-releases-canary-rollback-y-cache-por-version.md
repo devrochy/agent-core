@@ -440,3 +440,32 @@ Propuesta revisada por el arquitecto. El dueño aprobó el plan el 2026-10-25 (c
    - los escenarios pendientes de la parte 2, pasar los escenarios a los packs y el golden de ruteo;
    - el tope global de la plataforma;
    - el panel.
+
+## Adenda propuesta HU-AOS-27: versiones en el panel (2026-10-25)
+
+Propuesta, revisada por el arquitecto. Decisiones del dueño del 2026-10-25:
+- de las candidatas de la plataforma entran el aviso (texto del panel) y «Detener»; generarlas desde una versión nueva de una habilidad (§3, parte 2) va en otra HU;
+- con el gate apagado se publica con aviso («sin pruebas automáticas: pruébala en el chat de prueba»); con el gate cerrado y sin veredicto aprobado, la acción no está disponible y el panel ofrece «Medir ahora».
+
+1. **Diferencias legibles** (`core/releases/diff_legible.py`, puro, con los nombres legibles que arma el router). Compara la candidata con otra release de la **misma conexión** (por defecto la activa; si no, 404), cargadas con el mismo binario:
+   - **agentes:**
+     - alta, baja, cambio de versión y cambio de agente por defecto;
+     - las **claves de primer nivel** del contenido que cambiaron (el panel las traduce; las que no reconoce van a «otros cambios», así un `content_hash` distinto nunca queda sin explicación);
+     - herramientas y procedimientos añadidos y quitados por nombre. De `declarativeTools` solo sale el `name`, nunca `url`, `headers`, `body` ni `parameters`;
+   - **superpoderes:** habilidades con su nombre (`plugins.name`) y plugins del negocio;
+   - **permisos:** enlaces A2A añadidos, quitados o con otros modos;
+   - **otros:** los nombres de los campos de `app_settings` que cambiaron, overrides de playbooks y flujo;
+   - **qué se medirá:** `procedimientos_tocados`, con el título de cada procedimiento. Es el mismo comparador del gate: el diff no puede decir «sin cambios» si el gate pide medir.
+
+   Contra una activa `release/1` (sin procedimientos por agente ni `is_default` congelados), el diff lo dice (`sin_linea_base`) y no inventa cambios de agente por defecto.
+
+   `GET /api/v1/admin/connections/{id}/releases/{rid}/diff?against={rid2}`, con la sección `connections` en lectura. Cargar releases viejas para comparar ocupa la caché de releases (64 MiB): se acepta, cuesta recargas y no fallos.
+2. **Los permisos entran en el gate.** `procedimientos_tocados` compara `a2a_graph`: si el `content_hash` es igual no hay cambio; si no, compara enlace por enlace por `(from, to)`, incluidos modos, intenciones y límites. Un enlace añadido, quitado o cambiado toca los procedimientos de los agentes `from` y `to` que están en la conexión (motivo `permiso:<key>><key>`); los demás enlaces son inertes. Esto supera la nota de la adenda HU-AOS-18 de ADR-0116 (§2, «el gate no mira `a2a_graph`»), porque `encargar`, `consultar` y el handoff ya existen (HU-AOS-19).
+
+   **Cobertura del veredicto:** un `approved` solo vale si cubrió todos los procedimientos tocados de ahora (los medidos más los `sin_medir`). Si el comparador encuentra más (por un cambio del binario, como este), cuenta como sin veredicto y se vuelve a medir.
+3. **Detener una candidata** (`POST .../releases/{rid}/stop`). Exige lo mismo que promover: la sección en escritura, propietario o master y el candado legacy.
+   - Bajo el `FOR UPDATE` de la conexión registra `invalid` con `data.reason = "detenida_por_dueno"`.
+   - Es `invalid` y no `retired`: `retired` queda para el drenado del §4 (limpieza), y la parada del dueño se distingue por `data.reason`. `_exigir_utilizable` ya impide promoverla.
+   - Errores 409: `ya_activa` (para eso está volver atrás), `ya_detenida` y `es_canary`. Detener la canary es `canary_stopped` con el puntero a NULL, y llega con HU-AOS-32.
+   - **Es definitivo para ese contenido:** como el build es idempotente por `manifest_hash`, volver a construir lo mismo devuelve la release detenida. La API responde 409 `version_detenida` («esa combinación se detuvo: cambia algo para crear una versión nueva»), en lugar de dejar una candidata que nunca se podrá publicar.
+4. **Listado y detalle:** `ReleaseSummary` suma `lifecycle`, el último evento de ciclo de vida, porque `last_event` lo pisan los eventos del gate. Una release con una habilidad `yanked` no se refleja ahí: el panel muestra el 409 `habilidad_retirada` al intentarlo.

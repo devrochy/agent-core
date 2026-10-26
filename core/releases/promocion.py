@@ -41,6 +41,9 @@ log = get_logger(__name__)
 CICLO_DE_VIDA = ("promoted", "canary_started", "rolled_back", "canary_stopped", "invalid")
 # Tras uno de estos, las conversaciones de la release cambian en su siguiente turno.
 RETIRAN = frozenset({"rolled_back", "canary_stopped", "invalid"})
+# HU-AOS-27: el dueño detiene una candidata (`invalid` con este `reason`); `retired` queda para el
+# drenado del §4 de ADR-0117.
+DETENIDA_POR_DUENO = "detenida_por_dueno"
 
 
 class ReleaseNoEncontrada(LookupError):
@@ -127,6 +130,15 @@ async def gate_aprobado(
         return False, "pendiente", tocados
     if previo["tipo"] == veredicto.RECHAZADO:
         return False, "rechazado", tocados
+    # Un `approved` solo cubre lo que midió (más lo que declaró sin medir). Si hoy se tocan más
+    # procedimientos (otro binario, p. ej. los permisos de HU-AOS-27), cuenta como sin veredicto.
+    cubiertos = set(previo.get("por_procedimiento") or {}) | set(previo.get("sin_medir") or [])
+    if set(tocados) - cubiertos:
+        from core.releases import gate
+
+        if not await gate.cerrado(session, tenant_id):
+            return True, "sin_evaluar", tocados
+        return False, "pendiente", tocados
     return True, "aprobado", tocados
 
 
@@ -178,7 +190,8 @@ async def _release(
 
 
 async def _exigir_utilizable(session: Any, tenant_id: uuid.UUID, release_id: uuid.UUID) -> None:
-    """409 si la release fue invalidada o detenida (`rolled_back` sí se puede reactivar), o si
+    """409 si la release fue invalidada (también la detenida por el dueño, `invalid` con
+    `reason = detenida_por_dueno`) o su canary se detuvo (`rolled_back` sí se puede reactivar), o si
     fija una versión de habilidad retirada por seguridad (`yanked`, ADR-0117 §3)."""
     ultimo = (
         await session.execute(
@@ -413,6 +426,10 @@ class ReleaseVista:
     canary: bool
     last_event: str | None
     last_event_at: datetime | None
+    # HU-AOS-27: el último evento de ciclo de vida (`last_event` lo pisan los del gate) y si fue la
+    # detención del dueño (`invalid` con `reason = detenida_por_dueno`).
+    lifecycle: str | None = None
+    detenida: bool = False
 
 
 async def _punteros(
@@ -442,11 +459,15 @@ async def listar(
         filas = (
             await session.execute(
                 text(
-                    "SELECT r.id, r.number, r.origin, r.manifest_hash, r.created_at, e.type, e.created_at "
+                    "SELECT r.id, r.number, r.origin, r.manifest_hash, r.created_at, e.type, e.created_at, "
+                    "  v.type, v.data->>'reason' "
                     "FROM connection_releases r "
                     "LEFT JOIN LATERAL (SELECT type, created_at FROM release_events ev "
                     "  WHERE ev.tenant_id = r.tenant_id AND ev.release_id = r.id "
                     "  ORDER BY ev.created_at DESC LIMIT 1) e ON true "
+                    "LEFT JOIN LATERAL (SELECT type, data FROM release_events cv "
+                    "  WHERE cv.tenant_id = r.tenant_id AND cv.release_id = r.id AND cv.type = ANY(:ciclo) "
+                    "  ORDER BY cv.created_at DESC LIMIT 1) v ON true "
                     "WHERE r.tenant_id = :t AND r.connection_id = :c AND (cast(:antes AS integer) IS NULL OR r.number < cast(:antes AS integer)) "
                     "ORDER BY r.number DESC LIMIT :lim"
                 ),
@@ -455,11 +476,15 @@ async def listar(
                     "c": connection_id,
                     "antes": antes_de,
                     "lim": max(1, min(limite, 200)),
+                    "ciclo": list(CICLO_DE_VIDA),
                 },
             )
         ).all()
     return [
-        ReleaseVista(f[0], f[1], f[2], f[3], f[4], f[0] == activa, f[0] == canary, f[5], f[6])
+        ReleaseVista(
+            f[0], f[1], f[2], f[3], f[4], f[0] == activa, f[0] == canary, f[5], f[6], f[7],
+            f[7] == "invalid" and f[8] == DETENIDA_POR_DUENO,
+        )
         for f in filas
     ]
 
@@ -495,6 +520,7 @@ async def obtener(
             ).mappings()
         ]
     ultimo = eventos[-1] if eventos else None
+    ciclo = next((e for e in reversed(eventos) if e["type"] in CICLO_DE_VIDA), None)
     vista = ReleaseVista(
         fila[0],
         fila[1],
@@ -505,18 +531,69 @@ async def obtener(
         fila[0] == canary,
         ultimo["type"] if ultimo else None,
         ultimo["created_at"] if ultimo else None,
+        ciclo["type"] if ciclo else None,
+        bool(ciclo and ciclo["type"] == "invalid" and (ciclo["data"] or {}).get("reason") == DETENIDA_POR_DUENO),
     )
     return vista, fila[5], eventos
 
 
+async def detener(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID, release_id: uuid.UUID, *, actor: str
+) -> None:
+    """El dueño detiene una candidata (HU-AOS-27): queda `invalid` y no se puede promover. Bajo el
+    `FOR UPDATE` de la conexión. 409 si es la activa, la canary o ya está retirada."""
+    _exigir_scope(tenant_id)
+    async with get_session() as session:
+        activa, canary = await _bloquear(session, tenant_id, connection_id)
+        await _release(session, tenant_id, connection_id, release_id)
+        if release_id == activa:
+            raise ConflictoDeRelease("ya_activa", "Esa versión es la activa: para dejarla, vuelve a la anterior.")
+        if release_id == canary:
+            raise ConflictoDeRelease("es_canary", "Esa versión está en prueba con una parte de los clientes.")
+        ultimo = (
+            await session.execute(
+                text(
+                    "SELECT type FROM release_events WHERE tenant_id = :t AND release_id = :r "
+                    "AND type = ANY(:tipos) ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"t": tenant_id, "r": release_id, "tipos": list(CICLO_DE_VIDA)},
+            )
+        ).scalar_one_or_none()
+        if ultimo in RETIRAN - {"rolled_back"}:
+            raise ConflictoDeRelease("ya_detenida", "Esa versión ya está detenida.")
+        await registrar_evento(
+            session, tenant_id, connection_id, release_id, "invalid", actor, {"reason": DETENIDA_POR_DUENO}
+        )
+    log.info("release_detenida", connection_id=str(connection_id), release_id=str(release_id))
+
+
+async def esta_detenida(tenant_id: uuid.UUID, release_id: uuid.UUID) -> bool:
+    """¿La release la detuvo el dueño? (el build idempotente la devuelve si se reconstruye lo mismo)."""
+    _exigir_scope(tenant_id)
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                text(
+                    "SELECT type, data->>'reason' FROM release_events WHERE tenant_id = :t AND release_id = :r "
+                    "AND type = ANY(:tipos) ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"t": tenant_id, "r": release_id, "tipos": list(CICLO_DE_VIDA)},
+            )
+        ).first()
+    return fila is not None and fila[0] == "invalid" and fila[1] == DETENIDA_POR_DUENO
+
+
 __all__ = [
     "CICLO_DE_VIDA",
+    "DETENIDA_POR_DUENO",
     "RETIRAN",
     "Cambio",
     "ConflictoDeRelease",
     "ReleaseNoEncontrada",
     "ReleaseVista",
     "destino_de_rollback",
+    "detener",
+    "esta_detenida",
     "gate_aprobado",
     "listar",
     "obtener",

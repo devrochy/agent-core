@@ -770,8 +770,11 @@ async def registrar_evento(
 ) -> None:
     await session.execute(
         text(
-            "INSERT INTO release_events (tenant_id, connection_id, release_id, type, data, actor) "
-            "VALUES (:t, :c, :r, :tipo, cast(:d as jsonb), :actor)"
+            # `clock_timestamp()` y no el `now()` del default: la transacción empieza antes del
+            # FOR UPDATE, y el «último evento de ciclo de vida» se ordena por `created_at`
+            # (un `invalid` escrito tras esperar el candado debe quedar después, HU-AOS-27).
+            "INSERT INTO release_events (tenant_id, connection_id, release_id, type, data, actor, created_at) "
+            "VALUES (:t, :c, :r, :tipo, cast(:d as jsonb), :actor, clock_timestamp())"
         ),
         {
             "t": tenant_id,
