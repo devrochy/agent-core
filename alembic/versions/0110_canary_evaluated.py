@@ -8,8 +8,8 @@ de vida (`promocion.CICLO_DE_VIDA`).
 Aditiva: se reemplaza el CHECK por uno con el tipo nuevo. Dentro de la transacción de Alembic el
 `ADD CONSTRAINT` toma un bloqueo exclusivo hasta el commit; la tabla es chica y es inocuo.
 
-Revision ID: 0109
-Revises: 0108
+Revision ID: 0110
+Revises: 0109
 Create Date: 2026-10-26
 """
 
@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0109"
-down_revision = "0108"
+revision = "0110"
+down_revision = "0109"
 branch_labels = None
 depends_on = None
 
