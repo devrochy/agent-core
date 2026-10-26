@@ -148,9 +148,23 @@ async def test_publicar_sin_muestra_espera_y_a_los_siete_dias_publica() -> None:
     del uno
 
 
+async def _conversacion_unica(tid: uuid.UUID, cid: uuid.UUID) -> uuid.UUID:
+    """Como `_conversacion`, con un id externo de cliente sin colisiones (se siembran cientos)."""
+    cliente, conv = uuid.uuid4(), uuid.uuid4()
+    await _sql(
+        tid, "insert into customers (id, tenant_id, channel, external_id) values (:id, :t, 'instagram', :e)",
+        id=cliente, t=tid, e=f"cli-{uuid.uuid4().hex}",
+    )
+    await _sql(
+        tid, "insert into conversations (id, tenant_id, customer_id, channel, connection_id) values (:id, :t, :cli, 'instagram', :c)",
+        id=conv, t=tid, cli=cliente, c=cid,
+    )
+    return conv
+
+
 async def _sembrar_muestra(tid: uuid.UUID, cid: uuid.UUID, rid: uuid.UUID, lane: str, n: int, escaladas: int, desde: datetime) -> None:
     for i in range(n):
-        conv = await _conversacion(tid, cid)
+        conv = await _conversacion_unica(tid, cid)
         await _sql(
             tid,
             "insert into core_decisions (id, tenant_id, connection_id, conversation_id, release_id, release_lane, outcome, latency_ms, created_at) "
