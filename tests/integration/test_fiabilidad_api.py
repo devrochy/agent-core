@@ -380,6 +380,21 @@ async def test_consistencia_vigente_recorre_la_cadena(app_client) -> None:
     conexion = (await app_client.get(f"{_BASE}/reliability", headers=h)).json()["consistency"][0]
     assert conexion["release_id"] == str(r4) and conexion["below_threshold"] == [p] and not conexion["no_data"]
 
+    # v5 se promovió sin veredicto (gate apagado): no corta la cadena; lo que tocó queda sin datos.
+    from core.releases.build import registrar_evento
+
+    r5 = await _candidata(tid, cid, "Asistente cinco")
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            await registrar_evento(
+                session, tid, cid, r5, "promoted", "test",
+                {"from_release_id": str(r4), "gate": "sin_evaluar", "gate_tocados": {procs[2]: "test"} if len(procs) > 2 else {}},
+            )
+    v5 = await vigente(r5)
+    assert v5[p]["pass_k"] == 0.5 and v5[p]["medido_en_release_id"] == r2 and v5[q]["pass_k"] is None
+    if len(procs) > 2:
+        assert v5[procs[2]]["pass_k"] is None
+
     corridas = (await app_client.get(f"{_BASE}/evals/runs", headers=h, params={"connection_id": str(cid)})).json()
     assert len(corridas["items"]) == 3 and all("cost_usd" not in c for c in corridas["items"])
     assert corridas["items"][-1]["pass_k_average"] == pytest.approx(0.75)  # v2: (2 + 4) escenarios estables de 8

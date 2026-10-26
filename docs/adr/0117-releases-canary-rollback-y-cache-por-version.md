@@ -478,13 +478,13 @@ Propuesta revisada por el arquitecto. Decisión del dueño del 2026-10-25: la co
    - **Turnos:** filas de `core_decisions` con `outcome` `routed` o `escalated` (las de palabra de escalamiento cuentan). No cuentan los bloqueos por política (pausa, cuota, horario).
    - **Escalamiento:** `outcome = 'escalated'` o `turn_outcomes.status = 'escalated'`. Se reporta por turno y también en conversaciones distintas; el canary cuenta su muestra en conversaciones.
    - **Ledger best-effort:** un turno sin `turn_outcomes` (la escritura del resultado falló) no cuenta como fallido ni escalado. Se reporta aparte como `sin_resultado`, para que el canary lo trate como señal y no como éxito.
-   - **Dinero, de una sola fuente:** `usage_ledger` (filas `turn` y `agent_run`, sin `NO_ES_ACTIVIDAD`). La versión sale de `usage_ledger.release_id` y el carril, por `turn_id → core_decisions`. `turn_outcomes` queda para latencia y status.
+   - **Dinero, de una sola fuente:** `usage_ledger` (todo menos `NO_ES_ACTIVIDAD`: turno, `agent_run`, clasificador y redactor). La versión sale de `usage_ledger.release_id` y el carril, por `turn_id → core_decisions`. `turn_outcomes` queda para latencia y status.
    - **Operaciones entre agentes:** el costo de las filas `agent_run` se agrupa por (agente que pide, agente que responde, modo), uniendo `a2a_call_id` con `a2a_events`. El dinero viene del ledger.
    - **Rechazos del verificador por tipo** (`verdict = 'fail'`, incluidos los borradores que el reintento corrigió: es lo que el verificador frenó, no siempre lo que vio el cliente), menos los falsos positivos marcados.
    - **Completitud por procedimiento:** tareas cerradas en la ventana (`completed_at`), completadas sobre terminadas. La versión y el carril salen por `started_turn_id → core_decisions`.
    - **Muestra mínima:** con menos de 20 turnos, o de 10 tareas terminadas por procedimiento, la tasa sale como `null` y el panel dice «sin datos suficientes».
 2. **Consistencia vigente** (`veredicto.consistencia_vigente`, una sola función). Para cada procedimiento de la versión activa vale el último veredicto de la cadena `base_release_id` (como mucho 10 versiones hacia atrás) que lo midió, siempre que en las versiones posteriores no se haya vuelto a tocar.
-   - Si lo tocó una versión posterior sin medirlo, o la cadena se corta sin medición, sale «sin datos».
+   - Si lo tocó una versión posterior sin medirlo, o la cadena se corta sin medición, sale «sin datos». Una versión promovida sin veredicto (exenta, gate apagado o forzada) no corta la cadena: lo que tocó (`gate_tocados` del evento `promoted`) queda sin datos y se sigue por `from_release_id`.
    - El número es `por_procedimiento.pass_k`: la fracción de escenarios estables en k = 4. `/evals/runs` expone el promedio de la corrida con otro nombre (`pass_k_promedio`) y nunca su costo, que es de la plataforma.
    - Aparecen todas las conexiones conversacionales: las que no tienen versión activa también, con «sin datos».
 3. **Falsos positivos del verificador:** `turn_feedback(source = 'owner', signal = 'verifier_false_positive:<tipo>')`, con `note` libre para el dueño.

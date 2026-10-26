@@ -9,7 +9,7 @@ Definiciones (adenda HU-AOS-29):
 - **escalamiento**: `outcome = 'escalated'` o `turn_outcomes.status = 'escalated'`, por turno y en
   conversaciones distintas;
 - **sin resultado**: turnos sin `turn_outcomes` (el ledger es best-effort): no cuentan como éxito;
-- **dinero**: solo `usage_ledger` (filas `turn` y `agent_run`, sin `NO_ES_ACTIVIDAD`);
+- **dinero**: solo `usage_ledger` sin `NO_ES_ACTIVIDAD` (turno, `agent_run`, clasificador y redactor);
 - **rechazos del verificador**: `verdict = 'fail'` por tipo, menos los falsos positivos marcados;
 - **completitud**: tareas cerradas en la ventana (`completed_at`), completadas sobre terminadas.
 
@@ -272,11 +272,13 @@ async def completitud(session: Any, tenant_id: uuid.UUID, f: Filtro) -> list[dic
     params: dict[str, Any] = {"t": tenant_id, "desde": f.desde, "hasta": f.hasta, "terminales": list(TERMINALES)}
     union = ""
     extra = ""
-    if f.release_id is not None or f.lane is not None or f.connection_id is not None:
-        union = "JOIN core_decisions d ON d.tenant_id = t.tenant_id AND d.id = t.started_turn_id "
-        if f.connection_id is not None:
-            extra += " AND d.connection_id = :c"
-            params["c"] = f.connection_id
+    if f.connection_id is not None:
+        # Por la conversación: `started_turn_id` puede faltar (tareas abiertas fuera de un turno).
+        union += "JOIN conversations cv ON cv.tenant_id = t.tenant_id AND cv.id = t.conversation_id "
+        extra += " AND cv.connection_id = :c"
+        params["c"] = f.connection_id
+    if f.release_id is not None or f.lane is not None:
+        union += "JOIN core_decisions d ON d.tenant_id = t.tenant_id AND d.id = t.started_turn_id "
         if f.release_id is not None:
             extra += " AND d.release_id = :r"
             params["r"] = f.release_id

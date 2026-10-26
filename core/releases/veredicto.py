@@ -314,8 +314,9 @@ async def consistencia_vigente(session: Any, tenant_id: uuid.UUID, activa: uuid.
 
     Recorre la cadena `base_release_id` desde la activa (hasta `MAX_CADENA` versiones). Para cada
     procedimiento vale el último veredicto que lo midió, siempre que ninguna versión posterior lo haya
-    vuelto a tocar sin medirlo. Una versión sin veredicto corta la cadena. Lo que queda sin medición
-    sale con `pass_k = None` («sin datos»)."""
+    vuelto a tocar sin medirlo. Una versión promovida sin veredicto (exenta, gate apagado o forzada)
+    no corta la cadena: lo que tocó (`gate_tocados`) queda sin datos y se sigue por `from_release_id`.
+    Lo que queda sin medición sale con `pass_k = None` («sin datos»)."""
     from core.releases.cargar import cargar_release
 
     _exigir_scope(tenant_id)
@@ -340,7 +341,25 @@ async def consistencia_vigente(session: Any, tenant_id: uuid.UUID, activa: uuid.
             )
         ).first()
         if fila is None:
-            break
+            # Promovida sin veredicto (exenta, gate apagado o forzada): lo que tocó queda sin datos y
+            # la cadena sigue por la versión que reemplazó.
+            promovida = (
+                await session.execute(
+                    text(
+                        "SELECT data FROM release_events WHERE tenant_id = :t AND release_id = :r "
+                        "AND type = 'promoted' ORDER BY created_at DESC LIMIT 1"
+                    ),
+                    {"t": tenant_id, "r": actual},
+                )
+            ).scalar_one_or_none()
+            if not isinstance(promovida, dict) or not promovida.get("from_release_id"):
+                break
+            pendientes -= set(promovida.get("gate_tocados") or {})
+            try:
+                actual = uuid.UUID(str(promovida["from_release_id"]))
+            except ValueError:
+                break
+            continue
         data = dict(fila[1] or {})
         por = data.get("por_procedimiento") or {}
         for pid in sorted(pendientes & set(por)):
