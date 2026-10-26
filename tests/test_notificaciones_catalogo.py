@@ -4,6 +4,7 @@ una sección real de permisos y no lleva PII en `data`."""
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 
@@ -21,6 +22,13 @@ CONSTRUCTORES = {
     "conexion_token_por_vencer": lambda: catalog.conexion_token_por_vencer(CID, vence="2026-11-01", dia="2026-10-25"),
     "calidad_de_numero_roja": lambda: catalog.calidad_de_numero_roja(CID, dia="2026-10-25"),
     "mensaje_fallido": lambda: catalog.mensaje_fallido("1730000000-0"),
+    "handoff_tomado": lambda: catalog.handoff_tomado(uuid.uuid4(), CID, uuid.uuid4(), "ana@negocio.com"),
+    "handoff_resuelto": lambda: catalog.handoff_resuelto(
+        uuid.uuid4(), CID, uuid.uuid4(), "ana@negocio.com", devuelta_al_agente=True
+    ),
+    "cliente_esperando": lambda: catalog.cliente_esperando(
+        uuid.uuid4(), CID, desde=datetime(2026, 10, 26, tzinfo=UTC), umbral_minutos=15
+    ),
 }
 
 
@@ -44,3 +52,17 @@ def test_el_titulo_depende_del_alcance_de_la_pausa() -> None:
     propia = catalog.conexion_pausada(CID, alcance="connection", motivo="x", dia="d")
     assert cuenta.title == catalog.TITULO_CONEXION_WHATSAPP
     assert propia.title == catalog.TITULO_CONEXION_PROPIA
+
+
+def test_un_episodio_de_espera_tiene_una_clave_y_otro_episodio_otra() -> None:
+    esc = uuid.uuid4()
+    uno = catalog.cliente_esperando(esc, CID, desde=datetime(2026, 10, 26, 10, 0, tzinfo=UTC), umbral_minutos=15)
+    mismo = catalog.cliente_esperando(esc, CID, desde=datetime(2026, 10, 26, 10, 0, tzinfo=UTC), umbral_minutos=15)
+    otro = catalog.cliente_esperando(esc, CID, desde=datetime(2026, 10, 26, 11, 0, tzinfo=UTC), umbral_minutos=15)
+    assert uno.dedupe_key == mismo.dedupe_key != otro.dedupe_key
+
+
+def test_el_aviso_de_handoff_lleva_al_actor_para_no_avisarle_a_el() -> None:
+    admin = uuid.uuid4()
+    spec = catalog.handoff_tomado(uuid.uuid4(), CID, admin, "ana@negocio.com")
+    assert spec.data["actorAdminId"] == str(admin)

@@ -34,6 +34,8 @@ from core.db.models import (
     UsageLedger,
 )
 from core.db.session import get_owned, get_session
+from core.notifications import catalog
+from core.notifications.service import notify_by_actor
 from core.orchestrator import motivos_escalacion as motivos
 from core.orchestrator.motivos_escalacion import MotivoCodigo
 from core.shared.exceptions import OutboundWindowExpiredError
@@ -734,6 +736,19 @@ async def resolve_conversation(
         for escalation in escalations:
             escalation.status = "resuelta"
             escalation.resolved_at = datetime.now(UTC)
+        if escalations:
+            await notify_by_actor(
+                session,
+                principal.tenant_id,
+                catalog.handoff_resuelto(
+                    escalations[0].id,
+                    conversation_id,
+                    principal.admin.id,
+                    principal.admin.email,
+                    devuelta_al_agente=False,
+                ),
+                principal.admin.id,
+            )
     return Response(status_code=204)
 
 
@@ -771,12 +786,20 @@ async def take_conversation(
             otro = await session.get(Admin, esc.assigned_admin_id)
             quien = otro.email if otro else "otra persona del equipo"
             raise ApiError(409, "already_taken", f"La conversación ya la atiende {quien}.")
+        recien_tomada = esc.assigned_admin_id is None
         esc.assigned_admin_id = admin_id
         esc.status = "asignada"
         conversation = await get_owned(session, Conversation, conversation_id, tenant_id)
         conversation.status = "escalated"
         conversation.bot_paused = True
         await session.flush()
+        if recien_tomada:
+            await notify_by_actor(
+                session,
+                tenant_id,
+                catalog.handoff_tomado(esc.id, conversation_id, admin_id, principal.admin.email),
+                admin_id,
+            )
         tomada = await _escalacion_activa(session, tenant_id, conversation_id)
     assert tomada is not None
     return tomada
@@ -811,6 +834,19 @@ async def return_conversation_to_bot(
         for escalation in escalations:
             escalation.status = "resuelta"
             escalation.resolved_at = datetime.now(UTC)
+        if escalations:
+            await notify_by_actor(
+                session,
+                principal.tenant_id,
+                catalog.handoff_resuelto(
+                    escalations[0].id,
+                    conversation_id,
+                    principal.admin.id,
+                    principal.admin.email,
+                    devuelta_al_agente=True,
+                ),
+                principal.admin.id,
+            )
     return Response(status_code=204)
 
 

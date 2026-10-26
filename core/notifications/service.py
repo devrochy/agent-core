@@ -81,6 +81,23 @@ async def notify(session, tenant_id: uuid.UUID, spec: NotificationSpec) -> uuid.
         return None
 
 
+async def notify_by_actor(
+    session, tenant_id: uuid.UUID, spec: NotificationSpec, actor_admin_id: uuid.UUID
+) -> uuid.UUID | None:
+    """Como `notify`, para un hecho que hizo una persona del equipo: a ella no le llega el
+    push (`destinatarios_de_push` lee `data.actorAdminId`) y el aviso nace leído para ella.
+    Nunca lanza."""
+    nid = await notify(session, tenant_id, spec)
+    if nid is None:
+        return None
+    try:
+        async with session.begin_nested():
+            await feed.marcar_leidas(session, tenant_id, actor_admin_id, [nid])
+    except Exception as exc:
+        log.warning("notificacion_actor_fallo", event_key=spec.event_key, error=type(exc).__name__)
+    return nid
+
+
 async def notify_standalone(tenant_id: uuid.UUID, spec: NotificationSpec) -> uuid.UUID | None:
     """Como `notify`, con su propio scope y sesión. Nunca lanza.
 
@@ -161,7 +178,10 @@ async def destinatarios_de_push(
     ahora = datetime.now(UTC)
     elegidos: list[uuid.UUID] = []
     badges: dict[uuid.UUID, int] = {}
+    actor = (notificacion.data or {}).get("actorAdminId")
     for admin_id, admin in admins.items():
+        if actor is not None and str(admin_id) == str(actor):
+            continue
         if not feed.ve_notificacion(
             actua_master=actua_como_master(admin),
             tenant_role=roles.get(admin_id),

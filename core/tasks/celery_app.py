@@ -211,6 +211,26 @@ celery.conf.beat_schedule[_NOTIFICATIONS_RETENTION_TASK] = {
     "schedule": crontab(hour="4", minute="0"),
 }
 
+# «Cliente esperando respuesta» (ADR-0167): cada 5 min avisa de los clientes con una escalación
+# abierta que llevan más de 15 min sin respuesta humana (un aviso por episodio).
+_CLIENTE_ESPERANDO_TASK = "core.cliente_esperando"
+
+
+@celery.task(name=_CLIENTE_ESPERANDO_TASK)
+def _cliente_esperando() -> None:
+    from core.tasks.cliente_esperando import avisar_clientes_esperando
+
+    try:
+        run_async(avisar_clientes_esperando())
+    except Exception:
+        log.exception("cron_task_failed", task=_CLIENTE_ESPERANDO_TASK)
+
+
+celery.conf.beat_schedule[_CLIENTE_ESPERANDO_TASK] = {
+    "task": _CLIENTE_ESPERANDO_TASK,
+    "schedule": crontab(minute="*/5"),
+}
+
 # Consolidación nocturna de la memoria (ADR-0114, HU-AOS-36): datos de tareas cerradas → hechos.
 _MEMORY_CONSOLIDATION_TASK = "core.memory_consolidation"
 

@@ -8,6 +8,7 @@ determinista, no prompts) y `data` lleva solo ids, nunca datos del cliente.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from core.notifications.spec import NotificationSpec
 
@@ -128,4 +129,92 @@ def mensaje_fallido(entry_id: str) -> NotificationSpec:
         section="settings",
         data={"type": "core.dlq"},
         target={"entity": "mensaje_fallido", "id": entry_id, "section": "settings"},
+    )
+
+
+def handoff_tomado(
+    escalation_id: uuid.UUID | str,
+    conversation_id: uuid.UUID | str,
+    admin_id: uuid.UUID | str,
+    quien: str,
+) -> NotificationSpec:
+    """Una persona del equipo tomó la conversación escalada: el resto sabe que ya la atienden.
+
+    `actorAdminId` (en `data`) es quien hizo la acción: no recibe el push ni cuenta como no leída."""
+    return NotificationSpec(
+        event_key="core.handoff_assigned",
+        category="conversaciones",
+        severity="info",
+        title="Conversación tomada",
+        body=f"{quien} atiende la conversación escalada.",
+        dedupe_key=f"handoff_tomado:{escalation_id}:{admin_id}",
+        section="escalations",
+        data={
+            "type": "core.handoff_assigned",
+            "conversationId": str(conversation_id),
+            "escalationId": str(escalation_id),
+            "actorAdminId": str(admin_id),
+        },
+        target={"entity": "conversacion", "id": str(conversation_id), "section": "escalations"},
+    )
+
+
+def handoff_resuelto(
+    escalation_id: uuid.UUID | str,
+    conversation_id: uuid.UUID | str,
+    admin_id: uuid.UUID | str,
+    quien: str,
+    *,
+    devuelta_al_agente: bool,
+) -> NotificationSpec:
+    """La atención humana de la conversación terminó (resuelta o devuelta al agente)."""
+    return NotificationSpec(
+        event_key="core.handoff_resolved",
+        category="conversaciones",
+        severity="success",
+        title="Conversación resuelta",
+        body=(
+            f"{quien} devolvió la conversación al agente."
+            if devuelta_al_agente
+            else f"{quien} cerró la atención humana de la conversación."
+        ),
+        dedupe_key=f"handoff_resuelto:{escalation_id}",
+        section="escalations",
+        data={
+            "type": "core.handoff_resolved",
+            "conversationId": str(conversation_id),
+            "escalationId": str(escalation_id),
+            "actorAdminId": str(admin_id),
+        },
+        target={"entity": "conversacion", "id": str(conversation_id), "section": "escalations"},
+    )
+
+
+def cliente_esperando(
+    escalation_id: uuid.UUID | str,
+    conversation_id: uuid.UUID | str,
+    *,
+    desde: datetime,
+    umbral_minutos: int,
+    asignada_a: uuid.UUID | None = None,
+) -> NotificationSpec:
+    """Un cliente lleva más de `umbral_minutos` sin respuesta humana en una conversación escalada.
+
+    `desde` (inicio del episodio) acota la deduplicación: un aviso por episodio. Si la
+    escalación está asignada, va dirigido a esa persona además de a quien ve Escalaciones."""
+    return NotificationSpec(
+        event_key="core.customer_waiting",
+        category="conversaciones",
+        severity="warning",
+        title="Cliente esperando respuesta",
+        body=f"Un cliente lleva más de {umbral_minutos} minutos esperando respuesta humana.",
+        dedupe_key=f"cliente_esperando:{escalation_id}:{int(desde.timestamp())}",
+        section="escalations",
+        audience_admin_id=asignada_a,
+        data={
+            "type": "core.customer_waiting",
+            "conversationId": str(conversation_id),
+            "escalationId": str(escalation_id),
+        },
+        target={"entity": "conversacion", "id": str(conversation_id), "section": "escalations"},
     )
