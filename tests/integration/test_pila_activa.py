@@ -165,11 +165,27 @@ async def test_cancelar_en_el_turno_retoma_la_de_otro_sin_sus_acciones(_ruteo: N
     tid, cid, inst = await _con_pila()
     conv = await _conversacion(tid, cid)
     await _turno(tid, conv, monkeypatch, ["¿Mensual o anual?"], texto=DOS)
-    g = await _turno(tid, conv, monkeypatch, [("cancelar_tarea", {}), "Listo, la demo la sigue Agenda."], texto="mejor no quiero el plan")
+    g = await _turno(
+        tid, conv, monkeypatch,
+        [
+            ("cancelar_tarea", {}),
+            # Aunque no se ofrecen, llamarlas por nombre tampoco sirve (la tarea es de Agenda).
+            ("check_availability", {"date": "2030-01-10"}),
+            ("actualizar_tarea", {"slots": {"fecha": "2030-01-10"}}),
+            "Listo, la demo la sigue Agenda.",
+        ],
+        texto="mejor no quiero el plan",
+    )
     tareas = await _tareas(tid, conv)
     assert tareas[PLAN][0] == "cancelled" and tareas[CITA][:2] == ("active", 0)
     # Después de cancelar, en el mismo turno: la demo es de Agenda, Ventas no ofrece sus acciones.
     assert "check_availability" not in g.tools[1]
+    negadas = g.resultados[1:3]
+    assert len(negadas) == 2 and all("error" in r.lower() or "no " in r.lower() for r in negadas), negadas
+    eventos = await _sql(
+        tid, "select count(*) from task_events where task_id = :t and type = 'slot_set'", t=tareas[CITA][3]
+    )
+    assert eventos == [(0,)]
     assert "Esta tarea la sigue" in g.prompts[1]
     assert await _dueno(tid, conv) == inst["ventas"]  # el cambio lo hace el router en el turno siguiente
     await _turno(tid, conv, monkeypatch, ["¿Qué día?"], texto="ok")

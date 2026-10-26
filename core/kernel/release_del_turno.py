@@ -492,9 +492,11 @@ async def retomar_pausada(session: AsyncSession, *, tenant_id: uuid.UUID, conver
     pausada = next((f for f in filas if f.status == "suspended"), None)
     if pausada is None:
         return None
+    from core.shared import turno as turno_vigente
+
     await state.registrar(
         session, tenant_id=tenant_id, conversation_id=conversation_id, task_id=pausada.id, tipo="resumed",
-        data={"reason": "pila"}, actor="kernel",
+        data={"reason": "pila"}, actor="kernel", turn_id=turno_vigente.turno_id(),
     )
     log.info("kernel_pila_retomada", procedure_id=pausada.procedure_id)
     return pausada.id
@@ -532,8 +534,8 @@ async def _pila(
         plan = router.plan_de_pila(
             intenciones, con_foco=entrada.tarea is not None, abiertas=len(entrada.abiertas), max_stack=max_stack
         )
-    except Exception:
-        log.exception("kernel_pila_error")
+    except Exception as exc:
+        log.warning("kernel_pila_error", error=type(exc).__name__)
         return ruta
     if plan is None:
         return ruta

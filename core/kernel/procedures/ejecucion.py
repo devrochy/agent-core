@@ -822,8 +822,10 @@ class ContextoMotor:
 
         # Con un handoff aceptado no se abren tareas nuevas: el destino podría no gobernarlas.
         candidatos = [] if decisions.handoff_pendiente() else self._candidatos()
+        # HU-AOS-20: la tarea en foco de otro agente (retomada en este turno) no la gobierna este.
+        de_otro = self._foco is not None and _de_otro_agente(self._foco.fila)
         return comandos.aplicables(
-            foco=self._par_en_foco(),
+            foco=None if de_otro else self._par_en_foco(),
             candidatos=candidatos,
             destinos_de_handoff=self._destinos_de_handoff(),
             encargos=bool(self._oferta_encargos()),
@@ -949,6 +951,10 @@ class ContextoMotor:
         try:
             async with _con_lock(self.tenant_id, self.conversation_id) as s:
                 foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
+                if foco is not None and _de_otro_agente(foco.fila):
+                    # HU-AOS-20: la tarea en foco la sigue otro agente: sus acciones no corren aquí.
+                    log.info("motor_accion_de_tarea_de_otro_agente", accion=accion)
+                    return Previo(Decision({"error": mensaje("fuera_del_agente", accion=accion)}, "denied", h))
                 etapa = foco.stage.actions if foco is not None else ()
                 if self._fuera_del_agente(accion, etapa):
                     # Fail-closed por agente y por scope (ADR-0118 §3): no la ofrece y no corre.

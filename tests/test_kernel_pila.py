@@ -209,3 +209,25 @@ def test_max_stack_de_la_release_del_turno(monkeypatch: pytest.MonkeyPatch) -> N
     assert release_vigente.max_stack() == 2
     monkeypatch.setattr(release_vigente, "kernel_del_turno", lambda: None)
     assert release_vigente.max_stack() == 2
+
+
+async def test_tomar_inicio_solo_para_el_negocio_del_scope() -> None:
+    import uuid
+
+    from core.shared import release_vigente
+    from core.shared.tenant import tenant_scope
+
+    a, b = uuid.uuid4(), uuid.uuid4()
+    token = release_vigente.abrir()
+    try:
+        release_vigente.fijar_inicio(a, "p.x", pila=(("p.y", None),), max_stack=2)
+        async with tenant_scope(b):
+            assert release_vigente.tomar_inicio() is None  # otro negocio: se descarta
+        release_vigente.fijar_inicio(a, None, pila=(("p.y", None),), max_stack=2)
+        async with tenant_scope(a):
+            inicio = release_vigente.tomar_inicio()
+            assert inicio is not None and inicio.pila == (("p.y", None),) and inicio.max_stack == 2
+            assert release_vigente.tomar_inicio() is None  # una sola vez
+    finally:
+        release_vigente.cerrar(token)
+
