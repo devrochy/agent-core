@@ -25,7 +25,12 @@ celery = Celery(
     # tasks definidas en estos módulos al finalizar el arranque. Sin esto,
     # `core.outbound_send` quedaba como "unregistered task" y los mensajes de
     # salida nunca se enviaban.
-    include=["core.tasks.outbound_send", "core.tasks.push_tasks", "core.tasks.production_readiness"],
+    include=[
+        "core.tasks.outbound_send",
+        "core.tasks.push_tasks",
+        "core.tasks.production_readiness",
+        "core.tasks.gate_tasks",  # HU-AOS-21 parte 4: medición del gate de pass^k
+    ],
 )
 celery.conf.update(
     task_serializer="json",

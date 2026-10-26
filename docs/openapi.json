@@ -3948,6 +3948,158 @@
         }
       }
     },
+    "/api/v1/admin/connections/{connection_id}/releases/{release_id}/evaluate": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · releases"
+        ],
+        "summary": "Evaluate Release",
+        "description": "Pide medir la candidata contra la activa (HU-AOS-21 parte 4). Exige la bandera del gate del\nnegocio (409 `gate_abierto` si está apagada) para no gastar el tope sin gate.",
+        "operationId": "evaluate_release_api_v1_admin_connections__connection_id__releases__release_id__evaluate_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "release_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Release Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationRequested"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationRequested"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/{connection_id}/releases/{release_id}/evaluation": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · releases"
+        ],
+        "summary": "Get Evaluation",
+        "description": "La medición de la candidata contra la activa de ahora (HU-AOS-21 parte 4).",
+        "operationId": "get_evaluation_api_v1_admin_connections__connection_id__releases__release_id__evaluation_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "release_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Release Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Evaluation"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/connections/{connection_id}/rollback": {
       "post": {
         "tags": [
@@ -9791,6 +9943,136 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AgentOSResultado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/tenants/{tenant_id}/gate": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Get Gate",
+        "description": "Bandera del gate de pass^k del negocio y su tope mensual. Solo el master.",
+        "operationId": "get_gate_api_v1_admin_platform_tenants__tenant_id__gate_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateBandera"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Put Gate",
+        "description": "Enciende o apaga el gate del negocio (auditado como `release_gate_bandera`). 409\n`sin_base_de_eval` si se intenta cerrar sin la base de evaluación configurada en el entorno.",
+        "operationId": "put_gate_api_v1_admin_platform_tenants__tenant_id__gate_put",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GateBanderaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateBandera"
                 }
               }
             }
@@ -29292,6 +29574,177 @@
         ],
         "title": "EvalRunItem"
       },
+      "Evaluation": {
+        "properties": {
+          "gate_cerrado": {
+            "type": "boolean",
+            "title": "Gate Cerrado"
+          },
+          "base_release_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Release Id"
+          },
+          "es_la_activa": {
+            "type": "boolean",
+            "title": "Es La Activa"
+          },
+          "veredicto": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvaluationVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "medicion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvaluationRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "gate_cerrado",
+          "base_release_id",
+          "es_la_activa",
+          "veredicto",
+          "medicion"
+        ],
+        "title": "Evaluation"
+      },
+      "EvaluationRequested": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "title": "Estado",
+            "description": "`encolada`, `en_curso`, `demasiados_intentos`, `no_encolada`, `sin_cambios`, `ya_medida`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado"
+        ],
+        "title": "EvaluationRequested"
+      },
+      "EvaluationRun": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "codigo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codigo"
+          },
+          "creado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creado"
+          },
+          "sin_escenarios": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sin Escenarios"
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado",
+          "codigo",
+          "creado",
+          "sin_escenarios"
+        ],
+        "title": "EvaluationRun"
+      },
+      "EvaluationVerdict": {
+        "properties": {
+          "aprobado": {
+            "type": "boolean",
+            "title": "Aprobado"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo"
+          },
+          "k": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "K"
+          },
+          "umbral": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Umbral"
+          },
+          "por_procedimiento": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Por Procedimiento"
+          },
+          "sin_medir": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sin Medir"
+          }
+        },
+        "type": "object",
+        "required": [
+          "aprobado",
+          "motivo",
+          "k",
+          "umbral",
+          "por_procedimiento",
+          "sin_medir"
+        ],
+        "title": "EvaluationVerdict"
+      },
       "EventCatalogItem": {
         "properties": {
           "event": {
@@ -43610,6 +44063,59 @@
           "warnings"
         ],
         "title": "FromTemplateOut"
+      },
+      "GateBandera": {
+        "properties": {
+          "cerrado": {
+            "type": "boolean",
+            "title": "Cerrado",
+            "description": "Con el gate cerrado, una versión sin veredicto no se activa (409 `gate_pendiente`)."
+          },
+          "tope_usd_mensual": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tope Usd Mensual",
+            "description": "Tope mensual de las mediciones (USD, lo paga la plataforma); null = el del entorno."
+          }
+        },
+        "type": "object",
+        "required": [
+          "cerrado"
+        ],
+        "title": "GateBandera"
+      },
+      "GateBanderaIn": {
+        "properties": {
+          "cerrado": {
+            "type": "boolean",
+            "title": "Cerrado",
+            "description": "Con el gate cerrado, una versión sin veredicto no se activa (409 `gate_pendiente`)."
+          },
+          "tope_usd_mensual": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tope Usd Mensual",
+            "description": "Tope mensual de las mediciones (USD, lo paga la plataforma); null = el del entorno."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cerrado"
+        ],
+        "title": "GateBanderaIn"
       },
       "LlmModel": {
         "properties": {

@@ -400,3 +400,43 @@ sigue pasando con `gate = 'sin_evaluar'`). Qué quedó y qué se decidió al con
   «Evaluar» y 409 `gate_pendiente` con el flag por negocio; mover los escenarios a los packs; los escenarios
   PENDIENTES de la parte 2; grabar con LLM real (necesita OK del dueño y medir el costo de la primera
   corrida); tope global de la plataforma; panel.
+
+### Parte 4 propuesta: cerrar el gate (2026-10-25)
+
+Propuesta revisada por el arquitecto. El dueño aprobó el plan el 2026-10-25 (cerrar el gate, con el PR del panel aparte) y decidió que un cambio sin escenarios medibles **pasa anotado como «sin medir»**.
+
+1. **Bandera por negocio, apagada por defecto:** `tenants.settings.evals.gate = "cerrado"` (la ausencia es abierta), junto al tope.
+   - Es JSON y no una columna con guarda: solo se lee al promover, no en cada turno. El precedente es ADR-0148 y ADR-0125.
+   - La escribe solo el master con `GET/PUT /api/v1/admin/platform/tenants/{id}/gate`, usando `{cerrado, tope_usd_mensual}`.
+   - Se escribe con un UPDATE atómico que mezcla dentro de `settings->'evals'` (`core/releases/gate.py`), nunca reescribiendo el dict.
+   - El cambio queda auditado como `release_gate_bandera`.
+   - El tope va acotado (finito, entre 0 y 100 USD).
+   - Encender con `cerrado: true` sin `EVAL_DATABASE_URL` y `EVAL_MIGRATIONS_DATABASE_URL` da 409 `sin_base_de_eval`.
+   - Se corrige `core/provisioning/consumer.py`, el único escritor de `settings` sin `FOR UPDATE`, que podía perder la clave y abrir el gate en silencio.
+2. **`gate_aprobado` con la bandera, dentro del `FOR UPDATE`:**
+   - Si la candidata toca procedimientos y no hay veredicto contra la activa:
+     - si la última medición contra esa base quedó `sin_escenarios`, pasa con `gate = 'sin_medir'`;
+     - si no, `gate = 'pendiente'` y `promover` responde **409 `gate_pendiente`**, con `details` = `{estado, base_release_id}` de la última medición.
+   - Con la bandera apagada, todo sigue como hoy (`sin_evaluar`).
+   - Las exenciones, `sin_cambios`, `rejected` (409 `gate_rechazado`) y el forzado del master no cambian.
+   - Un veredicto `approved` que dejó procedimientos sin medir (`sin_escenarios` o `no_medible`) los guarda en `sin_medir` del evento, y la promoción los anota.
+3. **Encolado** (`gate.solicitar_medicion`, un solo servicio para el 409 y para «Evaluar»):
+   - Va en el `except` del router: el `raise` dentro de la sesión ya hizo rollback y soltó el `FOR UPDATE`.
+   - Lee la última medición con la misma consulta del corredor, factorizada.
+   - No encola si hay una `en_curso` vigente o si está en `demasiados_intentos`. `tope_alcanzado` y `sin_escenarios` se vuelven a pedir: el corredor los recalcula sin gastar LLM (mes nuevo, tope subido, escenarios nuevos).
+   - Si falla el encolado, queda en el log y se responde igual el 409 con `estado = no_encolada`.
+   - El encolado es idempotente: hay una sola tarea pendiente por `(negocio, candidata, base)` (clave de Redis `gate:pendiente:…` con `SET NX`, que suelta la tarea al terminar). Repetir clics no llena el worker.
+4. **Tarea `core.releases.evaluar_candidata`**, en la cola y el worker de siempre (no hay servicio nuevo en Coolify):
+   - `time_limit` y `soft_time_limit` por encima de `EVAL_TIMEOUT_SEGUNDOS`, y `acks_late=False`. Así Celery no mata la medición a los 300 s ni deja huérfano el subproceso, y Redis no la vuelve a entregar cuando vence el reclamo.
+   - La «concurrencia 1» la da un **candado de Redis** (`gate:corredor`, `NX`, que vence con el límite duro de la tarea y se suelta con «comparar y borrar») tomado antes de `corredor.medir`. Si está ocupado, la tarea se reprograma con `countdown` sin escribir nada. Al agotar la espera (2 h), deja `fallida/corredor_ocupado` para que el panel lo muestre y se pueda volver a pedir.
+   - Sin las variables `EVAL_*` en el worker, deja `evaluated` con `fallida/sin_base_de_eval` sin reclamo ni foto.
+   - Comprueba que el negocio exista y no esté suspendido, y el módulo entra en el `include` de `celery_app`.
+   - Un worker dedicado (`-Q gate -c 1`) queda para cuando haya volumen y el dueño lo apruebe.
+5. **API de la conexión:**
+   - `POST .../releases/{rid}/evaluate`, con propietario o master, el candado legacy y la bandera encendida. En la misma petición calcula los tocados y responde 200 sin encolar si es `exento`, `sin_cambios` o `ya_medida`; 409 `ya_activa` si es la activa. Si no, encola y responde 202.
+   - `GET .../evaluation` (sección `connections`): la medición contra la activa de ahora, con estado, costo, veredicto por procedimiento y lo `sin_medir`, sin textos de escenarios.
+6. **Fuera de esta parte:**
+   - crear `agentcore_eval` y las variables `EVAL_*` en test, y grabar con LLM real (las dos cosas necesitan el OK del dueño). Con la bandera encendida, cada promoción mide con LLM real;
+   - los escenarios pendientes de la parte 2, pasar los escenarios a los packs y el golden de ruteo;
+   - el tope global de la plataforma;
+   - el panel.
