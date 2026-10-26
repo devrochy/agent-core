@@ -499,3 +499,87 @@ async def put_gate(
         raise ApiError(422, "tope_invalido", str(exc)) from None
     return GateBandera(cerrado=bandera.cerrado, tope_usd_mensual=bandera.tope_usd_mensual)
 
+
+# ---------------------------------------------------------------- colaboración con pila (HU-AOS-20)
+ModoPila = Literal["off", "shadow", "active"]
+ModoVerificacion = Literal["shadow", "active"]
+
+
+class ColaboracionBanderas(BaseModel):
+    pila: ModoPila = Field(
+        description="Pila de tareas: «off», «shadow» (calcula y anota lo que abriría) o «active» (la abre)."
+    )
+    verificar_horarios: ModoVerificacion = Field(
+        description="Horarios sin respaldo: «shadow» solo cuenta; «active» rechaza y reintenta."
+    )
+    verificar_preguntas: ModoVerificacion = Field(
+        description="Más preguntas que `composition.maxQuestions`: «shadow» solo cuenta; «active» rechaza."
+    )
+    disponibles: dict[str, list[str]] = Field(
+        default_factory=dict, description="Los valores que este despliegue ya aplica (la HU se entrega por partes)."
+    )
+
+
+class ColaboracionBanderasIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pila: ModoPila | None = None
+    verificar_horarios: ModoVerificacion | None = None
+    verificar_preguntas: ModoVerificacion | None = None
+
+
+def _colaboracion_out(bandera: Any) -> ColaboracionBanderas:
+    from core.kernel.banderas_pila import DISPONIBLES
+
+    return ColaboracionBanderas(
+        pila=bandera.pila,
+        verificar_horarios=bandera.verificar_horarios,
+        verificar_preguntas=bandera.verificar_preguntas,
+        disponibles={k: list(v) for k, v in DISPONIBLES.items()},
+    )
+
+
+@router.get("/tenants/{tenant_id}/colaboracion", response_model=ColaboracionBanderas)
+async def get_colaboracion(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> ColaboracionBanderas:
+    """Banderas de la colaboración con pila de tareas del negocio. Solo el master."""
+    _require_master_agent_os(principal)
+    from core.kernel import banderas_pila as colaboracion
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            bandera = await colaboracion.leer(tenant_id)
+    except colaboracion.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return _colaboracion_out(bandera)
+
+
+@router.put("/tenants/{tenant_id}/colaboracion", response_model=ColaboracionBanderas)
+async def put_colaboracion(
+    tenant_id: uuid.UUID,
+    payload: ColaboracionBanderasIn,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> ColaboracionBanderas:
+    """Cambia las banderas que vengan (auditado como `agent_os_colaboracion`). 409 `no_disponible`
+    con un valor que este despliegue todavía no aplica."""
+    _require_master_agent_os(principal)
+    from core.kernel import banderas_pila as colaboracion
+    from core.shared.tenant import tenant_scope
+
+    cambios = payload.model_dump(exclude_none=True)
+    try:
+        async with tenant_scope(tenant_id):
+            bandera = (
+                await colaboracion.fijar(tenant_id, cambios, actor=f"admin:{principal.admin.email}")
+                if cambios
+                else await colaboracion.leer(tenant_id)
+            )
+    except colaboracion.NoDisponible as exc:
+        raise ApiError(409, "no_disponible", str(exc)) from None
+    except colaboracion.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return _colaboracion_out(bandera)
+

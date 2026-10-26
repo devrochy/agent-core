@@ -85,6 +85,9 @@ class Entrada:
     tarea: TareaEnFoco | None = None
     hechos: Mapping[tuple[str, str], Any] = field(default_factory=dict)
     hora_local: str | None = None
+    # Procedimientos con una tarea abierta de primer nivel (foco o en pausa): solo con la pila
+    # (HU-AOS-20) encendida.
+    abiertas: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -101,6 +104,8 @@ class Ruta:
     focus_task_id: uuid.UUID | None = None
     # Una regla o disparador que no cambió de dueño por la estabilidad (queda `default`).
     frenada_por_estabilidad: bool = False
+    # HU-AOS-20: lo que la pila habría abierto (`{"abre", "pausa", "sobrantes"}`), en sombra.
+    pila_sombra: dict[str, list[str]] | None = None
 
     def sombra(self) -> dict[str, Any]:
         """Lo que se guarda en `core_decisions.shadow_route`: la decisión, sin texto del cliente."""
@@ -322,6 +327,84 @@ def estabilizar(
     )
 
 
+# ------------------------------------------------------------------ pila de tareas (HU-AOS-20, puras)
+def _en_espanol(release: ReleaseCongelada) -> bool:
+    idioma = str(release.app_settings.get("language") or "es").strip().lower()
+    return idioma.startswith("es") or idioma.startswith("spa")
+
+
+def intenciones_del_texto(
+    texto: str,
+    indice: Any,
+    *,
+    strong: float,
+    margin: float,
+    min_score: float,
+    max_candidates: int,
+    abiertas: Sequence[str] = (),
+) -> tuple[str, ...]:
+    """Los procedimientos que el texto pide, en su orden (adenda HU-AOS-20 de ADR-0116). Puro.
+
+    El texto se parte en segmentos (`disparadores.segmentar`) y cada uno aporta su ganador si es
+    fuerte (`strong` y `margin`) **y** también es candidato del texto completo (≥ `min_score`, entre
+    los `max_candidates` mejores): un segmento suelto como «pagarlo con tarjeta» no abre un pago si
+    el mensaje no lo pide. Sin repetidos ni procedimientos con una tarea abierta."""
+    from core.kernel.disparadores import fuerte, segmentar
+
+    if not (texto or "").strip():
+        return ()
+    completos = {p.procedure_id for p in indice.puntuar(texto) if p.score >= min_score}
+    completos &= {p.procedure_id for p in indice.puntuar(texto)[:max_candidates]}
+    if not completos:
+        return ()
+    vistos: list[str] = []
+    for segmento in segmentar(texto):
+        g = fuerte(indice.puntuar(segmento), strong=strong, margin=margin)
+        if g is None or g.procedure_id not in completos or g.procedure_id in vistos or g.procedure_id in abiertas:
+            continue
+        vistos.append(g.procedure_id)
+    return tuple(vistos)
+
+
+def detectar_intenciones(release: ReleaseCongelada, routing: Routing, entrada: Entrada) -> tuple[str, ...]:
+    """`intenciones_del_texto` con el índice de disparadores de la release y sus umbrales. Fuera del
+    español, nada (los conectores del léxico son del español)."""
+    if not entrada.texto.strip() or not _en_espanol(release):
+        return ()
+    indice, _duenos = release.indice_de_disparadores()
+    t = routing.triggers
+    return intenciones_del_texto(
+        entrada.texto,
+        indice,
+        strong=t.strongScore,
+        margin=t.margin,
+        min_score=t.minScore,
+        max_candidates=t.maxCandidates,
+        abiertas=entrada.abiertas,
+    )
+
+
+def plan_de_pila(
+    intenciones: Sequence[str], *, con_foco: bool, abiertas: int, max_stack: int
+) -> dict[str, list[str]] | None:
+    """Qué abriría la pila: `abre` (en foco), `pausa` y `sobrantes` (lo que no cabe en `maxStack`).
+
+    Sin foco hacen falta dos intenciones; con foco (digresión) basta una, que va en pausa. `abiertas`:
+    tareas abiertas de primer nivel (foco incluido). `maxStack = 1` apaga la pila (None)."""
+    if max_stack <= 1 or not intenciones or (not con_foco and len(intenciones) < 2):
+        return None
+    libres = max(0, max_stack - abiertas)
+    if con_foco:
+        abre: list[str] = []
+        pausa = list(intenciones[:libres])
+        sobrantes = list(intenciones[libres:])
+    else:
+        abre = list(intenciones[:1]) if libres >= 1 else []
+        pausa = list(intenciones[1:libres]) if libres >= 2 else []
+        sobrantes = list(intenciones[len(abre) + len(pausa) :])
+    return {"abre": abre, "pausa": pausa, "sobrantes": sobrantes}
+
+
 def _candidatos(release: ReleaseCongelada, routing: Routing, entrada: Entrada) -> tuple[dict[str, Any], ...]:
     """Procedimientos ofrecidos con su puntaje (≥ `minScore`, los `maxCandidates` mejores):
     `core_decisions.candidates`."""
@@ -408,9 +491,10 @@ async def leer_entrada(
     payload: str,
     channel: str,
     dueno: uuid.UUID | None,
+    con_abiertas: bool = False,
 ) -> Entrada:
     """La entrada del router: la tarea en foco siempre; hechos del cliente y hora local solo si
-    alguna regla los usa."""
+    alguna regla los usa; las tareas abiertas solo con la pila encendida (`con_abiertas`)."""
     claves, con_hora = necesita(routing)
     return Entrada(
         texto=(texto or "")[:MAX_TEXTO],
@@ -420,7 +504,21 @@ async def leer_entrada(
         tarea=await tarea_en_foco(session, tenant_id, conversation_id),
         hechos=await _hechos(session, tenant_id, customer_id, claves) if customer_id is not None else {},
         hora_local=await _hora_local(session, tenant_id) if con_hora else None,
+        abiertas=await procedimientos_abiertos(session, tenant_id, conversation_id) if con_abiertas else (),
     )
+
+
+async def procedimientos_abiertos(session: AsyncSession, tenant_id: uuid.UUID, conversation_id: uuid.UUID) -> tuple[str, ...]:
+    """Procedimientos de las tareas abiertas de primer nivel (foco y en pausa), en orden de pila."""
+    filas = await session.execute(
+        text(
+            "SELECT procedure_id FROM conversation_tasks WHERE tenant_id = :t AND conversation_id = :c "
+            "AND status IN ('active', 'suspended') AND parent_task_id IS NULL "
+            "ORDER BY stack_position, created_at"
+        ),
+        {"t": tenant_id, "c": conversation_id},
+    )
+    return tuple(str(f[0]) for f in filas)
 
 
 async def cambios_de_dueno(session: AsyncSession, tenant_id: uuid.UUID, conversation_id: uuid.UUID) -> int:
@@ -491,13 +589,17 @@ __all__ = [
     "cambios_de_dueno",
     "cumple",
     "decidir",
+    "detectar_intenciones",
     "estabilizar",
     "generalista",
     "guardar_payload",
+    "intenciones_del_texto",
     "leer_entrada",
     "modo_efectivo",
     "necesita",
     "orden_de_duenos",
+    "plan_de_pila",
+    "procedimientos_abiertos",
     "tarea_en_foco",
     "tomar_payload",
 ]

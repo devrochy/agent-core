@@ -19,6 +19,7 @@ El léxico vive en el playbook (invariante 3). Se mide con `tests/fixtures/ruteo
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
@@ -42,11 +43,13 @@ class Lexico:
     vacias: frozenset[str]
     # (variante normalizada en palabras, canónica), la más larga primero.
     equivalencias: tuple[tuple[tuple[str, ...], str], ...]
+    # Conectores que separan dos pedidos en un mensaje (HU-AOS-20), normalizados y en palabras.
+    conectores: tuple[tuple[str, ...], ...] = ()
 
 
 def parsear_lexico(contenido: str) -> Lexico:
-    """Las secciones `vacias` y `equivalencias` del playbook. Fail-closed: si falta una o queda
-    vacía, o una línea de equivalencias no tiene la forma `canon: a, b`, lanza (test de CI)."""
+    """Las secciones `vacias`, `equivalencias` y `conectores` del playbook. Fail-closed: si falta una
+    o queda vacía, o una línea de equivalencias no tiene la forma `canon: a, b`, lanza (test de CI)."""
     from core.kernel.procedures.textos import normalizar, secciones
 
     crudas = secciones(contenido)
@@ -65,7 +68,12 @@ def parsear_lexico(contenido: str) -> Lexico:
     if not pares:
         raise RotulosInvalidos("el léxico de disparadores no tiene la sección equivalencias")
     orden = tuple(sorted(pares.items(), key=lambda kv: (-len(kv[0]), kv[0])))
-    return Lexico(vacias=vacias, equivalencias=orden)
+    conectores = {tuple(n.split()) for f in crudas.get("conectores", []) if (n := normalizar(f))}
+    if not conectores:
+        raise RotulosInvalidos("el léxico de disparadores no tiene la sección conectores")
+    return Lexico(
+        vacias=vacias, equivalencias=orden, conectores=tuple(sorted(conectores, key=lambda c: (-len(c), c)))
+    )
 
 
 @cache
@@ -107,6 +115,54 @@ def terminos(texto: str, lx: Lexico | None = None) -> tuple[str, ...]:
         if t not in lx.vacias:
             vistos.setdefault(t[:_RAIZ], None)
     return tuple(vistos)
+
+
+# Varios pedidos en un mensaje (HU-AOS-20): signos que cortan siempre y tope de segmentos.
+_CORTE_RE = re.compile(r"[,;\n]+|(?<!\b\w)\.(?=\s)|[!?¡¿]+")
+MAX_SEGMENTOS = 8
+
+
+def segmentar(texto: str, lx: Lexico | None = None) -> list[str]:
+    """Partes del mensaje que pueden traer un pedido cada una: se corta por coma, punto y coma,
+    salto de línea, signos de exclamación o pregunta, punto seguido de espacio que no cierra una
+    abreviatura de una letra (no rompe «1.500» ni «p. m.») y por los `conectores` del léxico como palabras aisladas. Una parte
+    sin términos con significado se une a la anterior (o a la siguiente, si es la primera). Como
+    mucho `MAX_SEGMENTOS`: el resto se une a la última."""
+    from core.kernel.procedures.textos import normalizar
+
+    lx = lx or lexico()
+    partes: list[str] = []
+    for trozo in _CORTE_RE.split((texto or "")[:MAX_CARACTERES]):
+        palabras = trozo.split()
+        normal = [normalizar(p) for p in palabras]
+        actual: list[str] = []
+        i = 0
+        while i < len(palabras):
+            conector = next((c for c in lx.conectores if tuple(normal[i : i + len(c)]) == c), None)
+            if conector is not None:
+                if actual:
+                    partes.append(" ".join(actual))
+                actual = []
+                i += len(conector)
+                continue
+            actual.append(palabras[i])
+            i += 1
+        if actual:
+            partes.append(" ".join(actual))
+    unidas: list[str] = []
+    pendiente = ""
+    for parte in partes:
+        if not terminos(parte, lx):
+            if unidas:
+                unidas[-1] = f"{unidas[-1]} {parte}"
+            else:
+                pendiente = f"{pendiente} {parte}".strip()
+            continue
+        unidas.append(f"{pendiente} {parte}".strip() if pendiente else parte)
+        pendiente = ""
+    if len(unidas) > MAX_SEGMENTOS:
+        unidas = [*unidas[: MAX_SEGMENTOS - 1], " ".join(unidas[MAX_SEGMENTOS - 1 :])]
+    return unidas
 
 
 @dataclass(frozen=True)
@@ -208,6 +264,7 @@ def exponentes_de(procedimientos: Mapping[str, object], overrides: Mapping[str, 
 
 __all__ = [
     "MAX_CARACTERES",
+    "MAX_SEGMENTOS",
     "Exponente",
     "Indice",
     "Lexico",
@@ -216,5 +273,6 @@ __all__ = [
     "fuerte",
     "lexico",
     "parsear_lexico",
+    "segmentar",
     "terminos",
 ]

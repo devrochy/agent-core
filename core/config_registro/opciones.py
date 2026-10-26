@@ -24,7 +24,7 @@ from core.config_limites import rango
 from core.config_registro.modelo import Dependencia, Opcion, ValorPosible
 from core.db.models import DEFAULT_ASSISTANT_NAME
 from core.gateway.message_splitter import CAPS
-from core.kernel.banderas import APAGADAS
+from core.kernel.banderas import APAGADAS, MODOS_PILA, MODOS_VERIFICACION, Colaboracion
 from core.kernel.fuera_de_horario import IDIOMA_POR_DEFECTO, IDIOMAS
 from core.kernel.router import MODOS as MODOS_RUTEO
 from core.llm.difficulty_router import (
@@ -757,6 +757,15 @@ _RUTEO = {
     "shadow": ("Sombra", "calcula y registra, sin aplicar"),
     "active": ("Activo", "pasa la conversación al agente elegido"),
 }
+_PILA = {
+    "off": ("Apagado", "atiende un pedido por mensaje, como siempre"),
+    "shadow": ("Sombra", "anota lo que abriría, sin cambiar nada"),
+    "active": ("Activo", "abre los dos pedidos: uno en curso y otro en espera"),
+}
+_VERIFICAR = {
+    "shadow": ("Sombra", "solo cuenta"),
+    "active": ("Activo", "corrige la respuesta"),
+}
 AGENT_OS: list[Opcion] = [
     Opcion(
         clave="aos_runtime",
@@ -804,6 +813,58 @@ AGENT_OS: list[Opcion] = [
         ),
         editable_por="master",
         almacen="tenants:aos_routing",
+    ),
+    # Colaboración con pila de tareas (HU-AOS-20, adenda de ADR-0116), en `tenants.settings.agent_os`.
+    Opcion(
+        clave="agent_os_pila",
+        grupo="agent_os",
+        tipo="elegir_una",
+        etiqueta="Dos pedidos en un mensaje",
+        explicacion=(
+            "Cuando el cliente pide dos cosas a la vez («el Premium y una demo»), el Coordinador abre las dos: una en "
+            "curso y la otra en espera. «Sombra» solo anota lo que abriría; «Activo» las abre. Exige el enrutamiento."
+        ),
+        valores=[ValorPosible(valor=v, etiqueta=_PILA.get(v, (v, ""))[0], nota=_PILA.get(v, (v, ""))[1]) for v in MODOS_PILA],
+        por_defecto=Colaboracion().pila,
+        depende_de=Dependencia(
+            clave=_OPCION_RUNTIME, condicion="igual", valor="v3", motivo="La pila de tareas exige el Agent OS."
+        ),
+        editable_por="master",
+        almacen="tenants:settings.agent_os.pila",
+    ),
+    Opcion(
+        clave="agent_os_verificar_horarios",
+        grupo="agent_os",
+        tipo="elegir_una",
+        etiqueta="Verificar horarios",
+        explicacion=(
+            "El verificador revisa que cada hora o fecha que ofrece el asistente salga de la agenda. «Sombra» solo "
+            "cuenta las que no tienen respaldo; «Activo» corrige la respuesta."
+        ),
+        valores=[ValorPosible(valor=v, etiqueta=_VERIFICAR.get(v, (v, ""))[0], nota=_VERIFICAR.get(v, (v, ""))[1]) for v in MODOS_VERIFICACION],
+        por_defecto=Colaboracion().verificar_horarios,
+        depende_de=Dependencia(
+            clave=_OPCION_RUNTIME, condicion="igual", valor="v3", motivo="El verificador de horarios exige el Agent OS."
+        ),
+        editable_por="master",
+        almacen="tenants:settings.agent_os.verificar_horarios",
+    ),
+    Opcion(
+        clave="agent_os_verificar_preguntas",
+        grupo="agent_os",
+        tipo="elegir_una",
+        etiqueta="Una pregunta por respuesta",
+        explicacion=(
+            "El verificador cuenta las preguntas de cada respuesta contra «Preguntas por respuesta». «Sombra» solo "
+            "cuenta; «Activo» pide al asistente reescribirla con una sola pregunta."
+        ),
+        valores=[ValorPosible(valor=v, etiqueta=_VERIFICAR.get(v, (v, ""))[0], nota=_VERIFICAR.get(v, (v, ""))[1]) for v in MODOS_VERIFICACION],
+        por_defecto=Colaboracion().verificar_preguntas,
+        depende_de=Dependencia(
+            clave=_OPCION_RUNTIME, condicion="igual", valor="v3", motivo="El verificador de preguntas exige el Agent OS."
+        ),
+        editable_por="master",
+        almacen="tenants:settings.agent_os.verificar_preguntas",
     ),
 ]
 

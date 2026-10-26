@@ -201,3 +201,119 @@ Los agentes colaboran en el mismo hilo con mecanismos deterministas, permisos ve
 
    Los journeys con LLM real quedan para cuando el dueño apruebe el costo.
 8. **Fuera de esta adenda:** que el motor ejecute la acción de salida de un encargo; la pila de colaboración (HU-AOS-20, con `maxStack`); que un cambio de enlace cuente como procedimientos tocados en el gate (adenda HU-AOS-18 §2); y los presets con grafo.
+
+## Adenda HU-AOS-20 (2026-10-25): colaboración con pila de tareas
+
+**Estado:** propuesta, revisada por el arquitecto. Decisiones del dueño del 2026-10-25:
+- (a) la pila la arma el **Coordinador**, de forma determinista; el LLM no abre la segunda tarea;
+- (b) dos intenciones se detectan **partiendo el mensaje**;
+- (c) con una tarea en foco, una intención nueva fuerte **se encola en pausa** (digresión);
+- (d) lo que no cabe en `maxStack` **se anota en la tarjeta**;
+- (e) la pausada es **de su especialista**;
+- (f) el verificador **valida horarios**;
+- (g) el verificador **cuenta las preguntas** contra `composition.maxQuestions`;
+- (h) todo se mide primero **en sombra** y el master lo enciende por negocio;
+- (i) la pila se traza **solo en `task_events` y `core_decisions`**, sin `a2a_events`.
+
+No cambia contratos ni tablas: `procedures.maxStack` y `composition.maxQuestions` ya están en el KernelSpec (ADR-0113) y hoy nadie los lee. No resuelve las digresiones sobre el **mismo** procedimiento («agrégame una gaseosa» durante `esperar_pago`, pendiente de HU-AOS-08), porque `uq_conversation_tasks_open_procedure` lo impide. El caso que sí cubre es «el Premium y una demo».
+
+Se entrega en tres partes: **1**, detección y sombra (§1, §5 y §6); **2**, la pila activa (§2-§4); **3**, el verificador (§7).
+
+1. **Detección de varias intenciones.** Es una función pura en `core/kernel/router.py`, llamada desde `decidir`.
+   - **Partir el mensaje.** Los conectores viven en la sección `conectores` del playbook `disparadores`, junto a `vacias` y `equivalencias` (invariante 3; fail-closed si falta).
+     - Se corta solo por token aislado («y», «también», «además», «aparte», «e»), coma, punto y coma, salto de línea, y por un punto **seguido de espacio**. Así no se rompen «1.500» ni «p. m.».
+     - Un segmento de menos de 2 palabras de contenido se une al anterior.
+     - Se toman como mucho 8 segmentos.
+     - Con `app_settings.language ≠ es` no hay detección.
+   - **Puntuar cada segmento** con los disparadores del turno (`disparadores.puntuar`, el índice cacheado por release). Un segmento tiene intención si su ganador es **fuerte** (`disparadores.fuerte`: `strongScore` y `margin`) **y** ese procedimiento también está entre los `candidates` del texto completo (≥ `minScore`). Esto frena los falsos positivos del tipo «comprar el plan y pagarlo con tarjeta».
+   - **Intenciones:** los ganadores fuertes de procedimientos distintos, en el orden en que aparecen en el texto. Se descartan los que ya tienen una tarea abierta.
+   - **Sin foco:** hay pila con dos o más intenciones. Con una o ninguna, el router decide como hoy; un empate en el texto completo sigue siendo `default`.
+   - **Con foco** (digresión, decisión c): basta **un** segmento fuerte de un procedimiento distinto del de la tarea en foco. La atención del turno sigue siendo del dueño de la tarea en foco (`source = task`).
+   - **Resultado:** `Ruta.pila: tuple[str, ...]`, la lista ordenada de intenciones. Con una regla `start`, la regla va primero y las intenciones detrás.
+2. **Ruta y apertura** (parte 2).
+   - **Sin foco y con la bandera en `active`:**
+     - `Ruta.agente` es el dueño de la primera intención (`router.orden_de_duenos`) y pasa por `estabilizar`;
+     - `Ruta.start` es esa intención y `Ruta.pila` lleva las demás.
+     - Si `estabilizar` frena el cambio de dueño, **no hay pila en ese turno**: se decide como hoy, sin `start` ni `pila`.
+     - Así el agente que habla es siempre el dueño de la tarea en foco, con las acciones de su etapa.
+   - **Con foco:** `Ruta.pila` lleva las intenciones nuevas y el agente no cambia.
+   - **Viaje al motor:** `fijar_inicio` / `tomar_inicio` pasan a llevar `(start, pila)`.
+   - **Apertura:** el motor (`_abrir_pila`, que reemplaza a `_iniciar_por_regla` cuando hay pila) abre todo en **una sola transacción `_con_lock`**. Bajo el lock relee las tareas abiertas y recalcula qué va en foco, qué va en pausa, qué está duplicado y qué no cabe. Del router solo usa la lista ordenada. Reglas:
+     - sin foco, la primera se abre en `stack_position = 0` y las siguientes con `started` en `max + 1` (el reductor ya las crea `suspended`);
+     - con foco, todas van en pausa detrás de las que ya había;
+     - **tope:** foco más pausadas de primer nivel ≤ `procedures.maxStack` de la release congelada (`ReleaseCongelada.procedimientos_kernel()`, nuevo, con los defaults del contrato). `maxStack = 1` apaga la pila.
+   - **Dueño de cada tarea:** el especialista habilitado en la conexión que declara el procedimiento. **No se hereda** la guarda de `_iniciar_por_regla` («solo procedimientos del agente del turno»): la decisión (e) la salta a propósito. No es un permiso de `agent_links`.
+   - **Sobrantes:** lo que no cabe no se abre. Va a la tarjeta del turno con la clave `sobrantes`: «El cliente también pidió: Agendar una demo. Dile que lo ven después de terminar lo actual». No persiste: si el cliente insiste, se detecta de nuevo.
+   - **Sin release `release/2`:** no hay pila.
+   - `iniciar_procedimiento` del LLM sigue igual: solo se ofrece sin foco.
+3. **Retomar** (parte 2).
+   - Un solo lugar: `release_del_turno.asignar`, bajo su `FOR UPDATE` y después de `revalidar_tareas`. Si no hay foco y hay pausadas, el Coordinador escribe `resumed` (actor `kernel`) sobre la primera por `(stack_position, created_at)`.
+   - **No se renumeran las posiciones:** los huecos no molestan, porque todo ordena por `(stack_position, created_at)`.
+   - **Casos que cubre:** completar, cancelar, escalar, cambio de release, cierres por evento fuera de turno y caídas. `_devolver_control` sigue retomando en el turno, al completar o cancelar.
+   - **Cambio de dueño:** retomar no lo toca. Con `pila = active` el ruteo está `active` y el router lleva la tarea en foco a su dueño en ese mismo turno (`source = task`); el cambio cuenta en `cambios_de_dueno`.
+   - **Retomada en el turno por `_devolver_control` y de otro agente:** el resto de ese turno el LLM no recibe acciones de esa tarea. La tarjeta la muestra en foco con la línea `retomada_de_otro` del playbook: «Esta tarea la sigue {agente}; avísale al cliente que continúa con eso».
+   - **Escalar con `relevo_humano`:** no retoma nada mientras la conversación está con una persona.
+   - **Handoff con pausadas de otro agente:**
+     - `destinos_de_handoff` exige que el destino declare la tarea en foco y las pausadas **propias** del agente del turno (las que tienen `owner_instance_id` igual al `from` o nulo);
+     - la fase 2 (`handoff.cerrar`) escribe `owner_changed` **solo en esas**;
+     - las pausadas de otro especialista conservan su dueño.
+4. **La tarjeta** (parte 2).
+   - **Pausadas:** para cada una pinta también **lo que falta**, sin acciones ni `pide_ahora`.
+   - **Claves nuevas en `CLAVES`** (playbook `estado-conversacion`, fail-closed, en el mismo PR):
+     - `guia_pila`: «Atiende la tarea en foco. Puedes mencionar las que están en pausa, pero pregunta solo por la tarea en foco». **Solo aparece cuando hay pausadas**: con la bandera en `off`, el prompt no cambia;
+     - `sobrantes`;
+     - `retomada_de_otro`.
+   - `renderizar_tarjeta` recibe `max_en_pausa = maxStack - 1` como parámetro, y desaparece la constante `MAX_EN_PAUSA = 3`.
+   - **Acciones:** solo las de la etapa en foco, como hoy.
+5. **Banderas** (parte 1): `tenants.settings.agent_os`, solo las cambia el master.
+   - **Valores:**
+     - `pila`: `off` (por defecto), `shadow` o `active`;
+     - `verificar_horarios` y `verificar_preguntas`: `shadow` (por defecto) o `active`.
+   - Un valor desconocido cuenta como el más apagado.
+   - **Lectura:** en el mismo SELECT de `banderas_del_negocio`, sin consulta extra por turno.
+   - **Dependencia:** `pila = active` exige `aos_procedures` y el modo efectivo del ruteo en `active` (`aos_routing`, que `routing.shadowMode` puede bajar). Si no se cumple, se comporta como `shadow`. La sombra exige `aos_routing ≠ off` (con `off`, el router no corre). Esta dependencia vive solo en el código.
+   - **Endpoint:** `GET/PUT /api/v1/admin/platform/tenants/{id}/colaboracion`, solo master y auditado, con el patrón del gate. `/agent-os` no se toca.
+   - Las tres se registran en `core/config_registro/opciones.py` (grupo `AGENT_OS`, SPEC-37).
+   - **Candado:** «solo el master» lo comprueba la API, como en el gate de HU-AOS-21. La base no lo exige, a diferencia de `aos_fijar_banderas`, que es SECURITY DEFINER. Se acepta porque son banderas de medición, el único escritor es `core.kernel.banderas_pila.fijar` (con `tenant_scope` y `audit_log`) y no hay cruce entre negocios. Si alguna llega a cambiar la conducta con clientes reales sin pasar por la sombra, se mueve a una función SECURITY DEFINER.
+   - **Valores que ya están vigentes:** `composition.maxQuestions` y `procedures.maxStack` ya los edita el dueño en el panel. Al encender las banderas se aplica lo que haya puesto. `maxQuestions = 0` significa «ninguna pregunta» y `maxStack = 1`, sin pila.
+6. **Sombra y reporte** (parte 1).
+   - Con `pila = shadow`, o con `active` degradada a `shadow`, el turno sigue como hoy. Lo que se habría abierto va a `core_decisions.shadow_route.pila` (`{"abre": [...], "pausa": [...], "sobrantes": [...]}`).
+   - `shadow_route` se escribe aunque el ruteo esté en `active`, solo con la clave `pila`. `anotar_ruta` lo combina con la ruta de sombra.
+   - `ruteo_sombra` filtra su reporte actual con `shadow_route ? 'route_source'` y suma un bloque «pila», **solo para turnos sin foco**: compara lo que habría abierto con los procedimientos que se iniciaron en el resto del episodio.
+   - El golden de ruteo admite `esperado` como lista e incluye **filas negativas** (una sola intención con «y»).
+   - **Criterio para pasar a `active`:** precisión ≥ 0,9 en el golden y en la sombra de un negocio real.
+7. **Verificador** (parte 3, ADR-0119). Es independiente de la pila. `Evidencia`/`EstadoTareas` reciben la zona horaria del negocio, un reloj inyectable y `maxQuestions`.
+   - **Horarios** (`horario_sin_evidencia`).
+     - Un parser determinista extrae del borrador horas («3 p. m.», «15:00», «a las 10») y fechas con día («el jueves 30», «30 de octubre»). Una hora sin «a. m./p. m.» acepta `h` o `h+12`.
+     - Cada una necesita respaldo en los resultados de acciones (del turno o anteriores) o en los datos con `source = action:*` de cualquier tarea abierta o del episodio. Las horas del **prompt del sistema** (rangos de atención) cuentan como respaldo; las del **cliente**, no (se separan del `contexto`).
+     - **No son afirmaciones:** las preguntas, el eco de un horario que pidió el cliente cuando una tarea tiene ese dato fijado por el cliente («listo, anoto a las 3»), y lo que no se puede normalizar (queda en sombra).
+   - **Preguntas** (`demasiadas_preguntas`).
+     - Se cuentan las oraciones interrogativas (con «?», o con «¿» sin cierre). Si pasan de `maxQuestions`, es un rechazo con el reintento del negocio.
+     - El texto correctivo es la sección `verificador_demasiadas_preguntas` del playbook `verificador-estado`.
+     - Solo aplica con el motor activo y cuando el texto lo escribió el modelo.
+   - **Modo:**
+     - `shadow`: cuenta en `veredicto.sombra` (`unverifiable` en `turn_outcomes.verifier`);
+     - `active`: `fail` con reintento.
+   - Montos y cierres no cambian.
+8. **Escenarios simulados sin LLM** (modelo guionado):
+   - **Parte 1:** golden con dos intenciones y negativos; bandera en `shadow`, donde nada cambia y queda `shadow_route.pila`; con `aos_routing = off`, no hay sombra.
+   - **Parte 2:**
+     - «quiero el Premium y una demo el jueves»: dos tareas y una sola respuesta; al completar, se retoma y la conversación pasa de Ventas a Agenda;
+     - digresión con foco;
+     - tres intenciones con `maxStack = 2`: la tercera va a `sobrantes`;
+     - procedimiento ya abierto: no se duplica;
+     - estabilidad congelada: no hay pila;
+     - `maxStack = 1`;
+     - escalar la tarea en foco: retoma la pausada en el siguiente turno;
+     - handoff con una pausada ajena: conserva su dueño;
+     - dos turnos concurrentes.
+
+     Además, el journey `05-premium-y-demo`.
+   - **Parte 3:** horario sin respaldo, eco del cliente y dos preguntas, en `shadow` y en `active`.
+
+**Fuera de esta HU:**
+- que el LLM encole una digresión con un comando (`pausar_tarea`/`retomar_tarea`);
+- reordenar la pila;
+- ofrecer acciones de la pausada;
+- digresiones sobre el mismo procedimiento;
+- el ledger A2A de la pila.

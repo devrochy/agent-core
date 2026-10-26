@@ -351,6 +351,10 @@ def anotar_ruta(ruta: Any, *, activa: bool) -> None:
         turno.rule_id = None
         turno.confidence = None
         turno.shadow_route = ruta.sombra()
+    # HU-AOS-20: lo que la pila habría abierto va en la clave `pila`, también con el ruteo activo.
+    pila = getattr(ruta, "pila_sombra", None)
+    if pila:
+        turno.shadow_route = {**(turno.shadow_route or {}), "pila": pila}
 
 
 def anotar_foco(task_id: uuid.UUID | None) -> None:

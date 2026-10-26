@@ -118,6 +118,8 @@ class ContextoRuteo:
     modo: str
     texto: str = ""
     payload: str = ""
+    # Pila de tareas (HU-AOS-20): off | shadow | active. En la parte 1 solo se mide en sombra.
+    pila: str = "off"
 
 
 # ------------------------------------------------------------------ reglas (puras)
@@ -443,11 +445,14 @@ async def _enrutar(
         payload=ruteo.payload,
         channel=channel,
         dueno=dueno,
+        con_abiertas=ruteo.pila != "off",
     )
     ruta = router.decidir(release, routing, entrada, legacy)
     if ruta.source in ("rule", "trigger") and dueno is not None and ruta.agente.instance_id != dueno:
         cambios = await router.cambios_de_dueno(session, tenant_id, conversation_id)
         ruta = router.estabilizar(ruta, entrada, legacy, routing, cambios)
+    if ruteo.pila != "off":
+        ruta = _pila_en_sombra(release, routing, entrada, ruta)
     log.info(
         "kernel_route",
         mode=modo,
@@ -458,6 +463,30 @@ async def _enrutar(
         candidates=len(ruta.candidates),
     )
     return modo, ruta
+
+
+def _pila_en_sombra(release: ReleaseCongelada, routing: Any, entrada: Any, ruta: Ruta) -> Ruta:
+    """Lo que la pila de tareas habría abierto en este turno (HU-AOS-20, parte 1: solo sombra; la
+    pila activa llega en la parte 2). Nunca rompe el turno: un error queda en el log."""
+    import dataclasses
+
+    from core.kernel import router
+
+    try:
+        intenciones = router.detectar_intenciones(release, routing, entrada)
+        plan = router.plan_de_pila(
+            intenciones,
+            con_foco=entrada.tarea is not None,
+            abiertas=len(entrada.abiertas),
+            max_stack=release.procedimientos_kernel().maxStack,
+        )
+    except Exception:
+        log.exception("kernel_pila_sombra_error")
+        return ruta
+    if plan is None:
+        return ruta
+    log.info("kernel_pila_sombra", abre=len(plan["abre"]), pausa=len(plan["pausa"]), sobrantes=len(plan["sobrantes"]))
+    return dataclasses.replace(ruta, pila_sombra=plan)
 
 
 async def _es_conexion_de_pruebas(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> bool:
@@ -502,7 +531,9 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "") -> Asignac
             from core.kernel.router import tomar_payload
 
             payload = await tomar_payload(tenant_id, conversation.id)
-            ruteo = ContextoRuteo(modo=banderas.ruteo, texto=texto or "", payload=payload)
+            ruteo = ContextoRuteo(
+                modo=banderas.ruteo, texto=texto or "", payload=payload, pila=banderas.colaboracion.pila
+            )
         resultado = await asignar(
             session,
             tenant_id=tenant_id,
