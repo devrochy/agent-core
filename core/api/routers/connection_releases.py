@@ -614,7 +614,7 @@ async def start_canary(
 ) -> None:
     """Prueba la versión con una parte de las conversaciones nuevas (HU-AOS-32). Mismas reglas que
     publicar: dueño o master, gate aprobado si está cerrado, `aos_runtime = v3` (409 `requiere_v3`).
-    Hasta la parte 2 (la reversión automática) responde 409 `canary_no_disponible`."""
+    Si la plataforma la apagó (`CANARY_DISPONIBLE`), responde 409 `canary_no_disponible`."""
     from core.releases import canary
 
     require_owner_or_master(principal)

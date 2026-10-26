@@ -529,7 +529,7 @@ Se entrega en partes:
 - **2:** el job, el auto-rollback y los avisos;
 - **panel**, aparte.
 
-**La parte 1 no se despliega sola:** sin el job, un canary vivo nunca se revierte, y eso contradice la enmienda de §5. En la parte 1, `iniciar` responde 409 `canary_no_disponible` (constante `CANARY_DISPONIBLE = False`) y la parte 2 lo habilita.
+**La parte 1 no se despliega sola:** sin el job, un canary vivo nunca se revierte, y eso contradice la enmienda de §5. En la parte 1, `iniciar` responde 409 `canary_no_disponible` (constante `CANARY_DISPONIBLE = False`) y la parte 2 lo habilita. **Hecho** en la parte 2 (`core/releases/canary_job.py`, entradas del beat `core.canary_senal_dura` y `core.canary_no_inferioridad`): `CANARY_DISPONIBLE = True`.
 
 1. **Reparto sticky** (`core/kernel/release_del_turno.py`).
    - **Cubeta:** `cubeta(canary_id, conversation_id) = int(sha256(f"{canary_id}|{conversation_id}")[:8], 16) % 100`. Se usa sha256 y no `hash()` de Python, que cambia entre procesos. Con otro canary el reparto cambia.

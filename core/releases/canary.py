@@ -13,8 +13,8 @@ adenda de ADR-0117 que enmienda §5).
 - **Estado:** muestra, comparación por carril, veredicto y señal dura (solo lectura).
 
 Todo bajo el `FOR UPDATE` de la conexión (`promocion._bloquear`), dentro del `tenant_scope` del
-negocio y filtrando por `tenant_id`. La reversión automática y los avisos son la parte 2: hasta
-entonces `iniciar` responde 409 `canary_no_disponible` (`CANARY_DISPONIBLE`).
+negocio y filtrando por `tenant_id`. La reversión automática y los avisos los hace el job
+(`core/releases/canary_job.py`); `CANARY_DISPONIBLE` permite apagar `iniciar` si hiciera falta.
 """
 
 from __future__ import annotations
@@ -44,8 +44,8 @@ from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
-# Parte 1 sin el job: un canary vivo no se revertiría solo (contradice la enmienda de §5).
-CANARY_DISPONIBLE = False
+# Con el job de la parte 2 (`core/releases/canary_job.py`) un canary que empeora se retira solo.
+CANARY_DISPONIBLE = True
 PORCENTAJE_MIN, PORCENTAJE_MAX = 1, 50
 
 
@@ -262,8 +262,12 @@ async def _carril(
     )
 
 
-async def evaluar(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID, canary: uuid.UUID, ahora: datetime) -> Estado:
-    """Calcula el estado del canary (sin escribir). Usa el veredicto guardado si ya se decidió."""
+async def evaluar(
+    session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID, canary: uuid.UUID, ahora: datetime,
+    *, solo_senal: bool = False,
+) -> Estado:
+    """Calcula el estado del canary (sin escribir). Usa el veredicto guardado si ya se decidió. Con
+    `solo_senal` (la corrida de 5 min del job) no agrega los carriles: solo la señal dura."""
     from core.metricas import fiabilidad as m
 
     _exigir_scope(tenant_id)
@@ -271,8 +275,11 @@ async def evaluar(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID, 
     desde, datos = await _inicio(session, tenant_id, canary)
     u = ev.umbrales(datos.get("umbrales"))
     base = uuid.UUID(str(datos["base_release_id"])) if datos.get("base_release_id") else None
-    estable = await _carril(session, tenant_id, connection_id, base, "stable", desde, ahora)
-    candidato = await _carril(session, tenant_id, connection_id, canary, "canary", desde, ahora)
+    if solo_senal:
+        estable, candidato = ev.Carril(), ev.Carril()
+    else:
+        estable = await _carril(session, tenant_id, connection_id, base, "stable", desde, ahora)
+        candidato = await _carril(session, tenant_id, connection_id, canary, "canary", desde, ahora)
     horas = max(0.0, (ahora - desde).total_seconds() / 3600)
     guardado = await _guardado(session, tenant_id, canary, desde)
     if guardado is not None:
@@ -280,6 +287,8 @@ async def evaluar(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID, 
             str(guardado.get("veredicto")), list(guardado.get("motivos") or []),
             list(guardado.get("advertencias") or []), dict(guardado.get("detalle") or {}),
         )
+    elif solo_senal:
+        veredicto = ev.Veredicto("sin_muestra")
     else:
         veredicto = ev.decidir(candidato, estable, horas, u)
     ventana = int(u["dura_ventana"])

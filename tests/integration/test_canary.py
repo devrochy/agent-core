@@ -1,8 +1,7 @@
 """HU-AOS-32 parte 1 · canary sticky: iniciar, reparto, 409, detener, publicar y aislamiento.
 
 Sin LLM ni turnos reales: las conversaciones se asignan con `asignar` (como el kernel) y la muestra
-se siembra en `core_decisions`. `CANARY_DISPONIBLE` se enciende en el test (la parte 1 lo deja
-apagado hasta el job de la parte 2).
+se siembra en `core_decisions`. Con el job de la parte 2, `iniciar` ya está disponible sin forzarlo.
 """
 
 from __future__ import annotations
@@ -36,13 +35,6 @@ pytestmark = [
         reason="tests de integración: requiere AGENT_CORE_INTEGRATION=1 y el stack local",
     ),
 ]
-
-
-@pytest.fixture(autouse=True)
-def _canary_disponible(monkeypatch: Any) -> None:
-    from core.releases import canary
-
-    monkeypatch.setattr(canary, "CANARY_DISPONIBLE", True)
 
 
 async def _con_candidata() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:

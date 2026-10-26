@@ -231,6 +231,41 @@ celery.conf.beat_schedule[_CLIENTE_ESPERANDO_TASK] = {
     "schedule": crontab(minute="*/5"),
 }
 
+# Canary (HU-AOS-32, adenda de ADR-0117 §5): cada 5 min la señal dura y la habilidad retirada; cada
+# hora, además, la no-inferioridad (dos entradas: no hace falta estado para saber «una vez por hora»).
+_CANARY_SENAL_DURA_TASK = "core.canary_senal_dura"
+_CANARY_NO_INFERIORIDAD_TASK = "core.canary_no_inferioridad"
+
+
+@celery.task(name=_CANARY_SENAL_DURA_TASK)
+def _canary_senal_dura() -> None:
+    from core.releases.canary_job import revisar
+
+    try:
+        run_async(revisar(no_inferioridad=False))
+    except Exception:
+        log.exception("cron_task_failed", task=_CANARY_SENAL_DURA_TASK)
+
+
+@celery.task(name=_CANARY_NO_INFERIORIDAD_TASK)
+def _canary_no_inferioridad() -> None:
+    from core.releases.canary_job import revisar
+
+    try:
+        run_async(revisar(no_inferioridad=True))
+    except Exception:
+        log.exception("cron_task_failed", task=_CANARY_NO_INFERIORIDAD_TASK)
+
+
+celery.conf.beat_schedule[_CANARY_SENAL_DURA_TASK] = {
+    "task": _CANARY_SENAL_DURA_TASK,
+    "schedule": crontab(minute="*/5"),
+}
+celery.conf.beat_schedule[_CANARY_NO_INFERIORIDAD_TASK] = {
+    "task": _CANARY_NO_INFERIORIDAD_TASK,
+    "schedule": crontab(minute="0"),
+}
+
 # Consolidación nocturna de la memoria (ADR-0114, HU-AOS-36): datos de tareas cerradas → hechos.
 _MEMORY_CONSOLIDATION_TASK = "core.memory_consolidation"
 
