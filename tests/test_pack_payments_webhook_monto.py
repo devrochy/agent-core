@@ -75,13 +75,16 @@ def entorno(monkeypatch):
 
     import core.events.outbox as outbox_mod
     import core.shared.audit as audit_mod
-    import core.tasks.push_tasks as push_mod
 
     monkeypatch.setattr(module_mod, "get_session", _get_session)
     monkeypatch.setattr(module_mod, "get_current_tenant_id", lambda: TENANT)
     monkeypatch.setattr(outbox_mod, "emit_domain", _emit_domain)
     monkeypatch.setattr(audit_mod, "record_audit", _record_audit)
-    monkeypatch.setattr(push_mod.notify_owners_push, "delay", lambda *a: pushes.append(a))
+
+    async def _emitir(tenant_id, spec):
+        pushes.append((str(tenant_id), spec.title, spec.body, spec.data))
+
+    monkeypatch.setattr("core.notifications.service.notify_standalone", _emitir)
     return SimpleNamespace(transaction=transaction, emitted=emitted, audits=audits, pushes=pushes)
 
 

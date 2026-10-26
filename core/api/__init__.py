@@ -42,6 +42,7 @@ from core.api.routers import (
     meta_ops,
     meta_promocion,
     meta_wizard,
+    notifications,
     onboarding,
     plan,
     platform,
@@ -64,6 +65,7 @@ api_router = APIRouter(prefix="/api/v1", tags=["api"])
 api_router.include_router(auth.router)
 api_router.include_router(me.router)
 api_router.include_router(push.router)
+api_router.include_router(notifications.router)
 api_router.include_router(search.router)
 api_router.include_router(sync.router)
 api_router.include_router(audit.router)

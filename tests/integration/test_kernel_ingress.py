@@ -73,13 +73,9 @@ def _sin_llm(monkeypatch) -> None:
 
 
 def _avisos(monkeypatch) -> list[str]:
-    import core.tasks.push_tasks as push_tasks
+    from _api_helpers import capturar_avisos
 
-    pushes: list[str] = []
-    monkeypatch.setattr(
-        push_tasks.notify_owners_push, "delay", lambda _tid, titulo, *_a, **_k: pushes.append(titulo)
-    )
-    return pushes
+    return capturar_avisos(monkeypatch, lambda _t, spec: spec.title)
 
 
 async def _ajustes(tid: uuid.UUID, **valores: Any) -> None:

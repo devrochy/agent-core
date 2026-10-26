@@ -111,12 +111,12 @@ async def _entrar_web(tid: uuid.UUID, key: str, visitante: str) -> uuid.UUID:
 
 # ---------------------------------------------------------------- pausar y reanudar
 async def test_pausado_desde_la_consola_no_responde_y_al_reanudar_vuelve(app_client, monkeypatch) -> None:
-    import core.tasks.push_tasks as push_tasks
+    from _api_helpers import capturar_avisos
 
     tid = await _negocio()
     cid, key, h = await _widget(app_client, tid)
     _inmediato(monkeypatch)
-    monkeypatch.setattr(push_tasks.notify_owners_push, "delay", lambda *_a, **_k: None)
+    capturar_avisos(monkeypatch)
     visitante = uniq("vis")
 
     r = await app_client.post(_accion(cid), headers=h, json={"action": "deactivate"})

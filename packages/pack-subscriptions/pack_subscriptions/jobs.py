@@ -98,18 +98,26 @@ async def _avisar_sin_forma_de_pago(tenant_id: uuid.UUID, sub: Subscription, car
         action="subs_cargo_sin_forma_de_pago",
         output_data={"subscription_id": str(sub.id), "charge_id": str(cargo.id), "periodo": cargo.periodo},
     )
-    try:
-        from core.tasks.push_tasks import notify_owners_push
+    from core.notifications.service import notify_standalone
+    from core.notifications.spec import NotificationSpec
 
-        notify_owners_push.delay(
-            str(tenant_id),
-            "Cobro sin forma de pago",
-            f"El cobro de «{sub.concepto}» por {cargo.monto} no tiene link de pago y no hay cuentas de "
-            "transferencia configuradas: el cliente no recibió el aviso.",
-            {"kind": "subs_cargo_sin_forma_de_pago", "subscription_id": str(sub.id)},
-        )
-    except Exception:
-        log.warning("subs_alerta_push_fallida", subscription_id=str(sub.id), exc_info=True)
+    await notify_standalone(
+        tenant_id,
+        NotificationSpec(
+            event_key="subscriptions.cobro_sin_forma_de_pago",
+            category="cobros",
+            severity="warning",
+            title="Cobro sin forma de pago",
+            body=(
+                f"El cobro de «{sub.concepto}» por {cargo.monto} no tiene link de pago y no hay cuentas de "
+                "transferencia configuradas: el cliente no recibió el aviso."
+            ),
+            dedupe_key=f"subs_sin_forma_de_pago:{cargo.id}",
+            section="pack_subscriptions",
+            data={"kind": "subs_cargo_sin_forma_de_pago", "subscription_id": str(sub.id)},
+            target={"entity": "suscripcion", "id": str(sub.id), "section": "pack_subscriptions"},
+        ),
+    )
 
 
 async def zona_del_negocio(session, tenant_id: uuid.UUID) -> str | None:  # type: ignore[no-untyped-def]
@@ -647,14 +655,20 @@ async def _avisar_pausa_al_negocio(
         action="subs_pausada_por_mora",
         output_data={"subscription_id": str(sub.id), "charge_id": str(cargo.id), "dias_mora": dias_mora},
     )
-    try:
-        from core.tasks.push_tasks import notify_owners_push
+    from core.notifications.service import notify_standalone
+    from core.notifications.spec import NotificationSpec
 
-        notify_owners_push.delay(
-            str(tenant_id),
-            "Suscripción pausada por mora",
-            f"Se pausó «{sub.concepto}»: el pago de {cargo.monto} lleva {dias_mora} días pendiente.",
-            {"kind": "subs_pausada_por_mora", "subscription_id": str(sub.id)},
-        )
-    except Exception:
-        log.warning("subs_alerta_push_fallida", subscription_id=str(sub.id), exc_info=True)
+    await notify_standalone(
+        tenant_id,
+        NotificationSpec(
+            event_key="subscriptions.pausada_por_mora",
+            category="cobros",
+            severity="critical",
+            title="Suscripción pausada por mora",
+            body=f"Se pausó «{sub.concepto}»: el pago de {cargo.monto} lleva {dias_mora} días pendiente.",
+            dedupe_key=f"subs_pausada_por_mora:{sub.id}:{cargo.id}",
+            section="pack_subscriptions",
+            data={"kind": "subs_pausada_por_mora", "subscription_id": str(sub.id)},
+            target={"entity": "suscripcion", "id": str(sub.id), "section": "pack_subscriptions"},
+        ),
+    )

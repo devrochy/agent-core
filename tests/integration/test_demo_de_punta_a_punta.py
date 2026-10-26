@@ -153,16 +153,17 @@ async def test_cita_nueva_avisa_al_responsable_del_tipo() -> None:
 
 
 async def test_avisar_al_equipo_va_al_asignado_o_a_los_duenos(monkeypatch) -> None:
+    from _api_helpers import capturar_avisos
     from pack_calendar.demo import avisar_al_equipo
     from pack_calendar.models import Appointment
 
-    import core.tasks.push_tasks as push
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
-    enviados: list[tuple] = []
-    monkeypatch.setattr(push.send_push_batch, "delay", lambda *a, **k: enviados.append(("asignado", a[1])))
-    monkeypatch.setattr(push.notify_owners_push, "delay", lambda *a, **k: enviados.append(("duenos", None)))
+    enviados = capturar_avisos(
+        monkeypatch,
+        lambda _t, spec: ("asignado", [str(spec.audience_admin_id)]) if spec.audience_admin_id else ("duenos", None),
+    )
     tid = await _tenant_calendario()
     asignado = await _admin_del_negocio(tid)  # colaborador real del negocio
     inicio = datetime(2027, 3, 17, 15, tzinfo=UTC)
@@ -306,16 +307,14 @@ async def test_el_asistente_no_ve_ni_toca_citas_de_otro_cliente() -> None:
 
 
 async def test_un_ex_colaborador_no_recibe_el_aviso(monkeypatch) -> None:
+    from _api_helpers import capturar_avisos
     from pack_calendar.demo import avisar_al_equipo
     from pack_calendar.models import Appointment
 
-    import core.tasks.push_tasks as push
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
-    enviados: list[str] = []
-    monkeypatch.setattr(push.send_push_batch, "delay", lambda *a, **k: enviados.append("asignado"))
-    monkeypatch.setattr(push.notify_owners_push, "delay", lambda *a, **k: enviados.append("duenos"))
+    enviados = capturar_avisos(monkeypatch, lambda _t, spec: "asignado" if spec.audience_admin_id else "duenos")
     tid = await _tenant_calendario()
     inicio = datetime(2027, 3, 19, 15, tzinfo=UTC)
     async with tenant_scope(tid):

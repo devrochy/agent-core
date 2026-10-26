@@ -16,11 +16,12 @@ el flujo (mismo criterio que el correo de sistema, ADR-0098).
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from core.config import get_settings
 from core.db.models import PushToken
@@ -35,6 +36,22 @@ DEVICE_NOT_REGISTERED = "DeviceNotRegistered"
 # `src/modules/notificaciones/push.ts`). Sin él, Android usa el canal de respaldo de
 # FCM, sin la importancia ni el sonido de la app. Expo lo ignora en iOS.
 ANDROID_CHANNEL_ID = "solvershub-general"
+
+# Máximo de mensajes por request del servicio de Expo.
+EXPO_CHUNK = 100
+# Vida del mensaje en Expo si el dispositivo está apagado: un aviso viejo no sirve.
+TTL_NORMAL_S = 24 * 3600
+TTL_CRITICO_S = 3 * 24 * 3600
+
+
+def canal_android(category: str | None) -> str:
+    """Canal de Android de la categoría (la app los crea por JS); sin categoría, el general."""
+    return f"solvershub-{category}" if category else ANDROID_CHANNEL_ID
+
+
+def prioridad_expo(severity: str | None) -> str:
+    """`high` despierta el dispositivo (FCM): solo para lo que pide acción pronto."""
+    return "high" if severity in ("warning", "critical") else "default"
 
 
 class PushTransportError(RuntimeError):
@@ -66,15 +83,25 @@ async def enviar_push(
     title: str,
     body: str,
     data: dict[str, Any],
+    *,
+    category: str | None = None,
+    severity: str | None = None,
+    badges: Mapping[uuid.UUID, int] | None = None,
 ) -> None:
-    """Resuelve tokens de los admins en el negocio y envía el push (o solo loguea)."""
+    """Resuelve tokens de los admins en el negocio y envía el push (o solo loguea).
+
+    `category`/`severity` (centro de notificaciones, ADR-0167) fijan el canal de Android,
+    la prioridad y el TTL; `badges` da el contador de no leídas por admin. Sin ellos, el
+    mensaje sale como antes (canal general). Envía en lotes de `EXPO_CHUNK`.
+    """
     settings = get_settings()
     if not settings.expo_push_enabled:
         log.info(
             "push_disabled",
             tenant_id=str(tenant_id),
             admin_ids=[str(a) for a in admin_ids],
-            kind=str((data or {}).get("kind", "")),  # sin el título: puede llevar datos del cliente
+            # sin el título: puede llevar datos del cliente
+            kind=str((data or {}).get("kind") or (data or {}).get("type") or ""),
         )
         return
 
@@ -94,43 +121,59 @@ async def enviar_push(
         if not tokens:
             return
 
-        mensajes = [
-            {
-                "to": t.token,
-                "title": title,
-                "body": body,
-                "data": {**data, "tenantId": str(tenant_id)},
-                "sound": "default",
-                "channelId": ANDROID_CHANNEL_ID,
+        extra: dict[str, Any] = {}
+        if category or severity:
+            extra = {
+                "priority": prioridad_expo(severity),
+                "ttl": TTL_CRITICO_S if severity == "critical" else TTL_NORMAL_S,
             }
-            for t in tokens
-        ]
-        tickets = await _post_expo(mensajes)
+        for inicio in range(0, len(tokens), EXPO_CHUNK):
+            lote = tokens[inicio : inicio + EXPO_CHUNK]
+            mensajes = []
+            for t in lote:
+                mensaje: dict[str, Any] = {
+                    "to": t.token,
+                    "title": title,
+                    "body": body,
+                    "data": {**data, "tenantId": str(tenant_id)},
+                    "sound": "default",
+                    "channelId": canal_android(category),
+                    **extra,
+                }
+                if badges is not None and t.admin_id in badges:
+                    mensaje["badge"] = badges[t.admin_id]
+                mensajes.append(mensaje)
+            tickets = await _post_expo(mensajes)
 
-        for token_row, ticket in zip(tokens, tickets, strict=True):
-            if ticket.get("status") == "ok":
-                continue
-            detail = (ticket.get("details") or {}).get("error")
-            if detail == DEVICE_NOT_REGISTERED:
-                # Baja SOFT (invariante 8: sin borrado físico fuera del purge).
-                token_row.deleted_at = datetime.now(UTC)
-                log.info(
-                    "push_token_baja",
-                    tenant_id=str(tenant_id),
-                    admin_id=str(token_row.admin_id),
-                    motivo=detail,
-                )
-            else:
-                log.warning(
-                    "push_ticket_error",
-                    tenant_id=str(tenant_id),
-                    error=detail or ticket.get("status"),
-                )
-        await session.commit()
+            for token_row, ticket in zip(lote, tickets, strict=True):
+                if ticket.get("status") == "ok":
+                    continue
+                detail = (ticket.get("details") or {}).get("error")
+                if detail == DEVICE_NOT_REGISTERED:
+                    # Baja SOFT (invariante 8: sin borrado físico fuera del purge).
+                    token_row.deleted_at = datetime.now(UTC)
+                    log.info(
+                        "push_token_baja",
+                        tenant_id=str(tenant_id),
+                        admin_id=str(token_row.admin_id),
+                        motivo=detail,
+                    )
+                else:
+                    log.warning(
+                        "push_ticket_error",
+                        tenant_id=str(tenant_id),
+                        error=detail or ticket.get("status"),
+                    )
+            # Una baja ya aplicada no se pierde si un lote posterior falla y se reintenta.
+            await session.commit()
+            # El scope del negocio es de transacción y murió con el COMMIT: se vuelve a fijar
+            # para que el siguiente lote siga bajo la RLS del mismo negocio.
+            await session.execute(
+                text("select set_config('app.tenant_id', :t, true)"), {"t": str(tenant_id)}
+            )
 
     log.info(
         "push_sent",
         tenant_id=str(tenant_id),
         destinatarios=len(tokens),
-        title=title[:80],
     )

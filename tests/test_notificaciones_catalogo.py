@@ -1,0 +1,46 @@
+"""Catálogo de avisos de core (ADR-0167): cada constructor entrega una spec válida, apunta a
+una sección real de permisos y no lleva PII en `data`."""
+
+from __future__ import annotations
+
+import uuid
+
+import pytest
+
+from core.admin.permissions import CORE_SECTIONS
+from core.notifications import catalog
+
+CID = uuid.uuid4()
+
+CONSTRUCTORES = {
+    "escalacion": lambda: catalog.escalacion(CID, "keyword", uuid.uuid4()),
+    "escalacion_fallida": lambda: catalog.escalacion_fallida(CID),
+    "conexion_pausada": lambda: catalog.conexion_pausada(CID, alcance="meta_account", motivo="Pausada", dia="2026-10-25"),
+    "conexion_pausada_propia": lambda: catalog.conexion_pausada(CID, alcance="connection", motivo="Pausada", dia="2026-10-25"),
+    "conexion_sin_acceso": lambda: catalog.conexion_sin_acceso(CID, vencido=True, dia="2026-10-25"),
+    "conexion_token_por_vencer": lambda: catalog.conexion_token_por_vencer(CID, vence="2026-11-01", dia="2026-10-25"),
+    "calidad_de_numero_roja": lambda: catalog.calidad_de_numero_roja(CID, dia="2026-10-25"),
+    "mensaje_fallido": lambda: catalog.mensaje_fallido("1730000000-0"),
+}
+
+
+@pytest.mark.parametrize("nombre", sorted(CONSTRUCTORES))
+def test_cada_aviso_del_catalogo_es_valido_y_apunta_a_una_seccion_real(nombre) -> None:
+    spec = CONSTRUCTORES[nombre]()
+    spec.validate()
+    assert spec.section in CORE_SECTIONS
+    assert spec.target is not None and spec.target["section"] == spec.section
+
+
+def test_las_claves_de_deduplicacion_son_distintas_por_episodio() -> None:
+    hoy = catalog.conexion_pausada(CID, alcance="connection", motivo="x", dia="2026-10-25")
+    manana = catalog.conexion_pausada(CID, alcance="connection", motivo="x", dia="2026-10-26")
+    assert hoy.dedupe_key != manana.dedupe_key
+    assert catalog.escalacion(CID, "a", uuid.uuid4()).dedupe_key != catalog.escalacion(CID, "a", uuid.uuid4()).dedupe_key
+
+
+def test_el_titulo_depende_del_alcance_de_la_pausa() -> None:
+    cuenta = catalog.conexion_pausada(CID, alcance="meta_account", motivo="x", dia="d")
+    propia = catalog.conexion_pausada(CID, alcance="connection", motivo="x", dia="d")
+    assert cuenta.title == catalog.TITULO_CONEXION_WHATSAPP
+    assert propia.title == catalog.TITULO_CONEXION_PROPIA

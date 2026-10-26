@@ -635,6 +635,97 @@ class PushToken(Base):
     )
 
 
+class Notification(Base):
+    """Notificación de un evento del negocio (feed in-app + push, ADR-0167).
+
+    Una fila POR EVENTO (no por destinatario): quién la ve se resuelve al leer, por
+    permiso de la `section` (dueño y master ven todo; un colaborador, solo si tiene acceso
+    explícito a la sección). El estado de lectura de cada admin vive en `notification_reads`
+    y `notification_state`. Tabla de NEGOCIO: tenant_id + RLS forzada (invariante 1).
+    """
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index(
+            "uq_notifications_tenant_dedupe",
+            "tenant_id",
+            "dedupe_key",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_notifications_tenant_created", "tenant_id", text("created_at DESC")),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    event_key: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(Text, nullable=False)
+    section: Mapped[str | None] = mapped_column(Text)
+    # Dirigida a una persona (p. ej. la cita asignada): además de dueños y masters, la ve ella
+    # aunque no tenga acceso a la sección.
+    audience_admin_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    target: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    dedupe_key: Mapped[str] = mapped_column(Text, nullable=False)
+    push_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class NotificationState(Base):
+    """Preferencias y marca de «leído hasta» de un admin en un negocio (ADR-0167).
+
+    Sin fila = todo activo. `read_all_before` es la marca de «marcar todas como leídas»;
+    `push_off_categories` y `muted_until` solo gobiernan el push (el feed siempre muestra).
+    """
+
+    __tablename__ = "notification_state"
+    __table_args__ = (
+        Index("uq_notification_state_admin", "tenant_id", "admin_id", unique=True),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    admin_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    read_all_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    muted_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    push_off_categories: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class NotificationRead(Base):
+    """Notificación leída o archivada por un admin (solo existen filas de lo tocado)."""
+
+    __tablename__ = "notification_reads"
+    __table_args__ = (
+        Index(
+            "uq_notification_reads_admin_notif",
+            "tenant_id",
+            "admin_id",
+            "notification_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    admin_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    notification_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class MobileAuditEvent(Base):
     """Auditoría de acciones críticas de la app oficial (ADR-0097, HU-APP-15).
 

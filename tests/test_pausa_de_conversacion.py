@@ -90,7 +90,6 @@ async def test_sin_conexion_usa_el_puente_de_la_cuenta(fila, cuentas) -> None:
 
 async def test_el_aviso_de_una_conexion_propia_es_generico(monkeypatch) -> None:
     import core.memory.working as working
-    import core.tasks.push_tasks as push_tasks
 
     class _Redis:
         async def set(self, *_a, **_k):
@@ -98,7 +97,11 @@ async def test_el_aviso_de_una_conexion_propia_es_generico(monkeypatch) -> None:
 
     monkeypatch.setattr(working, "get_redis", lambda: _Redis())
     pushes: list = []
-    monkeypatch.setattr(push_tasks.notify_owners_push, "delay", lambda *a, **_k: pushes.append(a))
+
+    async def _emitir(tenant_id, spec):
+        pushes.append((str(tenant_id), spec.title, spec.body, spec.data))
+
+    monkeypatch.setattr("core.notifications.service.notify_standalone", _emitir)
     cid = uuid.uuid4()
     await mcs.avisar_mensaje_en_conexion_pausada(uuid.uuid4(), cid, mcs.MOTIVO_CONEXION_PAUSADA, alcance="connection")
     (_, titulo, _cuerpo, datos), = pushes

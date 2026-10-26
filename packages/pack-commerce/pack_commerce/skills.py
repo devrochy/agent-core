@@ -768,6 +768,58 @@ async def completar_lead(
     return True
 
 
+
+async def _avisar_lead_nuevo(session, lead_id) -> None:  # type: ignore[no-untyped-def]
+    """Centro de notificaciones (ADR-0167): lead nuevo, en la transacción que lo crea. Sin
+    datos del cliente en el texto; nunca propaga."""
+    from core.notifications.service import notify
+    from core.notifications.spec import NotificationSpec
+
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return
+    await notify(
+        session,
+        tenant_id,
+        NotificationSpec(
+            event_key="commerce.lead_nuevo",
+            category="ventas",
+            severity="info",
+            title="Lead nuevo",
+            body="Un cliente nuevo quedó registrado como lead. Revisa su ficha para darle seguimiento.",
+            dedupe_key=f"lead_nuevo:{lead_id}",
+            section="leads",
+            data={"kind": "lead_nuevo", "lead_id": str(lead_id)},
+            target={"entity": "lead", "id": str(lead_id), "section": "leads"},
+        ),
+    )
+
+
+async def _avisar_pedido_nuevo(session, order) -> None:  # type: ignore[no-untyped-def]
+    """Centro de notificaciones (ADR-0167): pedido nuevo, en la transacción que lo crea."""
+    from core.notifications.service import notify
+    from core.notifications.spec import NotificationSpec
+
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return
+    await notify(
+        session,
+        tenant_id,
+        NotificationSpec(
+            event_key="commerce.pedido_nuevo",
+            category="ventas",
+            severity="success",
+            title="Pedido nuevo",
+            body=f"El asistente tomó el pedido {order.public_order_number}.",
+            dedupe_key=f"pedido_nuevo:{order.id}",
+            section="pack_commerce",
+            data={"kind": "pedido_nuevo", "order_id": str(order.id)},
+            target={"entity": "pedido", "id": str(order.id), "section": "pack_commerce"},
+        ),
+    )
+
+
 class LeadSkill(BaseSkill):
     name = "lead_skill"
     description = "Captura y calificación de leads (prospectos de venta)"
@@ -879,6 +931,7 @@ class LeadSkill(BaseSkill):
             session.add(lead)
             await session.flush()
             lead_id = str(lead.id)
+            await _avisar_lead_nuevo(session, lead.id)
 
         # Entity Memory (Capa 2): el core recuerda esto en TODAS las conversaciones futuras.
         # El perfil es la fuente de los datos de contacto que muestra la ficha (ADR-0149).
@@ -1995,6 +2048,7 @@ class OrderSkill(BaseSkill):
             )
             session.add(order)
             await session.flush()
+            await _avisar_pedido_nuevo(session, order)
             if pedido_de_alta is not None:
                 # Misma transacción que el pedido: sin pedido no queda la aceptación.
                 registrar_pedido_de_alta(session, pedido_de_alta, referencia=order.public_order_number)

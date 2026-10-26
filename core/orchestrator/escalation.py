@@ -55,8 +55,10 @@ async def escalate(conversation_id: uuid.UUID, reason: str, summary: str = "") -
             return
         conversation.status = "escalated"
         conversation.bot_paused = True  # CRÍTICO: el bot deja de responder ya
+        escalation_id = uuid.uuid4()
         session.add(
             Escalation(
+                id=escalation_id,
                 tenant_id=get_current_tenant_id(),
                 conversation_id=conversation_id,
                 reason=reason,
@@ -72,20 +74,14 @@ async def escalate(conversation_id: uuid.UUID, reason: str, summary: str = "") -
     )
     await event_bus.emit(ON_ESCALATION_TRIGGERED, conversation_id=conversation_id, reason=reason)
 
-    # Push a los dueños del negocio (ADR-0099): fire-and-forget por Celery.
-    try:
-        from core.tasks.push_tasks import TITULO_ESCALACION, notify_owners_push
+    # Centro de notificaciones (ADR-0167): feed + push al equipo con acceso a Escalaciones.
+    # Nunca propaga: un fallo del aviso no puede deshacer la escalación.
+    tenant = get_current_tenant_id()
+    if tenant is not None:
+        from core.notifications.catalog import escalacion
+        from core.notifications.service import notify_standalone
 
-        tenant = get_current_tenant_id()
-        if tenant is not None:
-            notify_owners_push.delay(
-                str(tenant),
-                TITULO_ESCALACION,
-                "Un cliente pidió atención humana y la conversación quedó escalada.",
-                {"type": "core.escalation", "conversationId": str(conversation_id), "reason": reason},
-            )
-    except Exception:
-        log.warning("push_escalacion_fallo", conversation_id=str(conversation_id), exc_info=True)
+        await notify_standalone(tenant, escalacion(conversation_id, reason, escalation_id))
 
     log.info("conversation_escalated", conversation_id=str(conversation_id), reason=reason)
 

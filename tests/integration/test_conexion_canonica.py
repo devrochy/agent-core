@@ -20,7 +20,7 @@ import os
 import uuid
 
 import pytest
-from _api_helpers import uniq
+from _api_helpers import capturar_avisos, uniq
 from test_api_registrar_numero import _negocio_con_byok
 
 pytestmark = [
@@ -305,7 +305,6 @@ async def test_las_guardas_pausan_por_la_cuenta_de_la_conexion_con_y_sin_connect
 
 async def test_lo_que_entra_por_la_conexion_pausada_se_guarda_sin_ia_y_avisa_con_la_cuenta(monkeypatch) -> None:
     import core.orchestrator.consumer as consumer_mod
-    import core.tasks.push_tasks as push_tasks
     from core.shared.tenant import tenant_scope
 
     tid, cuenta, _waba, _phone = await _negocio_con_byok()
@@ -318,8 +317,7 @@ async def test_lo_que_entra_por_la_conexion_pausada_se_guarda_sin_ia_y_avisa_con
 
     monkeypatch.setattr(consumer_mod, "process_conversation", _no_ia)
     monkeypatch.setattr(consumer_mod, "schedule_debounce", _no_ia)
-    avisos: list[dict] = []
-    monkeypatch.setattr(push_tasks.notify_owners_push, "delay", lambda *a, **_k: avisos.append(a[3]))
+    avisos = capturar_avisos(monkeypatch, lambda _t, spec: spec.data)
 
     async with tenant_scope(tid):
         await consumer_mod._handle_inbound_scoped(

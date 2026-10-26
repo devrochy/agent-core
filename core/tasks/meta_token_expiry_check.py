@@ -60,5 +60,17 @@ async def check_tokens_expiry() -> None:
                 "Reconectá la app en /admin/conexiones para no dejar de responder.",
                 severity="critical" if expired else "warning",
             )
+            from core.notifications import catalog
+            from core.notifications.service import notify_standalone
+
+            dia = now.date().isoformat()
+            await notify_standalone(
+                tenant_id,
+                catalog.conexion_sin_acceso(connection_id, vencido=True, dia=dia)
+                if expired
+                else catalog.conexion_token_por_vencer(
+                    connection_id, vence=expires_at.date().isoformat(), dia=dia
+                ),
+            )
         except Exception:
             log.exception("meta_token_expiry_check_error", connection_id=str(connection_id))
