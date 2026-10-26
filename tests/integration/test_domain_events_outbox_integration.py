@@ -116,10 +116,11 @@ async def test_despachador_entrega_con_el_tenant_del_evento() -> None:
                     payload={"reference": "OC-CROSS", "amount": 1.0},
                 )
 
-        # La base de la suite completa trae eventos pendientes de otros tests (más de un lote):
-        # se despacha por lotes hasta que llega el de este test.
+        # La base de la suite completa trae eventos pendientes de otros tests (más de un lote;
+        # cada aviso del centro de notificaciones deja uno, ADR-0167): se despacha por lotes
+        # hasta que llega el de este test.
         procesados = 0
-        for _ in range(20):
+        for _ in range(200):
             lote = await dispatch_due_events(limit=200)
             procesados += lote
             if lote == 0 or any(ref == "OC-CROSS" for ref, _tid in registros):
