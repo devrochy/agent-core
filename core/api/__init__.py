@@ -47,6 +47,7 @@ from core.api.routers import (
     notifications,
     onboarding,
     plan,
+    plantillas_opciones,
     platform,
     platform_altas,
     platform_meta_es,
@@ -101,6 +102,7 @@ api_router.include_router(meta_messenger.router)
 api_router.include_router(meta_instagram.router)
 api_router.include_router(meta_promocion.router)
 api_router.include_router(meta_mensaje_prueba.router)
+api_router.include_router(plantillas_opciones.router)
 api_router.include_router(collaborators.router)
 api_router.include_router(invitations.router)
 api_router.include_router(files.router)

@@ -12,6 +12,7 @@ Habilidades y Avanzado del panel SSR quedan pendientes.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -1171,15 +1172,27 @@ class MessageTemplatesUpdate(BaseModel):
     mapping: dict[str, EventTemplateEntry]
 
 
+# `client_message_id` de un envío de plantilla con opciones (`opciones_envio.PREFIJO_ID` + «:»); un test lo vigila.
+PREFIJO_OPCIONES = "opt_send:"
+
+
 class MissingTemplateItem(BaseModel):
     conversation_id: str
     detail: str
     created_at: datetime
+    # `evento`: un aviso por evento sin plantilla asignada o aprobada (remedio: Configuración → Plantillas).
+    # `opcion`: una plantilla con opciones (SPEC-40) fuera de la ventana de 24 h sin su plantilla de Meta aprobada
+    # (remedio: publicar la versión en Meta, no el mapeo de eventos); `clave` es la de la plantilla con opciones.
+    tipo: Literal["evento", "opcion"] = "evento"
+    clave: str | None = None
 
 
 class MissingTemplates(BaseModel):
     total_7d: int
     recent: list[MissingTemplateItem]
+    # Desglose de `total_7d` por tipo (los dos suman el total).
+    total_eventos_7d: int = 0
+    total_opciones_7d: int = 0
 
 
 async def _message_templates_out(tenant_id) -> MessageTemplatesSettings:
@@ -1343,13 +1356,28 @@ async def get_missing_templates(
                 select(Message).where(*filtro).order_by(Message.created_at.desc()).limit(10)
             )
         ).scalars().all()
+        de_opciones = (
+            await session.execute(select(func.count()).select_from(Message).where(*filtro, Message.client_message_id.startswith(PREFIJO_OPCIONES, autoescape=True)))
+        ).scalar_one()
     return MissingTemplates(
         total_7d=int(total),
-        recent=[
-            MissingTemplateItem(conversation_id=str(m.conversation_id), detail=m.content, created_at=m.created_at)
-            for m in filas
-        ],
+        total_opciones_7d=int(de_opciones),
+        total_eventos_7d=int(total) - int(de_opciones),
+        recent=[_missing_item(m) for m in filas],
     )
+
+
+def _missing_item(m) -> MissingTemplateItem:  # type: ignore[no-untyped-def]
+    """Un aviso que no salió. Una plantilla con opciones deja el mensaje `failed` con el `client_message_id` del
+    envío (`opt_send:<id>:f…`) y el texto «Aviso «opciones:<clave>» sin enviar: …» (ADR-0172, adenda del PR 5)."""
+    clave = None
+    if (m.client_message_id or "").startswith(PREFIJO_OPCIONES):
+        tipo = "opcion"
+        encontrada = re.search(r"«opciones:([a-z0-9_]{1,40})»", m.content or "")
+        clave = encontrada.group(1) if encontrada else None
+    else:
+        tipo = "evento"
+    return MissingTemplateItem(conversation_id=str(m.conversation_id), detail=m.content, created_at=m.created_at, tipo=tipo, clave=clave)
 
 
 # ------------------------------------------------- proveedor de suscripciones (HU-SUB-09)

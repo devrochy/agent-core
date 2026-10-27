@@ -77,12 +77,17 @@ def test_la_bandera_esta_apagada_salvo_el_literal_true(settings, esperado: bool)
 def test_nadie_fuera_del_modulo_ni_de_la_ruta_master_toca_la_bandera() -> None:
     """`bandera.fijar` solo la llamará la ruta de plataforma master-only (PR de la API). Los otros módulos que
     importan la bandera solo la LEEN: el consumer (`habilitada`, HU-OPC-03), el envío (`habilitada`, HU-OPC-02) y la
-    tool `enviar_plantilla_opciones` (`oferta_habilitada`); nunca la escriben. Cuando llegue
-    la ruta master, se añade aquí `platform.py` y NINGÚN otro router del dueño."""
+    tool `enviar_plantilla_opciones` (`oferta_habilitada`) y la API de plantillas (`habilitada`, PR 6); nunca la
+    escriben. Cuando llegue la ruta master, se añade aquí `platform.py` y NINGÚN otro router del dueño."""
     from pathlib import Path
 
     raiz = Path(__file__).resolve().parent.parent / "core"
-    lectores = {"core/orchestrator/consumer.py", "core/gateway/opciones_envio.py", "core/tools/core_skill.py"}
+    lectores = {
+        "core/orchestrator/consumer.py",
+        "core/gateway/opciones_envio.py",
+        "core/tools/core_skill.py",
+        "core/api/routers/plantillas_opciones.py",
+    }
     permitidos = {"core/kernel/opciones/bandera.py", *lectores}
     importadores = []
     for ruta in raiz.rglob("*.py"):
