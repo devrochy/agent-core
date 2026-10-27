@@ -31,6 +31,7 @@ from core.config import get_settings
 from core.config_limites import leer_entero
 from core.db.models import AppSettings, AuditLog, Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
+from core.kernel import horario_de_servicio
 from core.kernel.decisions import (
     anotar_foco,
     anotar_uso,
@@ -395,6 +396,10 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         referencias=referencias,
         state_card=state_card,
         team_notes=team_notes,
+        service_hours=horario_de_servicio.para_prompt(
+            app_settings.escalation_config if app_settings else None,
+            app_settings.language if app_settings else None,
+        ),
         # Zona del negocio para la fecha y hora actual del prompt (ADR-0091).
         timezone=(getattr(app_settings, "timezone", None) if app_settings else None) or DEFAULT_TIMEZONE,
     )

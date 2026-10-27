@@ -21,11 +21,11 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from core.db.models import Conversation, Customer, utcnow
 from core.db.session import get_session
-from core.gateway.conexion_pruebas import asegurar_conexion_de_pruebas
+from core.gateway.conexion_pruebas import asegurar_conexion_de_pruebas, validar_conexion_para_probar
 from core.shared.logger import get_logger
 from core.shared.test_mode import TEST_CHANNEL
 
@@ -69,26 +69,37 @@ async def _get_or_create_customer(session, tenant_id: uuid.UUID) -> Customer:
     return customer
 
 
-async def get_or_create_test_conversation(tenant_id: uuid.UUID) -> Conversation:
-    """Conversación de prueba "viva" del tenant (una sola a la vez)."""
+async def get_or_create_test_conversation(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None
+) -> Conversation:
+    """Conversación de prueba "viva" del tenant (una sola a la vez por conexión).
+
+    Sin `connection_id` va por la conexión interna del playground (sin release: el camino de
+    siempre). Con `connection_id` (HU-AOS-57) se ata a esa conexión del negocio y el turno corre por
+    su release activa, es decir, por el agente publicado ahí; sigue siendo del canal `test`."""
     async with get_session() as session:
         customer = await _get_or_create_customer(session, tenant_id)
-        conversation = (
-            await session.execute(
-                select(Conversation)
-                .where(
-                    Conversation.tenant_id == tenant_id,
-                    Conversation.customer_id == customer.id,
-                    Conversation.channel == TEST_CHANNEL,
-                    Conversation.status != "closed",
-                    Conversation.deleted_at.is_(None),
-                )
-                .order_by(Conversation.started_at.desc())
-            )
-        ).scalars().first()
         # El contract del Agent OS vuelve `connection_id` obligatorio: la conversación de prueba
-        # también va por la conexión interna del negocio (la liga si es una de antes).
-        conexion_id = await asegurar_conexion_de_pruebas(session, tenant_id)
+        # también va por una conexión (la interna del negocio, o la elegida si es válida).
+        if connection_id is not None:
+            conexion_id = await validar_conexion_para_probar(session, tenant_id, connection_id)
+        else:
+            conexion_id = await asegurar_conexion_de_pruebas(session, tenant_id)
+        filtros = [
+            Conversation.tenant_id == tenant_id,
+            Conversation.customer_id == customer.id,
+            Conversation.channel == TEST_CHANNEL,
+            Conversation.status != "closed",
+            Conversation.deleted_at.is_(None),
+        ]
+        if connection_id is not None:
+            filtros.append(Conversation.connection_id == conexion_id)
+        else:
+            # La de siempre: la interna (o una de antes sin conexión); nunca una atada a un agente.
+            filtros.append(or_(Conversation.connection_id.is_(None), Conversation.connection_id == conexion_id))
+        conversation = (
+            await session.execute(select(Conversation).where(*filtros).order_by(Conversation.started_at.desc()))
+        ).scalars().first()
         if conversation is None:
             conversation = Conversation(
                 tenant_id=tenant_id,
@@ -113,25 +124,25 @@ async def list_test_turns(conversation_id: uuid.UUID) -> list[dict]:
     return await working_memory.get_recent_turns(conversation_id)
 
 
-async def reset_test_conversation(tenant_id: uuid.UUID) -> Conversation:
+async def reset_test_conversation(tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None) -> Conversation:
     """Cierra la prueba actual y arranca una nueva desde cero."""
     from core.memory import working as working_memory
 
-    current = await get_or_create_test_conversation(tenant_id)
+    current = await get_or_create_test_conversation(tenant_id, connection_id)
     async with get_session() as session:
         row = await session.get(Conversation, current.id)
         if row is not None and row.tenant_id == tenant_id:
             row.status = "closed"
             row.closed_at = utcnow()
     await working_memory.clear(current.id)
-    return await get_or_create_test_conversation(tenant_id)
+    return await get_or_create_test_conversation(tenant_id, connection_id)
 
 
-async def run_test_turn(tenant_id: uuid.UUID, text: str) -> TestTurn:
+async def run_test_turn(tenant_id: uuid.UUID, text: str, connection_id: uuid.UUID | None = None) -> TestTurn:
     """Procesa un turno contra el loop real y devuelve la respuesta (sin canal)."""
     from core.orchestrator.loop import process_conversation
 
-    conversation = await get_or_create_test_conversation(tenant_id)
+    conversation = await get_or_create_test_conversation(tenant_id, connection_id)
     await _guardar_mensaje(tenant_id, conversation.id, "inbound", text)
     try:
         result = await process_conversation(conversation.id, text)

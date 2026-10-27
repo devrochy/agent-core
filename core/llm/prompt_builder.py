@@ -66,6 +66,7 @@ class PromptContext:
     referencias: list[str] = field(default_factory=list)  # ids vigentes de la conversación (ADR-0130)
     state_card: str = ""              # tarjeta de estado (ADR-0114); "" con aos_procedures apagada
     team_notes: str = ""              # notas del equipo sobre el cliente (ADR-0147); "" sin notas
+    service_hours: str = ""           # horario del equipo humano (HU-AOS-58); "" si no es informativo
     timezone: str = DEFAULT_TIMEZONE  # zona del negocio (ADR-0091)
     now: datetime | None = None       # None = ahora; inyectable en tests
 
@@ -169,6 +170,9 @@ def bloque_dinamico(ctx: PromptContext) -> str:
     if ctx.state_card:
         # Ya serializada y escapada por el kernel (`core/kernel/tarjeta.py`), justo antes de la fecha.
         dynamic_parts.append(ctx.state_card)
+    if ctx.service_hours:
+        # Armada por `core/kernel/horario_de_servicio.py` desde su playbook; solo con horario informativo.
+        dynamic_parts.append(ctx.service_hours)
     # Siempre la última parte: cambia cada minuto y no debe tocar el prefijo cacheado.
     dynamic_parts.append(_current_datetime_part(ctx))
     return "\n\n".join(dynamic_parts)

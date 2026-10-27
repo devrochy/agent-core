@@ -138,3 +138,26 @@ modales de ayuda y las guías por habilidad siguen siendo de SPEC-12.
 - `cli/commands/tenant.py`: `agent-core tenant embudo`. `docs/openapi.json`.
 - Panel (`solvershub-panel`): `/invitacion`, `/recuperar`, invitaciones pendientes en el layout, primeros
   pasos y recorrido en el Resumen.
+
+## Adenda 2026-10-27 — recorrido de primer uso obligatorio pero saltable (HU-SH-10)
+
+**Contexto:** el primer uso pasa a ser un asistente a pantalla completa que se abre solo, se puede saltar y deja
+un aviso visible hasta terminarlo (SPEC-41). Eso pide recordar dónde va la persona y si lo saltó.
+
+**Decisión:** la regla de arriba **se mantiene**: los pasos del checklist se calculan siempre del estado real y
+ninguno se marca a mano. Lo nuevo es el **recorrido**, que es de la persona y no del negocio: dónde va, si lo omitió
+y si lo terminó. Vive en `tenants.settings.onboarding` (JSONB, sin migración; UPDATE atómico con `jsonb_set` y
+auditado como `onboarding_recorrido`) y lo mueven `avanzar`, `omitir`, `reanudar` y `finalizar`.
+
+- «Completo» no lo declara el panel: `finalizar` lo valida el servidor con el estado real (datos del negocio, agente
+  publicado en el chat de pruebas y una prueba hecha con él) y responde 409 `faltan_pasos` si falta algo.
+- Solo se abre solo al propietario; master y tester ven el aviso sin bloqueo.
+- Los negocios creados antes de `ONBOARDING_DESDE` (o todos, si está vacía) quedan `no_aplica`.
+- El gate de pass^k no cambia: `dejar-listo` solo activa la versión si el gate lo deja pasar.
+
+**Qué haría que revisáramos esto:** que el recorrido necesite su propio embudo (pasaría a hitos como los de arriba)
+o que otros tipos de negocio tengan un recorrido distinto (pasaría al manifiesto del preset).
+
+**Impacto en el código:** `core/primeros_pasos/recorrido.py`, `core/api/routers/onboarding.py`,
+`core/config.py` (`ONBOARDING_DESDE`), `docs/openapi.json`.
+

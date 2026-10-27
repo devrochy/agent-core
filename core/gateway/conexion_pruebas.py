@@ -28,6 +28,33 @@ PROVEEDOR = "internal"
 CANAL = "test"
 
 
+class ConexionNoValida(ValueError):
+    """La conexión elegida para probar no es del negocio, no está activa o no atiende conversaciones."""
+
+
+async def validar_conexion_para_probar(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID) -> uuid.UUID:
+    """Probar un agente por una conexión real (HU-AOS-57): la conversación de prueba (canal `test`,
+    fuera de métricas) se ata a ella para que el turno corra por su release activa. Solo conexiones
+    del negocio, vivas y conversacionales; nunca la interna del playground (esa es el camino de siempre)."""
+    fila = (
+        await session.execute(
+            select(ChannelConnection.type_id).where(
+                ChannelConnection.tenant_id == tenant_id,
+                ChannelConnection.id == connection_id,
+                ChannelConnection.deleted_at.is_(None),
+            )
+        )
+    ).first()
+    if fila is None:
+        raise ConexionNoValida("No encontramos esa conexión en tu negocio.")
+    tipo = get_connection_type(fila[0])
+    if tipo is None or fila[0] == PLAYGROUND or not tipo.produces_conversations:
+        raise ConexionNoValida("Esa conexión no atiende conversaciones.")
+    # Una conexión pausada o cerrada al público (como el chat de pruebas del primer uso) sí se puede
+    # probar: la prueba no pasa por el canal, solo usa la release de la conexión.
+    return connection_id
+
+
 async def conexion_de_pruebas(session: Any, tenant_id: uuid.UUID) -> uuid.UUID | None:
     """El id de la conexión viva del Centro de pruebas del negocio, o None si no existe."""
     return (

@@ -33,17 +33,17 @@ CLAVES_ESPERADAS = {
     "difficulty_turnos_sin_resolver_threshold", "difficulty_score_threshold", "palabras_de_baja",
     "waweb_mode", "waweb_send_min_delay_ms", "waweb_send_max_delay_ms", "waweb_daily_outbound_cap",
     "waweb_warmup_enabled", "escalation_keywords", "auto_escalate_after_turns", "business_tz",
-    "business_ranges", "out_of_hours_message", "persona_tone", "persona_warmth", "persona_emojis",
+    "business_ranges", "business_hours_mode", "out_of_hours_message", "persona_tone", "persona_warmth", "persona_emojis",
     "persona_max_length", "persona_forbidden",
 }  # fmt: skip
 
 
 # ------------------------------------------------------------------ forma
-def test_las_opciones_de_identidad_siguen_siendo_las_31_del_primer_recorte() -> None:
+def test_las_opciones_de_identidad_son_las_31_del_primer_recorte_y_el_modo_del_horario() -> None:
     claves = [o.clave for o in OPCIONES]
     assert len(claves) == len(set(claves))
     identidad = {o.clave for o in OPCIONES if o.grupo not in ("coordinador", "agent_os")}
-    assert identidad == CLAVES_ESPERADAS and len(identidad) == 31
+    assert identidad == CLAVES_ESPERADAS and len(identidad) == 32
 
 
 def test_cada_opcion_tiene_etiqueta_y_explicacion_en_espanol() -> None:
@@ -145,9 +145,9 @@ def test_el_duenio_no_ve_las_waweb_y_el_master_si() -> None:
     dueno = catalogo_para(es_master=False, guardrails_disponibles=[])
     master = catalogo_para(es_master=True, guardrails_disponibles=[])
     assert not [o for o in dueno.opciones if o.clave.startswith("waweb_")]
-    # Identidad: 26 del dueño y 31 del master. Coordinador: 16 del dueño y 19 del master. Banderas: 6 (3 del Agent OS y 3 de la colaboración, HU-AOS-20).
-    assert len(dueno.opciones) == 26 + 16
-    assert len(master.opciones) == 31 + 19 + 6
+    # Identidad: 27 del dueño y 32 del master (HU-AOS-58 sumó el modo del horario). Coordinador: 16 del dueño y 19 del master. Banderas: 6 (3 del Agent OS y 3 de la colaboración, HU-AOS-20).
+    assert len(dueno.opciones) == 27 + 16
+    assert len(master.opciones) == 32 + 19 + 6
     assert {o.clave for o in master.opciones if o.clave.startswith("waweb_")} == {
         o.clave for o in OPCIONES if o.grupo == "whatsapp_web"
     }

@@ -45,6 +45,7 @@ from core.db.models import AppSettings, AuditLog
 from core.db.session import get_session
 from core.gateway.message_splitter import CAPS
 from core.kernel.fuera_de_horario import texto_por_defecto
+from core.kernel.horario_de_servicio import modo_del_horario
 from core.llm.difficulty_router import (
     DIFFICULTY_SCORE_THRESHOLD,
     LONG_MESSAGE_THRESHOLD,
@@ -107,6 +108,14 @@ class IdentitySettings(BaseModel):
     bot_paused: bool
     business_tz: str
     business_ranges: list[dict[str, Any]] = Field(description=_BUSINESS_RANGES_DESC)
+    business_hours_mode: Literal["bloquea", "informativo"] = Field(
+        default="bloquea",
+        description=(
+            "`bloquea`: fuera del horario el asistente no atiende y responde el mensaje fuera de horario "
+            "(comportamiento de siempre). `informativo`: el horario es el del equipo humano del comercio, "
+            "el asistente responde 24/7 y lo conoce para informarlo (HU-AOS-58)."
+        ),
+    )
 
 
 class IdentityUpdate(BaseModel):
@@ -145,6 +154,8 @@ class IdentityUpdate(BaseModel):
     )
     escalation_keywords: list[str] = []
     out_of_hours_message: str = ""
+    # `None` = no cambiar (un cliente que no conoce el campo no lo pisa).
+    business_hours_mode: Literal["bloquea", "informativo"] | None = None
     auto_escalate_after_turns: int = Field(
         default=0, ge=rango("auto_escalate_after_turns").minimo, le=rango("auto_escalate_after_turns").maximo
     )
@@ -381,6 +392,7 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
         business_ranges=validate_business_ranges(
             (escalation.get("business_hours") or {}).get("ranges") or []
         ),
+        business_hours_mode=modo_del_horario(escalation),
     )
 
 
@@ -488,6 +500,8 @@ async def save_identity(
             ),
             "business_hours": business_hours,
         }
+        if payload.business_hours_mode is not None:
+            app_settings.escalation_config["business_hours_mode"] = payload.business_hours_mode
         if payload.bot_paused is not None:
             app_settings.bot_paused = payload.bot_paused
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from datetime import date
 from functools import lru_cache
 from typing import Any, Literal
 
@@ -254,6 +255,16 @@ class Settings(BaseSettings):
     # Se enciende antes que `tenants.aos_runtime = 'v3'` y se apaga después de volver todos a
     # `legacy`.
     aos_connection_routing: bool = Field(default=False, alias="AOS_CONNECTION_ROUTING")
+
+    # --- Onboarding obligatorio (HU-SH-10, adenda a ADR-0124) ---
+    # Fecha de corte (AAAA-MM-DD): solo los negocios creados desde ese día pasan por el recorrido
+    # de primer uso. Vacía = función apagada (ningún negocio es forzado ni ve el aviso).
+    onboarding_desde: date | None = Field(default=None, alias="ONBOARDING_DESDE")
+
+    @field_validator("onboarding_desde", mode="before")
+    @classmethod
+    def _onboarding_desde_vacio(cls, value: Any) -> Any:
+        return None if isinstance(value, str) and not value.strip() else value
 
     # --- Modo demo (SOLO desarrollo) ---
     # Activa un LLM fake determinístico y un envío de canal no-op para probar el

@@ -485,6 +485,28 @@ ESCALAMIENTO = [
         almacen="escalation_config:business_hours.ranges",
     ),
     Opcion(
+        clave="business_hours_mode",
+        grupo="horario",
+        tipo="elegir_una",
+        etiqueta="Qué hace el asistente fuera del horario",
+        explicacion=(
+            "Con «Informativo» el horario es el de tu equipo: el asistente responde a toda hora y lo "
+            "conoce para decírselo a tus clientes. Con «Pausa» deja de atender fuera del horario y "
+            "responde el mensaje de abajo."
+        ),
+        valores=_valores(
+            ("informativo", "Informativo", "el asistente responde 24/7 y conoce el horario del equipo"),
+            ("bloquea", "Pausa", "fuera del horario responde solo el mensaje fuera de horario"),
+        ),
+        por_defecto="bloquea",
+        depende_de=Dependencia(
+            clave="business_ranges",
+            condicion="no_vacia",
+            motivo="Sin horario de atención, el asistente responde siempre.",
+        ),
+        almacen="escalation_config:business_hours_mode",
+    ),
+    Opcion(
         clave="out_of_hours_message",
         grupo="horario",
         tipo="texto_largo",

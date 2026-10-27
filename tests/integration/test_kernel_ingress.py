@@ -198,6 +198,42 @@ async def test_fuera_de_horario_responde_el_mensaje_configurado_sin_llm(monkeypa
     assert await _escalaciones(tid, conv) == []
 
 
+async def test_fuera_de_horario_informativo_no_bloquea_el_turno_y_llega_al_modelo(monkeypatch) -> None:
+    """HU-AOS-58: con `business_hours_mode = informativo` el horario es el del equipo humano y el
+    asistente atiende 24/7: el ingreso no responde el mensaje fuera de horario ni corta el turno."""
+    tid = await _negocio(
+        escalation_config={
+            "business_hours": SIEMPRE_CERRADO,
+            "business_hours_mode": "informativo",
+            "out_of_hours_message": "Cerrado",
+        }
+    )
+    _inmediato(monkeypatch)
+    llamadas: list[str] = []
+
+    class _Espia:
+        provider_name = "espia"
+
+        def estimate_cost_usd(self, *_a: Any) -> float:
+            return 0.0
+
+        async def generate(self, **_kwargs: Any):
+            llamadas.append("generate")
+            raise RuntimeError("alcanza con saber que el turno llegó al modelo")
+
+    monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *a, **k: _Espia())
+
+    try:
+        conv = await _entrar(tid, uniq("wa-info"), "hola, ¿están abiertos?")
+    except RuntimeError:
+        conv = None
+
+    assert llamadas, "el turno fuera de horario informativo debe llegar al modelo"
+    if conv is not None:
+        assert ("blocked", "out_of_hours", "replied") not in await _turnos(tid, conv)
+        assert "Cerrado" not in await _salientes(tid, conv)
+
+
 async def test_fuera_de_horario_sin_mensaje_avisa_una_vez_sin_llm(monkeypatch) -> None:
     tid = await _negocio(assistant_name="Lupe", escalation_config={"business_hours": SIEMPRE_CERRADO})
     _inmediato(monkeypatch)
