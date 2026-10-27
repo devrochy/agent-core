@@ -29,4 +29,9 @@ def toque(outcome: str, segundos: float) -> None:
 
 
 def error_de_tool(tool: str) -> None:
-    _errores_tool.add(1, {"tool": tool[:80]})
+    """La etiqueta es el nombre de la tool SOLO si la registra el binario; las declarativas las nombra cada
+    negocio, y un valor que controla un negocio no va a una métrica global."""
+    from core.mcp.host import mcp_host
+
+    registrada = mcp_host.get_tool(tool)
+    _errores_tool.add(1, {"tool": tool[:80] if registrada is not None else "declarativa"})

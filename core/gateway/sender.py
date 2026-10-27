@@ -667,6 +667,7 @@ async def send_interactive_to_conversation(
     *,
     fallback_text: str,
     sender_type: str = "agent",
+    sin_degradar: bool = False,
 ) -> bool:
     """Encola un mensaje con botones de respuesta o con lista (HU-AOS-09, HU-INMO-03).
 
@@ -674,7 +675,9 @@ async def send_interactive_to_conversation(
     Cloud (`meta`) con la ventana de 24 h abierta envía interactivos. En cualquier otro caso (web,
     waweb, Messenger, ventana cerrada, payload fuera de topes) sale `fallback_text` por el camino
     de texto de siempre, que registra el fallo si la ventana está cerrada. `content` guarda el
-    cuerpo para el panel; `interactive`, el payload. Devuelve True si quedó encolado."""
+    cuerpo para el panel; `interactive`, el payload. Devuelve True si quedó encolado.
+    `sin_degradar`: si no se puede mandar el interactivo, no manda `fallback_text` y devuelve False (quien
+    pide un botón para CONFIRMAR algo no puede conformarse con un texto que no confirma nada)."""
     async with get_session() as session:
         conversation = await session.get(Conversation, conversation_id)
         if conversation is None:
@@ -690,11 +693,15 @@ async def send_interactive_to_conversation(
     expira = conversation.service_window_expires_at
     ventana_abierta = expira is None or expira >= utcnow()
     if conversation.channel != "whatsapp" or not ventana_abierta or not interactivo_valido(interactive):
+        if sin_degradar:
+            return False
         return await send_to_conversation(conversation_id, fallback_text, sender_type=sender_type)
     provider, credentials = await resolve_credentials(
         conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=conversation.tenant_id
     )
     if provider != "meta":
+        if sin_degradar:
+            return False
         return await send_to_conversation(conversation_id, fallback_text, sender_type=sender_type)
 
     cuerpo = str(interactive["body"])

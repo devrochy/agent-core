@@ -19,3 +19,7 @@
   (`actor="option:<key>"`, ids y claves sin valores), log por toque y métricas `option_taps_total{outcome}`,
   `option_tap_latency_seconds`, `option_tool_errors_total{tool}`.
 - Sin migración ni rutas nuevas.
+- `fijar_release_del_turno(..., enrutar=False)`: asigna release y dueño sin correr el router ni consumir el
+  payload de botón del turno diferido (lo usa el toque). `send_interactive_to_conversation(...,
+  sin_degradar=True)`: devuelve False en vez de mandar el texto de respaldo (lo usa la confirmación, que no
+  puede conformarse con un texto). Contrato de import-linter `opciones-sin-orquestador`.

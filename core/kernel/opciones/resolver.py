@@ -160,7 +160,7 @@ async def atender_toque(toque: Toque, bordes: Bordes) -> str:
     except Exception as exc:
         traza.outcome = ERROR_INTERNO
         traza.codigo = type(exc).__name__
-        log.error("option_tap_internal_error", tenant_id=str(toque.tenant_id), error=type(exc).__name__, exc_info=True)
+        log.error("option_tap_internal_error", tenant_id=str(toque.tenant_id), error=type(exc).__name__)
         await _decir(bordes, texto("error_generico"))
     await _emitir(traza, time.monotonic() - inicio)
     return traza.outcome
@@ -183,9 +183,15 @@ async def _atender(toque: Toque, bordes: Bordes, t: _Traza) -> str:
     try:
         definicion = leer_definicion(envio.definition)
     except ValidationError:
+        # Sin definición ni opción no hay con qué verificar la firma de un `optc`/`optn` (ata los
+        # argumentos): solo un `opt` ya firmado merece respuesta.
+        if leido.tipo != "opt":
+            return _descartar(t, FIRMA_INVALIDA, "definicion")
         return await _fallo_sin_opcion(bordes, t, "definicion_invalida")
     opcion = next((o for o in definicion.opciones if o.id == leido.option_id), None)
     if opcion is None:
+        if leido.tipo != "opt":
+            return _descartar(t, FIRMA_INVALIDA, "opcion")
         return await _fallo_sin_opcion(bordes, t, "opcion_inexistente")
     t.tool = opcion.accion.tool
 
@@ -224,7 +230,7 @@ async def _tocar(
     previa = await activaciones.por_dedupe(toque.tenant_id, clave)
     if previa is not None and _confirmacion_vencida(previa, ahora):
         # La confirmación que quedó sin contestar venció: se libera y este toque abre una nueva.
-        await _cerrar_pendiente(toque, envio.send_id, leido.option_id, VENCIDA, ahora)
+        await _cerrar_pendiente(toque, envio.send_id, previa.option_id, VENCIDA, ahora, solo_vencidas=True)
         previa = None
     if previa is not None:
         return await _segun_estado(previa, opcion, definicion, envio, bordes, ahora, t, reenviar=toque)
@@ -257,7 +263,17 @@ async def _confirmar(
         if isinstance(plan, _Rechazo):
             # Lo confirmado ya no es ejecutable (la tool dejó de ser elegible o derivó): no se ejecuta, se
             # libera la opción y el cliente recibe la respuesta de error.
-            await _cerrar_pendiente(toque, envio.send_id, opcion.id, CANCELADA, ahora, codigo=plan.codigo)
+            cerrada = await activaciones.cerrar_pendiente(
+                toque.tenant_id, envio.send_id, opcion.id, "cancelled", ahora=ahora, error_code=plan.codigo
+            )
+            if cerrada is None:
+                # No había nada pendiente (un `optc` repetido tras ejecutarse, o ya cerrado): responde según
+                # lo que pasó, no con el error de una acción que sí se hizo.
+                previa = await activaciones.ultima_de(toque.tenant_id, envio.send_id, opcion.id)
+                if previa is None:
+                    return await _responder_sistema(bordes, VENCIDA, "confirmacion_vencida")
+                return await _segun_estado(previa, opcion, definicion, envio, bordes, ahora, t, reenviar=None)
+            t.activation_id = cerrada
             return await _responder_error(bordes, t, opcion, envio, plan)
         if plan.args_hash != args_hash:  # no debería pasar: ambos salen del mismo envío inmutable
             return _descartar(t, FIRMA_INVALIDA, "argumentos")
@@ -268,7 +284,7 @@ async def _confirmar(
         if activation_id is None:
             previa = await activaciones.ultima_de(toque.tenant_id, envio.send_id, opcion.id)
             if previa is not None and previa.state == "pending_confirm":
-                await _cerrar_pendiente(toque, envio.send_id, leido.option_id, VENCIDA, ahora)
+                await _cerrar_pendiente(toque, envio.send_id, previa.option_id, VENCIDA, ahora, solo_vencidas=True)
                 return await _responder_sistema(bordes, VENCIDA, "confirmacion_vencida")
             if previa is None:
                 return await _responder_sistema(bordes, VENCIDA, "confirmacion_vencida")
@@ -349,6 +365,9 @@ async def _pedir_confirmacion(
         existente = await activaciones.por_dedupe(toque.tenant_id, clave)
         return await _segun_estado(existente, opcion, definicion, envio, bordes, ahora, t, reenviar=None)
     if not await bordes.enviar_confirmacion(interactivo):
+        # Sin botones no hay confirmación posible: la pendiente no queda viva reteniendo la opción (en un
+        # envío exclusivo, todo el envío) hasta que venza.
+        await _cerrar_pendiente(toque, envio.send_id, opcion.id, CANCELADA, ahora, codigo="confirmacion_no_disponible")
         await _decir(bordes, texto("confirmacion_no_disponible"))
         t.codigo = "confirmacion_no_disponible"
     return CONFIRMACION_PEDIDA
@@ -405,9 +424,18 @@ async def _ejecutar(
     else:
         metricas.error_de_tool(plan.tool)
     t.codigo = codigo
-    if not await activaciones.terminar(
-        toque.tenant_id, activation_id, "done" if exito else "failed", ahora=bordes.ahora(), error_code=codigo or None
-    ):
+    try:
+        terminada = await activaciones.terminar(
+            toque.tenant_id, activation_id, "done" if exito else "failed", ahora=bordes.ahora(), error_code=codigo or None
+        )
+    except Exception as exc:
+        # La tool YA corrió y no se pudo registrar: la fila queda `running` (no se reejecuta) y el cliente
+        # no recibe un «no pude» sobre algo que pudo haberse hecho.
+        log.error("option_terminar_fallo", tenant_id=str(toque.tenant_id), activation_id=str(activation_id),
+                  error=type(exc).__name__)
+        t.codigo = "terminar_fallo"
+        return await _responder_sistema(bordes, SIN_CONFIRMAR, "sin_confirmar")
+    if not terminada:
         # La fila ya no estaba en `running` (otro proceso la tocó): no se pisa; el toque ya ejecutó.
         log.warning("option_activation_not_running", tenant_id=str(toque.tenant_id), activation_id=str(activation_id))
     if exito:
@@ -502,12 +530,16 @@ def _confirmacion_vencida(previa: Activacion, ahora: datetime) -> bool:
 
 
 async def _cerrar_pendiente(
-    toque: Toque, send_id: uuid.UUID, option_id: str, estado: str, ahora: datetime, *, codigo: str | None = None
+    toque: Toque, send_id: uuid.UUID, option_id: str, estado: str, ahora: datetime, *,
+    codigo: str | None = None, solo_vencidas: bool = False,
 ) -> None:
-    """Cierra (sin ejecutar) la confirmación pendiente de (envío, opción) y libera la opción."""
+    """Cierra (sin ejecutar) la confirmación pendiente de (envío, opción) y libera la opción.
+    `solo_vencidas`: solo si ya pasó su vigencia (dos toques que ven la misma pendiente vencida: el
+    segundo no debe cerrar la nueva que abrió el primero)."""
     await activaciones.cerrar_pendiente(
         toque.tenant_id, send_id, option_id, "cancelled" if estado == CANCELADA else "expired",
         ahora=ahora, error_code=codigo,
+        creada_antes_de=ahora - VIGENCIA_CONFIRMACION if solo_vencidas else None,
     )
 
 

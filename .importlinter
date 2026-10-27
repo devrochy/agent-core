@@ -100,6 +100,17 @@ forbidden_modules =
     core.orchestrator.debounce
 allow_indirect_imports = True
 
+# SPEC-40 (ADR-0172): el resolver del toque es puro; lo que solo el orquestador sabe (release, spec, la
+# ejecución de la tool, el envío) llega por `Bordes`/`Entorno` desde `core/orchestrator/opciones_toque.py`.
+[importlinter:contract:opciones-sin-orquestador]
+name = Las opciones directas del kernel no importan el orquestador
+type = forbidden
+source_modules =
+    core.kernel.opciones
+forbidden_modules =
+    core.orchestrator
+allow_indirect_imports = True
+
 # ADR-0125 (HU-SH-07): lo que un pack o una ruta de la API usan del aprovisionamiento no llega
 # al alta, ni siquiera de forma indirecta: así el camino pack → antiabuso → consumidor no existe.
 [importlinter:contract:antiabuso-sin-alta]

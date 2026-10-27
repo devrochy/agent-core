@@ -634,6 +634,38 @@ async def test_confirmacion_vencida_no_ejecuta_y_un_nuevo_toque_la_renueva(negoc
     assert nuevo == "confirm_requested" and len(s3.confirmaciones) == 1
 
 
+async def test_envio_exclusivo_con_la_confirmacion_vencida_de_otra_opcion_se_libera_para_la_nueva(negocios) -> None:
+    from core.kernel.opciones.resolver import VIGENCIA_CONFIRMACION
+
+    a, _ = negocios
+    conv, _ = await conversacion(a.tid)
+    envio = await crear_envio(a.tid, conv)  # exclusivo: una sola activación por envío
+    entorno = EntornoFalso(ficha(sensible=True))
+    despues = lambda: datetime.now(UTC) + VIGENCIA_CONFIRMACION + timedelta(minutes=1)  # noqa: E731
+
+    await tocar(envio, envio.payload(), entorno)  # confirmación pendiente de «ver»
+    outcome, salida = await tocar(envio, envio.payload(opcion="otra"), entorno, ahora=despues)
+
+    assert outcome == "confirm_requested" and len(salida.confirmaciones) == 1, "la vencida de «ver» ya no bloquea a «otra»"
+    assert sorted(estado_ for _, estado_, _ in await estado(envio)) == ["expired", "pending_confirm"]
+
+
+async def test_optc_de_una_opcion_que_no_existe_se_descarta_sin_responder(negocios) -> None:
+    from core.kernel.opciones import payload
+
+    a, _ = negocios
+    conv, _ = await conversacion(a.tid)
+    envio = await crear_envio(a.tid, conv)
+    fantasma = payload.construir(
+        payload.secreto_del_servidor(), "optc", a.tid, conv, envio.send_id, "fantasma", payload.hash_de_argumentos(TOOL, {})
+    )
+
+    outcome, salida = await tocar(envio, fantasma, EntornoFalso(ficha(sensible=True)))
+
+    assert outcome == "bad_signature" and salida.textos == [] and salida.confirmaciones == []
+    assert await estado(envio) == []
+
+
 async def test_tocar_de_nuevo_con_la_confirmacion_pendiente_la_reenvia_sin_ejecutar(negocios) -> None:
     a, _ = negocios
     conv, _ = await conversacion(a.tid)
@@ -695,6 +727,50 @@ async def test_confirmacion_sin_botones_disponibles_avisa_que_no_se_hizo_nada(ne
     outcome, salida = await tocar(envio, envio.payload(), EntornoFalso(ficha(sensible=True)), salida)
 
     assert outcome == "confirm_requested" and salida.textos == [texto("confirmacion_no_disponible")]
+    # la pendiente no queda viva reteniendo la opción: el cliente puede volver a intentarlo
+    assert await estado(envio) == [("ver", "cancelled", "confirmacion_no_disponible")]
+    salida2 = Salida()
+    otra, _ = await tocar(envio, envio.payload(), EntornoFalso(ficha(sensible=True)), salida2)
+    assert otra == "confirm_requested" and len(salida2.confirmaciones) == 1, "no responde «confirmación pendiente»"
+
+
+async def test_optc_repetido_tras_ejecutarse_no_responde_error_aunque_la_tool_ya_no_sea_elegible(negocios) -> None:
+    from core.kernel.opciones.textos import texto
+
+    a, _ = negocios
+    conv, _ = await conversacion(a.tid)
+    envio = await crear_envio(a.tid, conv)
+    entorno = EntornoFalso(ficha(sensible=True))
+    _, salida = await tocar(envio, envio.payload(), entorno)
+    optc, _ = _ids(salida.confirmaciones[0])
+    assert (await tocar(envio, optc, entorno))[0] == "ok"
+
+    # el binding se deshabilita después de ejecutada: el optc repetido habla de lo que pasó, no de un error
+    outcome, s2 = await tocar(envio, optc, EntornoFalso(ficha(sensible=True, binding_habilitado=False)))
+
+    assert outcome == "duplicate" and s2.textos == [texto("ya_atendido")] and len(entorno.llamadas) == 1
+    assert await estado(envio) == [("ver", "done", None)]
+
+
+async def test_si_no_se_puede_registrar_el_fin_de_la_tool_no_dice_que_fallo_y_no_reejecuta(negocios, monkeypatch) -> None:
+    from core.kernel.opciones import activaciones
+    from core.kernel.opciones.textos import texto
+
+    a, _ = negocios
+    conv, _ = await conversacion(a.tid)
+    envio = await crear_envio(a.tid, conv)
+    entorno = EntornoFalso()
+
+    async def _roto(*_a: Any, **_k: Any) -> bool:
+        raise RuntimeError("base caída")
+
+    monkeypatch.setattr(activaciones, "terminar", _roto)
+    outcome, salida = await tocar(envio, envio.payload(), entorno)
+    monkeypatch.undo()
+
+    assert outcome == "unconfirmed" and salida.textos == [texto("sin_confirmar")] and len(entorno.llamadas) == 1
+    assert await estado(envio) == [("ver", "running", None)]
+    assert (await tocar(envio, envio.payload(), entorno))[0] == "in_progress" and len(entorno.llamadas) == 1
 
 
 async def test_resumen_que_no_se_puede_mostrar_entero_no_pide_confirmar_a_ciegas(negocios) -> None:

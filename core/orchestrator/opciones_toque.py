@@ -10,8 +10,11 @@ para que la tool corra con los MISMOS bindings que tendría en un turno del agen
 `aos_runtime = v3`, los bindings son los de la versión congelada de ese agente; con legacy, los del
 AgentSpec). Es la misma asignación sticky por episodio que haría el siguiente mensaje del cliente: abre el
 episodio y puede fijar la release y el dueño de la conversación, pero no cambia nada que el próximo turno no
-fuera a cambiar igual. Sin turno abierto, `anotar_release` y `anotar_ruta` no hacen nada. La ranura se abre y
-se cierra aquí (también si falla): lo que fija un toque no lo ve el siguiente turno.
+fuera a cambiar igual. NO corre el router (`enrutar=False`): un toque no es un mensaje, y el router consumiría
+(GETDEL) el payload de botón de procedimiento que espera el turno diferido y reescribiría el dueño con un texto
+vacío. `anotar_release` y `anotar_ruta` solo escriben en el `Turno` del handler (el camino del toque no llama a
+`decidir`, así que no deja fila en el ledger del kernel: solo log y auditoría). La ranura se abre y se cierra
+aquí (también si falla): lo que fija un toque no lo ve el siguiente turno.
 
 La ficha de la tool (`FichaTool`) sale de las mismas piezas que el lint (`lint.fichas_de_tools`), con el
 binding EXPLÍCITO del spec del turno y los procedimientos disponibles de la release: la regla de elegibilidad
@@ -38,9 +41,6 @@ from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
-PREFIJO_DECLARATIVAS = "declarative"
-
-
 class _EntornoDelTurno:
     """`Entorno` del resolver: spec, release y tools del negocio, resueltos como en un turno."""
 
@@ -51,6 +51,7 @@ class _EntornoDelTurno:
 
     async def ficha(self, tool: str) -> FichaTool | None:
         from core.kernel.procedures import registro
+        from core.mcp.declarative import PLUGIN_ID as DECLARATIVE_PLUGIN_ID
         from core.mcp.declarative import tools_for_spec
         from core.mcp.host import mcp_host
         from core.plugin_manager import plugin_manager
@@ -66,7 +67,7 @@ class _EntornoDelTurno:
         inactivos = await plugin_manager.disabled_plugins_for_tenant(get_current_tenant_id())
         packs_activos = set(habilitados) - set(inactivos)
         if declarativa is not None:
-            packs_activos.add(PREFIJO_DECLARATIVAS)  # las declarativas del negocio valen por estar en su spec
+            packs_activos.add(DECLARATIVE_PLUGIN_ID)  # las declarativas del negocio valen por estar en su spec
         gobernadas = acciones_de_procedimientos(registro.disponibles(habilitados, inactivos).values())
         return fichas_de_tools([elegida], spec.tools, packs_activos, gobernadas).get(tool)
 
@@ -92,7 +93,7 @@ def abrir_entorno(conversation: Any, customer: Any) -> AbstractAsyncContextManag
         token = release_vigente.abrir()
         try:
             spec = await load_active_spec()
-            await fijar_release_del_turno(conversation, texto="")
+            await fijar_release_del_turno(conversation, enrutar=False)
             yield _EntornoDelTurno(conversation, customer, spec_del_turno(spec))
         finally:
             release_vigente.cerrar(token)
@@ -119,7 +120,7 @@ async def atender(conversation: Any, customer: Any, fields: dict[str, str]) -> s
         if conversation.channel != "whatsapp" or not interactivo_valido(interactivo):
             return False
         return await send_interactive_to_conversation(
-            conversation_id, interactivo, fallback_text=texto("confirmacion_no_disponible")
+            conversation_id, interactivo, fallback_text=texto("confirmacion_no_disponible"), sin_degradar=True
         )
 
     toque = resolver.Toque(

@@ -170,6 +170,8 @@ async def test_la_tool_corre_por_el_loop_con_el_binding_real_y_la_idempotencia_d
     assert contexto.idempotency_key == f"{conv_id}:{activacion}", "idempotency_key = conversación:activation_id"
     ejecutadas = await _sql(tid, "select input from audit_log where actor = :a and action = 'execute' and conversation_id = :c", a=f"tool:{TOOL}", c=conv_id)
     assert len(ejecutadas) == 1, "el loop audita la ejecución como cualquier tool"
+    assert ejecutadas[0][0] == {"keys": ["pedido"], "args_hash": ejecutadas[0][0]["args_hash"]} and "A-1" not in str(ejecutadas[0][0]), \
+        "la auditoría de la tool de un toque no copia los valores (vienen del contexto del cliente)"
 
 
 async def test_sin_binding_explicito_la_tool_no_corre_aunque_el_loop_la_dejaria(legacy, herramienta) -> None:
@@ -383,6 +385,30 @@ async def test_la_ranura_de_la_release_se_cierra_al_terminar_el_toque(v3, herram
     await tocar_real(envio, envio.payload(), conv, cust)
 
     assert release_vigente.vigente() is None, "lo que fija un toque no lo ve el siguiente turno"
+
+
+async def test_el_toque_no_corre_el_router_ni_consume_el_payload_de_boton_del_turno_diferido(v3, herramienta) -> None:
+    from core.kernel.router import guardar_payload, tomar_payload
+    from core.shared.tenant import tenant_scope
+
+    (tid, cid), _ = v3
+    conv_id, cliente = await _conversacion_v3(tid, cid)
+    conv, cust = await _objetos(tid, conv_id, cliente)
+    envio = await crear_envio(tid, conv_id)
+    from _api_helpers import banderas_como_dueno
+
+    await banderas_como_dueno(tid, aos_routing="shadow")
+    try:
+        async with tenant_scope(tid):
+            await guardar_payload(tid, conv_id, "proc:pagar")  # lo espera el turno diferido del botón de un procedimiento
+        outcome, _ = await tocar_real(envio, envio.payload(), conv, cust)
+        async with tenant_scope(tid):
+            restante = await tomar_payload(tid, conv_id)
+    finally:
+        await banderas_como_dueno(tid, aos_routing="off")
+
+    assert outcome == "ok"
+    assert restante == "proc:pagar", "el toque no consume (GETDEL) el payload de ruteo del turno que espera"
 
 
 # ---------------------------------------------------------------- el consumer: bandera y journey sin LLM
