@@ -1,9 +1,10 @@
 """HU-BILL-05 · planes por agentes: agentes publicados, colaboradores y crédito (D-35, ADR-0142).
 
-- Free (1 agente) con el General: publicar un segundo agente da 409 `plan_limit_agentes`, por la API de
-  la conexión y por el editor (antes de publicar la versión).
+- Free (1 agente) con el General incorporado: el primer especialista entra; el segundo da 409
+  `plan_limit_agentes`, por la API de la conexión y por el editor (antes de publicar la versión).
 - Premium permite 5 agentes; el sexto da 409. Un agente que ya está en una conexión no ocupa otro cupo.
-- El General cuenta y el Coordinador no.
+- Ni el General ni el Coordinador cuentan (enmienda del ADR-0142, 2026-10-27): el General viene
+  incorporado y se puede volver a poner sin cupo.
 - Colaboradores al tope (Free = 2): el tercero da 409 `plan_limit_colaboradores` sin crear la cuenta; la
   invitación pendiente ocupa cupo.
 - Un negocio por encima del tope (plan bajado) sigue operando: edita, publica versiones de sus agentes,
@@ -162,11 +163,21 @@ async def _instancias_vivas(tid: uuid.UUID, aid: str) -> int:
 
 
 # ---------------------------------------------------------------- agentes
-async def test_free_con_el_general_no_publica_un_segundo_agente(app_client) -> None:
+async def _llenar_cupo(
+    app_client, h: dict[str, str], cid: Any, key: str = "ventas", *, por_defecto: bool = False
+) -> str:
+    """Instala un especialista en la conexión (ocupa un cupo de `agentes`)."""
+    aid = await _especialista(app_client, h, key)
+    r = await app_client.post(_agents_url(cid), headers=h, json={"agent_id": aid, "is_default": por_defecto})
+    assert r.status_code == 201, r.text
+    return aid
+
+
+async def test_free_el_general_no_cuenta_y_un_segundo_agente_da_409(app_client) -> None:
     tid, cid = await _negocio("free")
     h = await api_headers(app_client, tid)  # master: escribe con cualquier runtime
-    # El General cuenta; el Coordinador no.
-    assert await _agentes(tid) == 1
+    # Ni el General ni el Coordinador cuentan: el negocio arranca en 0 con ambos instanciados.
+    assert await _agentes(tid) == 0
     kinds = await _sql(
         tid,
         "select a.key, a.kind from agent_instances i join agents a on a.id = i.agent_id "
@@ -176,16 +187,39 @@ async def test_free_con_el_general_no_publica_un_segundo_agente(app_client) -> N
     assert [tuple(k) for k in kinds] == [("coordinador", "core"), ("general", "specialist")]
 
     ventas = await _especialista(app_client, h, "ventas")
-    assert await _agentes(tid) == 1  # publicado sin instancia: todavía no es unidad facturable
+    assert await _agentes(tid) == 0  # publicado sin instancia: todavía no es unidad facturable
     r = await app_client.post(_agents_url(cid), headers=h, json={"agent_id": ventas})
+    assert r.status_code == 201, r.text  # el primero entra: el General no ocupó el cupo del Free
+    assert await _agentes(tid) == 1
+
+    soporte = await _especialista(app_client, h, "soporte")
+    r = await app_client.post(_agents_url(cid), headers=h, json={"agent_id": soporte})
     assert _limite(r) == (409, "plan_limit_agentes", {"metric": "agentes", "used": 1, "limit": 1}), r.text
     assert "mejora tu plan" in r.json()["error"]["message"].lower()
-    assert await _instancias_vivas(tid, ventas) == 0
+    assert await _instancias_vivas(tid, soporte) == 0
+    assert await _agentes(tid) == 1
+
+
+async def test_el_general_se_puede_volver_a_poner_con_el_cupo_lleno(app_client) -> None:
+    tid, cid = await _negocio("free")
+    h = await api_headers(app_client, tid)
+    await _llenar_cupo(app_client, h, cid, por_defecto=True)  # Free al tope: 1 de 1; deja de ser el General
+    (general,) = (await _sql(tid, "select id from agents where tenant_id = :t and key = 'general'", t=tid))[0]
+    (instancia,) = (
+        await _sql(tid, "select id from agent_instances where agent_id = :a and deleted_at is null", a=general)
+    )[0]
+    r = await app_client.delete(f"{_agents_url(cid)}/{instancia}", headers=h)
+    assert r.status_code == 204, r.text
+    # El General no ocupa cupo: volver a ponerlo no se mide contra el tope.
+    r = await app_client.post(_agents_url(cid), headers=h, json={"agent_id": str(general)})
+    assert r.status_code == 201, r.text
     assert await _agentes(tid) == 1
 
 
 async def test_free_el_editor_no_publica_la_version_si_no_hay_cupo(app_client) -> None:
     tid, cid = await _negocio("free")
+    hm = await api_headers(app_client, tid)
+    await _llenar_cupo(app_client, hm, cid, "soporte")  # Free al tope: 1 de 1
     h = await _dueno(app_client, tid)
     r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
     assert r.status_code == 201, r.text
@@ -200,12 +234,12 @@ async def test_free_el_editor_no_publica_la_version_si_no_hay_cupo(app_client) -
 async def test_premium_permite_cinco_agentes_y_el_sexto_da_409(app_client) -> None:
     tid, cid = await _negocio("premium")
     h = await api_headers(app_client, tid)
-    agentes = [await _especialista(app_client, h, f"esp{i}") for i in range(5)]
-    for aid in agentes[:4]:  # el General + 4 = 5
+    agentes = [await _especialista(app_client, h, f"esp{i}") for i in range(6)]
+    for aid in agentes[:5]:  # el General no cuenta: 5 especialistas llenan el cupo
         r = await app_client.post(_agents_url(cid), headers=h, json={"agent_id": aid})
         assert r.status_code == 201, r.text
     assert await _agentes(tid) == 5
-    r = await app_client.post(_agents_url(cid), headers=h, json={"agent_id": agentes[4]})
+    r = await app_client.post(_agents_url(cid), headers=h, json={"agent_id": agentes[5]})
     assert _limite(r) == (409, "plan_limit_agentes", {"metric": "agentes", "used": 5, "limit": 5}), r.text
 
     # Un agente que ya está en una conexión no ocupa otro cupo al entrar en una segunda.
@@ -233,15 +267,16 @@ async def test_por_encima_del_tope_sigue_operando_y_solo_no_crece(app_client) ->
     h = await api_headers(app_client, tid)
     ventas = await _especialista(app_client, h, "ventas")
     agenda = await _especialista(app_client, h, "agenda")
-    nuevo = await _especialista(app_client, h, "soporte")
+    soporte = await _especialista(app_client, h, "soporte")
+    nuevo = await _especialista(app_client, h, "facturas")
     ids = {}
-    for aid in (ventas, agenda):
+    for aid in (ventas, agenda, soporte):
         r = await app_client.post(_agents_url(cid), headers=h, json={"agent_id": aid})
         assert r.status_code == 201, r.text
         ids[aid] = r.json()["id"]
 
     await _plan(tid, "free")  # baja de plan: 3 agentes con tope 1
-    assert await _agentes(tid) == 3
+    assert await _agentes(tid) == 3  # el General no suma
 
     # Operar no se rompe: cambiar una instancia, publicar otra versión de un agente que ya está.
     r = await app_client.patch(f"{_agents_url(cid)}/{ids[ventas]}", headers=h, json={"priority": 10})
@@ -355,8 +390,11 @@ async def test_aislamiento_entre_negocios_y_plan_en_la_api(app_client) -> None:
     assert r.status_code == 200, r.text
 
     # Agentes: el lleno no puede crecer; los agentes del otro no le suman ni le restan.
+    assert await _agentes(lleno) == 0 and await _agentes(otro) == 0
+    await _llenar_cupo(app_client, h_lleno, cid_lleno, "ventas")
+    await _llenar_cupo(app_client, h_otro, cid_otro, "ventas")
     assert await _agentes(lleno) == 1 and await _agentes(otro) == 1
-    del_otro = await _especialista(app_client, h_otro, "ventas")
+    del_otro = await _especialista(app_client, h_otro, "soporte")
     r = await app_client.post(_agents_url(cid_otro), headers=h_otro, json={"agent_id": del_otro})
     assert _limite(r)[:2] == (409, "plan_limit_agentes")  # su propio tope, no el del vecino
     await _plan(otro, "premium")
