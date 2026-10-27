@@ -13,7 +13,8 @@ Forma de cada entrada:
       "allowed_domains": ["api.negocio.com"],
       "headers": {"Authorization": {"secret": "token_api"}, "X-Cliente": "abc"},  # opcional
       "parameters": { JSON Schema },                 # opcional
-      "body": {"order_id": "{order_id}"}             # opcional (POST)
+      "body": {"order_id": "{order_id}"},            # opcional (POST)
+      "option_safe": true                            # opcional (SPEC-40): apta para una opción directa
     }
 
 Los `{placeholders}` se interpolan con los argumentos de la tool (validados y
@@ -113,6 +114,11 @@ def validate_declarative_tools(raw: Any) -> list[dict[str, Any]]:
             else {"type": "object", "properties": {}},
             "body": item.get("body") if isinstance(item.get("body"), dict) else {},
         }
+        # SPEC-40: solo el literal `true` la marca apta (cualquier otro valor, incluido "true",
+        # cuenta como falso). La clave solo se escribe cuando es verdadera: las definiciones que
+        # ya existen no cambian de forma ni de huella.
+        if item.get("option_safe") is True:
+            entry["option_safe"] = True
         tools.append(entry)
     return tools
 
@@ -162,6 +168,9 @@ def build_tool(definition: dict[str, Any]) -> MCPTool:
         handler=_handler,
         plugin_id=PLUGIN_ID,
         scopes=[],
+        apta_para_opcion=definition.get("option_safe") is True,
+        # Una declarativa que escribe (POST) pide siempre la confirmación del cliente.
+        sensible=definition["method"] != "GET",
     )
     # La allowlist viaja con la tool para que el loop arme el ScopedHttp del turno.
     tool._allowed_domains = list(allowed)  # type: ignore[attr-defined]

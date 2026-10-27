@@ -368,6 +368,15 @@ class MCPTool:
     # efectos externos). Solo una tool marcada puede responder una consulta entre agentes
     # (fail-closed: sin la marca, no se ofrece). La declara quien la escribe.
     solo_lectura: bool = False
+    # SPEC-40 (ADR-0172 §5): la tool puede ser la acción de una opción directa (un toque del
+    # cliente la ejecuta sin LLM). Fail-closed: lo declara SOLO quien escribe la tool, y solo si
+    # es de lectura o de escritura reversible; nada financiero ni destructivo en v1 (D-SPEC-40-3).
+    # Es necesario pero no suficiente: además hace falta binding explícito y habilitado, pack
+    # activo y que ningún procedimiento habilitado la gobierne.
+    apta_para_opcion: bool = False
+    # SPEC-40: acción con efecto que el cliente debe confirmar (optc/optn) antes de ejecutarse
+    # desde una opción, aunque la definición no lo pida.
+    sensible: bool = False
 
 
 @dataclass
