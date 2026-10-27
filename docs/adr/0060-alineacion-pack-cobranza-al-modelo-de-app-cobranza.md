@@ -1,6 +1,6 @@
 # ADR-0060 — Alineación del pack-cobranza al modelo de dominio de app-cobranza (Propietario/Gestor/Cartera)
 
-- **Estado:** aceptado
+- **Estado:** aceptado — «cobros al propietario» y el hilo con el propietario se retiraron de la API y del admin el 2026-10-26/27 (ver ADR-0064); sus tablas se conservan
 - **Fecha:** 2026-09-24
 
 ## Contexto

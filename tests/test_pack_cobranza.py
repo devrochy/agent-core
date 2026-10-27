@@ -163,7 +163,6 @@ def test_rbac_subsecciones_por_path() -> None:
         "/cobranza/carteras": "pack_cobranza:carteras",
         "/cobranza/carteras/123/config": "pack_cobranza:carteras",
         "/cobranza/clientes/abc": "pack_cobranza:clientes",
-        "/cobranza/cobros/generar": "pack_cobranza:cobros",
         "/cobranza/reglas": "pack_cobranza:reglas",
         "/cobranza/monitoreo": "pack_cobranza:monitoreo",
         "/cobranza/reportes": "pack_cobranza:reportes",
@@ -180,6 +179,25 @@ def test_rbac_subsecciones_por_path() -> None:
     for path, esperado in casos.items():
         req = required_section(path, "GET", prefixes)
         assert req is not None and req[0] == esperado, path
+
+
+def test_cobros_conserva_su_subseccion_rbac_sin_menu() -> None:
+    """Se retiró «Cobros al propietario», pero `pack_cobranza:cobros` guarda «Pagos»."""
+    from pack_cobranza.module import CobranzaModule
+
+    from core.admin.permissions import pack_section_keys
+
+    modulo = CobranzaModule()
+    assert "pack_cobranza:cobros" in pack_section_keys([modulo])
+    assert all(i["section_key"] != "pack_cobranza:cobros" for i in modulo.admin_menu)
+
+
+def test_cobros_al_propietario_ya_no_expone_rutas() -> None:
+    from pack_cobranza.admin_api import router
+
+    rutas = {getattr(r, "path", "") for r in router.routes}
+    assert not [r for r in rutas if "owner-charges" in r]
+    assert "/api/v1/pack/cobranza/payments" in rutas
 
 
 def test_lead_provider_registra_columnas() -> None:
