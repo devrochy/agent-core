@@ -215,6 +215,7 @@ def test_calendar_skill_sin_estado_por_tenant() -> None:
         "list_client_appointments",
         "list_appointment_types",
         "find_next_available",
+        "list_calendars",  # HU-CAL-08: solo se ofrece con varias agendas
     }
 
 @pytest.mark.asyncio

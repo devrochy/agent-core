@@ -7,9 +7,10 @@ Los tokens de acceso/refresh NO van aquí: viven en la conexión del tenant
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, PrivateAttr, SecretStr, model_validator
 
 from core.mcp.types import BasePluginConfig
 
@@ -63,6 +64,14 @@ DEFAULT_EMAIL_BODY_CANCELLED = (
 
 
 class CalendarConfig(BasePluginConfig):
+    # HU-CAL-08: conexión de Google de la agenda para la que se armó esta config efectiva
+    # (`agendas.config_de`). No es un campo del schema: no se guarda ni se muestra en el panel.
+    _connection_id: uuid.UUID | None = PrivateAttr(default=None)
+
+    @property
+    def connection_id(self) -> uuid.UUID | None:
+        return self._connection_id
+
     source: str = Field(
         default="interno",
         description=(
@@ -78,6 +87,15 @@ class CalendarConfig(BasePluginConfig):
     )
     calendar_id: str = Field(
         default="primary", description="ID del calendario (primary = calendario principal)"
+    )
+    multi_agenda_modo: str = Field(
+        default="cliente_elige",
+        description=(
+            "Varias agendas (HU-CAL-08): 'cliente_elige' (con 2 o más agendas el asistente "
+            "le informa al cliente la disponibilidad de cada una y le pregunta con cuál quiere "
+            "la cita) o 'desactivado' (el asistente usa siempre la agenda principal). Con una "
+            "sola agenda no cambia nada."
+        ),
     )
     timezone: str = Field(default="America/Bogota", description="Zona horaria de las citas")
     # Minutos: la duración y el bloque son de al menos 1; el margen puede ser 0 (422 si no).
@@ -166,7 +184,7 @@ class CalendarConfig(BasePluginConfig):
         default="📅 Tu cita «{titulo}» quedó agendada para el {fecha} a las {hora} ({zona}).{enlace}",
         max_length=1000,
         json_schema_extra={"format": "textarea"},
-        description="Confirmación al cliente. Placeholders: {titulo}, {fecha}, {hora}, {zona}, {enlace}",
+        description="Confirmación al cliente. Placeholders: {titulo}, {fecha}, {hora}, {zona}, {enlace}, {agenda} (solo con varias agendas)",
     )
     recordatorios_horas: list[Annotated[int, Field(ge=0, le=720)]] = Field(
         default_factory=lambda: [24, 1],
@@ -227,6 +245,8 @@ class CalendarConfig(BasePluginConfig):
         """Modo `google` exige credenciales OAuth; `interno` no las necesita."""
         if self.source not in ("interno", "google"):
             raise ValueError("source debe ser 'interno' o 'google'")
+        if self.multi_agenda_modo not in ("cliente_elige", "desactivado"):
+            raise ValueError("multi_agenda_modo debe ser 'cliente_elige' o 'desactivado'")
         if self.source == "google" and (
             not self.client_id or not self.client_secret.get_secret_value()
         ):

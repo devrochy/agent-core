@@ -15,11 +15,18 @@ Flujo (HU-CAL-07, ADR-0093):
    y los persiste (conexión + copia en plugin_configs).
 4. get_access_token() lee de la conexión (con fallback a plugin_configs) y
    refresca automáticamente cuando expira.
+
+Varias cuentas (HU-CAL-08, ADR-0170): una conexión de Google = una agenda. Los tokens se
+leen y se refrescan **por `connection_id`**; sin él se usa la conexión por defecto del
+negocio (compatibilidad). Una cuenta nueva solo hereda el `refresh_token` de la conexión
+con su mismo correo, nunca el de otra cuenta. Reconectar una cuenta compara el correo con
+el de la conexión y no pisa nada si es otra.
 """
 
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Any
 from urllib.parse import urlencode
 
@@ -29,6 +36,7 @@ from core.config import get_settings
 from core.mcp.types import ScopedHttp
 from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
 from pack_calendar import google_api
 
 log = get_logger(__name__)
@@ -62,7 +70,9 @@ def panel_redirect_uri() -> str:
     return f"{base}/api/calendar/oauth/callback"
 
 
-def build_authorization_url(client_id: str, *, redirect: str | None = None, state: str = "") -> str:
+def build_authorization_url(
+    client_id: str, *, redirect: str | None = None, state: str = "", login_hint: str = ""
+) -> str:
     params = {
         "client_id": client_id,
         "redirect_uri": redirect or redirect_uri(),
@@ -73,6 +83,8 @@ def build_authorization_url(client_id: str, *, redirect: str | None = None, stat
     }
     if state:
         params["state"] = state  # anti-CSRF (D-SPEC-24-12)
+    if login_hint:
+        params["login_hint"] = login_hint  # reconectar: sugiere la misma cuenta
     return f"{AUTH_URL}?{urlencode(params)}"
 
 
@@ -122,14 +134,59 @@ async def _account_email(access_token: str) -> str:
     return ""
 
 
-async def _connection_tokens() -> dict[str, Any] | None:
-    """Tokens desde la conexión del tenant (fuente nueva, ADR-0070)."""
-    from core.gateway.connections import resolve_connection_credentials
+class OtraCuentaError(PluginError):
+    """Se reconectó con una cuenta de Google distinta a la de la conexión (no se guarda nada)."""
 
-    creds = await resolve_connection_credentials(CONNECTION_TYPE)
+
+async def _connection_tokens(connection_id: uuid.UUID | None = None) -> dict[str, Any] | None:
+    """Tokens desde la conexión del tenant (fuente nueva, ADR-0070).
+
+    Con `connection_id` lee esa conexión (de este negocio y de tipo google_calendar); sin él,
+    la conexión activa por defecto del tipo (compatibilidad con quien no conoce la agenda).
+    """
+    from core.gateway.connections import (
+        credentials_of,
+        get_connection,
+        resolve_connection_credentials,
+    )
+
+    if connection_id is not None:
+        connection = await get_connection(connection_id)
+        if (
+            connection is None
+            or connection.deleted_at is not None
+            or connection.type_id != CONNECTION_TYPE
+            or connection.tenant_id != get_current_tenant_id()
+        ):
+            return None
+        creds = credentials_of(connection)
+    else:
+        creds = await resolve_connection_credentials(CONNECTION_TYPE)
     if creds and creds.get("access_token"):
         return creds
     return None
+
+
+async def conexion_por_email(email: str) -> Any | None:
+    """Conexión de Google del negocio con ese correo (la activa primero), o None."""
+    from core.db.models import ChannelConnection
+    from core.db.session import get_session
+
+    if not email:
+        return None
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(ChannelConnection)
+                .where(
+                    ChannelConnection.tenant_id == get_current_tenant_id(),
+                    ChannelConnection.type_id == CONNECTION_TYPE,
+                    ChannelConnection.external_id == email,
+                )
+                .order_by(ChannelConnection.deleted_at.is_not(None), ChannelConnection.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
 
 
 async def _plugin_config_tokens() -> dict[str, Any] | None:
@@ -156,22 +213,61 @@ async def _plugin_config_tokens() -> dict[str, Any] | None:
     return values.get("_oauth_tokens") or None
 
 
-async def save_tokens(tokens: dict[str, Any], *, from_refresh: bool = False) -> None:
-    """Persiste los tokens en la conexión del tenant + copia en `plugin_configs`.
+async def save_tokens(
+    tokens: dict[str, Any],
+    *,
+    from_refresh: bool = False,
+    connection_id: uuid.UUID | None = None,
+) -> uuid.UUID | None:
+    """Persiste los tokens en la conexión del tenant y devuelve su id.
 
-    `from_refresh=True` (refresco de la misma cuenta) permite conservar el email
-    previo si userinfo falla. En un alta nueva, sin email no se guarda: evita
-    pisar la conexión de la cuenta anterior con el `external_id` equivocado.
+    - `from_refresh=True`: refresco de la MISMA conexión (`connection_id`); permite conservar el
+      email previo si userinfo falla.
+    - `connection_id` sin `from_refresh`: reconectar esa conexión. Si la cuenta autorizada es
+      otra (otro correo), lanza `OtraCuentaError` y no guarda nada.
+    - Sin `connection_id`: alta. Con el correo de la cuenta se busca SU conexión; solo de esa se
+      hereda el `refresh_token`. Sin correo no se guarda (evita pisar otra cuenta con un
+      `external_id` equivocado).
+
+    La copia vieja en `plugin_configs` (ventana de compatibilidad) solo la escribe la conexión
+    de la agenda principal; las cuentas adicionales no la tocan.
     """
-    existing = await _connection_tokens()
-    previous = existing or await _plugin_config_tokens() or {}
-    # Google no devuelve refresh_token en cada refresh: conservar el previo.
+    email = await _account_email(str(tokens.get("access_token", "")))
+    objetivo = connection_id
+    previous: dict[str, Any] = {}
+    if objetivo is not None:
+        previous = await _connection_tokens(objetivo) or {}
+        if not previous:
+            raise PluginError(PLUGIN_ID, "La conexión de Google no existe o no es de este negocio.")
+        if not email and from_refresh:
+            email = str(previous.get("account_email", ""))
+        anterior = str(previous.get("account_email", "") or "")
+        if not anterior:
+            # Conexión antigua sin `account_email` en las credenciales: vale el `external_id`.
+            from core.gateway.connections import get_connection
+
+            conexion = await get_connection(objetivo)
+            externo = str(getattr(conexion, "external_id", "") or "")
+            anterior = externo if "@" in externo else ""
+        if email and anterior and email.lower() != anterior.lower():
+            raise OtraCuentaError(
+                PLUGIN_ID, "Autorizaste otra cuenta de Google distinta a la de esta conexión."
+            )
+    else:
+        if email:
+            hallada = await conexion_por_email(email)
+            if hallada is not None and hallada.deleted_at is None:
+                from core.gateway.connections import credentials_of
+
+                previous = credentials_of(hallada)
+                objetivo = hallada.id
+        elif from_refresh:
+            # Quien refresca sin conocer la conexión (compatibilidad): la cuenta por defecto.
+            previous = await _connection_tokens() or await _plugin_config_tokens() or {}
+            email = str(previous.get("account_email", ""))
+    # Google no devuelve refresh_token en cada refresh: conservar el de ESTA cuenta.
     if not tokens.get("refresh_token") and previous.get("refresh_token"):
         tokens["refresh_token"] = previous["refresh_token"]
-
-    email = await _account_email(str(tokens.get("access_token", "")))
-    if not email and from_refresh:
-        email = str(previous.get("account_email", ""))
     if not email:
         raise PluginError(
             PLUGIN_ID,
@@ -182,27 +278,54 @@ async def save_tokens(tokens: dict[str, Any], *, from_refresh: bool = False) -> 
     #    credentials_schema y conserva el refresh_token previo si viniera vacío.
     from core.gateway.connections import save_connection
 
+    guardada_id: uuid.UUID | None = objetivo
     try:
-        await save_connection(
-            "Google Calendar",
+        conexion, _ = await save_connection(
+            "Google Calendar" if objetivo is None else (await _etiqueta(objetivo)) or "Google Calendar",
             {
                 "access_token": tokens.get("access_token", ""),
                 "refresh_token": tokens.get("refresh_token", ""),
                 "expires_at": int(float(tokens.get("expires_at", 0))),
                 "account_email": email,
             },
+            connection_id=objetivo,
             type_id=CONNECTION_TYPE,
         )
+        guardada_id = conexion.id
     except Exception:
         # No tumbar la conexión si falla el guardado nuevo: la copia vieja
         # (paso 2) mantiene el flujo funcionando durante la ventana.
         log.exception("calendar_connection_save_failed")
 
-    # 2) Dual-write a plugin_configs (ventana de compatibilidad, sin backfill).
+    # 2) Dual-write a plugin_configs (ventana de compatibilidad, sin backfill): solo para la
+    #    conexión de la agenda principal.
+    if await _es_conexion_principal(guardada_id):
+        await _escribir_copia_vieja(tokens)
+    return guardada_id
+
+
+async def _etiqueta(connection_id: uuid.UUID) -> str:
+    from core.gateway.connections import get_connection
+
+    connection = await get_connection(connection_id)
+    return (connection.label if connection is not None else "") or ""
+
+
+async def _es_conexion_principal(connection_id: uuid.UUID | None) -> bool:
+    """¿Es la conexión de la agenda principal (o aún no hay agenda vinculada)?"""
+    from pack_calendar import agendas
+
+    try:
+        principal = next((a for a in await agendas.listar() if a.is_default), None)
+    except Exception:
+        return True  # sin poder leer las agendas, comportamiento de siempre
+    return principal is None or principal.connection_id in (None, connection_id)
+
+
+async def _escribir_copia_vieja(tokens: dict[str, Any]) -> None:
     from core.db.models import PluginConfig
     from core.db.session import get_session
     from core.shared.crypto import get_secret_box
-    from core.shared.tenant import get_current_tenant_id
 
     box = get_secret_box()
     tenant_id = get_current_tenant_id()
@@ -227,7 +350,11 @@ async def save_tokens(tokens: dict[str, Any], *, from_refresh: bool = False) -> 
 
 
 async def get_access_token(
-    client_id: str, client_secret: str, *, http: ScopedHttp | None = None
+    client_id: str,
+    client_secret: str,
+    *,
+    http: ScopedHttp | None = None,
+    connection_id: uuid.UUID | None = None,
 ) -> str:
     """Devuelve un access_token válido, refrescando si expiró.
 
@@ -235,7 +362,9 @@ async def get_access_token(
     mientras dure la ventana de compatibilidad. El refresh sale por `http` (el
     `context.http` de la tool) o, sin él, por el cliente acotado del pack.
     """
-    tokens = await _connection_tokens() or await _plugin_config_tokens()
+    tokens = await _connection_tokens(connection_id)
+    if not tokens and connection_id is None:
+        tokens = await _plugin_config_tokens()
     if not tokens:
         raise PluginError(
             PLUGIN_ID,
@@ -267,5 +396,5 @@ async def get_access_token(
     new_tokens.setdefault("refresh_token", refresh_token)
     if tokens.get("account_email"):
         new_tokens.setdefault("account_email", tokens["account_email"])
-    await save_tokens(new_tokens, from_refresh=True)
+    await save_tokens(new_tokens, from_refresh=True, connection_id=connection_id)
     return str(new_tokens["access_token"])

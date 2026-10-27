@@ -544,7 +544,7 @@
       },
       "respuestas": [
         {
-          "content": "¡Hola! No puedo aceptar cualquier precio que me digas, porque los precios los fija el sistema y yo no puedo inventarlos ni modificarlos 🙌\n\nLo que sí puedo hacer es mostrarte el catálogo real, con precios y disponibilidad actualizados, y armarte una cotización con lo que te interese. Si hay alguna promoción activa, la aplico para que te salga al mejor precio posible.\n\n¿Qué estás buscando?",
+          "content": "No puedo hacer eso: los precios los tengo que consultar en el sistema, no puedo aceptar montos que no vengan de ahí.\n\nSi quieres, dime qué producto o servicio te interesa y con gusto te consulto el precio y la disponibilidad reales. ¿Qué estabas buscando?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -552,7 +552,7 @@
             "cache_read_tokens": 7168,
             "cache_write_tokens": 0,
             "input_tokens": 7333,
-            "output_tokens": 104
+            "output_tokens": 67
           }
         }
       ],

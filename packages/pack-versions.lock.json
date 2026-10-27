@@ -1,7 +1,8 @@
 {
   "pack_calendar": {
     "2.1.0": "afd6708aa6767d70182b3440d1c01edd0f55fb1072b8baccef443fc060f47755",
-    "2.2.0": "bb4d020ead6998a3bba728e8bd70c827d3916e101b69a00b2b33d55b1e9737f9"
+    "2.2.0": "bb4d020ead6998a3bba728e8bd70c827d3916e101b69a00b2b33d55b1e9737f9",
+    "2.3.0": "22cd2d9a82fa67f48ee9cf1ae5489abd207b6be3aa61800f9d1b0b54f12dd6cc"
   },
   "pack_cobranza": {
     "0.3.0": "cf01b020d8789ca70c222a34be32a3eef428a887169cd33cc820ae4ea0586ba4",

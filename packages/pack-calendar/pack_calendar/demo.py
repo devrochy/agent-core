@@ -33,12 +33,18 @@ def enlace_de(appt_type: Any, config: Any) -> str:
     return (getattr(appt_type, "enlace_reunion", None) or getattr(config, "enlace_reunion", "") or "").strip()
 
 
-def datos_de_cita(titulo: str, inicio: datetime, zona: str, enlace: str) -> dict[str, str]:
-    """Fecha, hora y zona en la hora del negocio (para mensajes y plantillas)."""
+def datos_de_cita(
+    titulo: str, inicio: datetime, zona: str, enlace: str, agenda: str = ""
+) -> dict[str, str]:
+    """Fecha, hora y zona en la hora del negocio (para mensajes y plantillas).
+
+    `agenda` (HU-CAL-08) es el nombre de la agenda y solo viene con varias agendas activas:
+    con una sola queda vacío y los textos no cambian.
+    """
     from pack_calendar.skills import _long_date
 
     local = inicio.astimezone(ZoneInfo(zona))
-    return {"titulo": titulo, "fecha": _long_date(local.date()), "hora": local.strftime("%H:%M"), "zona": zona, "enlace": enlace}
+    return {"titulo": titulo, "fecha": _long_date(local.date()), "hora": local.strftime("%H:%M"), "zona": zona, "enlace": enlace, "agenda": agenda}
 
 
 def texto_confirmacion(plantilla: str, datos: dict[str, str]) -> str:

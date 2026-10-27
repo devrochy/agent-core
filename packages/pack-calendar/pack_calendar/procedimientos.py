@@ -91,6 +91,7 @@ async def tipo_de_cita(valor: Any, ctx: ToolContext, datos: dict[str, Any]) -> R
 
 async def horario_ofrecido(valor: Any, ctx: ToolContext, datos: dict[str, Any]) -> ResolverResult:
     """El horario es uno de los libres que el servidor ofrece ese día (ver el docstring del módulo)."""
+    from pack_calendar import agendas
     from pack_calendar.skills import CalendarSkill, _free_slots, _long_date, _open_window
 
     skill = CalendarSkill()
@@ -108,18 +109,31 @@ async def horario_ofrecido(valor: Any, ctx: ToolContext, datos: dict[str, Any]) 
     tipo = await _tipo_por_id_o_nombre(datos.get("tipo_cita")) if datos.get("tipo_cita") else None
     duracion = int(getattr(tipo, "duration_minutes", 0) or 0) or config.event_duration_minutes
     dia = inicio.date().isoformat()
-    _ocupados, intervalos = await skill._busy_for_day(config, await skill._source(), dia, tz, ctx)
-    libres = _free_slots(
-        _open_window(config, dia),
-        intervalos,
-        tz,
-        dia,
-        slot_minutes=config.slot_minutes,
-        duration_minutes=duracion,
-        buffer_minutes=config.buffer_minutes,
-        limit=_MAX_LIBRES_DEL_DIA,
-        not_before=ahora if inicio.date() == ahora.date() else None,
-    )
+    not_before = ahora if inicio.date() == ahora.date() else None
+
+    async def _libres(cfg: Any, agenda: Any = None) -> list[str]:
+        _ocupados, intervalos = await skill._busy_for_day(cfg, cfg.source, dia, tz, ctx, agenda)
+        return _free_slots(
+            _open_window(cfg, dia),
+            intervalos,
+            tz,
+            dia,
+            slot_minutes=cfg.slot_minutes,
+            duration_minutes=duracion,
+            buffer_minutes=cfg.buffer_minutes,
+            limit=_MAX_LIBRES_DEL_DIA,
+            not_before=not_before,
+        )
+
+    lista, multi = await skill._agendas(config)
+    if multi:
+        # HU-CAL-08: con varias agendas el horario se ofrece si hay hueco en alguna; la agenda se
+        # elige después (create_calendar_event la exige) y valida el solape en ESA agenda.
+        libres = sorted(
+            {h for a in agendas.disponibles(lista, config) for h in await _libres(agendas.config_de(a, config), a)}
+        )
+    else:
+        libres = await _libres(config)
     if not hora_ofrecida(inicio, libres):
         return ResolverResult(ok=False, error=mensaje_no_ofrecido(_long_date(inicio.date()), libres))
     return ResolverResult(ok=True, value=inicio.isoformat())

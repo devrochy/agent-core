@@ -518,7 +518,9 @@ async def _google_token(config: Any) -> str:
     from pack_calendar.oauth import get_access_token
 
     return await get_access_token(
-        config.client_id, config.client_secret.get_secret_value()  # type: ignore[attr-defined]
+        config.client_id,  # type: ignore[attr-defined]
+        config.client_secret.get_secret_value(),  # type: ignore[attr-defined]
+        connection_id=getattr(config, "connection_id", None),
     )
 
 
