@@ -27,6 +27,7 @@ from typing import Any
 from core.agents.responses import load_response
 from core.kernel.decisions import bloquear, marcar_escalado
 from core.kernel.fuera_de_horario import primer_aviso, soltar_aviso, texto_por_defecto
+from core.kernel.horario_de_servicio import MODO_INFORMATIVO
 from core.orchestrator.escalation import (
     ESCALATION_REPLY,
     matches_escalation_keywords,
@@ -189,8 +190,14 @@ async def politicas_de_entrada(
     # Fuera de horario: se responde el mensaje configurado y NO se procesa el turno
     # con el LLM (ahorra costo y evita prometer atención que no hay). Sin config,
     # `within_business_hours` devuelve True (fail-open).
+    # Con horario informativo (HU-AOS-58) el horario es el del equipo humano: no se corta el turno,
+    # el asistente responde 24/7 y lo conoce por el prompt (`core/kernel/horario_de_servicio.py`).
     business_hours = escalation_cfg.get("business_hours")
-    if business_hours and not within_business_hours(business_hours):
+    if (
+        business_hours
+        and escalation_cfg.get("business_hours_mode") != MODO_INFORMATIVO
+        and not within_business_hours(business_hours)
+    ):
         out_msg = str(escalation_cfg.get("out_of_hours_message") or "").strip()
         if out_msg:
             await bloquear(conversation, "out_of_hours", status="replied")

@@ -1640,6 +1640,283 @@
         }
       }
     },
+    "/api/v1/admin/onboarding/avanzar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · primeros pasos"
+        ],
+        "summary": "Avanzar Recorrido",
+        "description": "Guarda el paso del asistente donde va la persona (y retoma un recorrido omitido).",
+        "operationId": "avanzar_recorrido_api_v1_admin_onboarding_avanzar_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AvanzarIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecorridoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/onboarding/omitir": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · primeros pasos"
+        ],
+        "summary": "Omitir Recorrido",
+        "description": "«Lo hago después»: el panel deja de abrir el asistente y muestra el aviso persistente.",
+        "operationId": "omitir_recorrido_api_v1_admin_onboarding_omitir_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecorridoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/onboarding/reanudar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · primeros pasos"
+        ],
+        "summary": "Reanudar Recorrido",
+        "operationId": "reanudar_recorrido_api_v1_admin_onboarding_reanudar_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecorridoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/onboarding/finalizar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · primeros pasos"
+        ],
+        "summary": "Finalizar Recorrido",
+        "description": "Da por completo el recorrido. Lo valida el servidor con el estado real: 409 `faltan_pasos`\n(`details.faltan`) si no hay datos del negocio, agente publicado o una prueba con él.",
+        "operationId": "finalizar_recorrido_api_v1_admin_onboarding_finalizar_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecorridoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/onboarding/dejar-listo": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · primeros pasos"
+        ],
+        "summary": "Dejar Listo",
+        "description": "Deja el agente del asistente listo para probar, de una vez y sin abrirlo a clientes: prepara un\nchat web cerrado, publica el agente ahí y activa su versión. Es idempotente y se puede\nreintentar. Si el gate de pass^k del negocio está cerrado, la activación queda\n`pendiente_de_revision` (no es un error: el agente queda publicado). Dueño o master.",
+        "operationId": "dejar_listo_api_v1_admin_onboarding_dejar_listo_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DejarListoIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DejarListoOut"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_agentes`, `error.details = {metric, used, limit}`; no se escribió nada."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/dlq": {
       "get": {
         "tags": [
@@ -2787,6 +3064,25 @@
         "operationId": "playground_history_api_v1_admin_playground_get",
         "parameters": [
           {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Historial de la prueba por esa conexión.",
+              "title": "Connection Id"
+            },
+            "description": "Historial de la prueba por esa conexión."
+          },
+          {
             "name": "X-Tenant-Id",
             "in": "header",
             "required": false,
@@ -2898,6 +3194,25 @@
         "description": "Cierra la prueba actual y arranca una nueva desde cero.",
         "operationId": "playground_reset_api_v1_admin_playground_reset_post",
         "parameters": [
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reinicia la prueba de esa conexión.",
+              "title": "Connection Id"
+            },
+            "description": "Reinicia la prueba de esa conexión."
+          },
           {
             "name": "X-Tenant-Id",
             "in": "header",
@@ -28828,6 +29143,22 @@
         ],
         "title": "AuditRow"
       },
+      "AvanzarIn": {
+        "properties": {
+          "paso": {
+            "type": "integer",
+            "maximum": 6.0,
+            "minimum": 1.0,
+            "title": "Paso",
+            "description": "Paso al que llega la persona."
+          }
+        },
+        "type": "object",
+        "required": [
+          "paso"
+        ],
+        "title": "AvanzarIn"
+      },
       "AvisoOut": {
         "properties": {
           "evento": {
@@ -33295,6 +33626,16 @@
             "type": "array",
             "title": "Business Ranges",
             "description": "Franjas del horario de atención: [{day, from, to}]. `day` va de 0=lunes a 6=domingo (criterio de `datetime.weekday()`); `from`/`to` en HH:MM, hora local de `business_tz`."
+          },
+          "business_hours_mode": {
+            "type": "string",
+            "enum": [
+              "bloquea",
+              "informativo"
+            ],
+            "title": "Business Hours Mode",
+            "description": "`bloquea`: fuera del horario el asistente no atiende y responde el mensaje fuera de horario (comportamiento de siempre). `informativo`: el horario es el del equipo humano del comercio, el asistente responde 24/7 y lo conoce para informarlo (HU-AOS-58).",
+            "default": "bloquea"
           }
         },
         "type": "object",
@@ -33441,6 +33782,21 @@
             "type": "string",
             "title": "Out Of Hours Message",
             "default": ""
+          },
+          "business_hours_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "bloquea",
+                  "informativo"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Hours Mode"
           },
           "auto_escalate_after_turns": {
             "type": "integer",
@@ -37701,6 +38057,9 @@
             },
             "type": "array",
             "title": "Pasos"
+          },
+          "recorrido": {
+            "$ref": "#/components/schemas/RecorridoOut"
           }
         },
         "type": "object",
@@ -37709,7 +38068,8 @@
           "origen",
           "completos",
           "total",
-          "pasos"
+          "pasos",
+          "recorrido"
         ],
         "title": "PrimerosPasosResponse"
       },
@@ -40320,6 +40680,117 @@
         ],
         "title": "RecentOrder"
       },
+      "RecorridoOut": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "enum": [
+              "pendiente",
+              "en_curso",
+              "omitido",
+              "completo",
+              "no_aplica"
+            ],
+            "title": "Estado",
+            "description": "pendiente | en_curso | omitido | completo | no_aplica (negocio anterior al corte o función apagada)."
+          },
+          "paso": {
+            "type": "integer",
+            "title": "Paso",
+            "description": "Paso del asistente donde va (1 a `total_pasos`)."
+          },
+          "total_pasos": {
+            "type": "integer",
+            "title": "Total Pasos"
+          },
+          "aplica": {
+            "type": "boolean",
+            "title": "Aplica",
+            "description": "El recorrido es del negocio (si no, el panel no muestra nada)."
+          },
+          "abrir": {
+            "type": "boolean",
+            "title": "Abrir",
+            "description": "El panel debe abrir el asistente solo: nunca se tocó y quien consulta es propietario del negocio."
+          },
+          "avisar": {
+            "type": "boolean",
+            "title": "Avisar",
+            "description": "Aviso persistente: empezó o saltó el recorrido y no lo terminó."
+          },
+          "omitido_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Omitido En"
+          },
+          "completado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completado En"
+          },
+          "agente_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agente Id",
+            "description": "Agente que creó el asistente."
+          },
+          "conexion_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conexion Id",
+            "description": "Conexión de pruebas donde quedó publicado."
+          },
+          "probado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Probado En",
+            "description": "Primera prueba con ese agente."
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado",
+          "paso",
+          "total_pasos",
+          "aplica",
+          "abrir",
+          "avisar"
+        ],
+        "title": "RecorridoOut"
+      },
       "RegisterNumberRequest": {
         "properties": {
           "pin": {
@@ -41131,6 +41602,45 @@
           "is_active"
         ],
         "title": "SpecVersion"
+      },
+      "SubPasoOut": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "enum": [
+              "conexion",
+              "publicar",
+              "activar"
+            ],
+            "title": "Clave"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "hecho",
+              "ya_estaba",
+              "pendiente_de_revision"
+            ],
+            "title": "Estado"
+          },
+          "mensaje": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mensaje"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "estado"
+        ],
+        "title": "SubPasoOut"
       },
       "SubscribeRequest": {
         "properties": {
@@ -42206,6 +42716,19 @@
           "text": {
             "type": "string",
             "title": "Text"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id",
+            "description": "Conexión del negocio por cuya release se prueba (HU-AOS-57): el turno corre por el agente publicado ahí. Sin ella, la prueba de siempre (sin release). Sigue siendo del canal `test`."
           }
         },
         "type": "object",
@@ -45138,6 +45661,66 @@
           "literals_to_migrate"
         ],
         "title": "DeclarativeToolsOut"
+      },
+      "DejarListoIn": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id",
+            "description": "Agente (borrador) que el asistente creó con `from-script`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id"
+        ],
+        "title": "DejarListoIn"
+      },
+      "DejarListoOut": {
+        "properties": {
+          "conexion_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Conexion Id",
+            "description": "Conexión de chat web (sin abrir al público) donde queda para probar."
+          },
+          "release_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Id"
+          },
+          "listo": {
+            "type": "boolean",
+            "title": "Listo",
+            "description": "El agente quedó activo y se puede probar con `POST /admin/playground/message`."
+          },
+          "pasos": {
+            "items": {
+              "$ref": "#/components/schemas/SubPasoOut"
+            },
+            "type": "array",
+            "title": "Pasos"
+          },
+          "recorrido": {
+            "$ref": "#/components/schemas/RecorridoOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conexion_id",
+          "listo",
+          "pasos",
+          "recorrido"
+        ],
+        "title": "DejarListoOut"
       },
       "Dependencia": {
         "properties": {
