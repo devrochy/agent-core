@@ -682,6 +682,7 @@ async def test_reset_del_panel_con_sesion_vinculada_vuelve_a_pedir_qr(
         connection_id=uuid.UUID(int=2),
         connection_external_id="waweb:1",
         status=status.CONNECTED,
+        linked_before=True,
     )
     registry = FakeRegistry([ctx])
     store = StoreConBlob(tmp_path, blob="creds-viejas")
@@ -760,3 +761,5 @@ async def test_reset_del_panel_con_sesion_vinculada_vuelve_a_pedir_qr(
     )
     assert vistos[1] == (False, None), "el socket nuevo debe arrancar sin credenciales"
     assert registry.statuses[ctx.tenant_id] == status.PENDING_QR
+    # El QR que sigue a un reset es lo esperado: no es una "sesión perdida".
+    assert connector._lost_alerted == set()

@@ -446,12 +446,44 @@ Notas aprendidas en vivo (2026-09-30):
 - **No** agregar `--sysctl net.ipv6.conf.all.disable_ipv6=1`: colgaba a Neonize.
 - Neonize (Go) revienta con `concurrent map writes` si se conectan dos sesiones a
   la vez: el conector serializa el puente con un lock global.
-- La sesión sin vincular se limpia al iniciar cada ciclo (si no, Neonize
-  "reanuda" credenciales viejas y nunca emite QR).
-- El watchdog solo recicla sockets que **no** emitieron ningún QR en el ciclo.
+- La sesión **que nunca se vinculó** se limpia al iniciar cada ciclo (si no, Neonize
+  "reanuda" credenciales viejas y nunca emite QR). "Nunca se vinculó" se decide con un
+  dato durable (`waweb_sessions.last_connected_at`/`jid` más `creds_encrypted` no nulo),
+  **no** con `status` ni con memoria del proceso: una sesión que sí estuvo conectada no se
+  borra aunque la fila haya quedado en `error`/`pending_qr` (2026-10-26). Cada borrado deja
+  el log `waweb_session_cleared` con su `motivo` (`nunca_vinculada`, `watchdog_sin_qr`,
+  `reset_panel`, `logged_out`).
+- `persist` solo guarda un directorio restaurado del blob o de una sesión que llegó a
+  `connected`: un `session.db` vacío creado por Neonize ya no pisa el blob.
+- El watchdog recicla (sin tocar el blob de una sesión vinculada) dos casos: socket que no
+  emitió QR ni conectó en `pairing_timeout_s` (45 s), y QR emitido que lleva más de
+  `qr_expired_s` (90 s: el primer QR dura 60 s) sin uno nuevo tras `Login event: timeout`.
+- Si una sesión que estuvo vinculada vuelve a pedir QR, el panel muestra
+  «Sesión perdida: re-vincular por QR» (`last_error`) y se envía una alerta crítica
+  (`waweb_sesion_perdida` en logs; sin `SLACK_ALERTS_WEBHOOK_URL` solo llega a logs).
+- `waweb:ready` se refresca solo mientras el socket está `connected`: sin conexión los
+  envíos fallan rápido en vez de esperar 45 s.
 - Una sesión conectada cuyo socket lleva 60 s sin conexión (el auto-reconnect de
   whatsmeow falló sin emitir `DisconnectedEv`) se recicla con la sesión guardada:
   buscar `waweb_socket_zombie` en los logs (2026-10-10).
+
+**Despliegues del conector (sin solape y con tiempo para guardar la sesión).** Cada
+reinicio compite por la misma sesión de WhatsApp y el estado de Neonize vive en un
+tmpfs que se pierde con el contenedor; lo único durable es el blob que `persist` escribe
+en la BD. Requisitos al desplegar (aplicar a mano en Coolify; el repo no los fija):
+- **Detener el contenedor viejo antes de arrancar el nuevo.** Dos conectores con la misma
+  sesión se pelean el stream (`StreamReplaced`, doble autenticación, mensajes perdidos) y
+  el nuevo puede quedar sin conectar. No activar *rolling update* para este recurso (con el
+  health check desactivado no debería haber solape: comprobarlo con `docker ps` durante el
+  despliegue — no deben convivir dos contenedores `yqd5gq5j…`).
+- **`stop_grace_period` suficiente** (≥ 30 s; p. ej. `--stop-timeout 30` en Custom Docker
+  Options). `scripts/entrypoint-connector.sh` hace `exec` del proceso Python, así que
+  SIGTERM llega a `core.waweb.connector`, que cancela las tareas y deja correr el `finally`
+  de `run_session` (persistir la sesión y desconectar el socket). El valor por defecto de
+  Docker (10 s) mata el proceso con SIGKILL antes de que termine si la BD o el puente de
+  Neonize van lentos, y la sesión se reanuda con el último estado guardado.
+- Tras un despliegue, verificar en logs `waweb_inbound_publicado`/`connected` y que no
+  aparezca `waweb_sesion_perdida`. No redesplegar el conector mientras se re-vincula.
 
 ## Persistencia de artefactos de tenant (`TENANTS_ROOT`)
 
