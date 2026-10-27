@@ -756,7 +756,13 @@ class QaEscenarioResultado(QaEscenario):
     creado: QaEscenarioCreado
 
 
-@router.get("/datos/escenarios", response_model=QaEscenarios)
+_RESPUESTAS_ESCENARIOS: dict[int | str, dict[str, Any]] = {
+    403: {"description": "Solo el admin de plataforma y los testers."},
+    404: {"description": "Fuera de test (`QA_TESTERS_ENABLED` apagada) o el escenario no existe."},
+}
+
+
+@router.get("/datos/escenarios", response_model=QaEscenarios, responses=_RESPUESTAS_ESCENARIOS)
 async def listar_escenarios(principal: Annotated[Principal, Depends(_leer)]) -> dict[str, Any]:
     """Escenarios de datos de prueba y lo que creó cada uno la última vez (HU-QA-13). 404 fuera de test."""
     from core.qa import escenarios
@@ -768,7 +774,15 @@ async def listar_escenarios(principal: Annotated[Principal, Depends(_leer)]) -> 
         raise _error(exc) from exc
 
 
-@router.post("/datos/escenarios/{slug}", response_model=QaEscenarioResultado, status_code=201)
+@router.post(
+    "/datos/escenarios/{slug}",
+    response_model=QaEscenarioResultado,
+    status_code=201,
+    responses={
+        **_RESPUESTAS_ESCENARIOS,
+        409: {"description": "Sin datos preparados, otra corrida en curso o el escenario no se puede crear (motivo)."},
+    },
+)
 async def crear_escenario(slug: str, principal: Annotated[Principal, Depends(_escribir)]) -> dict[str, Any]:
     """Crea un caso nuevo del escenario en el negocio de prueba del tester, sin LLM y sin borrar nada
     (HU-QA-13). 404 si no existe o fuera de test; 409 sin datos preparados, con otra corrida en curso o

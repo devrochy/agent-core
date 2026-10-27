@@ -350,7 +350,10 @@ async def conversacion_con_turnos(ctx: Contexto) -> Resultado:
     )
     async with get_session() as s:
         dueno = (
-            await s.execute(text("SELECT active_agent_instance_id FROM conversations WHERE id = :c"), {"c": conv.id})
+            await s.execute(
+                text("SELECT active_agent_instance_id FROM conversations WHERE tenant_id = :t AND id = :c"),
+                {"t": ctx.tenant_id, "c": conv.id},
+            )
         ).scalar_one()
     if dueno != chat.agenda.instancia:
         raise FalloEscenario("El traspaso a Agenda no se aplicó.")

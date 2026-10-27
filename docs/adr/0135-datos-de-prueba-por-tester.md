@@ -197,7 +197,8 @@ por el chat web para los flujos de punta a punta. Esta adenda fija los escenario
     su exención). Es el comportamiento de HU-QA-09 y no se cambia: lo dicen las tarjetas de los dos escenarios.
 12. **Registro.** Cada escenario creado deja un `qa_events` (`campo='datos.escenario'`,
     `item_slug='datos-escenario-<slug>'`, `admin_id` del tester, `despues` con el resumen en JSON). El GET lee la
-    última fila por tester y escenario.
+    última fila por tester y escenario. `qa_events` es una tabla de sistema sin RLS: el resumen lleva nombres de
+    clientes ficticios y rutas con ids del negocio de prueba, y todo lector debe filtrar por `admin_id`.
 
 **Consecuencias.** El panel tiene datos para probar cada módulo sin semanas de uso ni un LLM. A cambio, el negocio de
 prueba acumula turnos, avisos y versiones de mentira, que solo se limpian purgando el negocio, y los escenarios de

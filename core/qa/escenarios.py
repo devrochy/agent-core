@@ -366,12 +366,15 @@ async def _mensajes_fallidos(ctx: Contexto) -> Resultado:
     «Reintentar» lo procesa de verdad, sin turno ni envío."""
     from core.db.models import DomainEvent
     from core.memory.working import get_redis
-    from core.orchestrator.consumer import DEAD_LETTER_STREAM
+    from core.orchestrator.consumer import DEAD_LETTER_STREAM, MARCA_ESCENARIO
 
     cid, _activa, _canary = await conexion_web(ctx.tenant_id)
     async with get_session() as session:
         clave = (
-            await session.execute(text("SELECT external_id FROM channel_connections WHERE id = :c"), {"c": cid})
+            await session.execute(
+                text("SELECT external_id FROM channel_connections WHERE tenant_id = :t AND id = :c"),
+                {"t": ctx.tenant_id, "c": cid},
+            )
         ).scalar_one()
     visitante = f"web:qa-dlq-{ctx.sufijo.lower()}"
     await crear_cliente(
@@ -397,6 +400,8 @@ async def _mensajes_fallidos(ctx: Contexto) -> Resultado:
         "error": "RuntimeError: escenario de prueba (el turno falló tres veces)",
         "deliveries": "3",
         "failed_at": ahora.isoformat(),
+        # No cuenta para la alerta al on-call ni para el chequeo previo a producción (`dlq_pendientes`).
+        MARCA_ESCENARIO: "mensajes-fallidos",
     }
     entry_id = await get_redis().xadd(DEAD_LETTER_STREAM, entrada_dlq)
     async with get_session() as session:
@@ -525,7 +530,7 @@ async def _negocio_del_tester(admin: Admin) -> Contexto:
                 text(
                     "SELECT d.tenant_id, d.slug, d.dueno_admin_id, a.email FROM qa_tester_datasets d "
                     "JOIN tenants t ON t.id = d.tenant_id AND t.slug = d.slug AND t.slug LIKE 'qa-%' "
-                    "AND t.deleted_at IS NULL "
+                    "AND t.deleted_at IS NULL AND t.status = 'active' "
                     "LEFT JOIN admins a ON a.id = d.dueno_admin_id "
                     "WHERE d.admin_id = :a AND d.estado = 'listo' AND d.slug = :s"
                 ),
@@ -623,6 +628,9 @@ async def crear(admin: Admin, slug: str) -> dict[str, Any]:
             tomado = (await candado.execute(text(CANDADO_SQL), {"t": str(ctx.tenant_id)})).scalar_one()
         if not tomado:
             raise QaError("conflicto", "Ya se está creando un escenario en tu negocio de prueba. Espera un momento.")
+        # Con el candado tomado se vuelve a comprobar el negocio (pudo suspenderse o purgarse en el medio).
+        if (await _negocio_del_tester(admin)).tenant_id != ctx.tenant_id:
+            raise QaError("conflicto", "Tu negocio de prueba cambió: vuelve a intentarlo.")
         try:
             async with tenant_scope(ctx.tenant_id):
                 if escenario.agent_os:
@@ -632,6 +640,9 @@ async def crear(admin: Admin, slug: str) -> dict[str, Any]:
             raise QaError("conflicto", str(exc)) from exc
         except ConflictoDeRelease as exc:
             raise QaError("conflicto", str(exc)) from exc
+        except PermissionError as exc:  # un pack fuera del negocio del escenario: nunca debería pasar
+            log.error("qa_escenario_fuera_del_negocio", escenario=slug)
+            raise QaError("conflicto", "El escenario no se pudo crear en tu negocio de prueba.") from exc
     resumen = {"sufijo": ctx.sufijo, "detalle": resultado.detalle, "conteos": resultado.conteos, "ruta": resultado.ruta}
     async with get_session() as session:
         evento = QaEvent(

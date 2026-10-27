@@ -223,7 +223,7 @@ async def check_worker_heartbeat_and_dlq() -> PreflightCheck:
     un Redis vacío (CI) siempre va a dar `ok=False` por ausencia -- es el
     comportamiento correcto, no un bug del check."""
     from core.memory.working import get_redis
-    from core.orchestrator.consumer import DEAD_LETTER_STREAM
+    from core.orchestrator.consumer import dlq_pendientes
 
     now = datetime.now(UTC)
     redis = get_redis()
@@ -241,7 +241,7 @@ async def check_worker_heartbeat_and_dlq() -> PreflightCheck:
             detail=f"Heartbeat viejo ({heartbeat_at.isoformat()}) -- el worker puede estar caído", checked_at=now,
         )
 
-    dlq_size = await redis.xlen(DEAD_LETTER_STREAM)
+    dlq_size = await dlq_pendientes(redis)
     if dlq_size > 0:
         return PreflightCheck(key="worker_heartbeat_and_dlq", ok=False, detail=f"DLQ con {dlq_size} eventos pendientes", checked_at=now)
 
