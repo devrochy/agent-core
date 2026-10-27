@@ -48,6 +48,15 @@ def test_periodo_son_dos_ventanas_contiguas_de_7_dias() -> None:
     assert p.previo_hasta - p.previo_desde == timedelta(days=7)
 
 
+def test_versus_dice_contra_que_se_compara() -> None:
+    assert _kpi_a_dict(Kpi("a", "A", 1.0, previo=1.0))["versus"] == "los 7 días anteriores"
+    assert (
+        _kpi_a_dict(Kpi("a", "A", 1.0, previo=1.0, versus="el mes anterior"))["versus"]
+        == "el mes anterior"
+    )
+    assert _kpi_a_dict(Kpi("a", "A", 1.0))["versus"] is None  # foto de hoy: nada que comparar
+
+
 def test_kpi_a_dict_lleva_el_delta_y_el_destino_semantico() -> None:
     k = Kpi(
         "pedidos",

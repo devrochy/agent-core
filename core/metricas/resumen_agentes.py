@@ -15,6 +15,9 @@ detalle al que enlaza): turnos, conversaciones y costo salen de `usage_ledger.ag
 existen con runtime v3. El módulo de un agente es el del pack cuya `agent_key` es la clave de su
 plantilla; los módulos que ningún agente cubre cuelgan del General.
 
+El Coordinador (`kind=core`) no sale como agente: sus turnos cuentan en el bloque del negocio y no en
+ninguna tarjeta, así que la suma por agente puede quedar por debajo del total.
+
 Permisos: cada KPI se omite (no sale en cero) si el admin no tiene la sección que lo respalda. Las
 tasas salen `None` bajo la muestra mínima de fiabilidad. Todo filtra `tenant_id` además de RLS y
 exige el `tenant_scope` del negocio. Un módulo que falla se informa en su `error` y no tumba el resto.
@@ -57,6 +60,7 @@ from core.shared.test_mode import TEST_CHANNEL
 log = logging.getLogger(__name__)
 
 VENTANA = timedelta(days=7)
+VERSUS_POR_DEFECTO = "los 7 días anteriores"
 ESTADOS_ABIERTOS = ("active", "suspended")
 REF_GENERAL = KEY_GENERAL
 
@@ -96,6 +100,7 @@ def _kpi_a_dict(k: Kpi) -> dict[str, Any]:
         "delta_pct": k.delta_pct,
         "polaridad": k.polaridad,
         "hint": k.hint,
+        "versus": k.versus or (VERSUS_POR_DEFECTO if k.previo is not None else None),
         "destino": {"ruta": k.destino.ruta, "params": dict(k.destino.params)}
         if k.destino
         else None,

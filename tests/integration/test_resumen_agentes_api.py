@@ -60,7 +60,12 @@ async def _turno_hace(tid, conv, iid, cid, dias: float, costo: float = 0.01) -> 
         "insert into usage_ledger (id, tenant_id, conversation_id, model, input_tokens, output_tokens, "
         "cost_usd, connection_id, agent_instance_id, created_at) "
         "values (:id, :t, :c, 'fake', 10, 5, :costo, :conn, :i, :cuando)",
-        id=uuid.uuid4(), t=tid, c=conv, conn=cid, i=iid, costo=costo,
+        id=uuid.uuid4(),
+        t=tid,
+        c=conv,
+        conn=cid,
+        i=iid,
+        costo=costo,
         cuando=datetime.now(UTC) - timedelta(days=dias),
     )
 
@@ -72,8 +77,16 @@ async def _pedido(tid, conv, cliente, *, estado: str, pago: str, total: float = 
         "insert into pack_commerce_orders (id, tenant_id, conversation_id, customer_id, idempotency_key, "
         "order_seq, public_order_number, status, payment_status, total) "
         "values (:id, :t, :c, :cli, :k, :s, :n, :st, :p, :tot)",
-        id=uuid.uuid4(), t=tid, c=conv, cli=cliente, k=uuid.uuid4().hex, s=seq, n=f"P-{seq}",
-        st=estado, p=pago, tot=total,
+        id=uuid.uuid4(),
+        t=tid,
+        c=conv,
+        cli=cliente,
+        k=uuid.uuid4().hex,
+        s=seq,
+        n=f"P-{seq}",
+        st=estado,
+        p=pago,
+        tot=total,
     )
 
 
@@ -103,7 +116,9 @@ async def _escenario() -> dict:
         tid,
         "insert into pack_calendar_appointments (id, tenant_id, start_at, end_at, status) "
         "values (:id, :t, :s, :e, 'scheduled')",
-        id=uuid.uuid4(), t=tid, s=datetime.now(UTC) + timedelta(days=2),
+        id=uuid.uuid4(),
+        t=tid,
+        s=datetime.now(UTC) + timedelta(days=2),
         e=datetime.now(UTC) + timedelta(days=2, hours=1),
     )
     return {"tid": tid, "ventas": ventas, "agenda": agenda}
@@ -135,8 +150,10 @@ async def test_kpis_del_negocio_de_cada_agente_y_de_su_modulo(app_client) -> Non
     assert ventas["ref"] == str(e["ventas"])
     k = _kpis(ventas)
     assert (k["turnos"]["valor"], k["turnos"]["previo"], k["turnos"]["delta_pct"]) == (3, 1, 200)
+    assert k["turnos"]["versus"] == "los 7 días anteriores"
     assert k["turnos"]["destino"] == {
-        "ruta": "agente", "params": {"ref": str(e["ventas"]), "pestana": "conversaciones"},
+        "ruta": "agente",
+        "params": {"ref": str(e["ventas"]), "pestana": "conversaciones"},
     }
     assert k["tareas_abiertas"]["valor"] == 1 and k["tareas_abiertas"]["previo"] is None
     assert k["costo"]["valor"] == pytest.approx(0.03)
@@ -165,24 +182,32 @@ async def test_permisos_omiten_el_kpi_en_vez_de_mostrar_cero(app_client) -> None
     e = await _escenario()
     tid = e["tid"]
 
-    sin_costos = await api_headers(app_client, tid, email=await _colaborador(tid, ("costs",)), password=PASSWORD)
+    sin_costos = await api_headers(
+        app_client, tid, email=await _colaborador(tid, ("costs",)), password=PASSWORD
+    )
     datos = (await app_client.get(_URL, headers=sin_costos)).json()
     assert "costo_llm" not in _kpis(datos["general"])
     assert all("costo" not in _kpis(a) for a in datos["agentes"])
     assert _kpis(_agente_por_key(datos, "ventas"))["turnos"]["valor"] == 3  # lo demás sigue
 
-    sin_agentes = await api_headers(app_client, tid, email=await _colaborador(tid, ("agents",)), password=PASSWORD)
+    sin_agentes = await api_headers(
+        app_client, tid, email=await _colaborador(tid, ("agents",)), password=PASSWORD
+    )
     datos = (await app_client.get(_URL, headers=sin_agentes)).json()
     assert datos["agentes"] == []
     assert {"tasa_escalamiento", "consistencia"}.isdisjoint(_kpis(datos["general"]))
     assert "conversaciones" in _kpis(datos["general"])
 
-    sin_ventas = await api_headers(app_client, tid, email=await _colaborador(tid, ("pack_commerce",)), password=PASSWORD)
+    sin_ventas = await api_headers(
+        app_client, tid, email=await _colaborador(tid, ("pack_commerce",)), password=PASSWORD
+    )
     datos = (await app_client.get(_URL, headers=sin_ventas)).json()
     assert _agente_por_key(datos, "ventas")["modulos"] == []
     assert [m["id"] for m in _agente_por_key(datos, "agenda")["modulos"]] == ["pack_calendar"]
 
-    sin_dashboard = await api_headers(app_client, tid, email=await _colaborador(tid, ("dashboard",)), password=PASSWORD)
+    sin_dashboard = await api_headers(
+        app_client, tid, email=await _colaborador(tid, ("dashboard",)), password=PASSWORD
+    )
     assert (await app_client.get(_URL, headers=sin_dashboard)).status_code == 403
 
 
@@ -221,22 +246,37 @@ async def test_runtime_v3_cuenta_los_escalados_por_agente(app_client) -> None:
     e = await _escenario()
     tid = e["tid"]
     await banderas_como_dueno(tid, aos_runtime="v3")
-    cid = (await _sql(tid, "select connection_id from agent_instances where agent_id = :a", a=e["ventas"]))[0][0]
-    iid = (await _sql(tid, "select id from agent_instances where agent_id = :a", a=e["ventas"]))[0][0]
-    conv = (await _sql(tid, "select id from conversations where tenant_id = :t limit 1", t=tid))[0][0]
+    cid = (
+        await _sql(
+            tid, "select connection_id from agent_instances where agent_id = :a", a=e["ventas"]
+        )
+    )[0][0]
+    iid = (await _sql(tid, "select id from agent_instances where agent_id = :a", a=e["ventas"]))[0][
+        0
+    ]
+    conv = (await _sql(tid, "select id from conversations where tenant_id = :t limit 1", t=tid))[0][
+        0
+    ]
     for resultado in ("escalated", "replied"):
         turno = uuid.uuid4()
         await _sql(
             tid,
             "insert into core_decisions (id, tenant_id, conversation_id, outcome, latency_ms, connection_id, "
             "active_instance_id) values (:id, :t, :c, 'routed', 10, :conn, :i)",
-            id=turno, t=tid, c=conv, conn=cid, i=iid,
+            id=turno,
+            t=tid,
+            c=conv,
+            conn=cid,
+            i=iid,
         )
         await _sql(
             tid,
             "insert into turn_outcomes (turn_id, tenant_id, status, latency_ms, final_instance_id) "
             "values (:id, :t, :s, 10, :i)",
-            id=turno, t=tid, s=resultado, i=iid,
+            id=turno,
+            t=tid,
+            s=resultado,
+            i=iid,
         )
     datos = (await app_client.get(_URL, headers=await api_headers(app_client, tid))).json()
     assert datos["runtime"] == "v3"

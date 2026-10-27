@@ -6,9 +6,10 @@ previos y un destino para ver el detalle. Lo construye `core.metricas.resumen_ag
 cada módulo los aporta su pack (`core.admin.resumen_registry`).
 
 Permisos: la sección `dashboard` abre el endpoint; cada KPI exige además la sección que lo respalda
-y, si falta, **se omite** (no sale en cero): conversaciones (`conversations`), escalaciones
-(`escalations`), costo (`costs`), agentes y fiabilidad (`agents`), y cada módulo su propia sección
-(`pack_cobranza:resumen`, …). Un colaborador sin ninguna recibe la lista vacía, no un 403.
+y, si falta, **se omite** (no sale en cero): en el bloque del negocio, conversaciones
+(`conversations`), escalaciones (`escalations`), costo (`costs`) y fiabilidad (`agents`); los KPIs de
+cada agente exigen `agents` (como `/admin/agents/overview`) y su costo además `costs`; y cada módulo su
+propia sección (`pack_cobranza:resumen`, …). Un colaborador sin ninguna recibe la lista vacía, no un 403.
 """
 
 from __future__ import annotations
@@ -49,6 +50,10 @@ class KpiOut(BaseModel):
     )
     polaridad: Literal["up-good", "up-bad"]
     hint: str | None = None
+    versus: str | None = Field(
+        default=None,
+        description="Contra qué se compara `previo` («los 7 días anteriores», «el mes anterior»).",
+    )
     destino: DestinoOut | None = None
 
 

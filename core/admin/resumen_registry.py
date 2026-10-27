@@ -50,6 +50,8 @@ class Kpi:
     polaridad: Polaridad = "up-good"
     hint: str | None = None
     destino: Destino | None = None
+    # Contra qué se compara `previo` («el mes anterior»); sin él, la ventana anterior del Resumen.
+    versus: str | None = None
 
     @property
     def delta_pct(self) -> float | None:

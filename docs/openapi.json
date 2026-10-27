@@ -34151,6 +34151,18 @@
             ],
             "title": "Hint"
           },
+          "versus": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Versus",
+            "description": "Contra qué se compara `previo` («los 7 días anteriores», «el mes anterior»)."
+          },
           "destino": {
             "anyOf": [
               {

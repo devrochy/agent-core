@@ -33,6 +33,7 @@ async def kpis(tenant_id: uuid.UUID, p: PeriodoResumen) -> list[Kpi]:
             unidad="money",
             previo=m.mrr_mes_anterior,
             hint="Frente al cierre del mes anterior",
+            versus="el mes anterior",
             destino=Destino("suscripciones"),
         ),
         Kpi(
@@ -41,6 +42,7 @@ async def kpis(tenant_id: uuid.UUID, p: PeriodoResumen) -> list[Kpi]:
             float(m.altas_mes),
             previo=float(m.altas_mes_anterior),
             hint="Frente al mes anterior",
+            versus="el mes anterior",
             destino=Destino("suscripciones.lista", {"estado": "activa"}),
         ),
         Kpi(
