@@ -48039,6 +48039,17 @@
             "type": "string",
             "title": "Description"
           },
+          "section": {
+            "type": "string",
+            "title": "Section"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
           "skills": {
             "items": {
               "type": "string"
@@ -48084,6 +48095,8 @@
           "key",
           "name",
           "description",
+          "section",
+          "tools",
           "skills",
           "optional_skills",
           "available",

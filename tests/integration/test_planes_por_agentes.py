@@ -121,13 +121,13 @@ async def _dueno(app_client, tid: uuid.UUID) -> dict[str, str]:
 
 async def _especialista(app_client, h: dict[str, str], key: str) -> str:
     """Especialista con una versión publicada (sin instancia: todavía no cuenta)."""
-    from test_agentes_versionados import ventas_sin_secretos
+    from test_agentes_versionados import spec_en_su_enfoque
 
     r = await app_client.post("/api/v1/admin/agents", headers=h, json={"key": key, "kind": "specialist", "name": key})
     assert r.status_code == 201, r.text
     aid = r.json()["id"]
     r = await app_client.put(
-        f"/api/v1/admin/agents/{aid}/draft", headers=h, json={"content": ventas_sin_secretos(), "lock_version": 0}
+        f"/api/v1/admin/agents/{aid}/draft", headers=h, json={"content": spec_en_su_enfoque(key), "lock_version": 0}
     )
     assert r.status_code == 200, r.text
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/versions", headers=h, json={})

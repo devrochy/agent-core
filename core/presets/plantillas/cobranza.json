@@ -2,6 +2,7 @@
   "key": "cobranza",
   "nombre": "Cobranza",
   "descripcion": "Atiende la cartera: saldo, estado de cuenta y promesas de pago.",
+  "seccion": "Cobranza",
   "habilidades": ["pack_cobranza"],
   "procedimientos": ["pack_cobranza.promesa_de_pago"],
   "playbooks": ["cobranza", "seguimiento-cobranza"],

@@ -61,6 +61,7 @@ from core.api.routers.agents import (
 )
 from core.billing.enforcement import QuotaExceeded
 from core.presets import PresetError, load_plantilla
+from core.presets.agentes import herramientas_de_plantilla
 
 router = APIRouter(prefix="/admin", tags=["admin · editor de agentes"])
 
@@ -90,6 +91,9 @@ class AgentTemplate(BaseModel):
     key: str
     name: str
     description: str
+    # Sección del menú a la que pertenece (HU-AOS-51) y tools de pack que tendrá el agente.
+    section: str
+    tools: list[str]
     skills: list[str]
     optional_skills: list[str]
     available: bool
@@ -210,12 +214,19 @@ async def list_templates(
     tid = _tenant(principal)
     habilitados = await svc.habilitados_del_negocio(tid)
     vistas = svc.plantillas(habilitados)
-    por_clave = await requisitos.de_plantillas(tid, habilitados, [load_plantilla(v.key) for v in vistas])
+    cargadas = {v.key: load_plantilla(v.key) for v in vistas}
+    por_clave = await requisitos.de_plantillas(tid, habilitados, list(cargadas.values()))
+    proveedor = await svc._proveedor_de_suscripciones(tid)
+    catalogo = _catalogo()
     items = [
         AgentTemplate(
             key=v.key,
             name=v.name,
             description=v.description,
+            section=cargadas[v.key].seccion,
+            tools=herramientas_de_plantilla(
+                cargadas[v.key], catalogo, habilitados=habilitados, proveedor_suscripciones=proveedor
+            ),
             skills=list(v.skills),
             optional_skills=list(v.optional_skills),
             available=v.available,

@@ -2,6 +2,7 @@
   "key": "suscripciones",
   "nombre": "Suscripciones",
   "descripcion": "Atiende a los suscriptores: estado de la suscripción y cambio de plan.",
+  "seccion": "Suscripciones",
   "habilidades": ["pack_subscriptions"],
   "procedimientos": ["pack_subscriptions.cambiar_plan"],
   "playbooks": ["suscripciones", "planes"],

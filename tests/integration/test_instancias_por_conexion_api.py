@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 from _api_helpers import api_headers, banderas_como_dueno, uniq
-from test_agentes_versionados import PASSWORD, _dueno, ventas_sin_secretos
+from test_agentes_versionados import PASSWORD, _dueno, spec_en_su_enfoque
 from test_backfill_agentes import _conexion, _legacy_y_settings, _modules, _sql
 from test_byok_produccion import GraphFalso, _alta, _byok_de_prueba, _instalar, _negocio, _num, _url
 
@@ -84,7 +84,7 @@ async def _especialista(app_client, h: dict[str, str], key: str, *, publicar: bo
     aid = r.json()["id"]
     if publicar:
         r = await app_client.put(
-            f"/api/v1/admin/agents/{aid}/draft", headers=h, json={"content": ventas_sin_secretos(), "lock_version": 0}
+            f"/api/v1/admin/agents/{aid}/draft", headers=h, json={"content": spec_en_su_enfoque(key), "lock_version": 0}
         )
         assert r.status_code == 200, r.text
         r = await app_client.post(f"/api/v1/admin/agents/{aid}/versions", headers=h, json={})

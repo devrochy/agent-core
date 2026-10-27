@@ -205,6 +205,31 @@ def _contrato_422(issues: list[Issue]) -> ApiError:
     return ApiError(422, "invalid_spec", f"El spec tiene {len(issues)} problema(s) del contrato.", fields=campos)
 
 
+async def _exigir_enfoque(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> None:
+    """HU-AOS-51: publicar por esta ruta respeta el enfoque del agente igual que el editor (ADR-0155):
+    un superpoder fuera de la plantilla del agente da 422 `superpoder_fuera_de_enfoque` por campo.
+    Los agentes que no vienen de una plantilla (general, coordinador, por API) no se restringen."""
+    from core.agents import editor as editor_svc
+
+    agente = await svc.obtener_agente(tenant_id, agent_id)
+    permitidos = editor_svc.procedimientos_del_enfoque(agente.key)
+    if permitidos is None:
+        return
+    borrador = await svc.obtener_borrador(tenant_id, agent_id)
+    refs = borrador.content.get("procedures") if isinstance(borrador.content, dict) else None
+    issues = [
+        Issue(
+            "superpoder_fuera_de_enfoque",
+            f"procedures[{i}].id",
+            f"«{ref.get('id')}» no es parte del enfoque de este agente. Quítalo para poder publicar.",
+        )
+        for i, ref in enumerate(refs if isinstance(refs, list) else [])
+        if isinstance(ref, dict) and ref.get("id") not in permitidos
+    ]
+    if issues:
+        raise svc.ErroresDeContrato(issues)
+
+
 def _no_finito(valor: str) -> Any:
     raise ValueError(f"número no finito: {valor}")
 
@@ -359,6 +384,7 @@ async def publish_version(
 ) -> PublishOut:
     tid = await _puede_escribir(principal)
     try:
+        await _exigir_enfoque(tid, agent_id)
         version, creada = await svc.publicar(
             tid,
             agent_id,
