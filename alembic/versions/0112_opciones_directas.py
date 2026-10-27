@@ -11,9 +11,10 @@ Cuatro tablas de NEGOCIO: `tenant_id` + RLS habilitada y forzada + policy de ais
   inmutable: `prevent_mutation('message_template_id', 'retired_at')` (0067) rechaza DELETE, TRUNCATE y todo
   UPDATE salvo esas dos columnas. `message_template_id` se fija DESPUÉS de congelar (publicación en Meta,
   `<clave>_v<n>`) y `retired_at` marca el retiro; el resto (`definition`, `definition_hash`, `version_n`…) no
-  cambia nunca. FK simple a `message_templates` con `ON DELETE SET NULL` (esa tabla se borra en cascada con
-  la WABA y no tiene `UNIQUE (tenant_id, id)`); el negocio de la plantilla se valida en código al publicar.
-- `option_sends`: un envío concreto (conversación, versión, vía, `expires_at`). `context` guarda SOLO las
+  cambia nunca. FK COMPUESTA `(tenant_id, message_template_id)` a `message_templates` (para eso se le añade
+  `UNIQUE (tenant_id, id)`, tabla chica) con `ON DELETE SET NULL (message_template_id)` (PostgreSQL 15+): esa
+  tabla se borra en cascada con la WABA y solo se anula la columna, nunca `tenant_id`.
+- `option_sends`: un envío concreto (plantilla, versión, conversación, vía, `expires_at`), de solo INSERT. `context` guarda SOLO las
   rutas y valores que el servidor resolvió para renderizar el cuerpo; el mismo texto ya está en `messages`.
 - `option_activations`: un toque. `UNIQUE (tenant_id, dedupe_key)` y como máximo UNA activación pendiente
   (`pending_confirm`/`running`) por envío y opción (índice parcial): así el `optc:`/`optn:` de una opción no
@@ -52,7 +53,7 @@ _TABLAS = ("option_templates", "option_template_versions", "option_sends", "opti
 _AHORA = sa.text("now()")
 
 
-def _rls(table: str) -> None:
+def _rls(table: str, privilegios: str = "select, insert, update") -> None:
     op.execute(f"alter table {table} enable row level security")
     op.execute(f"alter table {table} force row level security")
     op.execute(
@@ -62,10 +63,12 @@ def _rls(table: str) -> None:
     # Sin DELETE: el borrado lógico es un UPDATE y la historia no se borra (solo `purge_tenant`). Los default
     # privileges de 0003 le dan DELETE al rol de la app, así que se revoca antes de conceder (como 0069).
     op.execute(f"revoke all on {table} from app_runtime")
-    op.execute(f"grant select, insert, update on {table} to app_runtime")
+    op.execute(f"grant {privilegios} on {table} to app_runtime")
 
 
 def upgrade() -> None:
+    # Destino de la FK compuesta de `option_template_versions.message_template_id` (como 0067 en otras tablas).
+    op.execute("alter table message_templates add constraint uq_message_templates_tenant_id_id unique (tenant_id, id)")
     op.create_table(
         "option_templates",
         sa.Column("id", _UUID, primary_key=True),
@@ -99,7 +102,7 @@ def upgrade() -> None:
         sa.Column("version_n", sa.Integer(), nullable=False),
         sa.Column("definition", JSONB(), nullable=False),
         sa.Column("definition_hash", sa.Text(), nullable=False),
-        sa.Column("message_template_id", _UUID, sa.ForeignKey("message_templates.id", ondelete="SET NULL"), nullable=True),
+        sa.Column("message_template_id", _UUID, nullable=True),
         sa.Column("published_at", _TS, nullable=False, server_default=_AHORA),
         sa.Column("retired_at", _TS, nullable=True),
         sa.Column("created_at", _TS, nullable=False, server_default=_AHORA),
@@ -112,6 +115,11 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint("version_n >= 1", name="ck_option_versions_n"),
         sa.CheckConstraint("definition_hash ~ '^[0-9a-f]{64}$'", name="ck_option_versions_hash"),
+    )
+    op.execute(
+        "alter table option_template_versions add constraint fk_option_versions_message_template "
+        "foreign key (tenant_id, message_template_id) references message_templates (tenant_id, id) "
+        "on delete set null (message_template_id)"
     )
     op.create_index(
         "ix_option_versions_tenant_message_template", "option_template_versions", ["tenant_id", "message_template_id"]
@@ -129,6 +137,11 @@ def upgrade() -> None:
         sa.Column("expires_at", _TS, nullable=False),
         sa.Column("created_at", _TS, nullable=False, server_default=_AHORA),
         sa.UniqueConstraint("tenant_id", "id", name="uq_option_sends_tenant_id_id"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "option_template_id"],
+            ["option_templates.tenant_id", "option_templates.id"],
+            name="fk_option_sends_template",
+        ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "version_id"],
             ["option_template_versions.tenant_id", "option_template_versions.id"],
@@ -191,7 +204,8 @@ def upgrade() -> None:
     op.create_index("ix_option_activations_tenant_send", "option_activations", ["tenant_id", "send_id"])
 
     for tabla in _TABLAS:
-        _rls(tabla)
+        # `option_sends` es de solo INSERT: un envío no se edita (la vigencia y el contexto quedan como salieron).
+        _rls(tabla, "select, insert" if tabla == "option_sends" else "select, insert, update")
 
     # Versiones publicadas = inmutables (función genérica de 0067): solo `message_template_id` y `retired_at`.
     op.execute(
@@ -215,3 +229,4 @@ def downgrade() -> None:
     op.drop_table("option_sends")
     op.drop_table("option_template_versions")
     op.drop_table("option_templates")
+    op.execute("alter table message_templates drop constraint if exists uq_message_templates_tenant_id_id")

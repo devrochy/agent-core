@@ -72,3 +72,19 @@ def test_una_declarativa_que_escribe_es_sensible() -> None:
 )
 def test_la_bandera_esta_apagada_salvo_el_literal_true(settings, esperado: bool) -> None:
     assert bandera.habilitada_desde(settings) is esperado
+
+
+def test_nadie_fuera_del_modulo_ni_de_la_ruta_master_toca_la_bandera() -> None:
+    """`bandera.fijar` solo la llamará la ruta de plataforma master-only (PR de la API). Hoy ningún módulo de
+    `core/` la importa; cuando llegue esa ruta, se añade aquí `platform.py` y NINGÚN otro router del dueño."""
+    from pathlib import Path
+
+    raiz = Path(__file__).resolve().parent.parent / "core"
+    permitidos = {"core/kernel/opciones/bandera.py"}
+    importadores = []
+    for ruta in raiz.rglob("*.py"):
+        rel = ruta.relative_to(raiz.parent).as_posix()
+        texto = ruta.read_text(encoding="utf-8")
+        if rel not in permitidos and ("opciones.bandera" in texto or "opciones import bandera" in texto):
+            importadores.append(rel)
+    assert importadores == [], f"módulos que importan la bandera de opciones directas: {importadores}"

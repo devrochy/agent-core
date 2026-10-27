@@ -30,15 +30,15 @@ Todas llevan `id`, `tenant_id`, RLS con `FORCE`, índices que empiezan por `tena
 | Tabla | Qué guarda |
 |---|---|
 | `option_templates` | Clave única por negocio entre las vivas, borrador en `draft_definition`, número de versión vigente, estado (`draft`, `published`, `retired`), borrado lógico |
-| `option_template_versions` | Una fila por versión **publicada**, inmutable: `definition` (jsonb validada con pydantic), `definition_hash`, FK nullable a `message_templates`. Solo `message_template_id` (se fija al publicar en Meta) y `retired_at` pueden cambiar |
-| `option_sends` | Un envío: conversación, versión, vía (`interactive`, `template`, `text`), contexto que resolvió el servidor y `expires_at` |
+| `option_template_versions` | Una fila por versión **publicada**, inmutable: `definition` (jsonb validada con pydantic), `definition_hash`, FK compuesta nullable `(tenant_id, message_template_id)` a `message_templates` (que gana `UNIQUE(tenant_id, id)`; `ON DELETE SET NULL (message_template_id)`). Solo `message_template_id` (se fija al publicar en Meta) y `retired_at` pueden cambiar |
+| `option_sends` | Un envío (solo INSERT: no se edita): plantilla, versión, conversación, vía (`interactive`, `template`, `text`), contexto que resolvió el servidor y `expires_at` |
 | `option_activations` | Un toque: `UNIQUE(tenant_id, dedupe_key)`, `inbound_wamid` único, a lo más una pendiente por (envío, opción) y estados `pending_confirm`, `running`, `done`, `failed`, `cancelled`, `expired` |
 
 `definition` contiene `body`, `footer`, `variables`, `exclusivo`, `ttl_horas` y entre 1 y 10 `opciones[]`. Cada opción lleva `id` estable (`[a-z0-9_]`, hasta 12), `titulo` (20 caracteres o menos), `accion {tool, args_fijos, args_contexto, confirmar}`, `respuesta_ok`, `respuesta_error` y `result_keys` (hasta 5).
 
 **Inmutabilidad.** El borrador no vive en `option_template_versions`: la fila nace al publicar, así que toda fila es inmutable y se reutiliza `prevent_mutation('message_template_id', 'retired_at')` de ADR-0114 en vez de un trigger propio.
 
-**Excepción a la invariante 8.** `option_template_versions`, `option_sends` y `option_activations` no llevan `deleted_at`: son historia de lo publicado y de lo ejecutado, de solo avance. Solo las borra `purge_tenant`. `app_runtime` no recibe `DELETE` en ninguna de las cuatro (el borrado lógico de `option_templates` es un `UPDATE`).
+**Excepción a la invariante 8.** `option_template_versions`, `option_sends` y `option_activations` no llevan `deleted_at`: son historia de lo publicado y de lo ejecutado, de solo avance. Solo las borra `purge_tenant`. `app_runtime` no recibe `DELETE` en ninguna de las cuatro (el borrado lógico de `option_templates` es un `UPDATE`) ni `UPDATE` en `option_sends`.
 
 **Datos personales.** `option_sends.context` guarda los valores que el servidor usó para armar el cuerpo (el mismo texto ya queda en `messages`) y `option_activations` no guarda argumentos ni resultados, solo `args_hash` y un `error_code`. La retención y la supresión por titular de esas filas siguen a las de la conversación; si el ADR-0164 pasa a aceptado y exige anonimizar columnas, `context` es la única candidata.
 

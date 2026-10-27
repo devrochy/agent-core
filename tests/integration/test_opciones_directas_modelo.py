@@ -275,6 +275,9 @@ async def test_la_bandera_nace_apagada_y_solo_fijar_la_enciende() -> None:
             assert await bandera.habilitada(s, tid) is False
         with pytest.raises(PermissionError):  # fuera del tenant_scope del negocio
             await bandera.fijar(tid, True, actor="admin:master@test")
+        async with _scope(uuid.uuid4()) as s:  # `tenants` no tiene RLS: leer el de otro negocio es un error
+            with pytest.raises(PermissionError):
+                await bandera.habilitada(s, tid)
         async with _scope(tid):
             assert await bandera.fijar(tid, True, actor="admin:master@test") is True
         async with _scope(tid) as s:
@@ -290,5 +293,92 @@ async def test_la_bandera_nace_apagada_y_solo_fijar_la_enciende() -> None:
             await bandera.fijar(tid, False, actor="admin:master@test")
         async with _scope(tid) as s:
             assert await bandera.habilitada(s, tid) is False
+    finally:
+        await _limpiar(tid, slug)
+
+
+async def _plantilla_de_meta(tid: uuid.UUID, nombre: str = "aviso_v1") -> uuid.UUID:
+    from core.db.models import MessageTemplate, MetaConnection, WabaAccount
+
+    async with _scope(tid) as s:
+        cuenta = MetaConnection(
+            tenant_id=tid, channel="whatsapp", environment="sandbox", origin="byok",
+            meta_app_id=f"app-{uuid.uuid4().hex[:6]}", status="connected",
+        )
+        s.add(cuenta)
+        await s.flush()
+        waba = WabaAccount(tenant_id=tid, connection_id=cuenta.id, waba_id=f"waba-{uuid.uuid4().hex[:6]}")
+        s.add(waba)
+        await s.flush()
+        plantilla = MessageTemplate(
+            tenant_id=tid, waba_account_id=waba.id, name=nombre, language="es", status="APPROVED",
+            category="UTILITY", components=[{"type": "BODY", "text": "Hola"}],
+        )
+        s.add(plantilla)
+        await s.flush()
+        return plantilla.id
+
+
+async def test_el_vinculo_con_meta_es_del_mismo_negocio_y_sobrevive_al_borrado_de_la_waba() -> None:
+    a = await _negocio("opc-meta-a")
+    b = await _negocio("opc-meta-b")
+    try:
+        ids = await _plantilla_publicada(a[0], a[2])
+        de_b = await _plantilla_de_meta(b[0])
+        propia = await _plantilla_de_meta(a[0])
+        # la plantilla de Meta de OTRO negocio no se puede vincular (FK compuesta), ni como sondeo
+        with pytest.raises(IntegrityError):
+            async with _scope(a[0]) as s:
+                await s.execute(
+                    text("update option_template_versions set message_template_id=:m where id=:i"),
+                    {"m": de_b, "i": ids["version"]},
+                )
+        # la propia sí, DESPUÉS de congelar (columna exenta del trigger)
+        async with _scope(a[0]) as s:
+            await s.execute(
+                text("update option_template_versions set message_template_id=:m where id=:i"),
+                {"m": propia, "i": ids["version"]},
+            )
+        # si la plantilla de Meta desaparece, solo se anula la columna: la versión (y su tenant_id) siguen
+        async with _owner(a[0]) as conn:
+            await conn.execute(text("delete from message_templates where id=:m"), {"m": propia})
+        async with _scope(a[0]) as s:
+            fila = (
+                await s.execute(
+                    text("select tenant_id, message_template_id, definition_hash from option_template_versions where id=:i"),
+                    {"i": ids["version"]},
+                )
+            ).one()
+        assert fila[0] == a[0] and fila[1] is None and fila[2] == HASH
+    finally:
+        await _limpiar(a[0], a[1])
+        await _limpiar(b[0], b[1])
+
+
+async def test_un_envio_no_se_edita_y_su_plantilla_debe_ser_la_de_su_version() -> None:
+    from core.db.models import OptionSend, OptionTemplate
+
+    tid, slug, conv = await _negocio("opc-envio")
+    try:
+        ids = await _plantilla_publicada(tid, conv)
+        with pytest.raises(DBAPIError, match="permission denied"):
+            async with _scope(tid) as s:
+                await s.execute(text("update option_sends set expires_at = now() where id=:i"), {"i": ids["envio"]})
+        async with _scope(tid) as s:
+            otra = OptionTemplate(tenant_id=tid, key="otra")
+            s.add(otra)
+            await s.flush()
+            otra_id = otra.id
+        # una plantilla inexistente en el negocio no cabe
+        with pytest.raises(IntegrityError):
+            async with _scope(tid) as s:
+                s.add(
+                    OptionSend(
+                        tenant_id=tid, option_template_id=uuid.uuid4(), version_id=ids["version"], conversation_id=conv,
+                        via="text", expires_at=datetime.now(UTC),
+                    )
+                )
+                await s.flush()
+        assert otra_id
     finally:
         await _limpiar(tid, slug)

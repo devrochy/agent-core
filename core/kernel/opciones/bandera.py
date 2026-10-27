@@ -6,7 +6,7 @@ dependa de `aos_runtime = v3` y el resolver de las opciones no depende de v3 ni 
 
 Solo la cambia el master: `fijar` es el ÚNICO escritor y lo llama la ruta de plataforma master-only del PR
 de la API (como `banderas_pila.fijar` con `/colaboracion`); ningún router del dueño la escribe, y una
-prueba lo vigila. Límite conocido (a diferencia de las `aos_*`, 0097, no hay función ni trigger en la base):
+prueba (`test_nadie_fuera_del_modulo…`) lo vigila. Límite conocido (a diferencia de las `aos_*`, 0097, no hay función ni trigger en la base):
 `tenants.settings` es un jsonb que `app_runtime` puede reescribir entero, y los caminos de leer-modificar-
 escribir del dict completo (presets, suscripciones) podrían reponer un `true` que el master apagó. Con la
 bandera apagada y sin consumidor es aceptable en este PR; si la ruta de plataforma lo pide, pasa a columna.
@@ -42,7 +42,10 @@ def habilitada_desde(settings: object) -> bool:
 
 
 async def habilitada(session: AsyncSession, tenant_id: uuid.UUID) -> bool:
-    """Lectura barata del consumer/API: apagada si el negocio no existe o está borrado."""
+    """Lectura barata del consumer/API: apagada si el negocio no existe o está borrado. `tenants` no tiene RLS,
+    así que solo se lee el del `tenant_scope` en curso: otro id es un error de quien llama."""
+    if get_current_tenant_id() != tenant_id:
+        raise PermissionError("opciones directas: fuera del tenant_scope del negocio")
     fila = (
         await session.execute(
             text("SELECT settings FROM tenants WHERE id = :t AND deleted_at IS NULL"), {"t": tenant_id}

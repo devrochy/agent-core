@@ -2546,7 +2546,9 @@ class OptionTemplateVersion(Base):
     version_n: Mapped[int] = mapped_column(Integer, nullable=False)
     definition: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     definition_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    message_template_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("message_templates.id", ondelete="SET NULL"))
+    # FK compuesta `(tenant_id, message_template_id)` con `ON DELETE SET NULL (message_template_id)`: solo en la
+    # migración 0112 (SQLAlchemy no expresa la lista de columnas del SET NULL).
+    message_template_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -2559,6 +2561,11 @@ class OptionSend(Base):
     __tablename__ = "option_sends"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_option_sends_tenant_id_id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "option_template_id"],
+            ["option_templates.tenant_id", "option_templates.id"],
+            name="fk_option_sends_template",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "version_id"],
             ["option_template_versions.tenant_id", "option_template_versions.id"],
