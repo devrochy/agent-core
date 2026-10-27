@@ -33,6 +33,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -2491,3 +2492,139 @@ class QaTesterInvitation(Base):
     invitado_por: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id"))
     creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     respondida_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ---------------------------------------------------------------- opciones directas (SPEC-40, ADR-0172, migración 0112)
+class OptionTemplate(Base):
+    """Plantilla con opciones del negocio. El borrador vive en `draft_definition`; cada publicación crea una
+    fila inmutable en `option_template_versions`. Estados: `draft`, `published`, `retired`. Única tabla del
+    módulo con borrado lógico (las otras tres son historia de solo avance, la borra `purge_tenant`).
+    Tabla de NEGOCIO: tenant_id + RLS forzada (invariante 1)."""
+
+    __tablename__ = "option_templates"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_option_templates_tenant_id_id"),
+        Index("uq_option_templates_tenant_key", "tenant_id", "key", unique=True, postgresql_where=text("deleted_at IS NULL")),
+        CheckConstraint("status in ('draft','published','retired')", name="ck_option_templates_status"),
+        CheckConstraint("key ~ '^[a-z0-9_]{1,40}$'", name="ck_option_templates_key"),
+        CheckConstraint("current_version_n is null or current_version_n >= 1", name="ck_option_templates_version"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="draft")
+    draft_definition: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    current_version_n: Mapped[int | None] = mapped_column(Integer)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class OptionTemplateVersion(Base):
+    """Versión PUBLICADA de una plantilla con opciones: inmutable (trigger `prevent_mutation`), salvo
+    `message_template_id` (se fija al publicar en Meta como `<clave>_v<n>`) y `retired_at`."""
+
+    __tablename__ = "option_template_versions"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_option_template_versions_tenant_id_id"),
+        UniqueConstraint("tenant_id", "option_template_id", "version_n", name="uq_option_template_versions_n"),
+        ForeignKeyConstraint(
+            ["tenant_id", "option_template_id"],
+            ["option_templates.tenant_id", "option_templates.id"],
+            name="fk_option_versions_template",
+        ),
+        Index("ix_option_versions_tenant_message_template", "tenant_id", "message_template_id"),
+        CheckConstraint("version_n >= 1", name="ck_option_versions_n"),
+        CheckConstraint("definition_hash ~ '^[0-9a-f]{64}$'", name="ck_option_versions_hash"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    option_template_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    version_n: Mapped[int] = mapped_column(Integer, nullable=False)
+    definition: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    definition_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    message_template_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("message_templates.id", ondelete="SET NULL"))
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OptionSend(Base):
+    """Un envío concreto de una versión a una conversación. `via`: `interactive` | `template` | `text`.
+    `context` guarda lo que el servidor resolvió para renderizar el cuerpo (nunca texto del cliente)."""
+
+    __tablename__ = "option_sends"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_option_sends_tenant_id_id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "version_id"],
+            ["option_template_versions.tenant_id", "option_template_versions.id"],
+            name="fk_option_sends_version",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "conversation_id"], ["conversations.tenant_id", "conversations.id"], name="fk_option_sends_conversation"
+        ),
+        Index("ix_option_sends_tenant_conversation", "tenant_id", "conversation_id", text("created_at DESC")),
+        Index("ix_option_sends_tenant_version", "tenant_id", "version_id"),
+        CheckConstraint("via in ('interactive','template','text')", name="ck_option_sends_via"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    option_template_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    via: Mapped[str] = mapped_column(Text, nullable=False)
+    context: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OptionActivation(Base):
+    """Un toque del cliente. Estados: `pending_confirm`, `running`, `done`, `failed`, `cancelled`, `expired`.
+    `UNIQUE (tenant_id, dedupe_key)`, a lo más una pendiente por (envío, opción) y `inbound_wamid` único.
+    No guarda argumentos ni resultados: solo `args_hash` y un `error_code`."""
+
+    __tablename__ = "option_activations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_option_activations_tenant_id_id"),
+        UniqueConstraint("tenant_id", "dedupe_key", name="uq_option_activations_tenant_dedupe"),
+        ForeignKeyConstraint(["tenant_id", "send_id"], ["option_sends.tenant_id", "option_sends.id"], name="fk_option_activations_send"),
+        Index(
+            "uq_option_activations_pendiente",
+            "tenant_id",
+            "send_id",
+            "option_id",
+            unique=True,
+            postgresql_where=text("state in ('pending_confirm','running')"),
+        ),
+        Index(
+            "uq_option_activations_wamid",
+            "tenant_id",
+            "inbound_wamid",
+            unique=True,
+            postgresql_where=text("inbound_wamid IS NOT NULL"),
+        ),
+        Index("ix_option_activations_tenant_send", "tenant_id", "send_id"),
+        CheckConstraint(
+            "state in ('pending_confirm','running','done','failed','cancelled','expired')", name="ck_option_activations_state"
+        ),
+        CheckConstraint("option_id ~ '^[a-z0-9_]{1,12}$'", name="ck_option_activations_option_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    send_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    option_id: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False, default="pending_confirm")
+    dedupe_key: Mapped[str] = mapped_column(Text, nullable=False)
+    inbound_wamid: Mapped[str | None] = mapped_column(Text)
+    args_hash: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

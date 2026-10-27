@@ -24,6 +24,18 @@ from core.kernel.procedures.catalogo import CORE_OWNER, Catalogo
 # procedimiento lo puede declarar como suyo. Igual a `motor.PREFIJO_CONFIRMAR`.
 PREFIJO_CONFIRMAR = "confirmar:"
 
+# Prefijos de los botones de las opciones directas (SPEC-40, ADR-0172 §3): tocar una opción, confirmarla y
+# cancelarla. Los atiende el resolver del core ANTES que el motor de procedimientos, así que ningún
+# procedimiento puede declararlos (el payload `opt:…` nunca le llegaría, o peor, lo leería como un dato).
+PREFIJOS_OPCIONES = ("opt:", "optc:", "optn:")
+
+
+def choca_con_opciones(prefijo: str) -> bool:
+    """¿Este prefijo de payload de un procedimiento tapa o lee los botones de las opciones directas?
+    El router compara con `payload.startswith(prefijo)`, así que choca el que es igual a uno reservado,
+    el que lo precede (`o`, `op`) y el que lo extiende (`opt:x`). No choca `options:` ni `opcion:`."""
+    return bool(prefijo) and any(r.startswith(prefijo) or prefijo.startswith(r) for r in PREFIJOS_OPCIONES)
+
 # Tope de un procedimiento serializado (CLI y API). Holgado: el más grande de los
 # críticos ocupa unos 4 KiB.
 MAX_PROCEDURE_BYTES = 64 * 1024
@@ -349,6 +361,12 @@ class _Linter:
                             f"{base}.setBy",
                             f"El prefijo '{valor}' es del core (botón de confirmación del motor).",
                         )
+                    elif choca_con_opciones(valor):
+                        self.add(
+                            "prefijo_reservado",
+                            f"{base}.setBy",
+                            f"El prefijo '{valor}' es del core (botones de las opciones directas).",
+                        )
                     if slot.candidates is None and slot.enum is None and slot.resolver is None:
                         self.add(
                             "dato_interactivo_sin_restriccion",
@@ -424,6 +442,13 @@ class _Linter:
                 "prefijo_reservado",
                 "triggers.interactivePayloadPrefix",
                 f"El prefijo '{PREFIJO_CONFIRMAR}' es del core (botón de confirmación del motor).",
+            )
+        prefijo = self.proc.triggers.interactivePayloadPrefix
+        if prefijo is not None and choca_con_opciones(prefijo):
+            self.add(
+                "prefijo_reservado",
+                "triggers.interactivePayloadPrefix",
+                f"El prefijo '{prefijo}' es del core (botones de las opciones directas).",
             )
         if self.proc.completion is None:
             return
