@@ -280,9 +280,8 @@ async def _enforcement_dispositivo(
     ).scalars().all()
     activos_imei = [d for d in dispositivos if d.estado == "activo" and d.imei]
     legacy_activo = any(d.estado == "activo" and not d.imei for d in dispositivos)
-    if activos_imei:
-        if imei and any(d.imei == imei for d in activos_imei):
-            return True, "activo"
+
+    def _denegar(motivo: str) -> JSONResponse:
         session.add(
             IntentoAcceso(
                 tenant_id=tenant_id,
@@ -290,11 +289,20 @@ async def _enforcement_dispositivo(
                 imei=imei or None,
                 whatsapp_number=whatsapp or None,
                 resultado="denegado",
-                motivo="dispositivo no autorizado",
+                motivo=motivo,
                 ip=request.client.host if request.client else None,
             )
         )
         return JSONResponse({"error": "dispositivo no autorizado"}, status_code=403)
+
+    # Un equipo bloqueado se deniega siempre, haya o no otro dispositivo activo: antes,
+    # si era el único registro, `activos_imei` quedaba vacío y el bloqueo abría el acceso.
+    if imei and any(d.estado == "bloqueado" and d.imei == imei for d in dispositivos):
+        return _denegar("dispositivo bloqueado")
+    if activos_imei:
+        if imei and any(d.imei == imei for d in activos_imei):
+            return True, "activo"
+        return _denegar("dispositivo no autorizado")
     if legacy_activo:
         return True, "activo"
     if any(d.estado == "pendiente" for d in dispositivos):
@@ -634,7 +642,11 @@ async def vincular_dispositivo(request: Request, authorization: str | None = Hea
             gestor = await get_owned(session, Gestor, uuid.UUID(str(gestor_id)))
             if gestor is None:
                 return JSONResponse({"error": "gestor no encontrado"}, status_code=404)
-            existente = (await session.execute(select(Device).where(Device.tenant_id == tenant_id, Device.gestor_id == gestor.id, Device.imei == imei, Device.deleted_at.is_(None)))).scalar_one_or_none()
+            # El único es (tenant_id, imei): se busca por el equipo, no por el gestor. Si ya es
+            # de otro gestor del negocio se responde 409 (antes: IntegrityError → 500).
+            existente = (await session.execute(select(Device).where(Device.tenant_id == tenant_id, Device.imei == imei, Device.deleted_at.is_(None)))).scalar_one_or_none()
+            if existente is not None and existente.gestor_id != gestor.id:
+                return JSONResponse({"error": "este equipo ya está vinculado a otra cuenta del negocio"}, status_code=409)
             if existente is not None:
                 if public_key and not existente.public_key:
                     existente.public_key = public_key
