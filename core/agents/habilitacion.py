@@ -7,6 +7,10 @@ aquí y `core.admin.views` las reexporta con sus nombres de siempre.
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+
 from sqlalchemy import select
 
 from core.agents.spec import count_tenant_packs, load_active_spec, save_spec_version
@@ -14,11 +18,30 @@ from core.billing.enforcement import QuotaExceeded, quota_decision
 from core.db.models import PluginConfig
 from core.db.session import get_session
 from core.plugin_manager import plugin_manager
+from core.shared.audit import record_audit
 from core.shared.exceptions import PluginConfigError, PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
+
+
+class HabilitacionError(RuntimeError):
+    """Un pack no se pudo habilitar. `code` estable: `pack_no_instalado` (el despliegue no trae el
+    módulo) o `concurrent_edit` (otra edición del spec ganó la carrera dos veces seguidas)."""
+
+    def __init__(self, code: str, packs: Iterable[str], mensaje: str) -> None:
+        super().__init__(mensaje)
+        self.code = code
+        self.packs = tuple(packs)
+
+
+@dataclass(frozen=True)
+class ResultadoHabilitacion:
+    habilitados_ahora: tuple[str, ...] = ()
+    ya_estaban: tuple[str, ...] = ()
+    # pack -> por qué no quedó activo (falta configuración): queda habilitado igual y se avisa.
+    config_pendiente: dict[str, str] = field(default_factory=dict)
 
 
 async def ensure_pack_activated(pack: str) -> str | None:
@@ -157,3 +180,74 @@ async def set_pack_for_tenant(pack: str, enabled: bool) -> str | None:
         return None
     await disable_pack_for_tenant(pack)
     return None
+
+
+async def asegurar_habilidades(
+    tenant_id: uuid.UUID, packs: Iterable[str], *, actor: uuid.UUID | None
+) -> ResultadoHabilitacion:
+    """Deja habilitados en `AgentSpec.packs` los `packs` dados (el alta del asistente los necesita).
+
+    Habilitar es un conjunto: lo que ya estaba no se toca ni crea versión de spec. Todo lo nuevo entra en
+    UNA sola versión de spec. Un pack que no activa (le falta configuración) se habilita igual y queda en
+    `config_pendiente`: no aporta tools mientras no esté activo (el runtime intersecta con lo activo) y el
+    dueño lo configura en Habilidades (`requirements[]`, ADR-0155). NO valida `min_plan` (decisión del
+    dueño); sí la cuota `plugins`, que hoy el plan no define. Corre dentro del `tenant_scope` del negocio.
+    """
+    if get_current_tenant_id() != tenant_id:
+        raise PermissionError("habilitación de packs: fuera del tenant_scope del negocio")
+    pedidos = sorted(set(packs))
+    # Todo lo que puede fallar sin efectos va antes de escribir.
+    sin_modulo = [p for p in pedidos if plugin_manager.get(p) is None]
+    if sin_modulo:
+        raise HabilitacionError(
+            "pack_no_instalado", sin_modulo, "Esta habilidad no está instalada en este despliegue."
+        )
+    spec = await load_active_spec()
+    ya = tuple(p for p in pedidos if p in spec.packs)
+    nuevos = [p for p in pedidos if p not in spec.packs]
+    if not nuevos:
+        return ResultadoHabilitacion(ya_estaban=ya)
+    decision = await quota_decision(tenant_id, "plugins")
+    if not decision.allowed:
+        raise QuotaExceeded("plugins", count_tenant_packs(spec), decision.limit or 0)
+
+    config_pendiente: dict[str, str] = {}
+    for pack in nuevos:
+        error = await ensure_pack_activated(pack)
+        if error is not None:
+            config_pendiente[pack] = error
+    habilitados: list[str] = []
+    for intento in range(2):  # un reintento si otra edición del spec ganó la carrera
+        actual = await load_active_spec()
+        habilitados = [p for p in nuevos if p not in actual.packs]
+        if not habilitados:
+            break
+        version = await save_spec_version(
+            actual.model_copy(update={"packs": sorted({*actual.packs, *habilitados})}), tenant_id
+        )
+        if version is not None:
+            for pack in habilitados:
+                await seed_flow_for_current_tenant(pack)
+            break
+        log.warning("habilitacion_reintento_spec", tenant_id=str(tenant_id), packs=habilitados, intento=intento)
+    else:
+        log.warning("habilitacion_conflicto", tenant_id=str(tenant_id), packs=nuevos)
+        raise HabilitacionError(
+            "concurrent_edit", nuevos, "Otra edición del negocio ganó la carrera: vuelve a intentarlo."
+        )
+    log.info(
+        "pack_habilitado_por_plantilla",
+        tenant_id=str(tenant_id),
+        packs=nuevos,
+        actor=str(actor) if actor else None,
+        config_pendiente=sorted(config_pendiente),
+    )
+    await record_audit(
+        str(actor) if actor else "sistema",
+        "skills_enabled_by_template",
+        input_data={"packs": nuevos},
+        output_data={"config_pendiente": sorted(config_pendiente)},
+    )
+    return ResultadoHabilitacion(
+        habilitados_ahora=tuple(nuevos), ya_estaban=ya, config_pendiente=config_pendiente
+    )

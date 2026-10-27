@@ -4,10 +4,14 @@ Completa la API de agentes (`agents.py`: alta, borrador con `lock_version`, vers
 el editor del panel necesita y no existía:
 
 - `GET  /api/v1/admin/agent-templates` — plantillas (Ventas, Cobranza, Agenda, Suscripciones)
-  con sus superpoderes y frases de la habilidad, y si el negocio puede usarlas.
+  con sus superpoderes y frases de la habilidad, y si el negocio puede usarlas. Elegir una
+  HABILITA sus habilidades (`will_enable`): no hace falta activarlas de antemano.
 - `POST /api/v1/admin/agent-templates/{key}/agents` — `{name?}` → especialista con la key de la
   plantilla y su borrador derivado (sin publicar). 409 `key_taken` (con `fields.agent_id`) si
-  ya existe; 409 `template_unavailable` si faltan habilidades.
+  ya existe; 409 `template_unavailable` si el despliegue no trae una habilidad; 403
+  `skills_forbidden` si hay habilidades por habilitar y falta `plugins:write`; 409
+  `concurrent_edit` (reintentable) si otra edición del negocio ganó la carrera. `enabled_skills`
+  trae lo que esta llamada habilitó.
 - `POST /api/v1/admin/agents/from-script` — `{template_key, answers, name?}` → lo mismo desde las
   respuestas del guion de la plantilla (`questions` de `agent-templates`, HU-AOS-48), más los
   `requirements` pendientes. 422 `invalid_answers` por pregunta; 409 igual que arriba.
@@ -119,7 +123,10 @@ class AgentTemplate(BaseModel):
     skills: list[str]
     optional_skills: list[str]
     available: bool
+    # Habilidades que este despliegue no trae: la única razón para no poder elegir la plantilla.
     missing_skills: list[str]
+    # Habilidades que crear el agente habilitará en el negocio (no hay que activarlas de antemano).
+    will_enable: list[str]
     superpowers: list[Superpower]
     requirements: list[Requirement]
 
@@ -134,6 +141,8 @@ class FromTemplateOut(BaseModel):
     agent: AgentSummary
     draft: AgentDraft
     warnings: list[str]
+    # Habilidades que esta llamada habilitó en el negocio (vacío si ya estaban).
+    enabled_skills: list[str]
 
 
 class FromScriptIn(BaseModel):
@@ -255,6 +264,14 @@ async def _ve_conexiones(principal: Principal, tid: uuid.UUID, *, write: bool = 
         raise ApiError.forbidden("Sin permiso para la sección 'connections'.")
 
 
+async def _puede_habilitar(principal: Principal, tid: uuid.UUID) -> bool:
+    """Elegir una plantilla habilita habilidades: eso exige la sección `plugins` con escritura, igual que
+    `POST /admin/plugins/{id}/action` (el master pasa). `settings:write` por sí solo no lo implica."""
+    if actua_como_master(principal.admin):
+        return True
+    return await effective_access(principal.admin, "plugins", tid) == "write"
+
+
 Paginados = Annotated[PageParams, Depends(page_params)]
 
 
@@ -284,6 +301,7 @@ async def list_templates(
             optional_skills=list(v.optional_skills),
             available=v.available,
             missing_skills=list(v.missing_skills),
+            will_enable=list(v.will_enable),
             superpowers=[_superpower(s) for s in v.superpowers],
             requirements=[_requirement(r) for r in por_clave.get(v.key, [])],
         )
@@ -302,14 +320,23 @@ async def create_from_template(
 ) -> FromTemplateOut:
     tid = await _puede_escribir(principal)
     try:
-        agente, borrador, avisos = await svc.crear_desde_plantilla(
-            tid, template_key, nombre=payload.name, catalogo=_catalogo(), actor=principal.admin.id
+        agente, borrador, avisos, habilitadas = await svc.crear_desde_plantilla(
+            tid,
+            template_key,
+            nombre=payload.name,
+            catalogo=_catalogo(),
+            actor=principal.admin.id,
+            puede_habilitar=await _puede_habilitar(principal, tid),
         )
     except svc.ErrorDelEditor as exc:
         raise _error(exc) from None
+    except QuotaExceeded as exc:
+        raise plan_limit_error(exc) from exc
     except versiones.ErroresDeContrato as exc:
         raise _contrato_422(exc.issues) from None
-    return FromTemplateOut(agent=_summary(agente, None), draft=_draft(borrador), warnings=avisos)
+    return FromTemplateOut(
+        agent=_summary(agente, None), draft=_draft(borrador), warnings=avisos, enabled_skills=habilitadas
+    )
 
 
 @router.post("/agents/from-script", response_model=FromScriptOut, status_code=status.HTTP_201_CREATED)
@@ -322,16 +349,19 @@ async def create_from_script(
     por pregunta si una respuesta no está en las opciones, sin crear nada."""
     tid = await _puede_escribir(principal)
     try:
-        agente, borrador, avisos = await svc.crear_desde_plantilla(
+        agente, borrador, avisos, habilitadas = await svc.crear_desde_plantilla(
             tid,
             payload.template_key,
             nombre=payload.name,
             catalogo=_catalogo(),
             actor=principal.admin.id,
             respuestas=payload.answers,
+            puede_habilitar=await _puede_habilitar(principal, tid),
         )
     except svc.ErrorDelEditor as exc:
         raise _error(exc) from None
+    except QuotaExceeded as exc:
+        raise plan_limit_error(exc) from exc
     except versiones.ErroresDeContrato as exc:
         raise _contrato_422(exc.issues) from None
     pendientes = await requisitos.de_plantillas(
@@ -341,6 +371,7 @@ async def create_from_script(
         agent=_summary(agente, None),
         draft=_draft(borrador),
         warnings=avisos,
+        enabled_skills=habilitadas,
         requirements=[_requirement(r) for r in pendientes.get(payload.template_key, [])],
     )
 

@@ -116,16 +116,37 @@ def test_costo_estimado_por_mil_turnos() -> None:
     assert editor.estimado(0.14, 0.28, None, None) is None
 
 
-def test_plantillas_disponibles_solo_con_sus_habilidades() -> None:
-    vistas = {p.key: p for p in editor.plantillas({"pack_commerce"})}
+INSTALADOS = {"pack_commerce", "pack_calendar", "pack_cobranza", "pack_subscriptions"}
+
+
+def test_plantillas_se_ofrecen_y_habilitan_sus_habilidades() -> None:
+    """Elegir la plantilla habilita lo que pide: estar habilitada ya no es precondición."""
+    vistas = {p.key: p for p in editor.plantillas({"pack_commerce"}, INSTALADOS)}
     assert set(vistas) == {"agenda", "cobranza", "suscripciones", "ventas"}
     ventas = vistas["ventas"]
-    assert ventas.available and [s.id for s in ventas.superpowers] == [
-        "pack_commerce.tomar_pedido",
-        "pack_commerce.contratar_plan",
-    ]
+    assert ventas.available and ventas.will_enable == () and ventas.missing_skills == ()
+    assert [s.id for s in ventas.superpowers] == ["pack_commerce.tomar_pedido", "pack_commerce.contratar_plan"]
     assert all(len(s.phrases) >= editor.MIN_FRASES for s in ventas.superpowers)
+    agenda = vistas["agenda"]
+    assert agenda.available and agenda.will_enable == ("pack_calendar",) and agenda.missing_skills == ()
+    assert [s.id for s in agenda.superpowers] == ["pack_calendar.agendar_cita"]
+
+
+def test_plantillas_sin_ninguna_habilidad_habilitada_siguen_disponibles() -> None:
+    vistas = editor.plantillas(set(), INSTALADOS)
+    assert all(v.available and v.superpowers and v.missing_skills == () for v in vistas)
+    assert {v.key: v.will_enable for v in vistas} == {
+        "agenda": ("pack_calendar",),
+        "cobranza": ("pack_cobranza",),
+        "suscripciones": ("pack_subscriptions",),
+        "ventas": ("pack_commerce",),
+    }
+
+
+def test_plantilla_no_disponible_solo_si_el_despliegue_no_trae_la_habilidad() -> None:
+    vistas = {p.key: p for p in editor.plantillas(set(), INSTALADOS - {"pack_calendar"})}
     assert not vistas["agenda"].available and vistas["agenda"].missing_skills == ("pack_calendar",)
+    assert vistas["ventas"].available
 
 
 def test_habilidades_del_contenido() -> None:
