@@ -622,11 +622,13 @@ async def _es_conexion_de_pruebas(tenant_id: uuid.UUID, connection_id: uuid.UUID
     return tipo == PLAYGROUND
 
 
-async def fijar_release_del_turno(conversation: Any, texto: str = "") -> Asignacion | None:
+async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar: bool = True) -> Asignacion | None:
     """Punto de enganche del loop. None (sin consultas) con `AOS_CONNECTION_ROUTING` apagada;
     None con `aos_runtime = 'legacy'`, sin conexión o sin release activa (el turno sigue como
     siempre). Fail-closed con v3: un error de base sube por el camino de error del turno.
-    `texto`: el mensaje del cliente, para el router (solo con `aos_routing` ≠ off)."""
+    `texto`: el mensaje del cliente, para el router (solo con `aos_routing` ≠ off). `enrutar=False`:
+    asigna la release y el dueño sticky SIN correr el router ni consumir el payload de botón que
+    espera el turno diferido (lo usa el toque de una opción directa, que no es un turno)."""
     if not get_settings().aos_connection_routing:
         return None
     tenant_id = get_current_tenant_id()
@@ -646,7 +648,7 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "") -> Asignac
         if banderas.runtime != "v3":
             return None
         ruteo = None
-        if banderas.ruteo != "off":
+        if enrutar and banderas.ruteo != "off":
             from core.kernel.router import tomar_payload
 
             payload = await tomar_payload(tenant_id, conversation.id)

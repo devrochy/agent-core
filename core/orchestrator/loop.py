@@ -1084,11 +1084,15 @@ async def _execute_tool_safely(
     motor: ContextoMotor | None = None,
     identidad: AgenteCongelado | None = None,
     solo_lectura: bool = False,
+    *,
+    ya_confirmada: bool = False,
 ) -> dict[str, Any]:
     """Ejecuta una tool aislando el error: un plugin roto se desactiva, el turno sigue.
 
     `identidad`/`solo_lectura` (HU-AOS-19): una consulta entre agentes corre con la identidad del
-    agente que la responde y sin escribir memoria."""
+    agente que la responde y sin escribir memoria. `ya_confirmada` (SPEC-40, ADR-0172 §4): el
+    cliente ya confirmó esta acción con el botón firmado `optc:` de una opción directa, así que
+    se salta el `requiresConfirmation` del binding (no hay LLM que pida la confirmación)."""
     # Una consulta entre agentes se audita como `query:` y no como `tool:`: no es evidencia de
     # que el agente del turno llamó la tool (`_historical_tool_results`).
     actor_de_auditoria = "query" if solo_lectura else "tool"
@@ -1158,7 +1162,7 @@ async def _execute_tool_safely(
     # Con la acción gobernada por la etapa en foco (leída bajo lock), la confirmación es la del
     # motor, que también aplica el `requiresConfirmation` del binding (ADR-0113 §4).
     gobernada = previo is not None and previo.gobernada
-    if spec is not None and not gobernada and _binding_requires_confirmation(spec, tool_call.name):
+    if spec is not None and not gobernada and not ya_confirmada and _binding_requires_confirmation(spec, tool_call.name):
         pending = dict(conversation.state.get("pending_confirmation") or {})
         already = (
             pending.get("tool") == tool_call.name
@@ -1240,8 +1244,9 @@ async def _execute_tool_safely(
         action="execute",
         conversation_id=conversation.id,
         # Lo que mandó el modelo: los datos ligados que completó el motor (PII de la tarea) no se
-        # copian a la auditoría.
-        input_data=tool_call.arguments,
+        # copian a la auditoría. Un toque de opción directa (`ya_confirmada`) trae los valores del
+        # contexto del envío (datos del cliente): solo las claves y el hash, como la rama del motor.
+        input_data=_entrada_auditable(tool_call, ya_confirmada),
         # Se incluye `_tool_name` para que `_historical_tool_results` pueda
         # reconstruir qué tools se llamaron en turnos anteriores (lo usa el
         # guardrail declarativo `required_tool`, ADR-0051).
@@ -1270,6 +1275,14 @@ async def _connections_ok(tool, connected_types: set[str]) -> bool:  # type: ign
             return False
     required = getattr(tool, "requires_connection_types", None) or []
     return all(t in connected_types for t in required)
+
+
+def _entrada_auditable(tool_call: LLMToolCall, ya_confirmada: bool) -> dict[str, Any]:
+    if not ya_confirmada:
+        return tool_call.arguments
+    from core.kernel.opciones.payload import hash_de_argumentos
+
+    return {"keys": sorted(tool_call.arguments)[:40], "args_hash": hash_de_argumentos(tool_call.name, tool_call.arguments)}
 
 
 async def _tool_denial(

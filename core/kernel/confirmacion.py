@@ -204,6 +204,7 @@ def armar(
     es_dato: bool = False,
     rotulos: Mapping[str, str] | None = None,
     completo: bool = False,
+    instrucciones: tuple[str, str] | None = None,
 ) -> Confirmacion:
     """El mensaje de confirmación de UNA petición. `payload` es el id firmado del botón.
 
@@ -218,7 +219,9 @@ def armar(
     instrucción `instruccion_dato` (basta un "sí"). `rotulos`: los de la habilidad del recorrido.
     `completo`: el resumen único de la etapa (con los datos del cliente, adenda 2026-10-13): el
     cliente confirma TODO lo que ve, así que nada se recorta; si no cabe en el botón, sale como
-    texto, y si tampoco cabe ahí, `ResumenInvalido`. El orden es el de `datos`."""
+    texto, y si tampoco cabe ahí, `ResumenInvalido`. El orden es el de `datos`.
+    `instrucciones`: `(con botón, como texto)` en lugar de las del playbook (las opciones directas,
+    ADR-0172, confirman con «Confirmar» o «Cancelar» y no admiten pedir cambios por escrito)."""
     rot = r if r is not None else rotulos_del_playbook()
     vistos: set[str] = set()
     normales: list[str] = []
@@ -287,11 +290,15 @@ def armar(
         texto = recortado(rot.textos["instruccion_dato"])
         return Confirmacion(cuerpo=texto, payload="", titulo_boton="", texto=texto)
     sufijo = "_documentos" if documentos else ""
+    con_boton, como_texto = instrucciones or (
+        rot.textos[f"instruccion_boton{sufijo}"],
+        rot.textos[f"instruccion_texto{sufijo}"],
+    )
     return Confirmacion(
-        cuerpo=recortado(rot.textos[f"instruccion_boton{sufijo}"]),
+        cuerpo=recortado(con_boton),
         payload=payload,
         titulo_boton=rot.textos["boton"],
-        texto=recortado(rot.textos[f"instruccion_texto{sufijo}"]),
+        texto=recortado(como_texto),
     )
 
 

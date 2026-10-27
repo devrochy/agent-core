@@ -75,16 +75,34 @@ def test_la_bandera_esta_apagada_salvo_el_literal_true(settings, esperado: bool)
 
 
 def test_nadie_fuera_del_modulo_ni_de_la_ruta_master_toca_la_bandera() -> None:
-    """`bandera.fijar` solo la llamará la ruta de plataforma master-only (PR de la API). Hoy ningún módulo de
-    `core/` la importa; cuando llegue esa ruta, se añade aquí `platform.py` y NINGÚN otro router del dueño."""
+    """`bandera.fijar` solo la llamará la ruta de plataforma master-only (PR de la API). El único otro módulo que
+    importa la bandera es el consumer, y solo para LEERLA (`habilitada`, HU-OPC-03): nunca la escribe. Cuando llegue
+    la ruta master, se añade aquí `platform.py` y NINGÚN otro router del dueño."""
     from pathlib import Path
 
     raiz = Path(__file__).resolve().parent.parent / "core"
-    permitidos = {"core/kernel/opciones/bandera.py"}
+    lectores = {"core/orchestrator/consumer.py"}
+    permitidos = {"core/kernel/opciones/bandera.py", *lectores}
     importadores = []
     for ruta in raiz.rglob("*.py"):
         rel = ruta.relative_to(raiz.parent).as_posix()
         texto = ruta.read_text(encoding="utf-8")
         if rel not in permitidos and ("opciones.bandera" in texto or "opciones import bandera" in texto):
             importadores.append(rel)
+        if rel in lectores:
+            assert "bandera.fijar" not in texto, f"{rel} lee la bandera de opciones directas; no la escribe"
     assert importadores == [], f"módulos que importan la bandera de opciones directas: {importadores}"
+
+
+def test_ya_confirmada_solo_la_pasa_el_toque_de_una_opcion() -> None:
+    """`_execute_tool_safely(..., ya_confirmada=True)` salta el `requiresConfirmation` del binding: solo el toque de
+    una opción directa lo usa, porque el resolver ya exigió (y obtuvo) la confirmación del cliente con `optc:`."""
+    from pathlib import Path
+
+    raiz = Path(__file__).resolve().parent.parent / "core"
+    quienes = sorted(
+        ruta.relative_to(raiz.parent).as_posix()
+        for ruta in raiz.rglob("*.py")
+        if "ya_confirmada=True" in ruta.read_text(encoding="utf-8")
+    )
+    assert quienes == ["core/orchestrator/opciones_toque.py"], quienes

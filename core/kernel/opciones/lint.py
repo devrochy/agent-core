@@ -131,6 +131,29 @@ def confirmacion_efectiva(accion: Accion, ficha: FichaTool | None) -> bool:
     return ficha.sensible or ficha.binding_pide_confirmacion
 
 
+def motivos_de_rechazo(nombre: str, ficha: FichaTool) -> list[tuple[str, str]]:
+    """`(código, mensaje)` por cada motivo por el que la tool NO es elegible como acción de una opción
+    (fail-closed). Vacío = elegible. Es la regla única: la usa el lint al guardar y el resolver del toque al
+    ejecutar (`resolver.py`), así que no pueden divergir."""
+    motivos: list[tuple[str, str]] = []
+    if not ficha.apta_para_opcion:
+        motivos.append(("tool_no_apta", f"«{nombre}» no está habilitada para opciones: su autor no la marcó como apta."))
+    if not ficha.pack_activo:
+        motivos.append(("pack_inactivo", f"El pack de «{nombre}» no está activo en este negocio."))
+    if ficha.binding_habilitado is None:
+        motivos.append(("tool_sin_binding", f"«{nombre}» no tiene un permiso explícito en el asistente: habilítala primero."))
+    elif not ficha.binding_habilitado:
+        motivos.append(("tool_binding_deshabilitado", f"«{nombre}» está deshabilitada en el asistente."))
+    if ficha.gobernada_por_procedimiento:
+        motivos.append(
+            (
+                "tool_en_procedimiento",
+                f"«{nombre}» la gobierna un procedimiento habilitado: una opción no puede saltarse sus pasos.",
+            )
+        )
+    return motivos
+
+
 # ------------------------------------------------------------------ lint
 def lintar(crudo: Any, contexto: ContextoLint) -> list[Hallazgo]:
     """Todos los hallazgos de la definición `crudo` (el jsonb tal cual). Vacío = nada que reportar."""
@@ -238,27 +261,10 @@ def _lintar_accion(a: Accion, base: str, contexto: ContextoLint, out: list[Halla
     if ficha is None:
         _error(out, f"{base}.tool", "tool_inexistente", f"La acción «{a.tool}» no existe en este negocio.")
         return
-    elegible = True
-    if not ficha.apta_para_opcion:
-        elegible = False
-        _error(out, f"{base}.tool", "tool_no_apta", f"«{a.tool}» no está habilitada para opciones: su autor no la marcó como apta.")
-    if not ficha.pack_activo:
-        elegible = False
-        _error(out, f"{base}.tool", "pack_inactivo", f"El pack de «{a.tool}» no está activo en este negocio.")
-    if ficha.binding_habilitado is None:
-        elegible = False
-        _error(out, f"{base}.tool", "tool_sin_binding", f"«{a.tool}» no tiene un permiso explícito en el asistente: habilítala primero.")
-    elif not ficha.binding_habilitado:
-        elegible = False
-        _error(out, f"{base}.tool", "tool_binding_deshabilitado", f"«{a.tool}» está deshabilitada en el asistente.")
-    if ficha.gobernada_por_procedimiento:
-        elegible = False
-        _error(
-            out,
-            f"{base}.tool",
-            "tool_en_procedimiento",
-            f"«{a.tool}» la gobierna un procedimiento habilitado: una opción no puede saltarse sus pasos.",
-        )
+    motivos = motivos_de_rechazo(a.tool, ficha)
+    for code, mensaje in motivos:
+        _error(out, f"{base}.tool", code, mensaje)
+    elegible = not motivos
     if elegible:
         _lintar_argumentos(a, base, ficha, contexto, out)
     if not a.confirmar and confirmacion_efectiva(a, ficha):
