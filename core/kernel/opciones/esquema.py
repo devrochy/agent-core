@@ -98,7 +98,8 @@ def _lista(valor: list[Any], schema: dict[str, Any], ruta: str, prof: int) -> li
 
 def _objeto(valor: dict[str, Any], schema: dict[str, Any], ruta: str, prof: int) -> list[tuple[str, str]]:
     salida: list[tuple[str, str]] = []
-    props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    declaradas = schema.get("properties")
+    props: dict[str, Any] = declaradas if isinstance(declaradas, dict) else {}
     for nombre in schema.get("required") or []:
         if nombre not in valor:
             salida.append((f"{ruta}.{nombre}" if ruta else str(nombre), "Falta este campo."))

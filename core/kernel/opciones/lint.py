@@ -272,7 +272,8 @@ def _lintar_accion(a: Accion, base: str, contexto: ContextoLint, out: list[Halla
 
 def _lintar_argumentos(a: Accion, base: str, ficha: FichaTool, contexto: ContextoLint, out: list[Hallazgo]) -> None:
     schema = dict(ficha.parameters or {})
-    props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    declaradas = schema.get("properties")
+    props: dict[str, Any] = declaradas if isinstance(declaradas, dict) else {}
     if len(json.dumps(a.args_fijos, ensure_ascii=False, default=str)) > MAX_ARGS_FIJOS_BYTES:
         _error(out, f"{base}.args_fijos", "args_demasiado_grandes", f"Los valores fijos admiten {MAX_ARGS_FIJOS_BYTES} caracteres.")
         return
