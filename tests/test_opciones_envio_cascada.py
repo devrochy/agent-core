@@ -250,6 +250,12 @@ def test_los_valores_se_limpian_y_lo_que_no_es_un_dato_simple_no_cuenta() -> Non
     assert limpio == {"cliente.nombre": "Ana Pérez", "cita.fecha": "20261102"}
 
 
+def test_el_nombre_del_cliente_se_acota_a_60_pero_los_datos_del_servidor_no() -> None:
+    d = con_acciones({"fecha": "cita.fecha"})
+    largo = contexto.armar(d, {"cliente.nombre": "N" * 500}, {"cita.fecha": "F" * 200})
+    assert largo["cliente.nombre"] == "N" * 60 and largo["cita.fecha"] == "F" * 200
+
+
 def test_el_cuerpo_se_renderiza_con_el_contexto_saneado() -> None:
     d = definicion(2)
     assert mapeo.renderizar(d.body, contexto.armar(d, {"cliente.nombre": "Ana\nPérez"})) == "Hola Ana Pérez, ¿qué hacemos?"

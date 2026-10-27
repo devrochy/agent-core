@@ -1,6 +1,6 @@
 """Métricas del toque (SPEC-40, ADR-0172 §Observabilidad): `option_taps_total{outcome}`,
-`option_tap_latency_seconds` y `option_tool_errors_total{tool}`; y la del envío, `option_sends_total{canal,via}`
-(HU-OPC-02).
+`option_tap_latency_seconds` y `option_tool_errors_total{tool}`; y las del envío, `option_sends_total{canal,via}` y
+`option_send_failures_total{canal,outcome}` (HU-OPC-02).
 
 Usan la API de OpenTelemetry (`opentelemetry.metrics`), que sin un `MeterProvider` configurado es un no-op
 (igual que `core/observability/tracing.py` sin `OTEL_ENABLED`). Hoy el repo no configura el proveedor de
@@ -25,6 +25,16 @@ _errores_tool = _meter.create_counter(
 
 
 _envios = _meter.create_counter("option_sends_total", description="Envíos de plantillas con opciones por canal y vía")
+
+
+_envios_fallidos = _meter.create_counter(
+    "option_send_failures_total", description="Envíos de plantillas con opciones que no salieron, por canal y resultado"
+)
+
+
+def envio_fallido(canal: str, outcome: str) -> None:
+    """Un envío que no salió. `outcome` es el conjunto cerrado de `envio` (flag_off, sin_plantilla, paused…)."""
+    _envios_fallidos.add(1, {"canal": canal[:20], "outcome": outcome})
 
 
 def envio(canal: str, via: str) -> None:

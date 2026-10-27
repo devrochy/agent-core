@@ -20,7 +20,8 @@ toque va a fallar con `contexto_faltante` es peor que no mandarlo. Las citas `{c
 opcionales: si falta, la respuesta usa el texto genérico (`argumentos.renderizar_respuesta`).
 
 Solo se guardan las rutas que la definición cita (mínimo necesario, sin datos de más). Todo valor pasa por
-`clean_param` (sin saltos de línea, acotado) y se guarda como texto.
+`clean_param` (sin saltos de línea, acotado) y se guarda como texto. `cliente.nombre` es el nombre de perfil del
+canal (o lo que el agente haya guardado): es DATO del cliente, no instrucción, y se acota a 60.
 
 Puro: ni base, ni red, ni entorno. Quien llama lee el cliente y el negocio y pasa `base`.
 """
@@ -37,6 +38,10 @@ VARIABLES_BASE: dict[str, str] = {
     "cliente.nombre": "Nombre del cliente",
     "negocio.nombre": "Nombre del negocio",
 }
+# `customer.name` lo puede escribir el LLM con `update_customer_profile` y viene del perfil del canal: el nombre
+# de una persona se acota a 60 (ADR-0108, como `provisioning/owner.py` y `admin/envios_segmento.py`).
+MAX_NOMBRE = 60
+RUTAS_DE_NOMBRE = frozenset({"cliente.nombre"})
 
 
 class ContextoIncompleto(ValueError):
@@ -52,13 +57,13 @@ class DatosInvalidos(ValueError):
     tapar una ruta de la base). Es un error de programación de quien dispara el envío, no del cliente."""
 
 
-def _texto(valor: Any) -> str | None:
+def _texto(valor: Any, limite: int | None = None) -> str | None:
     """El valor como texto limpio; None si está vacío o no es un dato simple (un objeto, una lista, un booleano)."""
     if valor is None or isinstance(valor, bool) or not isinstance(valor, str | int | float):
         return None
     from core.gateway.event_notices import clean_param
 
-    limpio = clean_param(str(valor))
+    limpio = clean_param(str(valor)) if limite is None else clean_param(str(valor), limite)
     return limpio or None
 
 
@@ -106,7 +111,11 @@ def rutas_citadas(definicion: Definicion) -> tuple[list[str], list[str]]:
 def armar(definicion: Definicion, base: Mapping[str, Any], datos: Mapping[str, Any] | None = None) -> dict[str, str]:
     """El contexto del envío: `ruta → texto` de las rutas que la definición cita. `ContextoIncompleto` si falta
     una necesaria. `base` solo se lee en las rutas de `VARIABLES_BASE`; `datos` pasa por `normalizar_datos`."""
-    disponibles = {r: t for r, v in base.items() if r in VARIABLES_BASE and (t := _texto(v)) is not None}
+    disponibles = {
+        r: t
+        for r, v in base.items()
+        if r in VARIABLES_BASE and (t := _texto(v, MAX_NOMBRE if r in RUTAS_DE_NOMBRE else None)) is not None
+    }
     disponibles.update(normalizar_datos(datos))
     necesarias, opcionales = rutas_citadas(definicion)
     faltan = [r for r in necesarias if r not in disponibles]

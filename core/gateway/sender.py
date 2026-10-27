@@ -722,6 +722,9 @@ async def send_interactive_to_conversation(
     current_tenant_id = get_current_tenant_id()
     meta_connection_id = await connection_id_for_phone_number(credentials.get("phone_number_id", ""), current_tenant_id)
     paused = await is_paused(current_tenant_id, meta_connection_id)
+    if paused:
+        # Sin el `client_message_id` estable: un reintento cuando pase la pausa puede volver a intentarlo (ADR-0108).
+        client_message_id = None
     async with get_session() as session:
         message = Message(
             tenant_id=current_tenant_id,

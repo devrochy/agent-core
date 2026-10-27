@@ -15,11 +15,13 @@
   `sin_plantilla`. Con la bandera apagada se niega (`flag_off`) sin crear ni enviar nada.
 - Contexto del envío (`core/kernel/opciones/contexto.py`): `cliente.nombre` y `negocio.nombre` los resuelve el
   servidor; el código que dispara el envío puede aportar más rutas (`datos`). Si falta un dato que el cuerpo o una
-  acción necesitan, no se envía. Nunca del LLM ni del texto del cliente.
+  acción necesitan, no se envía. Nunca de lo que el LLM pasa a la tool; `cliente.nombre` (perfil del canal) se acota a 60.
 - Nueva tool del core `enviar_plantilla_opciones(clave)`: solo envía a la conversación del turno una plantilla ya
   publicada (no crea ni edita), se ofrece únicamente con la bandera del negocio encendida y **no** es elegible como
   acción de una opción. Idempotente por llamada de la tool.
 - Observabilidad: log `option_send` por envío (negocio, conversación, `send_id`, clave, versión, canal, vía,
-  resultado), métrica `option_sends_total{canal,via}` y auditoría `option_send` con ids y claves, sin valores.
+  resultado), métricas `option_sends_total{canal,via}` y `option_send_failures_total{canal,outcome}` y auditoría `option_send` con ids y claves, sin valores.
 - `send_interactive_to_conversation` acepta `client_message_id` estable; el interactivo lleva el pie
   (`footer`) de la definición, que el adaptador descartaba; el texto de respaldo numera las opciones.
+- Un `Message` `failed` (pausa, sin plantilla) ya no cuenta como enviado en la idempotencia, el `send_id` incluye plantilla y versión, la pausa por uso de la API se comprueba antes del alta y el interactivo pausado no deja el id estable.
+- ADR-0172: adenda del PR 5 (desviaciones de la cascada, huérfano aceptado, TTL único, superficie de la tool).

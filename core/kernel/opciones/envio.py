@@ -55,6 +55,7 @@ CONTEXTO_INCOMPLETO = "context_incomplete"
 SIN_PLANTILLA = "sin_plantilla"
 PAUSADA = "paused"
 NO_ENCOLADO = "enqueue_failed"
+DATOS_INVALIDOS = "invalid_data"
 DUPLICADO = "duplicate"
 ERROR_INTERNO = "internal_error"
 
@@ -189,6 +190,7 @@ _MENSAJE_AGENTE = {
     CONVERSACION_NO_ENCONTRADA: "No se encontró la conversación.",
     CONTEXTO_INCOMPLETO: "Faltan datos del cliente que la plantilla necesita; no se envió.",
     SIN_PLANTILLA: "El cliente está fuera de la ventana de 24 h y la plantilla no está aprobada por Meta; no se envió.",
+    DATOS_INVALIDOS: "No se pudo armar el contexto de la plantilla.",
     PAUSADA: "El envío está pausado en esta conexión; no se envió.",
     NO_ENCOLADO: "No se pudo enviar la plantilla.",
     ERROR_INTERNO: "No se pudo enviar la plantilla.",
