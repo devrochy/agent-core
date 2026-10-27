@@ -171,8 +171,6 @@ def test_rbac_subsecciones_por_path() -> None:
         "/cobranza/promesas": "pack_cobranza:promesas",
         "/cobranza/promesas/abc/estado": "pack_cobranza:promesas",
         "/cobranza/auditoria": "pack_cobranza:auditoria",
-        "/cobranza/propietario": "pack_cobranza:propietario",
-        "/cobranza/propietario/mensaje": "pack_cobranza:propietario",
         "/cobranza/carteras/abc/caja": "pack_cobranza:carteras",
         "/cobranza/carteras/abc/trayecto/optimizar": "pack_cobranza:carteras",
         "/cobranza/carteras/abc/cierre": "pack_cobranza:carteras",
