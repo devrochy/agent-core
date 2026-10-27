@@ -1,6 +1,6 @@
 # ADR-0064 — Comunicación con el propietario: bitácora por tenant con enlace wa.me
 
-- **Estado:** aceptado — la UI y la API del hilo se retiraron el 2026-10-26 (el asistente cubre reclamos y preguntas); las tablas y las notificaciones de cobro siguen
+- **Estado:** aceptado — la UI y la API del hilo se retiraron el 2026-10-26 (el asistente cubre reclamos y preguntas); las tablas se conservan. El 2026-10-27 se retiró también «Cobros al propietario» (que generaba las notificaciones de cobro del hilo): esa facturación la maneja el agente de suscripciones
 - **Fecha:** 2026-09-24
 
 ## Contexto
