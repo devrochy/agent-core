@@ -184,7 +184,7 @@ class CalendarConfig(BasePluginConfig):
         default="📅 Tu cita «{titulo}» quedó agendada para el {fecha} a las {hora} ({zona}).{enlace}",
         max_length=1000,
         json_schema_extra={"format": "textarea"},
-        description="Confirmación al cliente. Placeholders: {titulo}, {fecha}, {hora}, {zona}, {enlace}",
+        description="Confirmación al cliente. Placeholders: {titulo}, {fecha}, {hora}, {zona}, {enlace}, {agenda} (solo con varias agendas)",
     )
     recordatorios_horas: list[Annotated[int, Field(ge=0, le=720)]] = Field(
         default_factory=lambda: [24, 1],

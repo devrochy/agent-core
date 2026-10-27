@@ -954,8 +954,15 @@ class CalendarSkill(BaseSkill):
             # HU-SH-02) la adjunta el core; el modelo no la redacta.
             "_safe_append": texto_confirmacion(
                 config.confirmacion_texto,
-                datos_de_cita(title, start, config.timezone, enlace_de(appt_type, config)),
+                datos_de_cita(
+                    title,
+                    start,
+                    config.timezone,
+                    enlace_de(appt_type, config),
+                    agenda.name if multi and agenda is not None else "",
+                ),
             )
+            + (f"\n👤 Agenda: {agenda.name}" if multi and agenda is not None else "")
             + (f"\n🗓️ Agregala a tu calendario: {link}" if link else ""),
         }
 

@@ -19829,6 +19829,24 @@
             }
           },
           {
+            "name": "calendar_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "IDs de agenda separados por coma",
+              "title": "Calendar Ids"
+            },
+            "description": "IDs de agenda separados por coma"
+          },
+          {
             "name": "X-Tenant-Id",
             "in": "header",
             "required": false,
@@ -20011,7 +20029,7 @@
           "pack · calendario"
         ],
         "summary": "Oauth Start",
-        "description": "Inicia el OAuth2 de Google (302 a accounts.google.com).\n\nDeja dos cookies httponly que el panel reenvía al navegador: `oauth_state`\n(anti-CSRF, D-SPEC-24-12) y `oauth_next` (a dónde volver). El retorno de Google\nentra por la ruta BFF del panel (D-SPEC-24-11, ADR-0093).\n\nEl `state` lleva el negocio que inició el flujo (`<tenant_id>.<aleatorio>`): el\ncallback guarda la cuenta en el negocio de la sesión, que puede haber cambiado\nmientras el usuario estaba en Google.",
+        "description": "Inicia el OAuth2 de Google (302 a accounts.google.com).\n\nCon `connection_id` se reconecta esa cuenta (HU-CAL-08): se sugiere su correo a Google y\nel callback verifica que sea la misma cuenta antes de guardar.\n\nDeja dos cookies httponly que el panel reenvía al navegador: `oauth_state`\n(anti-CSRF, D-SPEC-24-12) y `oauth_next` (a dónde volver). El retorno de Google\nentra por la ruta BFF del panel (D-SPEC-24-11, ADR-0093).\n\nEl `state` lleva el negocio que inició el flujo (`<tenant_id>.<aleatorio>`): el\ncallback guarda la cuenta en el negocio de la sesión, que puede haber cambiado\nmientras el usuario estaba en Google.",
         "operationId": "oauth_start_api_v1_pack_calendar_oauth_start_get",
         "parameters": [
           {
@@ -20022,6 +20040,23 @@
               "type": "string",
               "default": "/calendario",
               "title": "Next"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
             }
           },
           {
@@ -27240,6 +27275,254 @@
           }
         }
       }
+    },
+    "/api/v1/pack/calendar/calendars": {
+      "get": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "List Calendars",
+        "description": "Agendas del negocio con el nombre que el asistente le dice al cliente.",
+        "operationId": "list_calendars_api_v1_pack_calendar_calendars_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarListOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Create Calendar",
+        "description": "Crea una agenda interna (sin cuenta de Google). Las de Google nacen al conectar la cuenta.",
+        "operationId": "create_calendar_api_v1_pack_calendar_calendars_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/calendars/{calendar_id}": {
+      "put": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Update Calendar",
+        "description": "Edita una agenda: nombre visible, descripción, alias, color, horario, zona, orden y estado.",
+        "operationId": "update_calendar_api_v1_pack_calendar_calendars__calendar_id__put",
+        "parameters": [
+          {
+            "name": "calendar_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Calendar Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/calendars/{calendar_id}/delete": {
+      "post": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Delete Calendar",
+        "description": "Elimina (suave) una agenda. No borra la cuenta de Google: eso va en Conexiones.\n\nLa principal no se elimina. Si tiene citas futuras, hay que pasar `move_to` (otra agenda)\npara moverlas; si no, 409.",
+        "operationId": "delete_calendar_api_v1_pack_calendar_calendars__calendar_id__delete_post",
+        "parameters": [
+          {
+            "name": "calendar_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Calendar Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CalendarDelete"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -28016,6 +28299,18 @@
               }
             ],
             "title": "Customer Id"
+          },
+          "calendar_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Id"
           }
         },
         "type": "object",
@@ -28130,6 +28425,18 @@
               }
             ],
             "title": "Asignado Admin Id"
+          },
+          "calendar_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Id"
           }
         },
         "type": "object",
@@ -28655,6 +28962,18 @@
             "type": "string",
             "title": "Reason",
             "default": ""
+          },
+          "calendar_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Id"
           }
         },
         "type": "object",
@@ -28684,6 +29003,18 @@
           "reason": {
             "type": "string",
             "title": "Reason"
+          },
+          "calendar_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Id"
           }
         },
         "type": "object",
@@ -29041,6 +29372,24 @@
           "default_duration_minutes": {
             "type": "integer",
             "title": "Default Duration Minutes"
+          },
+          "calendars": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarSummary"
+            },
+            "type": "array",
+            "title": "Calendars",
+            "default": []
+          },
+          "multi_activo": {
+            "type": "boolean",
+            "title": "Multi Activo",
+            "default": false
+          },
+          "multi_agenda_modo": {
+            "type": "string",
+            "title": "Multi Agenda Modo",
+            "default": "cliente_elige"
           }
         },
         "type": "object",
@@ -54035,6 +54384,423 @@
           "unread_count"
         ],
         "title": "UnreadCount"
+      },
+      "CalendarDelete": {
+        "properties": {
+          "move_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Move To"
+          }
+        },
+        "type": "object",
+        "title": "CalendarDelete"
+      },
+      "CalendarIn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases",
+            "default": []
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
+          "business_hours": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Hours"
+          },
+          "responsable_admin_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responsable Admin Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "CalendarIn"
+      },
+      "CalendarListOut": {
+        "properties": {
+          "calendars": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarOut"
+            },
+            "type": "array",
+            "title": "Calendars"
+          },
+          "multi_activo": {
+            "type": "boolean",
+            "title": "Multi Activo"
+          },
+          "multi_agenda_modo": {
+            "type": "string",
+            "title": "Multi Agenda Modo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "calendars",
+          "multi_activo",
+          "multi_agenda_modo"
+        ],
+        "title": "CalendarListOut"
+      },
+      "CalendarOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases"
+          },
+          "color": {
+            "type": "string",
+            "title": "Color"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
+          },
+          "own_timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Own Timezone"
+          },
+          "business_hours": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Hours"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "connected": {
+            "type": "boolean",
+            "title": "Connected",
+            "default": true
+          },
+          "account_email": {
+            "type": "string",
+            "title": "Account Email",
+            "default": ""
+          },
+          "responsable_admin_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responsable Admin Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "aliases",
+          "color",
+          "timezone",
+          "is_default",
+          "active",
+          "sort_order",
+          "source"
+        ],
+        "title": "CalendarOut"
+      },
+      "CalendarPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "aliases": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aliases"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
+          "business_hours": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Hours"
+          },
+          "inherit_timezone": {
+            "type": "boolean",
+            "title": "Inherit Timezone",
+            "default": false
+          },
+          "inherit_business_hours": {
+            "type": "boolean",
+            "title": "Inherit Business Hours",
+            "default": false
+          },
+          "responsable_admin_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responsable Admin Id"
+          },
+          "clear_responsable": {
+            "type": "boolean",
+            "title": "Clear Responsable",
+            "default": false
+          },
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
+          },
+          "sort_order": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sort Order"
+          },
+          "is_default": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Default"
+          }
+        },
+        "type": "object",
+        "title": "CalendarPatch"
+      },
+      "CalendarSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "color": {
+            "type": "string",
+            "title": "Color"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "connected": {
+            "type": "boolean",
+            "title": "Connected"
+          },
+          "account_email": {
+            "type": "string",
+            "title": "Account Email",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "color",
+          "is_default",
+          "active",
+          "source",
+          "connected"
+        ],
+        "title": "CalendarSummary"
       }
     }
   }
