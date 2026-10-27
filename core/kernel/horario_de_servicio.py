@@ -82,8 +82,11 @@ def _franjas_por_dia(ranges: Any) -> dict[int, list[tuple[str, str]]]:
     for rng in ranges:
         if not isinstance(rng, dict):
             continue
+        bruto = rng.get("day")
+        if bruto is None:
+            continue
         try:
-            dia = int(rng.get("day"))
+            dia = int(bruto)
         except (TypeError, ValueError):
             continue
         desde, hasta = _hhmm(rng.get("from")), _hhmm(rng.get("to"))
