@@ -194,6 +194,10 @@ class FakeRedis:
     async def xlen(self, key):
         return self._dlq_size
 
+    async def xrange(self, key, count=None):
+        # Entradas reales (sin la marca de los escenarios de prueba, HU-QA-13).
+        return [(f"{n}-0", {"tenant_id": "t"}) for n in range(self._dlq_size)]
+
 
 @pytest.mark.asyncio
 async def test_heartbeat_ausente_falla(monkeypatch):

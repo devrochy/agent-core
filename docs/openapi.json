@@ -21888,6 +21888,132 @@
         }
       }
     },
+    "/api/v1/admin/qa/datos/escenarios": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Listar Escenarios",
+        "description": "Escenarios de datos de prueba y lo que creó cada uno la última vez (HU-QA-13). 404 fuera de test.",
+        "operationId": "listar_escenarios_api_v1_admin_qa_datos_escenarios_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaEscenarios"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Solo el admin de plataforma y los testers."
+          },
+          "404": {
+            "description": "Fuera de test (`QA_TESTERS_ENABLED` apagada) o el escenario no existe."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/qa/datos/escenarios/{slug}": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · centro de pruebas"
+        ],
+        "summary": "Crear Escenario",
+        "description": "Crea un caso nuevo del escenario en el negocio de prueba del tester, sin LLM y sin borrar nada\n(HU-QA-13). 404 si no existe o fuera de test; 409 sin datos preparados, con otra corrida en curso o\nsi el escenario no se puede crear (el motivo va en el mensaje).",
+        "operationId": "crear_escenario_api_v1_admin_qa_datos_escenarios__slug__post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QaEscenarioResultado"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Solo el admin de plataforma y los testers."
+          },
+          "404": {
+            "description": "Fuera de test (`QA_TESTERS_ENABLED` apagada) o el escenario no existe."
+          },
+          "409": {
+            "description": "Sin datos preparados, otra corrida en curso o el escenario no se puede crear (motivo)."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/meta/wizard/cancel": {
       "post": {
         "tags": [
@@ -38673,6 +38799,200 @@
         },
         "type": "object",
         "title": "QaEnviarIn"
+      },
+      "QaEscenario": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug",
+            "description": "Fijo: el catálogo de pruebas lo cita como `datos-escenario-<slug>`."
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "crea": {
+            "type": "string",
+            "title": "Crea"
+          },
+          "requiere": {
+            "type": "string",
+            "title": "Requiere"
+          },
+          "donde": {
+            "type": "string",
+            "title": "Donde",
+            "description": "Sección del panel donde se ve."
+          },
+          "ruta": {
+            "type": "string",
+            "title": "Ruta"
+          },
+          "agent_os": {
+            "type": "boolean",
+            "title": "Agent Os",
+            "description": "Necesita el Agent OS listo en el negocio de prueba."
+          },
+          "ultimo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QaEscenarioCreado"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Lo que creó la última vez para este tester."
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "titulo",
+          "crea",
+          "requiere",
+          "donde",
+          "ruta",
+          "agent_os"
+        ],
+        "title": "QaEscenario"
+      },
+      "QaEscenarioCreado": {
+        "properties": {
+          "sufijo": {
+            "type": "string",
+            "title": "Sufijo",
+            "description": "Marca corta del caso: aparece en los nombres de lo creado."
+          },
+          "detalle": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Detalle",
+            "description": "Qué creó, en líneas legibles."
+          },
+          "conteos": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Conteos"
+          },
+          "ruta": {
+            "type": "string",
+            "title": "Ruta",
+            "description": "Ruta del panel donde se ve lo creado (en el negocio de prueba)."
+          },
+          "creado_en": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creado En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sufijo",
+          "detalle",
+          "ruta"
+        ],
+        "title": "QaEscenarioCreado"
+      },
+      "QaEscenarioResultado": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug",
+            "description": "Fijo: el catálogo de pruebas lo cita como `datos-escenario-<slug>`."
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "crea": {
+            "type": "string",
+            "title": "Crea"
+          },
+          "requiere": {
+            "type": "string",
+            "title": "Requiere"
+          },
+          "donde": {
+            "type": "string",
+            "title": "Donde",
+            "description": "Sección del panel donde se ve."
+          },
+          "ruta": {
+            "type": "string",
+            "title": "Ruta"
+          },
+          "agent_os": {
+            "type": "boolean",
+            "title": "Agent Os",
+            "description": "Necesita el Agent OS listo en el negocio de prueba."
+          },
+          "ultimo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QaEscenarioCreado"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Lo que creó la última vez para este tester."
+          },
+          "negocio_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Negocio Id",
+            "description": "El negocio de prueba donde se creó (para cambiar a él y abrir la ruta)."
+          },
+          "creado": {
+            "$ref": "#/components/schemas/QaEscenarioCreado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "titulo",
+          "crea",
+          "requiere",
+          "donde",
+          "ruta",
+          "agent_os",
+          "negocio_id",
+          "creado"
+        ],
+        "title": "QaEscenarioResultado"
+      },
+      "QaEscenarios": {
+        "properties": {
+          "datos_listos": {
+            "type": "boolean",
+            "title": "Datos Listos",
+            "description": "El tester ya preparó sus datos: sin eso los escenarios dan 409."
+          },
+          "escenarios": {
+            "items": {
+              "$ref": "#/components/schemas/QaEscenario"
+            },
+            "type": "array",
+            "title": "Escenarios"
+          }
+        },
+        "type": "object",
+        "required": [
+          "datos_listos",
+          "escenarios"
+        ],
+        "title": "QaEscenarios"
       },
       "QaEvento": {
         "properties": {

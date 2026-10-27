@@ -75,6 +75,9 @@ def consumer_name() -> str:
 CONSUMER = consumer_name()
 MAX_DELIVERIES = 3
 DEAD_LETTER_STREAM = "agent_core:inbound:dlq"
+# Campo de las entradas que siembra el escenario «Mensajes fallidos» del centro de pruebas (HU-QA-13):
+# se ven en la bandeja del negocio de prueba, pero no cuentan como fallos reales para las alertas.
+MARCA_ESCENARIO = "qa_escenario"
 # Cada cuánto se intenta el reclamo de pendientes huérfanos (HU-ARCH-06).
 RECLAIM_EVERY_S = 30.0
 # Cada cuánto se recortan el stream de entrada y la DLQ (ADR-0053).
@@ -245,6 +248,17 @@ async def _handle_entry(entry_id: str, fields: dict[str, str], *, reclaimed: boo
         if retries >= MAX_DELIVERIES:
             await _dead_letter(r, entry_id, fields, retries, error=f"{type(exc).__name__}: {exc}")
             await r.delete(retry_key)
+
+
+async def dlq_pendientes(r: Any) -> int:
+    """Entradas de la DLQ sin contar las sembradas por los escenarios de prueba (HU-QA-13). Lo usan la
+    alerta de salud y el chequeo previo a producción: una entrada de prueba no despierta al on-call."""
+    total = int(await r.xlen(DEAD_LETTER_STREAM))
+    if total == 0:
+        return 0
+    entradas = await r.xrange(DEAD_LETTER_STREAM, count=min(total, 5000))
+    marcadas = sum(1 for _id, campos in entradas if MARCA_ESCENARIO in campos or MARCA_ESCENARIO.encode() in campos)
+    return max(0, total - marcadas)
 
 
 async def _dead_letter(

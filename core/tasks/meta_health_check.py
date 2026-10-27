@@ -97,7 +97,7 @@ async def check_all_connections_health() -> None:
 
 async def _check_global_signals() -> None:
     from core.gateway.webhooks import count_stalled_webhook_events
-    from core.orchestrator.consumer import DEAD_LETTER_STREAM
+    from core.orchestrator.consumer import DEAD_LETTER_STREAM, dlq_pendientes
 
     try:
         stalled = await count_stalled_webhook_events()
@@ -114,7 +114,7 @@ async def _check_global_signals() -> None:
         from core.memory.working import get_redis
 
         redis = get_redis()
-        dlq_size = await redis.xlen(DEAD_LETTER_STREAM)
+        dlq_size = await dlq_pendientes(redis)
         if dlq_size > 0:
             await send_alert(
                 "DLQ de entrada con eventos pendientes",

@@ -1,0 +1,29 @@
+{
+  "seed": {
+    "leads": [
+      {"estado": "calificado", "interes": "Café de origen en grano para la oficina"},
+      {"estado": "nuevo", "interes": "Pregunta por café molido para cafetera de goteo"},
+      {"estado": "convertido", "interes": "Compra mensual de prensa francesa y filtros"},
+      {"estado": "contactado", "interes": "Quiere factura a nombre de su empresa"},
+      {"estado": "perdido", "interes": "Buscaba café descafeinado"},
+      {"estado": "calificado", "interes": "Quiere el plan anual de asesoría"}
+    ],
+    "pedidos": [
+      {"cliente": 0, "estado": "abierto", "pago": "pendiente", "metodo": "transferencia", "entrega": "domicilio",
+       "lineas": [{"sku": "QA-CAFE-500", "cantidad": 2}, {"sku": "QA-CAFE-250", "cantidad": 1}]},
+      {"cliente": 2, "estado": "entregado", "pago": "pagado", "metodo": "efectivo_contraentrega", "entrega": "domicilio",
+       "lineas": [{"sku": "QA-PRENSA-600", "cantidad": 1}]},
+      {"cliente": 4, "estado": "cancelado", "pago": "pendiente", "metodo": "transferencia", "entrega": "recoger_en_tienda",
+       "motivo": "El cliente canceló antes de pagar.", "lineas": [{"sku": "QA-CAFE-250", "cantidad": 3}]}
+    ],
+    "promocion": {"tipo": "temporada", "descuento_pct": 10, "dias": 30, "sku": "QA-CAFE-500"},
+    "planes": {
+      "products": [
+        {"name": "Plan Básico de café", "description": "Una bolsa de 500 g al mes.",
+         "variants": [{"price": 45000, "attributes": {"periodicidad": "mensual", "trial_dias": 0}}]},
+        {"name": "Plan Anual de asesoría", "description": "Una asesoría al mes durante un año.",
+         "variants": [{"price": 480000, "attributes": {"periodicidad": "anual", "trial_dias": 0}}]}
+      ]
+    }
+  }
+}
