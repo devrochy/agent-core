@@ -1,6 +1,6 @@
 # ADR-0064 — Comunicación con el propietario: bitácora por tenant con enlace wa.me
 
-- **Estado:** aceptado
+- **Estado:** aceptado — la UI y la API del hilo se retiraron el 2026-10-26 (el asistente cubre reclamos y preguntas); las tablas y las notificaciones de cobro siguen
 - **Fecha:** 2026-09-24
 
 ## Contexto
