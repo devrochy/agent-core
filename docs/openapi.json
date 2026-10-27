@@ -22964,7 +22964,7 @@
           "plantillas con opciones"
         ],
         "summary": "Publicar",
-        "description": "Congela el borrador como la versión siguiente (inmutable). 422 `definicion_con_errores` con los hallazgos si\nfalla el lint: no cambia nada. 409 `sin_cambios` si el borrador es igual a la versión vigente.",
+        "description": "Congela el borrador como la versión siguiente (inmutable). 422 `definicion_con_errores` con los hallazgos si\nfalla el lint: no cambia nada. 409 `sin_cambios` si el borrador es igual a la versión vigente. Con `meta`, encadena\nla alta de la versión como plantilla de Meta (`<clave>_v<n>`); si Meta falla, la versión SIGUE publicada y el\nresultado va en `meta` (se reintenta en `/versiones/{n}/publicar-en-meta`). 422 si la categoría o el idioma son inválidos.",
         "operationId": "publicar_api_v1_plantillas_opciones__clave__publicar_post",
         "parameters": [
           {
@@ -22993,6 +22993,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/OpcionesPublicarIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": "Successful Response",
@@ -28486,6 +28503,95 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/plantillas-opciones/{clave}/versiones/{version_n}/publicar-en-meta": {
+      "post": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Publicar Version En Meta",
+        "description": "Alta, o reintento, de UNA versión ya publicada como plantilla de Meta. Repetirla es seguro: no duplica la\nplantilla ni gasta otra creación. Nunca se edita una plantilla aprobada: una versión nueva es otra plantilla.\nResponde 200 con el resultado (`ok`, `outcome`, `reintentable`); 404 si la versión no existe, 409 si está retirada.",
+        "operationId": "publicar_version_en_meta_api_v1_plantillas_opciones__clave__versiones__version_n__publicar_en_meta_post",
+        "parameters": [
+          {
+            "name": "clave",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Clave"
+            }
+          },
+          {
+            "name": "version_n",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version N"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpcionesMetaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesMetaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
           }
         }
       }
@@ -37529,7 +37635,18 @@
               }
             ],
             "title": "Message Template Id",
-            "description": "Siempre nulo aquí: la publicación a Meta es un paso posterior."
+            "description": "La plantilla de Meta ligada si se pidió publicar en Meta; si no, nulo."
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpcionesMetaOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Resultado de la publicación en Meta; nulo si no se pidió."
           },
           "hallazgos": {
             "items": {
@@ -37546,6 +37663,7 @@
           "definition_hash",
           "publicada_en",
           "message_template_id",
+          "meta",
           "hallazgos"
         ],
         "title": "OpcionesPublicadaOut"
@@ -37655,6 +37773,17 @@
             "title": "Message Template Id",
             "description": "Plantilla de Meta de esta versión; la fija la publicación a Meta."
           },
+          "meta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpcionesMetaEstadoOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Estado de la plantilla de Meta; nulo si la versión no se publicó en Meta."
+          },
           "vigente": {
             "type": "boolean",
             "title": "Vigente"
@@ -37667,6 +37796,7 @@
           "retirada_en",
           "definition_hash",
           "message_template_id",
+          "meta",
           "vigente"
         ],
         "title": "OpcionesVersionOut"
@@ -57347,6 +57477,251 @@
           "connected"
         ],
         "title": "CalendarSummary"
+      },
+      "OpcionesMetaEstadoOut": {
+        "properties": {
+          "message_template_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Message Template Id"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre",
+            "description": "`<clave>_v<n>`: cada versión es una plantilla nueva de Meta."
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado",
+            "description": "`DRAFT` (reservada, aún sin respuesta de Meta), `PENDING`, `APPROVED`, `REJECTED`, `PAUSED`…"
+          },
+          "categoria": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categoria",
+            "description": "La que tiene la plantilla ahora (Meta puede recategorizarla)."
+          },
+          "categoria_anterior": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categoria Anterior"
+          },
+          "motivo_rechazo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Rechazo"
+          },
+          "recomendacion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recomendacion"
+          },
+          "error_de_publicacion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error De Publicacion",
+            "description": "El último error al crearla en Meta; vacío si no hubo."
+          }
+        },
+        "type": "object",
+        "required": [
+          "message_template_id",
+          "nombre",
+          "estado",
+          "categoria",
+          "categoria_anterior",
+          "motivo_rechazo",
+          "recomendacion",
+          "error_de_publicacion"
+        ],
+        "title": "OpcionesMetaEstadoOut",
+        "description": "Lo que Meta dice de la plantilla de una versión. Se lee de `message_templates` (lo escriben los webhooks de\nestado y de categoría), no se guarda aparte."
+      },
+      "OpcionesMetaIn": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "categoria": {
+            "type": "string",
+            "enum": [
+              "UTILITY",
+              "MARKETING"
+            ],
+            "title": "Categoria"
+          },
+          "idioma": {
+            "type": "string",
+            "maxLength": 10,
+            "title": "Idioma",
+            "default": "es"
+          },
+          "ejemplos": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "maxProperties": 30,
+            "title": "Ejemplos",
+            "description": "`ruta de variable → valor de muestra` (hasta 60 caracteres, nunca datos de un cliente)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "categoria"
+        ],
+        "title": "OpcionesMetaIn",
+        "description": "Publicar la versión como plantilla de Meta: en qué conexión (su WABA), con qué categoría (la elige el dueño y\ncambia el costo y la aprobación) e idioma, y un valor de muestra por variable del cuerpo (Meta los revisa)."
+      },
+      "OpcionesMetaOut": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome",
+            "description": "`published`, `already_published`, `network_error`, `rate_limited`, `in_progress`, `internal_error` (reintentables) o `meta_rejected`, `invalid_definition`, `name_taken`, `other_account`, `template_deleted`, `meta_id_taken`, `connection_not_ready`, `template_quota_full`, `version_retired`, `version_not_found`, `invalid_category`, `invalid_language`."
+          },
+          "reintentable": {
+            "type": "boolean",
+            "title": "Reintentable",
+            "description": "Repetir la misma petición puede resolverlo y no duplica la plantilla en Meta."
+          },
+          "nombre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre"
+          },
+          "estado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estado"
+          },
+          "categoria": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categoria"
+          },
+          "message_template_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Template Id"
+          },
+          "meta_template_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta Template Id"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo",
+            "description": "Texto acotado del motivo (de Meta si rechazó); nunca datos de un cliente."
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "outcome",
+          "reintentable",
+          "nombre",
+          "estado",
+          "categoria",
+          "message_template_id",
+          "meta_template_id",
+          "motivo"
+        ],
+        "title": "OpcionesMetaOut",
+        "description": "Resultado de publicar una versión en Meta. Un fallo NO revierte la versión publicada: `ok` falso con `outcome`."
+      },
+      "OpcionesPublicarIn": {
+        "properties": {
+          "meta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpcionesMetaIn"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Si llega, encadena la alta de la versión en Meta; si no, solo congela la versión."
+          }
+        },
+        "type": "object",
+        "title": "OpcionesPublicarIn"
       }
     }
   }

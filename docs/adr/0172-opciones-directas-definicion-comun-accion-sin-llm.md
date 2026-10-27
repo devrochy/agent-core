@@ -167,3 +167,55 @@ Decisiones que el ADR dejaba abiertas y cómo quedaron (`core/api/routers/planti
 - **La ruta master que fija la bandera NO llega con este PR (cambia §5).** §5 decía que llegaba con la API. Se difiere al PR de publicación a Meta (PR 7): este PR solo LEE la bandera (`core/api/routers/plantillas_opciones.py` entra a la lista cerrada de lectores de `test_opciones_esquema_y_bandera.py`) y encender un negocio sigue siendo una operación del master/DBA con el OK del dueño, descrita en el runbook. La entrada en el registro de configuración (CFG-02) va con esa ruta.
 - **Renombre.** La clase `Opcion` de la definición pasa a `OpcionDeLaPlantilla`: el esquema OpenAPI `Opcion` ya era del registro de configuración y FastAPI habría renombrado ambos a `core__…__Opcion`, rompiendo los tipos del panel. Los esquemas de la API llevan el prefijo `Opciones…` por la misma razón.
 - **Observabilidad.** Cada escritura deja `audit_log` (`option_template_create|draft|publish|retire|delete`, actor `admin:<id>`, solo ids y claves, nunca el contenido de la definición).
+
+## Adenda (2026-10-27) · PR 7: publicar la versión en Meta
+
+Decisiones que el ADR dejaba abiertas y cómo quedaron:
+
+- **Reintento seguro sin tabla ni migración.** `message_templates` ya tiene `UNIQUE (waba_account_id, name, language)` y
+  admite `DRAFT`: antes del POST se RESERVA la fila (`DRAFT`, sin `meta_template_id`, con la categoría y los componentes)
+  y se liga `option_template_versions.message_template_id` (columna que `prevent_mutation` deja mutar) en la misma
+  transacción. Esa fila es la clave de idempotencia y el estado persistido. Una fila `DRAFT` sin id que ya existía al
+  llamar es un intento de resultado desconocido (corte, timeout, caída del worker): se pregunta a Meta por ESE nombre
+  (`GET …/message_templates?name=`, filtro documentado y no verificado desde aquí; se vuelve a comparar nombre e
+  idioma de lo que responde) y, si ya la tiene, se adopta su id y estado sin otro POST. No se usa `sync_templates`
+  para conciliar: pagina toda la WABA y reescribe `components` y `category` de todas las filas.
+- **El completado no pisa al webhook.** Entre la respuesta de Meta y el guardado local puede llegar el webhook de estado;
+  sin `meta_template_id` en la fila se descarta (`template_webhook_sin_fila_del_negocio`). El guardado solo completa una
+  fila que sigue sin id y solo avanza el estado si sigue en `DRAFT`. Si el aviso se perdió en esa ventana (milisegundos)
+  lo corrige el sync horario.
+- **Colisión de nombre.** La clave es única solo entre las vivas: borrar y recrear una clave vuelve a dar `<clave>_v1`.
+  Si ya existe en la WABA una plantilla de ese nombre que no está ligada a esta versión, solo se adopta si dice
+  EXACTAMENTE lo mismo (cuerpo, pie, botones y variables) y es de la categoría pedida; si no, `name_taken` (con motivo `categoria_distinta` en el segundo caso) y no se toca nada. El índice del vínculo no es único: dos versiones de una clave borrada y recreada pueden quedar ligadas a la misma plantilla de Meta cuando dicen lo mismo (inocuo: es la misma plantilla). La salida del dueño es
+  publicar una versión nueva (Meta además no deja reusar un nombre borrado durante unas semanas).
+- **Categoría.** La elige el dueño: `UTILITY` o `MARKETING` (`AUTHENTICATION` se rechaza). Queda en la fila reservada
+  antes de llamar a Meta y se lee de `message_templates` (no de la publicación) porque `template_category_update`
+  puede cambiarla. Se manda `allow_category_change=False`: Meta rechaza en vez de recategorizar en silencio, porque el
+  costo cambia con la categoría. Un rechazo por eso llega como `REJECTED` con su motivo.
+- **Idioma.** La definición no lo tiene: parámetro con default `es` (el de la creación manual del panel). Los
+  `ejemplos` de los parámetros NAMED los da quien publica; sin ellos, `ejemplo` (Meta suele rechazarlo): el panel debe
+  pedirlos. Deben ser constantes neutras, nunca datos de un cliente.
+- **La bandera.** El servicio `publicar_en_meta` no la mira: publicar en Meta no envía nada a ningún cliente. La puerta es
+  la API de HU-OPC-05, que responde 404 `opciones_directas_no_habilitadas` en todas sus rutas (también en las de Meta) con la
+  bandera apagada, y los envíos y toques siguen gobernados por `opciones_directas.habilitada`. Quién puede publicar lo decide
+  la API: `connections` con escritura y dueño o master (§5).
+- **Una versión, una plantilla de Meta, una WABA.** El vínculo es una sola columna y el envío exige que la plantilla sea de
+  la WABA de la conversación: un negocio con dos WABAs envía por la de la versión (`plantilla_de_otra_cuenta` en la
+  otra) y publicarla en otra conexión da `other_account`. Aceptable con pocos negocios con dos WABAs; si se necesita
+  una versión en varias WABAs hace falta una relación N:M (migración) y es otro cambio.
+- **Cupo.** Se mira justo antes del POST (una versión que ya está en Meta no gasta cupo y su reintento no se topa con la cuenta llena). Cada versión gasta una plantilla de las que Meta permite por cuenta. Antes de llamar se mira
+  `message_template_count`/`message_template_limit` (contadores del último sync): lleno → `template_quota_full`. El panel
+  debe mostrar cuáles versiones siguen vigentes para no llenar la WABA (retirar una versión no borra su plantilla).
+- **Si Meta falla, la versión publicada no se revierte.** Queda `published` con su vínculo y el error en
+  `message_templates.sync_error` (visible en el panel); el reintento completa la misma fila. `network_error`, `rate_limited`,
+  `in_progress` e `internal_error` son reintentables (un 5xx de Meta o una respuesta sin id cuentan como `network_error`: Meta pudo
+  haberla creado y el reintento concilia por nombre); un rechazo de Meta, una definición inválida, `name_taken`, `other_account` y
+  `template_deleted` y `meta_id_taken` (el id que devolvió Meta ya está en otra fila del negocio, p. ej. tras reclamar la WABA, ADR-0122) no.
+- **Superficie nueva y lo que NO cambia.** `post_template` se extrae de `create_template` (el panel sigue igual);
+  `find_template_by_name` es nueva. No se llama a `update_template` jamás para una versión. No hay tabla ni migración nuevas.
+- **API (encadenado).** `POST /plantillas-opciones/{clave}/publicar` acepta un cuerpo opcional `meta` (`connection_id`, `categoria`, `idioma`, `ejemplos`): congela la versión y, solo entonces, la publica en Meta. Si Meta falla la versión sigue publicada y la respuesta trae `meta` con `ok=false`, el `outcome` y `reintentable`. El reintento (o publicar una versión ya congelada) es `POST /plantillas-opciones/{clave}/versiones/{n}/publicar-en-meta`. El detalle de cada versión lleva su `meta` (nombre, categoría y estado leídos de `message_templates`, sin N+1). Una categoría o idioma inválidos se rechazan con 422 ANTES de congelar nada.
+- **Lo que queda fuera.** (a) La ruta de plataforma (master) para encender la bandera, que el PR 6 difirió a este PR, **no se incluye**: sigue siendo un seguimiento aparte y la bandera se enciende a mano (runbook). (b) Distinguir en el panel el `sin_plantilla` de
+  una opción del de un evento (adenda del PR 5): es del panel (HU-OPC-06). (c) La clave Redis del límite de creación
+  (`tpl_create_rl:{waba_id}:{hora}`) no lleva el negocio (preexistente, mismo defecto que ya se corrigió en
+  `acquire_sync_lock`, ADR-0122): seguimiento aparte. (d) La prueba real del payload del QUICK_REPLY y de los límites de 25, 10
+  y 256 sigue **PENDIENTE** del dueño y es la puerta para encender la bandera.

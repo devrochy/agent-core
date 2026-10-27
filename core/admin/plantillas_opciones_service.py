@@ -17,8 +17,10 @@ Lo usa `core/api/routers/plantillas_opciones.py`; el router solo traduce HTTP. A
 - **Errores** como `ErrorPlantillaOpciones` (status, código, mensaje, detalles): el router los vuelve `ApiError`.
 - **Auditoría** de cada escritura con ids y claves, nunca valores de la definición.
 
-Toda consulta filtra por `tenant_id` además de la RLS (defensa en profundidad). Nada de esto envía a Meta: el
-encadenado a Meta de la versión publicada es de HU-OPC-04 (`gancho_tras_publicar`).
+Toda consulta filtra por `tenant_id` además de la RLS (defensa en profundidad). Publicar puede encadenar la alta de la
+versión como plantilla de Meta (HU-OPC-04, `core/gateway/opciones_meta.py`): es opcional, ocurre DESPUÉS de congelar y
+si Meta falla la versión sigue publicada (el resultado de Meta viaja aparte y se reintenta). Nada de esto envía un
+mensaje a un cliente.
 """
 
 from __future__ import annotations
@@ -33,8 +35,10 @@ from sqlalchemy.exc import IntegrityError
 
 from core.db.models import Conversation, OptionTemplate, OptionTemplateVersion, utcnow
 from core.db.session import get_session
+from core.gateway.opciones_meta import EstadoMeta, estado_de_publicacion, publicar_en_meta
 from core.kernel.opciones import contexto, lint, mapeo
 from core.kernel.opciones import envio as ev
+from core.kernel.opciones import meta as meta_k
 from core.kernel.opciones.definicion import Accion, Definicion, hallazgos_de_forma, hash_de
 from core.kernel.opciones.lint import (
     ContextoLint,
@@ -254,7 +258,24 @@ def _resumen(p: OptionTemplate, versiones: list[OptionTemplateVersion]) -> dict[
     }
 
 
-def _detalle(p: OptionTemplate, versiones: list[OptionTemplateVersion]) -> dict[str, Any]:
+def _estado_meta(e: EstadoMeta | None) -> dict[str, Any] | None:
+    """Lo que Meta dice de la plantilla ligada a una versión (se lee de `message_templates`, no se duplica)."""
+    if e is None:
+        return None
+    return {
+        "message_template_id": e.message_template_id, "nombre": e.nombre, "estado": e.estado, "categoria": e.categoria,
+        "categoria_anterior": e.categoria_anterior, "motivo_rechazo": e.motivo_rechazo, "recomendacion": e.recomendacion,
+        "error_de_publicacion": e.error_de_publicacion,
+    }
+
+
+async def _estados(tenant_id: uuid.UUID, versiones: list[OptionTemplateVersion]) -> dict[uuid.UUID, EstadoMeta]:
+    return await estado_de_publicacion(tenant_id, [v.id for v in versiones if v.message_template_id is not None])
+
+
+def _detalle(
+    p: OptionTemplate, versiones: list[OptionTemplateVersion], estados: dict[uuid.UUID, EstadoMeta] | None = None
+) -> dict[str, Any]:
     vigente = _version_vigente(p, versiones)
     return {
         **_resumen(p, versiones),
@@ -267,6 +288,7 @@ def _detalle(p: OptionTemplate, versiones: list[OptionTemplateVersion]) -> dict[
                 "retirada_en": v.retired_at,
                 "definition_hash": v.definition_hash,
                 "message_template_id": v.message_template_id,
+                "meta": _estado_meta((estados or {}).get(v.id)),
                 "vigente": v.version_n == p.current_version_n,
             }
             for v in versiones
@@ -302,7 +324,8 @@ async def obtener(tenant_id: uuid.UUID, clave: str) -> dict[str, Any]:
         if p is None:
             raise _no_encontrada()
         versiones = await _versiones(session, tenant_id, [p.id])
-        return _detalle(p, versiones.get(p.id, []))
+        versiones_de = versiones.get(p.id, [])
+        return _detalle(p, versiones_de, await _estados(tenant_id, versiones_de))
 
 
 # ------------------------------------------------------------------ borradores
@@ -355,7 +378,8 @@ async def guardar_borrador(tenant_id: uuid.UUID, actor: str, clave: str, nombre:
             p.name = nombre.strip()[:MAX_NOMBRE]
         p.updated_at = utcnow()
         versiones = await _versiones(session, tenant_id, [p.id])
-        resultado = _detalle(p, versiones.get(p.id, []))
+        versiones_de = versiones.get(p.id, [])
+        resultado = _detalle(p, versiones_de, await _estados(tenant_id, versiones_de))
     await record_audit(actor, ACC_BORRADOR, input_data={"template_key": clave}, output_data={"status": resultado["estado"]})
     return resultado
 
@@ -377,12 +401,42 @@ async def eliminar(tenant_id: uuid.UUID, actor: str, clave: str) -> None:
 
 
 # ------------------------------------------------------------------ publicar y retirar
-async def publicar(tenant_id: uuid.UUID, actor: str, clave: str) -> dict[str, Any]:
+def _validar_meta(meta: dict[str, Any]) -> tuple[uuid.UUID, str, str, dict[str, str]]:
+    """`(conexión, categoría, idioma, ejemplos)` de la petición de publicar en Meta, o 422. Se comprueba ANTES de congelar
+    una versión: una categoría inválida no debe dejar una versión publicada sin plantilla de Meta."""
+    categoria = meta_k.categoria_valida(str(meta.get("categoria") or ""))
+    if categoria is None:
+        raise ErrorPlantillaOpciones(422, "categoria_invalida", "La categoría debe ser UTILITY (utilidad) o MARKETING (marketing).")
+    idioma = str(meta.get("idioma") or meta_k.IDIOMA_POR_DEFECTO)
+    if not meta_k.idioma_valido(idioma):
+        raise ErrorPlantillaOpciones(422, "idioma_invalido", "El idioma debe tener la forma `es` o `es_AR`.")
+    try:
+        conexion = uuid.UUID(str(meta.get("connection_id")))
+    except ValueError as exc:
+        raise ErrorPlantillaOpciones(422, "conexion_invalida", "La conexión no es válida.") from exc
+    ejemplos = {str(k): str(v) for k, v in (meta.get("ejemplos") or {}).items()}
+    return conexion, categoria, idioma, ejemplos
+
+
+def _meta_como_dict(r: meta_k.ResultadoPublicacion) -> dict[str, Any]:
+    return {
+        "ok": r.ok, "outcome": r.outcome, "reintentable": r.reintentable, "nombre": r.nombre or None, "estado": r.estado,
+        "categoria": r.categoria, "message_template_id": r.message_template_id, "meta_template_id": r.meta_template_id,
+        "motivo": r.motivo or None,
+    }
+
+
+async def publicar(tenant_id: uuid.UUID, actor: str, clave: str, meta: dict[str, Any] | None = None) -> dict[str, Any]:
     """Congela el borrador como la versión `n + 1`. Con errores en el lint (o sin borrador, o sin cambios) se
-    rechaza y NO cambia nada. Los avisos (`warning`) no impiden publicar y viajan en la respuesta."""
+    rechaza y NO cambia nada. Los avisos (`warning`) no impiden publicar y viajan en la respuesta.
+
+    Con `meta` (`connection_id`, `categoria`, `idioma`, `ejemplos`) encadena, DESPUÉS de congelar, la alta de la
+    versión como plantilla de Meta `<clave>_v<n>` (HU-OPC-04). Si Meta falla la versión sigue publicada: el resultado
+    va en `meta` (`ok`, `outcome`, `reintentable`) y se reintenta con `publicar_version_en_meta`."""
     _scope(tenant_id)
     if not CLAVE.fullmatch(clave):
         raise _no_encontrada()
+    pedido = _validar_meta(meta) if meta is not None else None
     ctx = await contexto_del_lint(tenant_id)  # antes del candado: no se retiene la fila mientras se consulta
     async with get_session() as session:
         p = (await session.execute(select(OptionTemplate).where(*_viva(tenant_id, clave)).with_for_update())).scalar_one_or_none()
@@ -414,18 +468,47 @@ async def publicar(tenant_id: uuid.UUID, actor: str, clave: str) -> dict[str, An
         await session.flush()
         resultado = {
             "clave": clave, "version_n": n, "definition_hash": hash_, "publicada_en": version.published_at,
-            "message_template_id": None, "hallazgos": hallazgos_como_dicts(hallazgos),
+            "message_template_id": None, "meta": None, "hallazgos": hallazgos_como_dicts(hallazgos),
         }
-        version_id, plantilla_id = version.id, p.id
+        version_id = version.id
     await record_audit(actor, ACC_PUBLICAR, input_data={"template_key": clave}, output_data={"version": n})
-    await gancho_tras_publicar(tenant_id, plantilla_id, version_id)
+    if pedido is not None:
+        conexion, categoria, idioma, ejemplos = pedido
+        r = await publicar_en_meta(
+            tenant_id, version_id, conexion, categoria, idioma=idioma, ejemplos=ejemplos, actor=actor
+        )
+        resultado["meta"] = _meta_como_dict(r)
+        resultado["message_template_id"] = r.message_template_id
     return resultado
 
 
-async def gancho_tras_publicar(tenant_id: uuid.UUID, option_template_id: uuid.UUID, version_id: uuid.UUID) -> None:
-    """Punto de enganche de HU-OPC-04 (PR 7): ahí se encadena la publicación de la versión en Meta
-    (`<clave>_v<n>`) y se fija `message_template_id`. Hoy no hace nada a propósito: esta API solo congela."""
-    return None
+async def publicar_version_en_meta(
+    tenant_id: uuid.UUID, actor: str, clave: str, version_n: int, meta: dict[str, Any]
+) -> dict[str, Any]:
+    """Alta (o reintento) de UNA versión ya publicada como plantilla de Meta. Repetirla es seguro: no duplica la
+    plantilla ni gasta otra creación (ver `core/gateway/opciones_meta.py`). Una versión retirada no se publica."""
+    _scope(tenant_id)
+    if not CLAVE.fullmatch(clave):
+        raise _no_encontrada()
+    conexion, categoria, idioma, ejemplos = _validar_meta(meta)
+    async with get_session() as session:
+        version_id = (
+            await session.execute(
+                select(OptionTemplateVersion.id)
+                .join(
+                    OptionTemplate,
+                    (OptionTemplate.tenant_id == OptionTemplateVersion.tenant_id)
+                    & (OptionTemplate.id == OptionTemplateVersion.option_template_id),
+                )
+                .where(*_viva(tenant_id, clave), OptionTemplateVersion.version_n == version_n)
+            )
+        ).scalar_one_or_none()
+    if version_id is None:
+        raise _no_encontrada()
+    r = await publicar_en_meta(tenant_id, version_id, conexion, categoria, idioma=idioma, ejemplos=ejemplos, actor=actor)
+    if r.outcome == meta_k.VERSION_RETIRADA:
+        raise ErrorPlantillaOpciones(409, "version_retirada", "Esa versión está retirada: publica una versión nueva.")
+    return _meta_como_dict(r)
 
 
 async def retirar(tenant_id: uuid.UUID, actor: str, clave: str) -> dict[str, Any]:
@@ -454,7 +537,7 @@ async def retirar(tenant_id: uuid.UUID, actor: str, clave: str) -> dict[str, Any
         p.status = "retired"
         p.updated_at = ahora
         versiones = (await _versiones(session, tenant_id, [p.id])).get(p.id, [])
-        resultado = _detalle(p, versiones)
+        resultado = _detalle(p, versiones, await _estados(tenant_id, versiones))
     await record_audit(actor, ACC_RETIRAR, input_data={"template_key": clave})
     return resultado
 

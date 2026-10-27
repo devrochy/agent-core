@@ -80,7 +80,7 @@ def test_toda_falla_de_envio_tiene_su_estado_http_o_es_un_502_documentado() -> N
 
 def test_cada_ruta_exige_permiso_y_bandera_y_las_de_escritura_ademas_ser_duenio() -> None:
     rutas = [r for r in router_mod.router.routes if isinstance(r, APIRoute)]
-    assert len(rutas) == 12
+    assert len(rutas) == 13
     for r in rutas:
         dependencias = {d.call for d in r.dependant.dependencies}
         escribe = r.methods - {"GET"} and r.path not in {"/plantillas-opciones/validar", "/plantillas-opciones/vista-previa"}

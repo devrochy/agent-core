@@ -93,12 +93,27 @@ class OpcionesErrorOut(BaseModel):
 _ERROR_CON_HALLAZGOS: dict[int | str, dict[str, Any]] = {422: {"model": OpcionesErrorOut}, 409: {"model": OpcionesErrorOut}}
 
 
+class OpcionesMetaEstadoOut(BaseModel):
+    """Lo que Meta dice de la plantilla de una versión. Se lee de `message_templates` (lo escriben los webhooks de
+    estado y de categoría), no se guarda aparte."""
+
+    message_template_id: uuid.UUID
+    nombre: str = Field(description="`<clave>_v<n>`: cada versión es una plantilla nueva de Meta.")
+    estado: str = Field(description="`DRAFT` (reservada, aún sin respuesta de Meta), `PENDING`, `APPROVED`, `REJECTED`, `PAUSED`…")
+    categoria: str | None = Field(description="La que tiene la plantilla ahora (Meta puede recategorizarla).")
+    categoria_anterior: str | None
+    motivo_rechazo: str | None
+    recomendacion: str | None
+    error_de_publicacion: str | None = Field(description="El último error al crearla en Meta; vacío si no hubo.")
+
+
 class OpcionesVersionOut(BaseModel):
     version_n: int
     publicada_en: datetime
     retirada_en: datetime | None
     definition_hash: str
     message_template_id: uuid.UUID | None = Field(description="Plantilla de Meta de esta versión; la fija la publicación a Meta.")
+    meta: OpcionesMetaEstadoOut | None = Field(description="Estado de la plantilla de Meta; nulo si la versión no se publicó en Meta.")
     vigente: bool
 
 
@@ -158,12 +173,45 @@ class VistaPreviaOpcionesOut(BaseModel):
     hallazgos: list[OpcionesHallazgoOut] = Field(description="Solo avisos: con errores la ruta responde 422.")
 
 
+class OpcionesMetaIn(BaseModel):
+    """Publicar la versión como plantilla de Meta: en qué conexión (su WABA), con qué categoría (la elige el dueño y
+    cambia el costo y la aprobación) e idioma, y un valor de muestra por variable del cuerpo (Meta los revisa)."""
+
+    connection_id: uuid.UUID
+    categoria: Literal["UTILITY", "MARKETING"]
+    idioma: str = Field(default="es", max_length=10)
+    ejemplos: dict[str, str] = Field(default_factory=dict, max_length=30, description="`ruta de variable → valor de muestra` (hasta 60 caracteres, nunca datos de un cliente).")
+
+
+class OpcionesPublicarIn(BaseModel):
+    meta: OpcionesMetaIn | None = Field(default=None, description="Si llega, encadena la alta de la versión en Meta; si no, solo congela la versión.")
+
+
+class OpcionesMetaOut(BaseModel):
+    """Resultado de publicar una versión en Meta. Un fallo NO revierte la versión publicada: `ok` falso con `outcome`."""
+
+    ok: bool
+    outcome: str = Field(
+        description="`published`, `already_published`, `network_error`, `rate_limited`, `in_progress`, `internal_error` (reintentables) o "
+        "`meta_rejected`, `invalid_definition`, `name_taken`, `other_account`, `template_deleted`, `meta_id_taken`, `connection_not_ready`, "
+        "`template_quota_full`, `version_retired`, `version_not_found`, `invalid_category`, `invalid_language`."
+    )
+    reintentable: bool = Field(description="Repetir la misma petición puede resolverlo y no duplica la plantilla en Meta.")
+    nombre: str | None
+    estado: str | None
+    categoria: str | None
+    message_template_id: uuid.UUID | None
+    meta_template_id: str | None
+    motivo: str | None = Field(description="Texto acotado del motivo (de Meta si rechazó); nunca datos de un cliente.")
+
+
 class OpcionesPublicadaOut(BaseModel):
     clave: str
     version_n: int
     definition_hash: str
     publicada_en: datetime
-    message_template_id: uuid.UUID | None = Field(description="Siempre nulo aquí: la publicación a Meta es un paso posterior.")
+    message_template_id: uuid.UUID | None = Field(description="La plantilla de Meta ligada si se pidió publicar en Meta; si no, nulo.")
+    meta: OpcionesMetaOut | None = Field(description="Resultado de la publicación en Meta; nulo si no se pidió.")
     hallazgos: list[OpcionesHallazgoOut]
 
 
@@ -281,11 +329,31 @@ async def eliminar(clave: str, principal: Annotated[Principal, Depends(escritura
 
 # ------------------------------------------------------------------ ciclo de vida
 @router.post("/{clave}/publicar", response_model=OpcionesPublicadaOut, status_code=201, responses=_ERROR_CON_HALLAZGOS)
-async def publicar(clave: str, principal: Annotated[Principal, Depends(escritura)]) -> dict[str, Any]:
+async def publicar(
+    clave: str, principal: Annotated[Principal, Depends(escritura)], body: OpcionesPublicarIn | None = None
+) -> dict[str, Any]:
     """Congela el borrador como la versión siguiente (inmutable). 422 `definicion_con_errores` con los hallazgos si
-    falla el lint: no cambia nada. 409 `sin_cambios` si el borrador es igual a la versión vigente."""
+    falla el lint: no cambia nada. 409 `sin_cambios` si el borrador es igual a la versión vigente. Con `meta`, encadena
+    la alta de la versión como plantilla de Meta (`<clave>_v<n>`); si Meta falla, la versión SIGUE publicada y el
+    resultado va en `meta` (se reintenta en `/versiones/{n}/publicar-en-meta`). 422 si la categoría o el idioma son inválidos."""
     try:
-        return await svc.publicar(_negocio(principal), _actor(principal), clave)
+        meta = body.meta.model_dump(mode="json") if body is not None and body.meta is not None else None
+        return await svc.publicar(_negocio(principal), _actor(principal), clave, meta)
+    except svc.ErrorPlantillaOpciones as exc:
+        raise _api(exc) from exc
+
+
+@router.post("/{clave}/versiones/{version_n}/publicar-en-meta", response_model=OpcionesMetaOut, responses=_ERROR_CON_HALLAZGOS)
+async def publicar_version_en_meta(
+    clave: str, version_n: int, body: OpcionesMetaIn, principal: Annotated[Principal, Depends(escritura)]
+) -> dict[str, Any]:
+    """Alta, o reintento, de UNA versión ya publicada como plantilla de Meta. Repetirla es seguro: no duplica la
+    plantilla ni gasta otra creación. Nunca se edita una plantilla aprobada: una versión nueva es otra plantilla.
+    Responde 200 con el resultado (`ok`, `outcome`, `reintentable`); 404 si la versión no existe, 409 si está retirada."""
+    try:
+        return await svc.publicar_version_en_meta(
+            _negocio(principal), _actor(principal), clave, version_n, body.model_dump(mode="json")
+        )
     except svc.ErrorPlantillaOpciones as exc:
         raise _api(exc) from exc
 
