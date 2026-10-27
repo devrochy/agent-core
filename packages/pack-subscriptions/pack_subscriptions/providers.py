@@ -248,3 +248,7 @@ lead_registry.register(
     agent_name="Suscripciones",
     icon="repeat",
 )
+
+
+# Registra también los KPIs del módulo para el Resumen por agente (ADR-0171).
+from pack_subscriptions import resumen as _resumen  # noqa: E402, F401

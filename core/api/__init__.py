@@ -26,6 +26,7 @@ from core.api.routers import (
     conversations,
     costs,
     dashboard,
+    dashboard_agents,
     datos_de_prueba,
     declarative_tools,
     dlq,
@@ -73,6 +74,7 @@ api_router.include_router(sync.router)
 api_router.include_router(audit.router)
 api_router.include_router(tenants.router)
 api_router.include_router(dashboard.router)
+api_router.include_router(dashboard_agents.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(dlq.router)
 api_router.include_router(conversations.router)

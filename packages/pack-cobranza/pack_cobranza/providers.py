@@ -296,3 +296,7 @@ lead_registry.register(
     agent_name="Cobranza",
     icon="wallet",
 )
+
+
+# Registra también los KPIs del módulo para el Resumen por agente (ADR-0171).
+from pack_cobranza import resumen as _resumen  # noqa: E402, F401

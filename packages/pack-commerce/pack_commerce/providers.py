@@ -361,3 +361,7 @@ lead_registry.register(
     agent_name="Ventas",
     icon="shopping-cart",
 )
+
+
+# Registra también los KPIs del módulo para el Resumen por agente (ADR-0171).
+from pack_commerce import resumen as _resumen  # noqa: E402, F401
