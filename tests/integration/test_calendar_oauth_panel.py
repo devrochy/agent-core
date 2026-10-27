@@ -153,7 +153,12 @@ async def test_callback_valido_guarda_la_conexion_solo_en_su_negocio(app_client,
         follow_redirects=False,
     )
     assert r.status_code == 302, r.text
-    assert r.headers["location"].endswith("/calendario?google=ok")
+    destino = urlparse(r.headers["location"])
+    consulta = parse_qs(destino.query)
+    assert destino.path == "/calendario"
+    assert consulta["google"] == ["ok"]
+    # HU-CAL-08: el retorno trae la conexión guardada y su agenda.
+    assert consulta["conexion"] and consulta["agenda"]
     assert capturado == {
         "client_id": "cid-test",
         "code": "codigo-google",

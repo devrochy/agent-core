@@ -28,14 +28,64 @@ PLUGIN_ID = "pack_calendar"
 router = APIRouter(prefix="/api/v1/pack/calendar", tags=["pack · calendario"])
 
 
+async def _config_y_agendas() -> tuple[Any, list[Any]]:
+    """Config del pack (o `None` si no está configurado) y las agendas del negocio."""
+    from core.plugin_manager import plugin_manager
+    from pack_calendar import agendas
+    from pack_calendar.config import CalendarConfig
+
+    try:
+        config = await plugin_manager.load_config(PLUGIN_ID)
+    except Exception:
+        config = None
+    base = config if isinstance(config, CalendarConfig) else CalendarConfig()
+    return config, await agendas.listar(base)
+
+
+async def _agenda_de_alta(calendar_id: uuid.UUID | None, config: Any, lista: list[Any]) -> Any:
+    """Agenda a la que se asigna una cita o bloqueo nuevo (HU-CAL-08).
+
+    Con `calendar_id` debe ser una agenda activa del negocio; sin él, la principal, salvo que
+    el asistente ofrezca varias agendas (2+ disponibles): entonces el panel debe elegir.
+    """
+    from pack_calendar import agendas
+    from pack_calendar.config import CalendarConfig
+
+    base = config if isinstance(config, CalendarConfig) else CalendarConfig()
+    if calendar_id is not None:
+        agenda = next((a for a in lista if a.id == calendar_id and a.active), None)
+        if agenda is None:
+            raise ApiError.bad_request("La agenda no es de este negocio.", "agenda_invalida")
+        return agenda
+    if agendas.multi_activo(base, lista):
+        raise ApiError.bad_request("Elige la agenda de la cita.", "agenda_requerida")
+    return agendas.por_id(None, lista)
+
+
 # ------------------------------------------------------------------ estado
+class CalendarSummary(BaseModel):
+    id: uuid.UUID
+    name: str
+    color: str
+    is_default: bool
+    active: bool
+    source: str  # "google" | "interno"
+    connected: bool  # fuente lista (Google con la cuenta conectada, o interna)
+    account_email: str = ""
+
+
 class CalendarStatus(BaseModel):
     configured: bool
+    # `connected`, `account_email` y `connection_label` describen la agenda principal (o la
+    # primera con Google); son los campos de antes de HU-CAL-08 y quedan por compatibilidad.
     connected: bool
     account_email: str
     connection_label: str
     timezone: str
     default_duration_minutes: int
+    calendars: list[CalendarSummary] = []
+    multi_activo: bool = False
+    multi_agenda_modo: str = "cliente_elige"
 
 
 @router.get("/status", response_model=CalendarStatus)
@@ -51,6 +101,12 @@ async def calendar_status(
     except PluginConfigError:
         config = None
     connection = await get_active_connection("google_calendar")
+    from pack_calendar import agendas
+    from pack_calendar.config import CalendarConfig
+
+    base = config if isinstance(config, CalendarConfig) else CalendarConfig()
+    lista = await agendas.listar(base) if config is not None else []
+    correos = await _correos_de_conexiones([a.connection_id for a in lista if a.connection_id])
     return CalendarStatus(
         configured=config is not None,
         connected=connection is not None,
@@ -58,7 +114,352 @@ async def calendar_status(
         connection_label=(connection.label if connection else "") or "",
         timezone=getattr(config, "timezone", "America/Bogota") or "America/Bogota",
         default_duration_minutes=int(getattr(config, "event_duration_minutes", 60) or 60),
+        calendars=[
+            CalendarSummary(
+                id=a.id,
+                name=a.name,
+                color=a.color,
+                is_default=a.is_default,
+                active=a.active,
+                source="google" if a.es_google else "interno",
+                connected=agendas.disponible(a, base),
+                account_email=correos.get(a.connection_id, "") if a.connection_id else "",
+            )
+            for a in lista
+        ],
+        multi_activo=agendas.multi_activo(base, lista),
+        multi_agenda_modo=getattr(base, "multi_agenda_modo", "cliente_elige"),
     )
+
+
+async def _correos_de_conexiones(ids: list[uuid.UUID | None]) -> dict[uuid.UUID, str]:
+    """`{connection_id: correo de la cuenta}` (solo para quien tiene la sección de conexión)."""
+    from core.db.models import ChannelConnection
+
+    limpios = [i for i in ids if i is not None]
+    if not limpios:
+        return {}
+    async with get_session() as session:
+        rows = await session.execute(
+            select(ChannelConnection.id, ChannelConnection.external_id).where(
+                ChannelConnection.id.in_(limpios)
+            )
+        )
+        return {r.id: (r.external_id or "") for r in rows}
+
+
+# ------------------------------------------------------------------ agendas (HU-CAL-08)
+class CalendarOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str
+    aliases: list[str]
+    color: str
+    timezone: str  # efectiva (la propia o la del negocio)
+    own_timezone: str | None = None
+    business_hours: str | None = None  # propio; None = hereda el del negocio
+    is_default: bool
+    active: bool
+    sort_order: int
+    source: str  # "google" | "interno"
+    connection_id: uuid.UUID | None = None
+    connected: bool = True
+    account_email: str = ""  # solo con permiso de conexión
+    responsable_admin_id: uuid.UUID | None = None
+
+
+class CalendarListOut(BaseModel):
+    calendars: list[CalendarOut]
+    multi_activo: bool
+    multi_agenda_modo: str
+
+
+class CalendarIn(BaseModel):
+    name: str
+    description: str = ""
+    aliases: list[str] = []
+    color: str | None = None
+    timezone: str | None = None
+    business_hours: str | None = None
+    responsable_admin_id: uuid.UUID | None = None
+
+
+class CalendarPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    aliases: list[str] | None = None
+    color: str | None = None
+    timezone: str | None = None
+    business_hours: str | None = None
+    # Explícito: `true` quita el horario/zona propios y vuelve a heredar los del negocio.
+    inherit_timezone: bool = False
+    inherit_business_hours: bool = False
+    responsable_admin_id: uuid.UUID | None = None
+    clear_responsable: bool = False
+    active: bool | None = None
+    sort_order: int | None = None
+    is_default: bool | None = None
+
+
+def _validar_horario(valor: str | None) -> str | None:
+    if valor is None or not valor.strip():
+        return None
+    import json
+
+    try:
+        datos = json.loads(valor)
+    except ValueError as exc:
+        raise ApiError.bad_request("El horario debe ser un JSON válido.", "horario_invalido") from exc
+    if not isinstance(datos, dict) or not all(isinstance(v, str) for v in datos.values()):
+        raise ApiError.bad_request("El horario debe mapear día → 'HH:MM-HH:MM'.", "horario_invalido")
+    return valor.strip()
+
+
+def _validar_zona(valor: str | None) -> str | None:
+    if valor is None or not valor.strip():
+        return None
+    from zoneinfo import ZoneInfo
+
+    try:
+        ZoneInfo(valor.strip())
+    except Exception as exc:
+        raise ApiError.bad_request("Zona horaria inválida.", "zona_invalida") from exc
+    return valor.strip()
+
+
+def _calendar_out(a: Any, base: Any, correo: str, *, puede_ver_cuenta: bool) -> CalendarOut:
+    from pack_calendar import agendas
+
+    return CalendarOut(
+        id=a.id,
+        name=a.name,
+        description=a.description,
+        aliases=list(a.aliases),
+        color=a.color,
+        timezone=a.timezone or getattr(base, "timezone", "America/Bogota"),
+        own_timezone=a.timezone,
+        business_hours=a.business_hours,
+        is_default=a.is_default,
+        active=a.active,
+        sort_order=a.sort_order,
+        source="google" if a.es_google else "interno",
+        connection_id=a.connection_id if puede_ver_cuenta else None,
+        connected=agendas.disponible(a, base),
+        account_email=correo if puede_ver_cuenta else "",
+        responsable_admin_id=a.responsable_admin_id,
+    )
+
+
+@router.get("/calendars", response_model=CalendarListOut)
+async def list_calendars(
+    principal: Annotated[Principal, Depends(require("pack_calendar:citas"))],
+) -> CalendarListOut:
+    """Agendas del negocio con el nombre que el asistente le dice al cliente."""
+    from pack_calendar import agendas
+    from pack_calendar.config import CalendarConfig
+
+    config, lista = await _config_y_agendas()
+    base = config if isinstance(config, CalendarConfig) else CalendarConfig()
+    correos = await _correos_de_conexiones([a.connection_id for a in lista])
+    return CalendarListOut(
+        calendars=[
+            _calendar_out(a, base, correos.get(a.connection_id, "") if a.connection_id else "", puede_ver_cuenta=True)
+            for a in lista
+        ],
+        multi_activo=agendas.multi_activo(base, lista),
+        multi_agenda_modo=getattr(base, "multi_agenda_modo", "cliente_elige"),
+    )
+
+
+async def _guardar_agenda(
+    principal: Principal, calendar_id: uuid.UUID | None, datos: dict[str, Any]
+) -> CalendarOut:
+    from sqlalchemy.exc import IntegrityError
+
+    from core.db.models import utcnow
+    from pack_calendar import agendas
+    from pack_calendar.config import CalendarConfig
+    from pack_calendar.models import COLORES_TIPO, Calendar
+
+    config, lista = await _config_y_agendas()
+    base = config if isinstance(config, CalendarConfig) else CalendarConfig()
+    if "name" in datos:
+        nombre = agendas.limpiar_nombre(datos["name"])
+        if not nombre:
+            raise ApiError.bad_request("El nombre de la agenda es obligatorio.", "nombre_requerido")
+        datos["name"] = nombre
+        choque = [
+            a for a in lista if agendas.normalizar(a.name) == agendas.normalizar(nombre) and a.id != calendar_id
+        ]
+        if choque:
+            raise ApiError.bad_request("Ya hay una agenda con ese nombre.", "nombre_repetido")
+    if datos.get("color") is not None and datos["color"] not in COLORES_TIPO:
+        raise ApiError.bad_request("Color inválido.", "color_invalido")
+    if "aliases" in datos and datos["aliases"] is not None:
+        datos["aliases"] = agendas.limpiar_aliases(datos["aliases"])
+    if "description" in datos and datos["description"] is not None:
+        datos["description"] = " ".join(str(datos["description"]).split())[:300]
+    try:
+        async with get_session() as session:
+            if calendar_id is None:
+                fila = Calendar(
+                    tenant_id=principal.tenant_id,
+                    name=datos["name"],
+                    color=datos.get("color") or agendas.color_siguiente([a.color for a in lista]),
+                    sort_order=max((a.sort_order for a in lista), default=0) + 1,
+                )
+                session.add(fila)
+            else:
+                fila = await get_owned(session, Calendar, calendar_id, principal.tenant_id)
+                if fila is None or fila.deleted_at is not None:
+                    raise ApiError.not_found("Agenda no encontrada.")
+            for campo, valor in datos.items():
+                if campo == "is_default":
+                    continue
+                setattr(fila, campo, valor)
+            if datos.get("is_default") is True and not fila.is_default:
+                await session.flush()
+                for otra in (
+                    await session.execute(
+                        select(Calendar).where(
+                            Calendar.tenant_id == principal.tenant_id,
+                            Calendar.is_default.is_(True),
+                            Calendar.deleted_at.is_(None),
+                        )
+                    )
+                ).scalars():
+                    otra.is_default = False
+                await session.flush()
+                fila.is_default = True
+            fila.updated_at = utcnow()
+            await session.flush()
+            agendas.invalidar(principal.tenant_id)
+            nueva_id = fila.id
+    except IntegrityError as exc:
+        raise ApiError.bad_request("Ya hay una agenda con ese nombre.", "nombre_repetido") from exc
+    agendas.invalidar(principal.tenant_id)
+    lista = await agendas.listar(base)
+    agenda = next(a for a in lista if a.id == nueva_id)
+    correos = await _correos_de_conexiones([agenda.connection_id])
+    return _calendar_out(agenda, base, correos.get(agenda.connection_id, "") if agenda.connection_id else "", puede_ver_cuenta=True)
+
+
+@router.post("/calendars", response_model=CalendarOut, status_code=201)
+async def create_calendar(
+    payload: CalendarIn,
+    principal: Annotated[Principal, Depends(require("pack_calendar:configuracion", write=True))],
+) -> CalendarOut:
+    """Crea una agenda interna (sin cuenta de Google). Las de Google nacen al conectar la cuenta."""
+    datos: dict[str, Any] = {
+        "name": payload.name,
+        "description": payload.description,
+        "aliases": payload.aliases,
+        "timezone": _validar_zona(payload.timezone),
+        "business_hours": _validar_horario(payload.business_hours),
+        "responsable_admin_id": payload.responsable_admin_id,
+    }
+    if payload.color is not None:
+        datos["color"] = payload.color
+    if payload.responsable_admin_id is not None:
+        await _validar_responsable(principal.tenant_id, payload.responsable_admin_id)
+    return await _guardar_agenda(principal, None, datos)
+
+
+@router.put("/calendars/{calendar_id}", response_model=CalendarOut)
+async def update_calendar(
+    calendar_id: uuid.UUID,
+    payload: CalendarPatch,
+    principal: Annotated[Principal, Depends(require("pack_calendar:configuracion", write=True))],
+) -> CalendarOut:
+    """Edita una agenda: nombre visible, descripción, alias, color, horario, zona, orden y estado."""
+    datos: dict[str, Any] = {}
+    for campo in ("name", "description", "aliases", "color", "sort_order", "active", "is_default"):
+        valor = getattr(payload, campo)
+        if valor is not None:
+            datos[campo] = valor
+    if payload.inherit_timezone:
+        datos["timezone"] = None
+    elif payload.timezone is not None:
+        datos["timezone"] = _validar_zona(payload.timezone)
+    if payload.inherit_business_hours:
+        datos["business_hours"] = None
+    elif payload.business_hours is not None:
+        datos["business_hours"] = _validar_horario(payload.business_hours)
+    if payload.clear_responsable:
+        datos["responsable_admin_id"] = None
+    elif payload.responsable_admin_id is not None:
+        await _validar_responsable(principal.tenant_id, payload.responsable_admin_id)
+        datos["responsable_admin_id"] = payload.responsable_admin_id
+    if datos.get("active") is False or datos.get("is_default") is False:
+        _, lista = await _config_y_agendas()
+        actual = next((a for a in lista if a.id == calendar_id), None)
+        if actual is not None and actual.is_default:
+            raise ApiError.bad_request(
+                "La agenda principal no se desactiva: marca otra como principal primero.",
+                "agenda_principal",
+            )
+    return await _guardar_agenda(principal, calendar_id, datos)
+
+
+class CalendarDelete(BaseModel):
+    move_to: uuid.UUID | None = None
+
+
+@router.post("/calendars/{calendar_id}/delete", status_code=204)
+async def delete_calendar(
+    calendar_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_calendar:configuracion", write=True))],
+    payload: CalendarDelete | None = None,
+) -> Response:
+    """Elimina (suave) una agenda. No borra la cuenta de Google: eso va en Conexiones.
+
+    La principal no se elimina. Si tiene citas futuras, hay que pasar `move_to` (otra agenda)
+    para moverlas; si no, 409.
+    """
+    from sqlalchemy import update as sql_update
+
+    from core.db.models import utcnow
+    from pack_calendar import agendas
+    from pack_calendar.models import Calendar, CalendarBlock
+
+    _, lista = await _config_y_agendas()
+    actual = next((a for a in lista if a.id == calendar_id), None)
+    if actual is None:
+        raise ApiError.not_found("Agenda no encontrada.")
+    if actual.is_default:
+        raise ApiError.bad_request("La agenda principal no se elimina.", "agenda_principal")
+    destino = payload.move_to if payload else None
+    if destino is not None and not any(a.id == destino and a.id != calendar_id for a in lista):
+        raise ApiError.bad_request("La agenda de destino no es de este negocio.", "agenda_invalida")
+    ahora = utcnow()
+    async with get_session() as session:
+        futuras = (
+            await session.execute(
+                select(Appointment.id).where(
+                    Appointment.tenant_id == principal.tenant_id,
+                    Appointment.calendar_id == calendar_id,
+                    Appointment.deleted_at.is_(None),
+                    Appointment.status == "scheduled",
+                    Appointment.start_at >= ahora,
+                ).limit(1)
+            )
+        ).first()
+        if futuras and destino is None:
+            raise ApiError(
+                409, "agenda_con_citas", "La agenda tiene citas futuras: elige a qué agenda moverlas."
+            )
+        if destino is not None:
+            for modelo in (Appointment, CalendarBlock):
+                await session.execute(
+                    sql_update(modelo)
+                    .where(modelo.tenant_id == principal.tenant_id, modelo.calendar_id == calendar_id)
+                    .values(calendar_id=destino)
+                )
+        fila = await get_owned(session, Calendar, calendar_id, principal.tenant_id)
+        if fila is not None:
+            fila.deleted_at = ahora
+    agendas.invalidar(principal.tenant_id)
+    return Response(status_code=204)
 
 
 # ------------------------------------------------------------------ tipos de cita
@@ -329,6 +730,7 @@ class AppointmentOut(BaseModel):
     notification: NotificationOut | None = None
     customer_id: uuid.UUID | None = None  # HU-SH-02
     asignado_admin_id: uuid.UUID | None = None
+    calendar_id: uuid.UUID | None = None  # HU-CAL-08: agenda (None = la principal)
 
 
 @router.get("/appointments", response_model=list[AppointmentOut])
@@ -372,6 +774,7 @@ async def list_appointments(
             appointment_type_id=a.appointment_type_id,
             created_by=a.created_by,
             timezone=a.timezone,
+            calendar_id=a.calendar_id,
         )
         for a in rows
     ]
@@ -410,11 +813,13 @@ async def cancel_appointment(
     if row.google_event_id:
         try:
             from core.plugin_manager import plugin_manager
-            from pack_calendar import google_api
-            from pack_calendar.admin import _google_token
 
             # Sin ToolContext: el cliente acotado del pack (`google_api.default_http`).
+            from pack_calendar import agendas, google_api
+            from pack_calendar.admin import _google_token
+
             config = await plugin_manager.load_config(PLUGIN_ID)
+            config = await agendas.config_para(row.calendar_id, config)
             token = await _google_token(config)
             await google_api.delete_event(
                 google_api.default_http(), config.calendar_id, token, row.google_event_id
@@ -462,6 +867,8 @@ class AppointmentIn(BaseModel):
     appointment_type_id: uuid.UUID | None = None
     # HU-SH-02: cliente del negocio al que se le avisa por WhatsApp (opcional).
     customer_id: uuid.UUID | None = None
+    # HU-CAL-08: agenda de la cita. Obligatoria si el asistente ofrece varias agendas.
+    calendar_id: uuid.UUID | None = None
 
 
 @router.post("/appointments", response_model=AppointmentOut, status_code=201)
@@ -489,7 +896,13 @@ async def create_appointment(
         # Sin configuración del pack (p. ej. admin master en un negocio que no lo
         # tiene habilitado) la cita es local: no hay Google al que empujarla.
         config = None
-    # Solo se empuja a Google en modo `google`; en `interno` la cita es local
+    from pack_calendar import agendas as _agendas
+
+    _lista = (await _config_y_agendas())[1]
+    agenda = await _agenda_de_alta(payload.calendar_id, config, _lista)
+    if config is not None:
+        config = _agendas.config_de(agenda, config)
+    # Solo se empuja a Google si la agenda es de Google; en `interno` la cita es local
     # (antes se intentaba Google aunque el modo fuera interno → error 400).
     if config is not None and getattr(config, "source", "interno") == "google":
         try:
@@ -539,6 +952,7 @@ async def create_appointment(
                 created_by="panel",
                 timezone=zona,
                 asignado_admin_id=getattr(tipo, "responsable_admin_id", None),
+                calendar_id=agenda.id if agenda is not None else None,
             )
             session.add(cita)
             await session.flush()
@@ -556,6 +970,7 @@ async def create_appointment(
                 timezone=cita.timezone,
                 customer_id=cita.customer_id,
                 asignado_admin_id=cita.asignado_admin_id,
+                calendar_id=cita.calendar_id,
             )
     except Exception as exc:
         if es_solape(exc):
@@ -602,6 +1017,8 @@ class BlockIn(BaseModel):
     start_at: datetime
     end_at: datetime
     reason: str = ""
+    # HU-CAL-08: agenda que se bloquea. Sin ella, la principal (los bloqueos viejos también).
+    calendar_id: uuid.UUID | None = None
 
 
 class BlockOut(BaseModel):
@@ -609,6 +1026,7 @@ class BlockOut(BaseModel):
     start_at: datetime
     end_at: datetime
     reason: str
+    calendar_id: uuid.UUID | None = None
 
 
 @router.get("/blocks", response_model=list[BlockOut])
@@ -643,7 +1061,10 @@ async def list_blocks(
             .all()
         )
     return [
-        BlockOut(id=b.id, start_at=b.start_at, end_at=b.end_at, reason=b.reason or "") for b in rows
+        BlockOut(
+            id=b.id, start_at=b.start_at, end_at=b.end_at, reason=b.reason or "", calendar_id=b.calendar_id
+        )
+        for b in rows
     ]
 
 
@@ -658,17 +1079,24 @@ async def create_block(
         raise ApiError.bad_request("Sin negocio activo.", "no_tenant")
     if payload.end_at <= payload.start_at:
         raise ApiError.bad_request("El fin debe ser posterior al inicio.", "invalid_range")
+    config, lista = await _config_y_agendas()
+    agenda = await _agenda_de_alta(payload.calendar_id, config, lista)
     async with get_session() as session:
         block = CalendarBlock(
             tenant_id=principal.tenant_id,
             start_at=payload.start_at,
             end_at=payload.end_at,
             reason=payload.reason.strip(),
+            calendar_id=agenda.id if agenda is not None else None,
         )
         session.add(block)
         await session.flush()
         return BlockOut(
-            id=block.id, start_at=block.start_at, end_at=block.end_at, reason=block.reason
+            id=block.id,
+            start_at=block.start_at,
+            end_at=block.end_at,
+            reason=block.reason,
+            calendar_id=block.calendar_id,
         )
 
 
@@ -834,6 +1262,10 @@ class EventOut(BaseModel):
     # HU-UX-08: color (`cat-1`…`cat-4`) y código del tipo de la cita; vacíos sin tipo.
     tipo_color: str = ""
     tipo_codigo: str = ""
+    # HU-CAL-08: agenda del evento y su color (los bloqueos viejos y las citas sin agenda
+    # son de la principal).
+    calendar_id: str = ""
+    calendar_color: str = ""
 
 
 @router.get("/events")
@@ -841,6 +1273,7 @@ async def calendar_events(
     principal: Annotated[Principal, Depends(require("pack_calendar:citas"))],
     start: Annotated[str | None, Query()] = None,
     end: Annotated[str | None, Query()] = None,
+    calendar_ids: Annotated[str | None, Query(description="IDs de agenda separados por coma")] = None,
 ) -> dict[str, Any]:
     """Citas + bloqueos en formato FullCalendar para la grilla del panel (HU-CAL-03).
 
@@ -890,6 +1323,26 @@ async def calendar_events(
             ).order_by(AppointmentType.name)
         )).scalars().all()
 
+    config_ev, lista_ev = await _config_y_agendas()
+    principal_ev = next((a for a in lista_ev if a.is_default), None)
+    por_agenda = {a.id: a for a in lista_ev}
+    filtro: set[uuid.UUID] | None = None
+    if calendar_ids:
+        try:
+            filtro = {uuid.UUID(x) for x in calendar_ids.split(",") if x.strip()}
+        except ValueError as exc:
+            raise ApiError.bad_request("Agenda inválida.", "agenda_invalida") from exc
+
+    def _de_agenda(calendar_id: uuid.UUID | None) -> Any:
+        return por_agenda.get(calendar_id) if calendar_id is not None else principal_ev
+
+    def _visible(calendar_id: uuid.UUID | None) -> bool:
+        agenda = _de_agenda(calendar_id)
+        return filtro is None or agenda is None or agenda.id in filtro
+
+    citas = [a for a in citas if _visible(a.calendar_id)]
+    blocks = [b for b in blocks if _visible(b.calendar_id)]
+
     por_tipo = {t.id: t for t in tipos}
     events: list[dict[str, Any]] = []
     for a in citas:
@@ -909,6 +1362,8 @@ async def calendar_events(
             "appointment_type_id": str(a.appointment_type_id) if a.appointment_type_id else "",
             "tipo_color": (tipo.color or "cat-1") if tipo else "",
             "tipo_codigo": (tipo.codigo or codigo_por_defecto(tipo.name)) if tipo else "",
+            "calendar_id": str(_de_agenda(a.calendar_id).id) if _de_agenda(a.calendar_id) else "",
+            "calendar_color": _de_agenda(a.calendar_id).color if _de_agenda(a.calendar_id) else "",
         })
     for b in blocks:
         events.append({
@@ -926,7 +1381,23 @@ async def calendar_events(
             "appointment_type_id": "",
             "tipo_color": "",
             "tipo_codigo": "",
+            "calendar_id": str(_de_agenda(b.calendar_id).id) if _de_agenda(b.calendar_id) else "",
+            "calendar_color": _de_agenda(b.calendar_id).color if _de_agenda(b.calendar_id) else "",
         })
+    from pack_calendar import agendas as _ag
+
+    base_ev = config_ev if config_ev is not None else _ag.CalendarConfig()
+    leyenda_agendas = [
+        {
+            "id": str(a.id),
+            "name": a.name,
+            "color": a.color,
+            "is_default": a.is_default,
+            "active": a.active,
+            "disponible": _ag.disponible(a, base_ev),
+        }
+        for a in lista_ev
+    ]
     leyenda = [
         {
             "id": str(t.id),
@@ -937,7 +1408,13 @@ async def calendar_events(
         for t in tipos
         if t.active
     ]
-    return {"events": events, "tipos": leyenda, "timezone": await _timezone_name()}
+    return {
+        "events": events,
+        "tipos": leyenda,
+        "calendars": leyenda_agendas,
+        "multi_activo": _ag.multi_activo(base_ev, lista_ev),
+        "timezone": await _timezone_name(),
+    }
 
 
 class AppointmentPatch(BaseModel):
@@ -968,6 +1445,7 @@ async def patch_appointment(
         if row is None:
             raise ApiError.not_found("Cita no encontrada.")
         old_start, old_end = row.start_at, row.end_at
+        cita_calendar_id = row.calendar_id
 
     new_start = payload.start_at or old_start
     new_end = payload.end_at or old_end
@@ -984,9 +1462,13 @@ async def patch_appointment(
         config = None
     from pack_calendar.config import CalendarConfig
 
+    if isinstance(config, CalendarConfig):
+        from pack_calendar import agendas
+
+        config = await agendas.config_para(cita_calendar_id, config)
     if moved and isinstance(config, CalendarConfig) and getattr(config, "source", "interno") != "google":
         conflict = await CalendarSkill()._validate_internal_slot(
-            config, new_start, new_end, exclude_appt_id=appointment_id
+            config, new_start, new_end, exclude_appt_id=appointment_id, calendar_id=cita_calendar_id
         )
         if conflict is not None:
             raise ApiError.bad_request(
@@ -1019,7 +1501,7 @@ async def patch_appointment(
                 id=row.id, title=row.title, attendee_email=row.attendee_email,
                 start_at=row.start_at, end_at=row.end_at, status=row.status, notes=row.notes,
                 google_event_id=row.google_event_id, appointment_type_id=row.appointment_type_id,
-                created_by=row.created_by, timezone=row.timezone,
+                created_by=row.created_by, timezone=row.timezone, calendar_id=row.calendar_id,
             )
     except Exception as exc:
         if es_solape(exc):
@@ -1112,7 +1594,13 @@ async def patch_block(
         if payload.reason is not None:
             row.reason = payload.reason.strip()
         row.updated_at = utcnow()
-        return BlockOut(id=row.id, start_at=row.start_at, end_at=row.end_at, reason=row.reason)
+        return BlockOut(
+            id=row.id,
+            start_at=row.start_at,
+            end_at=row.end_at,
+            reason=row.reason,
+            calendar_id=row.calendar_id,
+        )
 
 
 def _panel_base() -> str:
@@ -1140,15 +1628,30 @@ async def _timezone_name() -> str:
 # Cookies del flujo OAuth (HU-CAL-07): el `state` anti-CSRF y el destino de vuelta.
 _OAUTH_STATE_COOKIE = "oauth_state"
 _OAUTH_NEXT_COOKIE = "oauth_next"
+_OAUTH_CONN_COOKIE = "oauth_conn"  # reconectar una conexión concreta (HU-CAL-08)
 _OAUTH_COOKIE_MAX_AGE = 600
+
+
+def _con_query(destino: str, **params: str) -> str:
+    """`destino` con parámetros agregados, respetando la query que ya traiga (`?a=1` → `?a=1&b=2`)."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    partes = urlsplit(destino)
+    query = [(k, v) for k, v in parse_qsl(partes.query, keep_blank_values=True) if k not in params]
+    query.extend((k, v) for k, v in params.items() if v != "")
+    return urlunsplit(("", "", partes.path, urlencode(query), partes.fragment))
 
 
 @router.get("/oauth/start", status_code=302)
 async def oauth_start(
     principal: Annotated[Principal, Depends(require("pack_calendar:conexion", write=True))],
     next: str = "/calendario",
+    connection_id: uuid.UUID | None = None,
 ) -> Response:
     """Inicia el OAuth2 de Google (302 a accounts.google.com).
+
+    Con `connection_id` se reconecta esa cuenta (HU-CAL-08): se sugiere su correo a Google y
+    el callback verifica que sea la misma cuenta antes de guardar.
 
     Deja dos cookies httponly que el panel reenvía al navegador: `oauth_state`
     (anti-CSRF, D-SPEC-24-12) y `oauth_next` (a dónde volver). El retorno de Google
@@ -1162,6 +1665,7 @@ async def oauth_start(
 
     from fastapi.responses import RedirectResponse
 
+    from pack_calendar import oauth
     from pack_calendar.oauth import build_authorization_url, panel_redirect_uri
 
     config = await _calendar_config()
@@ -1171,12 +1675,23 @@ async def oauth_start(
             "not_configured",
         )
     destino = next if next.startswith("/") and not next.startswith("//") else "/calendario"
+    pista = ""
+    if connection_id is not None:
+        previos = await oauth._connection_tokens(connection_id)
+        if previos is None:
+            raise ApiError.not_found("La conexión de Google no existe.")
+        pista = str(previos.get("account_email", "") or "")
     state = f"{principal.tenant_id}.{secrets.token_urlsafe(32)}"
     respuesta = RedirectResponse(
-        build_authorization_url(config.client_id, redirect=panel_redirect_uri(), state=state),
+        build_authorization_url(
+            config.client_id, redirect=panel_redirect_uri(), state=state, login_hint=pista
+        ),
         status_code=302,
     )
-    for nombre, valor in ((_OAUTH_STATE_COOKIE, state), (_OAUTH_NEXT_COOKIE, destino)):
+    cookies = [(_OAUTH_STATE_COOKIE, state), (_OAUTH_NEXT_COOKIE, destino)]
+    if connection_id is not None:
+        cookies.append((_OAUTH_CONN_COOKIE, str(connection_id)))
+    for nombre, valor in cookies:
         respuesta.set_cookie(
             nombre, valor, max_age=_OAUTH_COOKIE_MAX_AGE, httponly=True, samesite="lax", path="/"
         )
@@ -1209,9 +1724,11 @@ async def oauth_callback(
     marcador = request.cookies.get(_OAUTH_NEXT_COOKIE) or ""
     destino = marcador if marcador.startswith("/") and not marcador.startswith("//") else "/calendario"
 
-    def volver(estado: str) -> RedirectResponse:
-        respuesta = RedirectResponse(f"{_panel_base()}{destino}?google={estado}", status_code=302)
-        for nombre in (_OAUTH_STATE_COOKIE, _OAUTH_NEXT_COOKIE):
+    def volver(estado: str, **extra: str) -> RedirectResponse:
+        respuesta = RedirectResponse(
+            f"{_panel_base()}{_con_query(destino, google=estado, **extra)}", status_code=302
+        )
+        for nombre in (_OAUTH_STATE_COOKIE, _OAUTH_NEXT_COOKIE, _OAUTH_CONN_COOKIE):
             respuesta.delete_cookie(nombre, path="/")
         return respuesta
 
@@ -1235,11 +1752,28 @@ async def oauth_callback(
             code,
             redirect=oauth.panel_redirect_uri(),
         )
-        await oauth.save_tokens(tokens)
+        reconectar = None
+        marca = request.cookies.get(_OAUTH_CONN_COOKIE) or ""
+        if marca:
+            try:
+                reconectar = uuid.UUID(marca)
+            except ValueError:
+                return volver("error")
+        conexion_id = await oauth.save_tokens(tokens, connection_id=reconectar)
+        agenda_id = ""
+        if conexion_id is not None:
+            from pack_calendar import agendas
+
+            email = str((await oauth._connection_tokens(conexion_id) or {}).get("account_email", "") or "")
+            agenda, _ = await agendas.vincular_conexion(conexion_id, email, config)
+            agenda_id = str(agenda.id)
+    except oauth.OtraCuentaError:
+        log.warning("calendar_oauth_otra_cuenta", tenant_id=str(principal.tenant_id))
+        return volver("otra_cuenta")
     except Exception:
         log.exception("calendar_oauth_exchange_failed")
         return volver("error")
-    return volver("ok")
+    return volver("ok", conexion=str(conexion_id or ""), agenda=agenda_id)
 
 
 # ---------------------------------------------------------------- asistencia (HU-SH-02)

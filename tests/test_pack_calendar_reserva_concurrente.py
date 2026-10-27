@@ -7,7 +7,6 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -88,12 +87,17 @@ def test_los_reintentos_tienen_tope() -> None:
 
 def test_en_modo_interno_sin_fila_no_dice_que_quedo_agendada() -> None:
     skill = CalendarSkill()
-    config = SimpleNamespace(timezone="America/Bogota", event_duration_minutes=60, calendar_id="primary")
+    from pack_calendar.agendas import Agenda
+    from pack_calendar.config import CalendarConfig
+
+    config = CalendarConfig(timezone="America/Bogota", event_duration_minutes=60, calendar_id="primary")
+    principal = Agenda(id=uuid.uuid4(), name="Agenda principal", is_default=True)
 
     async def _valor(valor: Any) -> Any:
         return valor
 
     skill._source = lambda: _valor("internal")  # type: ignore[method-assign]
+    skill._agendas = lambda _c: _valor(([principal], False))  # type: ignore[method-assign]
     skill._tenant_config = lambda: _valor(config)  # type: ignore[method-assign]
     skill._appointment_type = lambda _id: _valor(None)  # type: ignore[method-assign]
     skill._email_provided_by_client = lambda _e, _c: _valor(True)  # type: ignore[method-assign]

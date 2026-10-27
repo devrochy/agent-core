@@ -7,9 +7,10 @@ Los tokens de acceso/refresh NO van aquí: viven en la conexión del tenant
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, PrivateAttr, SecretStr, model_validator
 
 from core.mcp.types import BasePluginConfig
 
@@ -63,6 +64,14 @@ DEFAULT_EMAIL_BODY_CANCELLED = (
 
 
 class CalendarConfig(BasePluginConfig):
+    # HU-CAL-08: conexión de Google de la agenda para la que se armó esta config efectiva
+    # (`agendas.config_de`). No es un campo del schema: no se guarda ni se muestra en el panel.
+    _connection_id: uuid.UUID | None = PrivateAttr(default=None)
+
+    @property
+    def connection_id(self) -> uuid.UUID | None:
+        return self._connection_id
+
     source: str = Field(
         default="interno",
         description=(

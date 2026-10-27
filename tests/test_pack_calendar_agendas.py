@@ -110,7 +110,7 @@ def test_agenda_principal_sin_vincular_en_modo_google_no_esta_disponible() -> No
 def test_config_de_hereda_y_pisa() -> None:
     cfg = _cfg(timezone="America/Bogota", calendar_id="primary")
     heredada = _ag("A")
-    assert config_de(heredada, cfg) is cfg
+    assert config_de(heredada, cfg) == cfg
     propia = _ag(
         "B", timezone="America/Mexico_City", business_hours='{"mon": "08:00-12:00"}',
         connection_id=uuid.uuid4(), google_calendar_id="abc@group.calendar.google.com",
@@ -119,6 +119,8 @@ def test_config_de_hereda_y_pisa() -> None:
     assert efectiva.timezone == "America/Mexico_City"
     assert efectiva.business_hours == '{"mon": "08:00-12:00"}'
     assert efectiva.calendar_id == "abc@group.calendar.google.com"
+    # `primary` (valor por defecto de la agenda) deja mandar al calendario de la config
+    assert config_de(_ag("C", connection_id=uuid.uuid4()), _cfg(calendar_id="x@y.com")).calendar_id == "x@y.com"
     assert efectiva.source == "google"
     assert cfg.timezone == "America/Bogota"  # la global no se toca
 

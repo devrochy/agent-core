@@ -224,7 +224,6 @@ async def ensure_default(config: CalendarConfig | None = None) -> Agenda:
                             )
                         ).scalar_one()
                         fila.connection_id = primaria
-                        fila.google_calendar_id = (config.calendar_id or "primary") or "primary"
                 invalidar(tenant_id)
                 return _a_agenda(fila, None)
         except IntegrityError:
@@ -339,12 +338,25 @@ def config_de(agenda: Agenda | None, config: CalendarConfig) -> CalendarConfig:
     if agenda.business_hours:
         cambios["business_hours"] = agenda.business_hours
     if agenda.es_google:
-        cambios["calendar_id"] = agenda.google_calendar_id or "primary"
+        # `primary` es el valor por defecto de la agenda: manda el calendario de la config del
+        # negocio (cualquier otro valor lo eligió el dueño para esa agenda).
+        propio = agenda.google_calendar_id
+        cambios["calendar_id"] = propio if propio and propio != "primary" else config.calendar_id
         cambios["source"] = "google"
-    elif config.source == "google":
-        # Una agenda interna dentro de un negocio en modo google no usa Google.
+    elif config.source == "google" and not agenda.is_default:
+        # Una agenda interna adicional dentro de un negocio en modo google no usa Google. La
+        # principal sin cuenta vinculada conserva el modo del negocio: sin Google conectado no
+        # se agenda (antes de HU-CAL-08 pasaba lo mismo).
         cambios["source"] = "interno"
-    return config.model_copy(update=cambios) if cambios else config
+    efectiva = config.model_copy(update=cambios) if cambios else config.model_copy()
+    efectiva._connection_id = agenda.connection_id
+    return efectiva
+
+
+async def config_para(calendar_id: uuid.UUID | None, config: CalendarConfig) -> CalendarConfig:
+    """Config efectiva de la agenda de una cita/bloqueo (`None` = la principal)."""
+    agenda = por_id(calendar_id, await listar(config))
+    return config_de(agenda, config)
 
 
 def descripcion_para_asistente(agenda: Agenda) -> dict[str, Any]:
@@ -355,3 +367,61 @@ def descripcion_para_asistente(agenda: Agenda) -> dict[str, Any]:
         "descripcion": agenda.description,
         "aliases": list(agenda.aliases),
     }
+
+
+async def vincular_conexion(
+    connection_id: uuid.UUID, email: str, config: CalendarConfig | None
+) -> tuple[Agenda, bool]:
+    """Agenda de una conexión de Google recién conectada; la crea si no existe.
+
+    - Si la conexión ya tiene agenda, esa (`creada=False`).
+    - Si el negocio está en modo google y la agenda principal no tiene cuenta, la cuenta se
+      adjunta a la principal (negocios que ya agendaban con Google).
+    - En otro caso se crea una agenda nueva con nombre y color por defecto: el nombre sale del
+      correo y nunca falla por colisión; la ficha invita a renombrarla.
+    """
+    from core.db.session import get_session
+    from core.shared.tenant import get_current_tenant_id
+
+    await ensure_default(config)
+    tenant_id = get_current_tenant_id()
+    for intento in (1, 2):
+        try:
+            async with get_session() as session:
+                filas = (
+                    await session.execute(
+                        select(Calendar).where(
+                            Calendar.tenant_id == tenant_id, Calendar.deleted_at.is_(None)
+                        )
+                    )
+                ).scalars().all()
+                existente = next((f for f in filas if f.connection_id == connection_id), None)
+                if existente is not None:
+                    invalidar(tenant_id)
+                    return _a_agenda(existente, True), False
+                principal = next((f for f in filas if f.is_default), None)
+                if (
+                    principal is not None
+                    and principal.connection_id is None
+                    and config is not None
+                    and config.source == "google"
+                ):
+                    principal.connection_id = connection_id
+                    invalidar(tenant_id)
+                    return _a_agenda(principal, True), False
+                nueva = Calendar(
+                    tenant_id=tenant_id,
+                    name=nombre_desde_email(email, {f.name for f in filas}),
+                    color=color_siguiente([f.color for f in filas]),
+                    connection_id=connection_id,
+                    sort_order=max((f.sort_order for f in filas), default=0) + 1,
+                )
+                session.add(nueva)
+                await session.flush()
+                invalidar(tenant_id)
+                return _a_agenda(nueva, True), True
+        except IntegrityError:
+            if intento == 2:
+                raise
+            log.info("calendar_vincular_race", tenant_id=str(tenant_id))
+    raise RuntimeError("inalcanzable")  # pragma: no cover
