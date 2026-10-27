@@ -38,18 +38,6 @@ pytestmark = [
 SECRETO = "Bearer literal-del-negocio-que-no-entra-a-versiones"
 
 
-@pytest.fixture(autouse=True)
-def _negocios_de_antes_del_despliegue(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Estos tests modelan negocios dados de alta ANTES de que el alta creara el General y el
-    Coordinador (HU-AOS-53): sin agentes, solo con su AgentSpec v2, que es lo que migra el backfill."""
-    import core.alta_negocio as alta
-
-    async def _sin_agentes(tenant_id: uuid.UUID, *, nuevo: bool) -> list[str]:
-        return []
-
-    monkeypatch.setattr(alta, "_agentes_base_al_alta", _sin_agentes)
-
-
 # ---------------------------------------------------------------- helpers
 def _modules() -> list[Any]:
     from core.plugin_manager import plugin_manager

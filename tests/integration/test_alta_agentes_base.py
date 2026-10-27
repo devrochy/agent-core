@@ -24,6 +24,15 @@ pytestmark = [
 ]
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _alta_con_agent_os():
+    import _alta_agent_os
+
+    _alta_agent_os.ACTIVO = True
+    yield
+    _alta_agent_os.ACTIVO = False
+
+
 async def _sql(tid: uuid.UUID, sql: str, **params: Any) -> list[Any]:
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -87,3 +96,58 @@ async def test_repetir_el_alta_no_duplica_ni_pisa_la_bandera_del_master() -> Non
     assert "recorte del General encendido" not in pasos
     bandera = (await _sql(tid, "select settings->'agent_os'->>'recortar_general' from tenants where id = :t", t=tid))[0][0]
     assert bandera == "false"
+
+
+# ------------------------------------------------------------------ runtime del negocio nuevo (P-34)
+async def _runtime(tid: uuid.UUID) -> str:
+    return (await _sql(tid, "select aos_runtime from tenants where id = :t", t=tid))[0][0]
+
+
+async def test_con_el_ruteo_encendido_el_negocio_nuevo_nace_en_v3_y_queda_auditado(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.alta_negocio import onboard_tenant
+    from core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
+    slug = uniq("hu53")
+    tid, pasos = await onboard_tenant(name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
+
+    assert await _runtime(tid) == "v3"
+    assert "runtime v3 encendido" in pasos
+    # El recorte lo escribe el escritor auditado, no un UPDATE suelto.
+    auditoria = await _sql(tid, "select actor from audit_log where action = 'agent_os_recorte_general'")
+    assert [a for (a,) in auditoria] == ["alta"]
+
+
+async def test_con_el_ruteo_apagado_el_negocio_nuevo_queda_en_legacy_y_lo_avisa(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.alta_negocio import onboard_tenant
+    from core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "aos_connection_routing", False)
+    slug = uniq("hu53")
+    tid, pasos = await onboard_tenant(name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
+
+    assert await _runtime(tid) == "legacy"
+    assert any(p.startswith("runtime v3 pendiente") for p in pasos)
+    assert await _agentes(tid) == {"coordinador": "core", "general": "specialist"}  # los agentes igual nacen
+
+
+async def test_fijar_bandera_audita_solo_si_cambia() -> None:
+    from core.agents import coordinacion
+    from core.alta_negocio import onboard_tenant
+    from core.shared.tenant import tenant_scope
+
+    slug = uniq("hu53")
+    tid, _ = await onboard_tenant(name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
+    async with tenant_scope(tid):
+        assert await coordinacion.estado_de_bandera(tid) is True
+        assert await coordinacion.fijar_bandera(tid, True, actor="cli") is False  # ya estaba
+        assert await coordinacion.fijar_bandera(tid, False, actor="cli:test") is True
+        assert await coordinacion.estado_de_bandera(tid) is False
+    filas = await _sql(tid, "select actor from audit_log where action = 'agent_os_recorte_general' order by created_at")
+    assert [a for (a,) in filas] == ["alta", "cli:test"]
+    # No pisa el resto de settings.agent_os.
+    assert (await _sql(tid, "select settings->>'language' from tenants where id = :t", t=tid))[0][0] == "es"

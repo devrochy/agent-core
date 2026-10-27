@@ -130,19 +130,43 @@ async def _agentes_base_al_alta(tenant_id: uuid.UUID, *, nuevo: bool) -> list[st
         pasos.append("agentes base pendientes (los crea el backfill)")
         return pasos
     if nuevo:
-        from sqlalchemy import text
+        from core.agents.coordinacion import fijar_bandera
 
-        async with get_session() as session:
-            await session.execute(
-                text(
-                    "update tenants set settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{agent_os}', "
-                    "coalesce(settings->'agent_os', '{}'::jsonb) || '{\"recortar_general\": true}'::jsonb) "
-                    "where id = :t"
-                ),
-                {"t": tenant_id},
-            )
+        async with tenant_scope(tenant_id):
+            await fijar_bandera(tenant_id, True, actor="alta")
         pasos.append("recorte del General encendido")
     return pasos
+
+
+async def _runtime_al_alta(tenant_id: uuid.UUID) -> str:
+    """Un negocio NUEVO nace en `aos_runtime = 'v3'` (HU-AOS-53, P-34) para que su dueño pueda crear
+    agentes con el asistente (en `legacy` solo escribe el master, 403 `aos_runtime_legacy`).
+
+    Usa el escritor de siempre, `migrar_a_v3` (rol dueño, orden de banderas y auditoría; el mismo
+    camino de «Preparar mis datos»), sin construir ni promover releases: la release de cada
+    conexión llega con ella, y mientras no la tenga el turno sigue por el motor de siempre. Con
+    `AOS_CONNECTION_ROUTING` apagada (entorno) o ante cualquier bloqueo, el negocio queda en `legacy`
+    y se registra: el alta no depende del Agent OS y el master puede migrarlo después."""
+    from core.config import get_settings
+
+    if not get_settings().aos_connection_routing:
+        log.info("alta_runtime_pendiente", tenant_id=str(tenant_id), motivo="AOS_CONNECTION_ROUTING apagada")
+        return "runtime v3 pendiente (AOS_CONNECTION_ROUTING apagada en este entorno)"
+    try:
+        from core.releases.migracion_v3 import migrar_a_v3
+
+        reporte = await migrar_a_v3(
+            tenant_ids=[tenant_id], dry_run=False, construir=False, modules=plugin_manager.list_modules()
+        )
+        negocio = reporte.negocios[0] if reporte.negocios else None
+        if negocio is not None and negocio.accion in ("encendido", "ya_estaba"):
+            return "runtime v3 encendido"
+        motivo = "; ".join(negocio.bloqueos)[:300] if negocio else "negocio no encontrado"
+    except Exception as exc:  # frontera deliberada: el alta no depende del Agent OS
+        log.warning("alta_runtime_fallo", tenant_id=str(tenant_id), error=type(exc).__name__, exc_info=True)
+        motivo = type(exc).__name__
+    log.warning("alta_runtime_pendiente", tenant_id=str(tenant_id), motivo=motivo)
+    return f"runtime v3 pendiente ({motivo})"
 
 
 async def onboard_tenant(
@@ -360,6 +384,8 @@ async def onboard_tenant(
             log.warning("tenant_flow_seed_failed", slug=slug, exc_info=True)
 
     steps.extend(await _agentes_base_al_alta(tenant_id, nuevo=negocio_nuevo))
+    if negocio_nuevo:
+        steps.append(await _runtime_al_alta(tenant_id))
 
     onboarding.ensure_tenant_docs(slug, name, business_description)
     await onboarding.ensure_brand_voice(tenant_id, slug)

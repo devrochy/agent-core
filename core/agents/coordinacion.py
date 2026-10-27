@@ -145,6 +145,57 @@ async def bandera_encendida(tenant_id: uuid.UUID) -> bool:
     return valor == "true"
 
 
+async def fijar_bandera(tenant_id: uuid.UUID, encendida: bool, *, actor: str) -> bool:
+    """Enciende o apaga `settings.agent_os.recortar_general` con un UPDATE atómico dentro de
+    `settings.agent_os` (no pisa el resto de `settings`) y lo audita como `agent_os_recorte_general`.
+    Devuelve si cambió algo (sin cambio no deja auditoría). Lo usan el alta (negocios nuevos) y el
+    comando `agent-core db recorte-general` (el master, negocios existentes)."""
+    from core.db.models import AuditLog
+
+    _exigir_scope(tenant_id)
+    valor = "true" if encendida else "false"
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                text(
+                    "WITH antes AS (SELECT settings->'agent_os'->>:k AS v FROM tenants WHERE id = :t AND deleted_at IS NULL), "
+                    "cambio AS (UPDATE tenants SET settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{agent_os}', "
+                    "coalesce(settings->'agent_os', '{}'::jsonb) || jsonb_build_object(cast(:k as text), cast(:b as boolean))) "
+                    "WHERE id = :t AND deleted_at IS NULL RETURNING 1) "
+                    "SELECT (SELECT v FROM antes), (SELECT count(*) FROM cambio)"
+                ),
+                {"k": BANDERA, "t": tenant_id, "b": encendida},
+            )
+        ).one()
+        if not fila[1]:
+            raise LookupError(str(tenant_id))
+        cambio = fila[0] != valor
+        if cambio:
+            session.add(
+                AuditLog(
+                    tenant_id=tenant_id,
+                    actor=actor[:120],
+                    action="agent_os_recorte_general",
+                    input={"recortar_general": encendida, "antes": fila[0]},
+                )
+            )
+    if cambio:
+        log.info("agent_os_recorte_general", tenant_id=str(tenant_id), recortar_general=encendida, actor=actor)
+    return cambio
+
+
+async def estado_de_bandera(tenant_id: uuid.UUID) -> bool | None:
+    """Valor guardado de la bandera (None si el negocio nunca la fijó)."""
+    _exigir_scope(tenant_id)
+    async with get_session() as session:
+        valor = (
+            await session.execute(
+                text("SELECT settings->'agent_os'->>:k FROM tenants WHERE id = :t"), {"k": BANDERA, "t": tenant_id}
+            )
+        ).scalar_one_or_none()
+    return None if valor is None else valor == "true"
+
+
 async def _enlazar(
     tenant_id: uuid.UUID, general_id: uuid.UUID, agente_id: uuid.UUID, admin_id: uuid.UUID | None
 ) -> bool:
