@@ -268,6 +268,15 @@ def test_con_el_plan_suficiente_el_paso_no_promete_nada() -> None:
     )
 
 
+def test_con_las_habilidades_del_preset_ya_habilitadas_no_hay_nada_que_esperar_del_plan() -> None:
+    """Elegir la plantilla del asistente habilita sus habilidades: un Free con su agente funcionando no
+    debe ver «tu tipo de negocio necesita Basic»."""
+    alta = {"id": "comercio", "estado": "pendiente"}
+    kwargs = {"preset_aplicado_id": None, "preset_aplicado_en": None, "requisito": COMERCIO}
+    assert paso_activar_preset(alta, packs_ya_habilitados=False, **kwargs) is not None
+    assert paso_activar_preset(alta, packs_ya_habilitados=True, **kwargs) is None
+
+
 # ------------------------------------------------------------------ medición
 def test_segundos_desde_el_alta_nunca_son_negativos() -> None:
     assert segundos_desde_alta(AHORA, AHORA + timedelta(minutes=90)) == 5400

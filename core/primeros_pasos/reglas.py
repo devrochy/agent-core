@@ -255,11 +255,13 @@ def paso_activar_preset(
     preset_aplicado_id: str | None,
     preset_aplicado_en: datetime | None,
     requisito: RequisitoDePreset | None,
+    packs_ya_habilitados: bool = False,
 ) -> Paso | None:
     """El tipo de negocio que eligió el comprador quedó pendiente en el alta (ADR-0121 § 3.7)
     porque su plan no alcanza. Se cumple cuando el preset se aplica (HU-SH-04 lo hace al subir
     de plan). Si el plan ya alcanza y no se aplicó, no hay nada que el dueño pueda hacer desde
-    el panel: no se muestra."""
+    el panel: no se muestra. Tampoco si las habilidades del preset ya están habilitadas (elegir
+    la plantilla del asistente las habilita): no hay nada pendiente que esperar del plan."""
     if not isinstance(alta_preset, Mapping) or alta_preset.get("estado") != "pendiente":
         return None
     preset_id = alta_preset.get("id")
@@ -268,7 +270,7 @@ def paso_activar_preset(
     titulo = requisito.nombre if requisito else None
     if preset_aplicado_id == preset_id:
         return _completo(ACTIVAR_PRESET, preset_aplicado_en, seccion=SECCION_PLAN, titulo=titulo)
-    if requisito is None or requisito.alcanza:
+    if packs_ya_habilitados or requisito is None or requisito.alcanza:
         return None
     return Paso(
         ACTIVAR_PRESET,

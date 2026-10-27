@@ -14,7 +14,7 @@ cualquier otra pantalla del panel.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
@@ -90,7 +90,7 @@ async def calcular(tenant_id: uuid.UUID, *, omitir_hitos: Collection[str] = ()) 
                 if mensaje is not None:
                     hitos[reglas.PRIMER_MENSAJE] = mensaje
         catalogo = reglas.paso_catalogo(await contenidos_de_habilidades(tenant_id, habilitadas))
-        preset = await _paso_activar_preset(tenant_id, settings, alta or {})
+        preset = await _paso_activar_preset(tenant_id, settings, alta or {}, habilitadas)
 
     pasos = [datos, whatsapp, catalogo, probar, equipo]
     if preset is not None:
@@ -335,7 +335,10 @@ def _fecha(valor: Any) -> datetime | None:
 
 
 async def _paso_activar_preset(
-    tenant_id: uuid.UUID, settings: Mapping[str, Any], alta: Mapping[str, Any]
+    tenant_id: uuid.UUID,
+    settings: Mapping[str, Any],
+    alta: Mapping[str, Any],
+    habilitadas: Sequence[str] = (),
 ) -> Paso | None:
     alta_preset = alta.get("preset")
     if not isinstance(alta_preset, Mapping) or alta_preset.get("estado") != "pendiente":
@@ -353,4 +356,17 @@ async def _paso_activar_preset(
         preset_aplicado_id=(aplicado or {}).get("id"),
         preset_aplicado_en=_fecha((aplicado or {}).get("aplicado_en")),
         requisito=requisito,
+        packs_ya_habilitados=_packs_del_preset_habilitados(preset_id, habilitadas),
     )
+
+
+def _packs_del_preset_habilitados(preset_id: str, habilitadas: Sequence[str]) -> bool:
+    """¿Ya están habilitadas todas las habilidades del preset? Elegir la plantilla del asistente las
+    habilita sin esperar al plan, así que el preset pendiente deja de ser algo que esperar."""
+    from core.presets import PresetError, load_preset
+
+    try:
+        packs = set(load_preset(preset_id).packs)
+    except PresetError:
+        return False
+    return bool(packs) and packs <= set(habilitadas)

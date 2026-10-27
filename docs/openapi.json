@@ -50545,6 +50545,13 @@
             "type": "array",
             "title": "Missing Skills"
           },
+          "will_enable": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Will Enable"
+          },
           "superpowers": {
             "items": {
               "$ref": "#/components/schemas/Superpower"
@@ -50572,6 +50579,7 @@
           "optional_skills",
           "available",
           "missing_skills",
+          "will_enable",
           "superpowers",
           "requirements"
         ],
@@ -50706,13 +50714,21 @@
             },
             "type": "array",
             "title": "Warnings"
+          },
+          "enabled_skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Enabled Skills"
           }
         },
         "type": "object",
         "required": [
           "agent",
           "draft",
-          "warnings"
+          "warnings",
+          "enabled_skills"
         ],
         "title": "FromTemplateOut"
       },
@@ -51709,6 +51725,13 @@
             "type": "array",
             "title": "Warnings"
           },
+          "enabled_skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Enabled Skills"
+          },
           "requirements": {
             "items": {
               "$ref": "#/components/schemas/Requirement"
@@ -51722,6 +51745,7 @@
           "agent",
           "draft",
           "warnings",
+          "enabled_skills",
           "requirements"
         ],
         "title": "FromScriptOut",

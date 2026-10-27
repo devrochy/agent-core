@@ -5,8 +5,9 @@ piezas que ya existen (borrador y versiones de HU-AOS-12, instancias de HU-AOS-1
 HU-AOS-14 y plantillas de HU-AOS-46):
 
 - `plantillas(habilitados)`: las plantillas de `core/presets/plantillas/` con sus superpoderes
-  (procedimientos publicados) y las frases de la habilidad; disponible si el negocio tiene
-  habilitadas todas sus `habilidades`.
+  (procedimientos publicados) y las frases de la habilidad. Elegir una plantilla HABILITA sus
+  `habilidades` (`will_enable`, `habilitacion.asegurar_habilidades`): estar habilitadas ya no es
+  precondición; solo no se ofrece si el despliegue no las trae.
 - `crear_desde_plantilla(...)`: agente `specialist` con la key de la plantilla (409 si ya existe:
   dos especialistas con los mismos superpoderes en una conexión dejarían uno muerto, ADR-0138) y
   su borrador DERIVADO como en los presets (`derivar_contenido`, desde la última versión del
@@ -120,8 +121,11 @@ class PlantillaVista:
     skills: tuple[str, ...]
     optional_skills: tuple[str, ...]
     available: bool
+    # Habilidades que el despliegue no trae instaladas: la única razón dura para no ofrecer la plantilla.
     missing_skills: tuple[str, ...]
     superpowers: tuple[Superpoder, ...]
+    # Habilidades que crear el agente habilitará en el negocio (las `skills` que aún no tiene).
+    will_enable: tuple[str, ...] = ()
 
 
 def keys_de_plantillas() -> list[str]:
@@ -130,11 +134,18 @@ def keys_de_plantillas() -> list[str]:
     return sorted(p.stem for p in PLANTILLAS_DIR.glob("*.json"))
 
 
-def plantillas(habilitados: Iterable[str]) -> list[PlantillaVista]:
+def plantillas(habilitados: Iterable[str], instalados: Collection[str] | None = None) -> list[PlantillaVista]:
+    """Las plantillas con sus superpoderes. Elegir una HABILITA sus habilidades (`will_enable`): estar
+    habilitadas ya no es precondición. `available` pide que el despliegue las traiga (`instalados`; por
+    defecto lo que cargó el `plugin_manager`) y que la plantilla ofrezca al menos un superpoder."""
+    from core.plugin_manager import plugin_manager
     from core.presets import PresetError, load_plantilla
 
     presentes = set(habilitados)
-    por_id = {s.id: s for s in superpoderes(presentes)}
+
+    def _instalada(pack: str) -> bool:
+        return pack in instalados if instalados is not None else plugin_manager.get(pack) is not None
+
     salida: list[PlantillaVista] = []
     for key in keys_de_plantillas():
         try:
@@ -143,7 +154,11 @@ def plantillas(habilitados: Iterable[str]) -> list[PlantillaVista]:
             # Una plantilla rota (un deploy defectuoso) no tumba la lista: se omite y se registra.
             log.error("plantilla_invalida", template=key)
             continue
-        faltan = tuple(sorted(set(plantilla.habilidades) - presentes))
+        habilidades = set(plantilla.habilidades)
+        sin_modulo = tuple(sorted(p for p in habilidades - presentes if not _instalada(p)))
+        # Los superpoderes se calculan como quedaría el negocio tras habilitar lo que la plantilla pide.
+        alcance = presentes | {p for p in habilidades if _instalada(p)}
+        por_id = {s.id: s for s in superpoderes(alcance)}
         poderes = tuple(por_id[p] for p in plantilla.procedimientos if p in por_id)
         salida.append(
             PlantillaVista(
@@ -152,9 +167,10 @@ def plantillas(habilitados: Iterable[str]) -> list[PlantillaVista]:
                 description=plantilla.descripcion,
                 skills=tuple(plantilla.habilidades),
                 optional_skills=tuple(plantilla.opcionales),
-                available=not faltan and bool(poderes),
-                missing_skills=faltan,
+                available=not sin_modulo and bool(poderes),
+                missing_skills=sin_modulo,
                 superpowers=poderes,
+                will_enable=tuple(sorted(habilidades - presentes)),
             )
         )
     return salida
@@ -247,10 +263,17 @@ async def crear_desde_plantilla(
     catalogo: Mapping[str, Any],
     actor: uuid.UUID | None,
     respuestas: Mapping[str, Any] | None = None,
-) -> tuple[Any, Any, list[str]]:
+    puede_habilitar: bool = False,
+) -> tuple[Any, Any, list[str], list[str]]:
     """Crea el especialista y su borrador derivado de la plantilla. Devuelve (agente, borrador,
-    avisos). `ErrorDelEditor` 404 si la plantilla no existe, 409 si falta alguna habilidad
-    (`template_unavailable`) o si ya hay un agente con esa key (`key_taken`, con su id).
+    avisos, habilidades habilitadas). `ErrorDelEditor` 404 si la plantilla no existe, 409 si ya hay un
+    agente con esa key (`key_taken`, con su id) o el despliegue no trae una habilidad de la plantilla
+    (`template_unavailable`).
+
+    Elegir la plantilla HABILITA sus habilidades en el negocio (`habilitacion.asegurar_habilidades`): ya
+    no es una precondición. Quien llama dice si el principal puede habilitar (`puede_habilitar`); si no
+    puede y falta alguna, 403 `skills_forbidden` sin crear nada. Habilitar va después de todo lo que
+    puede fallar sin efectos (plantilla, respuestas, `key_taken`).
 
     Con `respuestas` (el guion del asistente, HU-AOS-48) el agente conserva solo los superpoderes que
     esas respuestas dejan y toma su largo máximo y su nombre; una respuesta fuera del guion es 422
@@ -277,14 +300,6 @@ async def crear_desde_plantilla(
         plantilla = plantilla.model_copy(update={"procedimientos": ajustes.procedimientos})
         nombre = nombre or ajustes.nombre
     habilitados = await habilitados_del_negocio(tenant_id)
-    faltan = sorted(set(plantilla.habilidades) - habilitados)
-    if faltan:
-        raise ErrorDelEditor(
-            409,
-            "template_unavailable",
-            "Esta plantilla necesita habilidades que tu negocio no tiene activas.",
-            {"template": ", ".join(faltan)},
-        )
     existente = await _agente_por_key(tenant_id, plantilla.key)
     if existente is not None:
         raise ErrorDelEditor(
@@ -293,6 +308,32 @@ async def crear_desde_plantilla(
             f"Ya tienes un agente «{plantilla.nombre}»: edítalo en vez de crear otro.",
             {"agent_id": str(existente)},
         )
+    por_habilitar = sorted(set(plantilla.habilidades) - habilitados)
+    habilitadas: list[str] = []
+    sin_configurar: dict[str, str] = {}
+    if por_habilitar:
+        if not puede_habilitar:
+            raise ErrorDelEditor(
+                403,
+                "skills_forbidden",
+                "Para crear este asistente hay que activar habilidades del negocio: pídele al dueño que las active.",
+                {"skills": ", ".join(por_habilitar)},
+            )
+        from core.agents.habilitacion import HabilitacionError, asegurar_habilidades
+
+        try:
+            resultado = await asegurar_habilidades(tenant_id, por_habilitar, actor=actor)
+        except HabilitacionError as exc:
+            no_instalada = exc.code == "pack_no_instalado"
+            raise ErrorDelEditor(
+                409,
+                "template_unavailable" if no_instalada else exc.code,
+                "Esta plantilla necesita habilidades que este despliegue no trae." if no_instalada else str(exc),
+                {"skills": ", ".join(exc.packs)},
+            ) from None
+        habilitadas = list(resultado.habilitados_ahora)
+        sin_configurar = resultado.config_pendiente
+        habilitados = await habilitados_del_negocio(tenant_id)  # lo que derivan el borrador y los avisos
     publicados = _ofrecibles(habilitados)
     try:
         contenido, avisos = derivar_contenido(
@@ -308,6 +349,7 @@ async def crear_desde_plantilla(
         raise ErrorDelEditor(
             409, "template_unavailable", "Tu negocio no ofrece ninguno de los superpoderes de esta plantilla."
         ) from None
+    avisos = [*avisos, *(f"Habilidad {pack} habilitada, falta configurarla: {motivo}" for pack, motivo in sin_configurar.items())]
     if ajustes is not None and ajustes.largo_maximo is not None:
         contenido["persona"] = {**contenido.get("persona", {}), "maxLength": ajustes.largo_maximo}
     try:
@@ -322,7 +364,7 @@ async def crear_desde_plantilla(
     except versiones.Conflicto:
         raise ErrorDelEditor(409, "key_taken", f"Ya tienes un agente «{plantilla.nombre}».") from None
     borrador = await versiones.guardar_borrador(tenant_id, agente.id, contenido, 0, catalogo=catalogo, actor=actor)  # type: ignore[arg-type]
-    return agente, borrador, avisos
+    return agente, borrador, avisos, habilitadas
 
 
 # ------------------------------------------------------------------ validación del editor

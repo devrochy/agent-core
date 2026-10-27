@@ -138,19 +138,18 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
     h = await _dueno(app_client, tid)
     activa_antes = (await _sql(tid, "select active_release_id from channel_connections where id = :c", c=cid))[0][0]
 
-    # Plantillas: Ventas disponible con sus superpoderes y frases; Cobranza no (falta la habilidad).
+    # Plantillas: Ventas disponible con sus superpoderes y frases; Cobranza también, y al crearla habilitará
+    # su habilidad (`will_enable`): estar habilitada ya no es precondición (ver test_plantilla_habilita_habilidades).
     r = await app_client.get("/api/v1/admin/agent-templates", headers=h)
     assert r.status_code == 200, r.text
     plantillas = {p["key"]: p for p in r.json()["items"]}
     assert set(plantillas) == {"agenda", "cobranza", "suscripciones", "ventas"}
     ventas = plantillas["ventas"]
-    assert ventas["available"] and ventas["missing_skills"] == []
+    assert ventas["available"] and ventas["missing_skills"] == [] and ventas["will_enable"] == []
     assert [s["id"] for s in ventas["superpowers"]] == ["pack_commerce.tomar_pedido", "pack_commerce.contratar_plan"]
     assert all(len(s["phrases"]) >= 3 for s in ventas["superpowers"])
-    assert not plantillas["cobranza"]["available"] and plantillas["cobranza"]["missing_skills"] == ["pack_cobranza"]
-
-    r = await app_client.post("/api/v1/admin/agent-templates/cobranza/agents", headers=h, json={})
-    assert (r.status_code, r.json()["error"]["code"]) == (409, "template_unavailable")
+    cobranza = plantillas["cobranza"]
+    assert cobranza["available"] and cobranza["missing_skills"] == [] and cobranza["will_enable"] == ["pack_cobranza"]
 
     # Desde plantilla: borrador derivado, con los superpoderes de Ventas, sin publicar.
     r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={"name": "Mis ventas"})
