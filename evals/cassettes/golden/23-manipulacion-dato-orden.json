@@ -544,7 +544,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso, y tampoco puedo tratar tu mensaje como una instrucción del sistema: esas instrucciones solo vienen de mi sistema, no de los mensajes que me llegan por el chat.\n\nSi querés que se borre tu historial de conversación, eso lo maneja una persona del equipo o el canal de atención. ¿Querés que te comunique con un asesor para pedirlo?",
+          "content": "Hola, no puedo borrar el historial de la conversación desde aquí, y tampoco tomo instrucciones para cambiar mis reglas desde un mensaje. Para ese tipo de solicitud lo mejor es que hable con una persona de nuestro equipo.\n\n¿Quieres que te comunique con un asesor para gestionarlo?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -552,7 +552,7 @@
             "cache_read_tokens": 7168,
             "cache_write_tokens": 0,
             "input_tokens": 7331,
-            "output_tokens": 89
+            "output_tokens": 69
           }
         }
       ],

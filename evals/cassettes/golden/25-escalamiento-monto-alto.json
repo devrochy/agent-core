@@ -544,15 +544,21 @@
       },
       "respuestas": [
         {
-          "content": "¡Hola! Con gusto te ayudo con eso.\n\nPara armarte la cotización completa necesito saber qué productos del catálogo quieres incluir y en qué cantidades. ¿Me pasas la lista, por favor?\n\nTe adelanto algo: como el total supera los dos millones, ese tipo de pedido lo tiene que revisar y aprobar una persona de nuestro equipo, así que en cuanto tenga tu lista la dejo lista para que un asesor la gestione contigo.\n\n¿Me compartes los productos y cantidades?",
+          "content": "",
           "model": "deepseek-flash",
-          "stop_reason": "end_turn",
-          "tool_calls": [],
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            {
+              "arguments": {},
+              "id": "call_00_CFrppnT3yEnPFdn16xry6490",
+              "name": "consultar_inventario"
+            }
+          ],
           "usage": {
             "cache_read_tokens": 7168,
             "cache_write_tokens": 0,
             "input_tokens": 7330,
-            "output_tokens": 113
+            "output_tokens": 24
           }
         }
       ],

@@ -18,13 +18,14 @@
     "horario": { "type": "datetime", "required": true, "resolver": "pack_calendar.horario_ofrecido" },
     "correo": { "type": "string", "format": "email", "required": true, "dataClass": "pii" },
     "nombre": { "type": "string", "dataClass": "pii" },
+    "agenda": { "type": "string" },
     "event_id": { "type": "string", "setBy": "action:create_calendar_event" }
   },
   "stages": [
     {
       "id": "elegir_horario",
       "goal": "Ofrecer solo horarios libres reales de la agenda y que el cliente elija uno",
-      "actions": ["list_appointment_types", "check_availability", "find_next_available"],
+      "actions": ["list_appointment_types", "list_calendars", "check_availability", "find_next_available"],
       "exitWhen": { "slots": ["horario"] }
     },
     {
@@ -35,7 +36,7 @@
     },
     {
       "id": "agendar",
-      "goal": "Crear la cita en el horario elegido, con la confirmación del cliente",
+      "goal": "Crear la cita en el horario elegido (y en la agenda elegida, si el negocio tiene varias), con la confirmación del cliente",
       "actions": ["create_calendar_event"],
       "confirmation": "interactive_button",
       "exitWhen": { "action": "create_calendar_event", "slots": ["event_id"] }

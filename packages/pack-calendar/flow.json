@@ -9,6 +9,7 @@
       "tools": [
         "check_availability",
         "find_next_available",
+        "list_calendars",
         "list_appointment_types",
         "create_calendar_event"
       ]

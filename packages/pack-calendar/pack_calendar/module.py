@@ -398,7 +398,7 @@ def _parse_custom_completion_claims(raw: str) -> dict[str, tuple[re.Pattern[str]
 class GoogleCalendarModule(BaseModule):
     id = PLUGIN_ID
     name = "Calendario y citas"
-    version = "2.2.0"
+    version = "2.3.0"
     description = "Agendamiento con agenda interna (sin Google) o Google Calendar (ADR-0084)"
     display_name = "Agenda"
     category = "Agenda"

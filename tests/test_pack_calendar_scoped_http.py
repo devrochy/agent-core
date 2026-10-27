@@ -150,8 +150,11 @@ def test_loop_arma_el_http_del_pack_y_no_el_de_una_declarativa_homonima(monkeypa
 
 def _google_skill(monkeypatch, tokens: list[Any]):  # type: ignore[no-untyped-def]
     from pack_calendar import skills
+    from pack_calendar.agendas import Agenda
+    from pack_calendar.config import CalendarConfig
 
-    cfg = SimpleNamespace(
+    cfg = CalendarConfig(
+        source="google",
         timezone="America/Mexico_City",
         calendar_id="agenda@negocio.com",
         business_hours='{"mon": "09:00-18:00", "tue": "09:00-18:00", "wed": "09:00-18:00", '
@@ -163,6 +166,15 @@ def _google_skill(monkeypatch, tokens: list[Any]):  # type: ignore[no-untyped-de
         client_secret=SecretStr("secret"),
     )
     skill = skills.CalendarSkill()
+    # Una sola agenda de Google (la principal): el caso de siempre, sin base de datos.
+    principal = Agenda(
+        id=uuid.uuid4(), name="Agenda principal", is_default=True, connection_id=uuid.uuid4(), conexion_activa=True
+    )
+
+    async def _agendas(_config: Any) -> Any:
+        return [principal], False
+
+    monkeypatch.setattr(skill, "_agendas", _agendas)
 
     async def _source() -> str:
         return "google"
@@ -170,7 +182,7 @@ def _google_skill(monkeypatch, tokens: list[Any]):  # type: ignore[no-untyped-de
     async def _config() -> Any:
         return cfg
 
-    async def _token(client_id: str, client_secret: str, *, http: Any = None) -> str:
+    async def _token(client_id: str, client_secret: str, *, http: Any = None, **_kw: Any) -> str:
         tokens.append(http)
         return "tok"
 
@@ -281,10 +293,10 @@ async def test_refresh_del_token_sale_por_el_http_recibido(monkeypatch) -> None:
 
     saved: list[dict[str, Any]] = []
 
-    async def _tokens() -> dict[str, Any]:
+    async def _tokens(*_a: Any, **_k: Any) -> dict[str, Any]:
         return {"access_token": "viejo", "refresh_token": "rt", "expires_at": time.time() - 10}
 
-    async def _save(tokens: dict[str, Any], *, from_refresh: bool = False) -> None:
+    async def _save(tokens: dict[str, Any], *, from_refresh: bool = False, **_k: Any) -> None:
         saved.append(tokens)
 
     monkeypatch.setattr(oauth, "_connection_tokens", _tokens)

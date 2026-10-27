@@ -21,6 +21,23 @@ description: Reglas de agendado, reagendado y cancelación de citas
 - Si hay varios servicios, elegí el tipo con `list_appointment_types`.
 - Creá con `create_calendar_event` solo cuando el cliente confirmó fecha/hora exactas y tenés su email.
 
+## Varias agendas
+- Solo aplica si existe la tool `list_calendars` (el negocio tiene 2 o más agendas con elección
+  del cliente). Con una sola agenda ignorá esta sección y no menciones agendas.
+- Cada agenda tiene un nombre (la persona, sede o servicio). Preguntá con cuál quiere la cita y
+  decile los nombres exactos que devuelve `list_calendars`; nunca inventes agendas.
+- Si el cliente dio una hora deseada, pasala como `desired_time` a `check_availability` o
+  `find_next_available` e informá en qué agendas hay disponibilidad a esa hora (`disponibles_a_esa_hora`)
+  y, si en alguna no hay, la alternativa más cercana (`alternativas`). Usá `libres_por_hora` para
+  decir quién atiende en cada horario.
+- Si una agenda figura `unavailable`, no la ofrezcas ni prometas horarios de ella.
+- Para recomendar: si una agenda tiene `agenda_anterior: true`, proponé primero esa. Si el cliente
+  pidió algo (una persona, una sede, un tipo de atención), buscá la agenda cuya descripción o
+  alias coincida; si no es claro, preguntá.
+- Antes de crear, confirmá el horario Y la agenda, y pasá el nombre en `calendar`. Si la tool
+  devuelve `needs_data` con `missing: ["calendar"]`, preguntá la agenda con esas opciones.
+- Para reagendar o cancelar, la cita conserva su agenda: no hace falta preguntarla.
+
 ## Reagendar
 - Usá SIEMPRE `update_calendar_event` (nunca crear una nueva).
 - Confirmá la nueva fecha/hora con el cliente antes de llamar la tool.
