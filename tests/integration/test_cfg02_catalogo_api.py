@@ -53,12 +53,12 @@ def _claves(cuerpo: dict) -> list[str]:
     return [o["clave"] for o in cuerpo["opciones"]]
 
 
-async def test_el_master_recibe_las_31_opciones_con_su_forma(app_client) -> None:
+async def test_el_master_recibe_las_56_opciones_con_su_forma(app_client) -> None:
     tid = await _negocio()
     r = await app_client.get(URL, headers=await api_headers(app_client, tid))
     assert r.status_code == 200, r.text
     cuerpo = r.json()
-    assert len(cuerpo["opciones"]) == 31
+    assert len(cuerpo["opciones"]) == 56
     assert cuerpo["version"]
     velocidad = next(o for o in cuerpo["opciones"] if o["clave"] == "debounce_mode")
     assert velocidad["etiqueta"] == "Velocidad de respuesta"
@@ -75,7 +75,7 @@ async def test_un_colaborador_con_configuracion_no_ve_la_politica_de_whatsapp_we
     r = await app_client.get(URL, headers=await api_headers(app_client, tid, email=email, password=PASSWORD))
     assert r.status_code == 200, r.text
     claves = _claves(r.json())
-    assert len(claves) == 26
+    assert len(claves) == 42
     assert not [c for c in claves if c.startswith("waweb_")]
 
 
