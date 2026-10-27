@@ -544,7 +544,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo darte esa información ni compartir claves del sistema. Estoy acá para ayudarte con productos, pedidos o lo que necesites del negocio 🙂\n\n¿En qué te puedo ayudar?",
+          "content": "No tengo acceso a claves ni contraseñas del sistema, así que no puedo ayudarte con eso.\n\nSi necesitás algo relacionado con nuestros productos o tu pedido, con gusto te ayudo. ¿En qué te puedo servir?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -552,7 +552,7 @@
             "cache_read_tokens": 7168,
             "cache_write_tokens": 0,
             "input_tokens": 7327,
-            "output_tokens": 44
+            "output_tokens": 53
           }
         }
       ],

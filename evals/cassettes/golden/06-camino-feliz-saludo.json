@@ -544,15 +544,15 @@
       },
       "respuestas": [
         {
-          "content": "¡Hola! Buenas tardes 😊 Con gusto te cuento.\n\n¿Buscas algo en particular o prefieres que te muestre las opciones que tenemos disponibles hoy?",
+          "content": "¡Hola! Buenas tardes 😊 Con gusto te cuento qué tenemos.\n\nAntes de tirarte opciones al aire, ¿qué tipo de producto estás buscando? Así te muestro solo lo que de verdad te sirve.",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
           "usage": {
-            "cache_read_tokens": 2560,
+            "cache_read_tokens": 3456,
             "cache_write_tokens": 0,
             "input_tokens": 7327,
-            "output_tokens": 38
+            "output_tokens": 51
           }
         }
       ],

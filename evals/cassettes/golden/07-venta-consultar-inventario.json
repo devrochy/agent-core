@@ -544,13 +544,13 @@
       },
       "respuestas": [
         {
-          "content": "Voy a revisar nuestro catálogo para contarte bien.",
+          "content": "Déjame revisar el catálogo para ver qué tenemos disponible 🙂",
           "model": "deepseek-flash",
           "stop_reason": "tool_use",
           "tool_calls": [
             {
               "arguments": {},
-              "id": "call_00_43dZccZnICmGUTwjfSWQ0676",
+              "id": "call_00_cQ8HGkv3xjwcq7U4C2rd8810",
               "name": "consultar_inventario"
             }
           ],
@@ -558,7 +558,7 @@
             "cache_read_tokens": 7168,
             "cache_write_tokens": 0,
             "input_tokens": 7330,
-            "output_tokens": 37
+            "output_tokens": 39
           }
         }
       ],
