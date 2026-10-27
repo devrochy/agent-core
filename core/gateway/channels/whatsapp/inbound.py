@@ -77,6 +77,11 @@ class WhatsAppMetaInbound(InboundAdapter):
                         reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
                         content = reply.get("title", "")
                         interactive_id = str(reply.get("id") or "")[:256]
+                    elif msg_type == "button":
+                        # Quick reply de una plantilla de Meta: llega como `button`, no como `interactive`.
+                        button = msg.get("button") or {}
+                        content = str(button.get("text") or "")
+                        interactive_id = str(button.get("payload") or "")[:256]
                     else:
                         continue  # tipos no soportados: sticker, location, etc.
 

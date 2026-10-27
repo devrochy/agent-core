@@ -251,6 +251,7 @@ async def preparar_negocio(
         preset=definicion.get("preset"),
         plan=definicion.get("plan", "premium"),
         sembrar_ejemplos=not definicion.get("catalogo") and not replica,
+        agentes_base=False,  # el journey monta su propio runtime (`encender_runtime_v3`), no el del alta
     )
     async with tenant_scope(tenant_id):
         for pack_id, config in (definicion.get("config") or {}).items():

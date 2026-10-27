@@ -460,6 +460,64 @@ def backfill_agentes(
         raise typer.Exit(1)
 
 
+@app.command("recorte-general")
+def recorte_general(
+    tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
+    todos: bool = typer.Option(False, "--todos", help="Todos los negocios vivos con aos_runtime = v3."),
+    apagar: bool = typer.Option(False, "--apagar", help="Apaga la bandera en vez de encenderla."),
+    aplicar: bool = typer.Option(False, "--aplicar", help="Escribe. Sin esto es dry-run: reporta lo que haría."),
+) -> None:
+    """SPEC-39 (HU-AOS-52): enciende `settings.agent_os.recortar_general` para que cada especialista
+    que se cree le quite al General lo suyo. Solo cambia la bandera (auditada como
+    `agent_os_recorte_general`): no republica a nadie. Los negocios nuevos ya nacen con ella
+    encendida; este comando es para los que ya existían. Exige `--tenant` o `--todos`."""
+    import asyncio
+
+    from sqlalchemy import text
+
+    from cli.tenant_ref import resolve_tenant
+    from core.agents import coordinacion
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    if bool(tenant) == todos:
+        console.print("[red]Indica --tenant <slug|uuid> o --todos (uno solo).[/red]")
+        raise typer.Exit(2)
+
+    async def _run() -> list[tuple[str, str, bool | None, str]]:
+        async with get_session() as session:
+            if tenant:
+                negocios = (
+                    await session.execute(
+                        text("SELECT id, slug FROM tenants WHERE id = :t AND deleted_at IS NULL"),
+                        {"t": await resolve_tenant(tenant)},
+                    )
+                ).all()
+            else:
+                negocios = (
+                    await session.execute(
+                        text("SELECT id, slug FROM tenants WHERE aos_runtime = 'v3' AND deleted_at IS NULL ORDER BY slug")
+                    )
+                ).all()
+        filas: list[tuple[str, str, bool | None, str]] = []
+        for tid, slug in negocios:
+            async with tenant_scope(tid):
+                antes = await coordinacion.estado_de_bandera(tid)
+                if antes is (not apagar) or not aplicar:
+                    resultado = "sin cambios" if antes is (not apagar) else "cambiaría"
+                else:
+                    await coordinacion.fijar_bandera(tid, not apagar, actor="cli:recorte-general")
+                    resultado = "cambiado"
+            filas.append((str(tid), slug, antes, resultado))
+        return filas
+
+    filas = asyncio.run(_run())
+    console.print("Recorte del General" + ("" if aplicar else " (dry-run: no se escribió nada)"))
+    for tid, slug, antes, resultado in filas:
+        console.print(f"  {slug} ({tid}): antes={antes} → {resultado}")
+    console.print(f"{len(filas)} negocio(s).")
+
+
 @app.command("presets-v2")
 def presets_v2(
     tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),

@@ -140,3 +140,7 @@ lead_registry.register(
     agent_name="Agenda",
     icon="calendar",
 )
+
+
+# Registra también los KPIs del módulo para el Resumen por agente (ADR-0171).
+from pack_calendar import resumen as _resumen  # noqa: E402, F401
