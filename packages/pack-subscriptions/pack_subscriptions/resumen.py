@@ -47,11 +47,11 @@ async def kpis(tenant_id: uuid.UUID, p: PeriodoResumen) -> list[Kpi]:
         ),
         Kpi(
             "churn_mes",
-            "Bajas sobre vivas",
+            "Bajas del mes",
             m.churn_mes * 100 if m.churn_mes is not None else None,
             unidad="pct",
             polaridad="up-bad",
-            hint="Churn del mes",
+            hint="Sobre las vivas al inicio del mes",
             destino=Destino("suscripciones"),
         ),
         Kpi(
