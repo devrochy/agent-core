@@ -34,7 +34,7 @@ def _pide_candado(nodo: ast.AST) -> bool:
 def test_todo_camino_que_reescribe_tenants_settings_lo_lee_con_for_update() -> None:
     escritores: list[str] = []
     sin_candado: list[str] = []
-    for ruta in (RAIZ / "core").rglob("*.py"):
+    for ruta in (*(RAIZ / "core").rglob("*.py"), *(RAIZ / "packages").rglob("*.py")):
         rel = ruta.relative_to(RAIZ).as_posix()
         if rel in OTRAS_TABLAS:
             continue

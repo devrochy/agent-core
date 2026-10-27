@@ -100,8 +100,25 @@ def test_nadie_fuera_del_modulo_ni_de_la_ruta_master_toca_la_bandera() -> None:
         if rel in lectores:
             assert "bandera.fijar" not in texto, f"{rel} lee la bandera de opciones directas; no la escribe"
     assert importadores == [], f"módulos que importan la bandera de opciones directas: {importadores}"
-    plataforma = (raiz.parent / escritor).read_text(encoding="utf-8")
-    assert plataforma.count("bandera.fijar(") == 1 and "_require_master_agent_os(principal)" in plataforma
+    import ast
+
+    arbol = ast.parse((raiz.parent / escritor).read_text(encoding="utf-8"))
+    rutas = {n.name: n for n in ast.walk(arbol) if isinstance(n, ast.AsyncFunctionDef)}
+    for nombre in ("get_opciones_directas", "put_opciones_directas"):
+        llamadas = [
+            c.func.id if isinstance(c.func, ast.Name) else getattr(c.func, "attr", "")
+            for c in sorted(
+                (c for st in rutas[nombre].body for c in ast.walk(st) if isinstance(c, ast.Call)), key=lambda c: (c.lineno, c.col_offset)
+            )
+        ]
+        assert llamadas[0] == "_require_master_agent_os", f"{nombre}: el guard de master va primero"
+    assert "fijar" in [getattr(c.func, "attr", "") for c in ast.walk(rutas["put_opciones_directas"]) if isinstance(c, ast.Call)]
+    assert sum(1 for n in ast.walk(arbol) if isinstance(n, ast.Attribute) and n.attr == "fijar" and getattr(n.value, "id", "") == "bandera") == 1
+    # Nadie más escribe la clave con SQL directo.
+    for ruta in (*raiz.rglob("*.py"), *(raiz.parent / "packages").rglob("*.py")):
+        rel = ruta.relative_to(raiz.parent).as_posix()
+        if rel != "core/kernel/opciones/bandera.py" and "{opciones_directas}" in ruta.read_text(encoding="utf-8"):
+            raise AssertionError(f"{rel} escribe la bandera de opciones directas con SQL")
 
 
 def test_ya_confirmada_solo_la_pasa_el_toque_de_una_opcion() -> None:
