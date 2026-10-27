@@ -263,7 +263,7 @@ async def crear_desde_plantilla(
     catalogo: Mapping[str, Any],
     actor: uuid.UUID | None,
     respuestas: Mapping[str, Any] | None = None,
-    puede_habilitar: bool = True,
+    puede_habilitar: bool = False,
 ) -> tuple[Any, Any, list[str], list[str]]:
     """Crea el especialista y su borrador derivado de la plantilla. Devuelve (agente, borrador,
     avisos, habilidades habilitadas). `ErrorDelEditor` 404 si la plantilla no existe, 409 si ya hay un

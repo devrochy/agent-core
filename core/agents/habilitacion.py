@@ -86,6 +86,30 @@ async def ensure_pack_activated(pack: str) -> str | None:
         return f"{pack}: {exc}"
 
 
+async def _config_del_negocio(pack: str) -> str | None:
+    """`ensure_pack_activated` no mira nada si el pack ya está activo en el proceso (lo activó otro
+    negocio): este negocio puede no tener su fila de configuración. Se completa con la config vacía
+    si el schema lo permite; si exige campos reales, se devuelve el aviso."""
+    module = plugin_manager.get(pack)
+    if module is None or module.config_schema is None:
+        return None
+    async with get_session() as session:
+        tiene = (
+            await session.execute(
+                select(PluginConfig).where(
+                    PluginConfig.plugin_id == pack, PluginConfig.tenant_id == get_current_tenant_id()
+                )
+            )
+        ).scalar_one_or_none() is not None
+    if tiene:
+        return None
+    try:
+        await plugin_manager.save_config(pack, {})
+    except PluginConfigError:
+        return f'{pack} necesita configuración -- usa el botón "Configurar" en Habilidades'
+    return None
+
+
 async def configure_plugin_for_tenant(plugin_id: str, values: dict[str, object]) -> None:
     """Guarda la config del plugin, lo activa y lo habilita para el tenant actual.
 
@@ -213,7 +237,7 @@ async def asegurar_habilidades(
 
     config_pendiente: dict[str, str] = {}
     for pack in nuevos:
-        error = await ensure_pack_activated(pack)
+        error = await ensure_pack_activated(pack) or await _config_del_negocio(pack)
         if error is not None:
             config_pendiente[pack] = error
     habilitados: list[str] = []
