@@ -2,8 +2,8 @@
 
 SPEC-40, ADR-0172. Las plantillas con botones que ejecutan una tool sin LLM están construidas (API
 `/api/v1/plantillas-opciones`, envío, resolver del toque), pero la bandera `opciones_directas.habilitada` está
-**apagada por defecto** y NO se enciende en ningún negocio hasta cerrar el paso 1. Todo lo de abajo lo hace el dueño o
-el master a mano: ninguna sesión de Claude envía a Meta ni usa credenciales.
+**apagada por defecto** y NO se enciende en ningún negocio hasta cerrar el paso 1. El encendido lo hace el master con la ruta de
+plataforma (§2) y la prueba de Meta la hace el dueño a mano: ninguna sesión de Claude envía a Meta ni usa credenciales.
 
 ## 1. Prueba real del payload del QUICK_REPLY (puerta para encender la bandera)
 
@@ -44,11 +44,40 @@ algo difiere, no se enciende la bandera: se reabre el diseño.
 
 ## 2. Encender la bandera en UN negocio de test
 
-Solo con el paso 1 registrado y el OK del dueño. La bandera la fija **únicamente el master** y es por negocio
+Solo con el paso 1 registrado, el ADR-0172 aceptado y el OK del dueño (la ruta no verifica nada de esto: la puerta es
+humana). La bandera la fija **únicamente el master** y es por negocio
 (`tenants.settings["opciones_directas"] = {"habilitada": true}`). El escritor único es
-`core/kernel/opciones/bandera.py::fijar` (atómico con `jsonb_set`, audita `opciones_directas_bandera`). **Todavía no
-hay ruta de plataforma que lo llame**: se difiere al PR de publicación a Meta (ADR-0172, adenda del PR 6). Mientras no
-exista, el encendido es una operación del master/DBA sobre el negocio de test, nunca con SQL suelto en producción.
+`core/kernel/opciones/bandera.py::fijar` (atómico con `jsonb_set`, no pisa el resto de `settings`, audita
+`opciones_directas_bandera`) y su única llamada es la ruta de plataforma de abajo (PR 10a). El interruptor en el panel
+master llega en el PR 10b y usa esta misma ruta.
+
+**Cómo se enciende (ruta master).** El negocio se elige por su id (el listado `GET /api/v1/admin/platform/tenants`
+lo trae). Con la sesión del master (no vale el tester ni el dueño: 403):
+
+```bash
+# estado actual: {"habilitada": false} de fábrica
+curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/admin/platform/tenants/$TENANT_ID/opciones-directas"
+# encender (idempotente) / apagar
+curl -s -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+     -d '{"habilitada": true}' "$API/api/v1/admin/platform/tenants/$TENANT_ID/opciones-directas"
+```
+
+`404` si el negocio no existe o está borrado; `422` si el cuerpo trae algo que no sea `habilitada` booleana. Nunca se
+usa SQL suelto.
+
+**Cómo se verifica.**
+
+1. `GET …/opciones-directas` devuelve `{"habilitada": true}` y el `audit_log` tiene la fila `opciones_directas_bandera`
+   con `actor = admin:<email del master>` y el valor.
+2. Como dueño de ESE negocio, `GET /api/v1/plantillas-opciones` responde 200 (con la bandera apagada responde
+   `404 opciones_directas_no_habilitadas`). Otro negocio sigue en 404: la bandera es por negocio.
+3. `GET /api/v1/plantillas-opciones/catalogo-acciones` lista las acciones disponibles (ver §2.1). Vacío es normal si el
+   negocio no tiene el binding de ninguna.
+
+**Cómo se apaga (rollback inmediato).** `PUT {"habilitada": false}` (no hay `DELETE`: apagar es fijar `false`).
+Lo enviado queda sin efecto (el toque ya no se resuelve) y no hay estado que limpiar. Nadie más la repone: los caminos
+que reescriben `tenants.settings` entero (suscripciones, presets, alta) leen la fila con `FOR UPDATE` y el apagado
+espera ese candado (ADR-0172, adenda del PR 10a).
 
 Con la bandera encendida, para el negocio:
 
@@ -56,7 +85,32 @@ Con la bandera encendida, para el negocio:
 - la tool `enviar_plantilla_opciones` se ofrece a los agentes del negocio;
 - el consumer atiende los payloads `opt:`, `optc:` y `optn:`.
 
-Apagarla es el rollback inmediato: lo enviado queda sin efecto (el toque ya no se resuelve) y no hay estado que limpiar.
+### 2.1 Qué acciones hay y qué hace falta para verlas
+
+Una tool es acción de una opción solo si se cumplen **las cinco**: la marcó su autor (`apta_para_opcion`), su pack está
+activo en el negocio, tiene un **binding explícito** y habilitado en el asistente, ningún procedimiento de los packs
+del negocio la nombra, y la bandera del negocio está encendida. Hoy hay una marcada:
+
+| Tool | Pack | Qué hace | Por qué es segura | Qué hace falta |
+|---|---|---|---|---|
+| `list_client_appointments` | `pack_calendar` | Cuenta/lista las citas agendadas del cliente de la conversación (`total`, `proximas`) | Solo lee; siempre acotada al cliente y a la conversación del toque (no puede traer citas de otro); sin argumentos obligatorios; no envía nada; no es `sensible` | Pack de agenda activo y su binding habilitado (Configuración → Habilidades, `PUT /api/v1/admin/settings/skills`) |
+
+La respuesta de una opción es un texto fijo que solo cita valores escalares de primer nivel del resultado (`{result.k}`):
+para esta tool, `proximas` y `total` (la lista `appointments` no se cita). Ejemplo de respuesta de una opción
+«Ver mis citas»: `Tienes {result.proximas} cita(s) próxima(s). Escríbenos si quieres moverlas.`
+
+**Tools seguras que NO llegan al catálogo (y por qué).** `find_next_available`, `list_appointment_types`,
+`list_calendars` (las nombra el procedimiento `agendar_cita`) y `sub_consultar` (la nombra `cambiar_plan`) son de solo
+lectura pero las gobierna un procedimiento de su propio pack: mientras el pack esté activo, el lint las rechaza con
+`tool_en_procedimiento`. Cambiar esa regla para las de solo lectura es una decisión de ADR aparte. `escalate_to_human`
+(el botón «Hablar con un asesor») no se marcó: no es idempotente (cada toque crea otra escalación y otro aviso).
+
+**Tools declarativas.** Un dueño puede marcar una tool declarativa suya con `"option_safe": true` (solo el literal
+`true`; si hace POST nace `sensible`) por `PUT /api/v1/admin/settings/declarative-tools` o por el editor crudo del
+AgentSpec (`PUT /api/v1/admin/settings/advanced/spec`); el panel no tiene un editor de tools declarativas. Esas rutas
+exigen el permiso `settings` con escritura, **no** `require_owner_or_master` (que sí exige definir una plantilla): un
+colaborador con escritura en Configuración puede marcar una tool apta. Con un AgentSpec v3 no es posible
+(`declarativeTools` está congelado).
 
 ## 3. Qué mirar tras encenderla en test
 

@@ -11799,6 +11799,176 @@
         }
       }
     },
+    "/api/v1/admin/platform/tenants/{tenant_id}/opciones-directas": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Get Opciones Directas",
+        "description": "Bandera de las opciones directas del negocio (apagada por defecto). Solo el master.",
+        "operationId": "get_opciones_directas_api_v1_admin_platform_tenants__tenant_id__opciones_directas_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesDirectasBandera"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No es el admin master (tampoco el tester ni un colaborador).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "El negocio no existe o está borrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Put Opciones Directas",
+        "description": "Enciende o apaga las opciones directas del negocio (auditado como `opciones_directas_bandera`). Idempotente:\nrepetir el mismo valor deja el mismo estado. Solo el master; es por negocio y no toca ningún otro.",
+        "operationId": "put_opciones_directas_api_v1_admin_platform_tenants__tenant_id__opciones_directas_put",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpcionesDirectasBanderaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesDirectasBandera"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No es el admin master (tampoco el tester ni un colaborador).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "El negocio no existe o está borrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/settings/declarative-tools": {
       "get": {
         "tags": [
@@ -37272,6 +37442,34 @@
         },
         "type": "object",
         "title": "OpcionesDetallesDeError"
+      },
+      "OpcionesDirectasBandera": {
+        "properties": {
+          "habilitada": {
+            "type": "boolean",
+            "title": "Habilitada",
+            "description": "Si las plantillas con opciones que ejecutan una tool están encendidas para el negocio. Apagada: toda la API `/plantillas-opciones` responde 404 `opciones_directas_no_habilitadas`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "habilitada"
+        ],
+        "title": "OpcionesDirectasBandera"
+      },
+      "OpcionesDirectasBanderaIn": {
+        "properties": {
+          "habilitada": {
+            "type": "boolean",
+            "title": "Habilitada"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "habilitada"
+        ],
+        "title": "OpcionesDirectasBanderaIn"
       },
       "OpcionesEnviarPruebaIn": {
         "properties": {

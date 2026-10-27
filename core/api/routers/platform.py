@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from sqlalchemy import func, or_, select
 
 from core.admin.plan_view import subscription_overview_or_none
@@ -20,6 +20,7 @@ from core.admin.roles import actua_como_master, es_master, es_tester
 from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
+from core.api.routers.plantillas_opciones import OpcionesErrorOut
 from core.api.schemas import ReadinessRun, readiness_run_out
 from core.db.models import Tenant
 from core.db.session import get_session
@@ -583,3 +584,70 @@ async def put_colaboracion(
         raise ApiError.not_found("Negocio no encontrado.") from None
     return _colaboracion_out(bandera)
 
+
+
+# ---------------------------------------------------------------- opciones directas (SPEC-40, ADR-0172 §5)
+class OpcionesDirectasBandera(BaseModel):
+    habilitada: bool = Field(
+        description="Si las plantillas con opciones que ejecutan una tool están encendidas para el negocio. "
+        "Apagada: toda la API `/plantillas-opciones` responde 404 `opciones_directas_no_habilitadas`."
+    )
+
+
+class OpcionesDirectasBanderaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Estricto: solo `true`/`false` (no «1», «yes» ni «true» como texto) para una bandera que enciende envíos reales.
+    habilitada: StrictBool
+
+
+_ERRORES_OPCIONES_DIRECTAS: dict[int | str, dict[str, Any]] = {
+    403: {"model": OpcionesErrorOut, "description": "No es el admin master (tampoco el tester ni un colaborador)."},
+    404: {"model": OpcionesErrorOut, "description": "El negocio no existe o está borrado."},
+}
+
+
+@router.get(
+    "/tenants/{tenant_id}/opciones-directas",
+    response_model=OpcionesDirectasBandera,
+    responses=_ERRORES_OPCIONES_DIRECTAS,
+)
+async def get_opciones_directas(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> OpcionesDirectasBandera:
+    """Bandera de las opciones directas del negocio (apagada por defecto). Solo el master."""
+    _require_master_agent_os(principal)
+    from core.kernel.opciones import bandera
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            encendida = await bandera.leer(tenant_id)
+    except bandera.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return OpcionesDirectasBandera(habilitada=encendida)
+
+
+@router.put(
+    "/tenants/{tenant_id}/opciones-directas",
+    response_model=OpcionesDirectasBandera,
+    responses=_ERRORES_OPCIONES_DIRECTAS,
+)
+async def put_opciones_directas(
+    tenant_id: uuid.UUID,
+    payload: OpcionesDirectasBanderaIn,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> OpcionesDirectasBandera:
+    """Enciende o apaga las opciones directas del negocio (auditado como `opciones_directas_bandera`). Idempotente:
+    repetir el mismo valor deja el mismo estado. Solo el master; es por negocio y no toca ningún otro."""
+    _require_master_agent_os(principal)
+    from core.kernel.opciones import bandera
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            encendida = await bandera.fijar(tenant_id, payload.habilitada, actor=f"admin:{principal.admin.email}")
+    except bandera.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return OpcionesDirectasBandera(habilitada=encendida)

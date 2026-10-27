@@ -703,6 +703,11 @@ class CalendarSkill(BaseSkill):
                 },
                 handler=self.list_appointments,
                 connection_predicate=self._connections_ok,
+                # SPEC-40 (ADR-0172 §5, adenda del PR 10a): la acción de un botón sin LLM («Ver mis citas»).
+                # Solo LEE las citas del cliente de la conversación; sin argumentos obligatorios ni efectos. Ningún
+                # procedimiento la nombra, así que (a diferencia de `find_next_available`) la regla de «tool gobernada
+                # por un procedimiento» no la deja fuera.
+                apta_para_opcion=True,
             ),
             MCPTool(
                 name="cancel_calendar_event",
