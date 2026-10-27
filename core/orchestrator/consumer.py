@@ -527,6 +527,13 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
             )
         return
 
+    # ---------------- opciones directas (SPEC-40, ADR-0172): el toque de un botón `opt:`/`optc:`/`optn:`
+    # ejecuta su tool y contesta con un texto fijo. Con la bandera del negocio encendida lo atiende el
+    # resolver y el turno termina aquí (ni debounce ni LLM); apagada, o con cualquier otro payload, el
+    # mensaje sigue exactamente como siempre.
+    if await _toque_de_opcion(conversation, customer, fields):
+        return
+
     # ---------------- datos sin LLM (HU-AOS-05): botón, fila de lista o contenido que llena un
     # dato de la tarea en foco. Solo con `aos_procedures`; sin botón ni media no consulta nada.
     await entrada_sin_llm(conversation, fields)
@@ -725,6 +732,29 @@ async def _resolve_conversation(
 
 
 _SERVICE_WINDOW_HOURS = 24
+
+
+async def _toque_de_opcion(conversation: Conversation, customer: Customer, fields: dict[str, str]) -> bool:
+    """¿Lo atendió el resolver de opciones directas? Solo un payload con prefijo `opt` consulta la bandera
+    (el resto de los mensajes no paga ni una consulta). Una bandera que no se puede leer cuenta como apagada
+    (fail-closed: el mensaje sigue su camino de siempre)."""
+    from core.kernel.opciones import bandera
+    from core.kernel.opciones.payload import es_de_opciones
+
+    if not es_de_opciones((fields.get("interactive_id") or "").strip()):
+        return False
+    try:
+        async with get_session() as session:
+            encendida = await bandera.habilitada(session, conversation.tenant_id)
+    except Exception as exc:
+        log.warning("opciones_directas_bandera_ilegible", tenant_id=str(conversation.tenant_id), error=type(exc).__name__)
+        return False
+    if not encendida:
+        return False
+    from core.orchestrator.opciones_toque import atender
+
+    await atender(conversation, customer, fields)
+    return True
 
 
 async def _baja_de_promociones(conversation: Any, customer: Any, app_settings: Any, texto: str) -> None:

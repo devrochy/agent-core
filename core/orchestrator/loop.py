@@ -1084,11 +1084,14 @@ async def _execute_tool_safely(
     motor: ContextoMotor | None = None,
     identidad: AgenteCongelado | None = None,
     solo_lectura: bool = False,
+    ya_confirmada: bool = False,
 ) -> dict[str, Any]:
     """Ejecuta una tool aislando el error: un plugin roto se desactiva, el turno sigue.
 
     `identidad`/`solo_lectura` (HU-AOS-19): una consulta entre agentes corre con la identidad del
-    agente que la responde y sin escribir memoria."""
+    agente que la responde y sin escribir memoria. `ya_confirmada` (SPEC-40, ADR-0172 §4): el
+    cliente ya confirmó esta acción con el botón firmado `optc:` de una opción directa, así que
+    se salta el `requiresConfirmation` del binding (no hay LLM que pida la confirmación)."""
     # Una consulta entre agentes se audita como `query:` y no como `tool:`: no es evidencia de
     # que el agente del turno llamó la tool (`_historical_tool_results`).
     actor_de_auditoria = "query" if solo_lectura else "tool"
@@ -1158,7 +1161,7 @@ async def _execute_tool_safely(
     # Con la acción gobernada por la etapa en foco (leída bajo lock), la confirmación es la del
     # motor, que también aplica el `requiresConfirmation` del binding (ADR-0113 §4).
     gobernada = previo is not None and previo.gobernada
-    if spec is not None and not gobernada and _binding_requires_confirmation(spec, tool_call.name):
+    if spec is not None and not gobernada and not ya_confirmada and _binding_requires_confirmation(spec, tool_call.name):
         pending = dict(conversation.state.get("pending_confirmation") or {})
         already = (
             pending.get("tool") == tool_call.name
