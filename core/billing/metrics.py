@@ -238,10 +238,13 @@ async def _count_metric_in_session(session, tenant_id: uuid.UUID, key: str, peri
 
 
 async def _count_agents(session, tenant_id: uuid.UUID) -> int:
-    """Agentes publicados (D-35, ADR-0142): especialistas activos con al menos una instancia
-    viva en una conexión viva. Se cuentan agentes, no filas de `agent_instances` (un agente en
-    WhatsApp y en el chat web es uno). El General es un especialista: cuenta. El Coordinador
-    (`kind = core`) no cuenta, y el back-office (HU-AOS-37) es otra dimensión."""
+    """Agentes publicados (D-35, ADR-0142, enmienda 2026-10-27): especialistas activos con al
+    menos una instancia viva en una conexión viva. Se cuentan agentes, no filas de
+    `agent_instances` (un agente en WhatsApp y en el chat web es uno). El General (`key = general`)
+    viene incorporado en todo negocio y no cuenta; tampoco el Coordinador (`kind = core`), y el
+    back-office (HU-AOS-37) es otra dimensión."""
+    from core.agents.tolerante import KEY_GENERAL
+
     instanciado = (
         select(AgentInstanceRecord.id)
         .join(
@@ -260,6 +263,7 @@ async def _count_agents(session, tenant_id: uuid.UUID) -> int:
     query = select(func.count(AgentRecord.id)).where(
         AgentRecord.tenant_id == tenant_id,
         AgentRecord.kind == "specialist",
+        AgentRecord.key != KEY_GENERAL,
         AgentRecord.status == "active",
         AgentRecord.deleted_at.is_(None),
         instanciado,
