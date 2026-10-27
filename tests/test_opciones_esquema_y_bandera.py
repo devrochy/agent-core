@@ -75,10 +75,10 @@ def test_la_bandera_esta_apagada_salvo_el_literal_true(settings, esperado: bool)
 
 
 def test_nadie_fuera_del_modulo_ni_de_la_ruta_master_toca_la_bandera() -> None:
-    """`bandera.fijar` solo la llamará la ruta de plataforma master-only (PR de la API). Los otros módulos que
+    """`bandera.fijar` solo la llama la ruta de plataforma master-only (`platform.py`). Los otros módulos que
     importan la bandera solo la LEEN: el consumer (`habilitada`, HU-OPC-03), el envío (`habilitada`, HU-OPC-02) y la
     tool `enviar_plantilla_opciones` (`oferta_habilitada`) y la API de plantillas (`habilitada`, PR 6); nunca la
-    escriben. Cuando llegue la ruta master, se añade aquí `platform.py` y NINGÚN otro router del dueño."""
+    escriben. Entre los routers, solo `platform.py` (master) importa la bandera: NINGÚN router del dueño."""
     from pathlib import Path
 
     raiz = Path(__file__).resolve().parent.parent / "core"
@@ -88,7 +88,9 @@ def test_nadie_fuera_del_modulo_ni_de_la_ruta_master_toca_la_bandera() -> None:
         "core/tools/core_skill.py",
         "core/api/routers/plantillas_opciones.py",
     }
-    permitidos = {"core/kernel/opciones/bandera.py", *lectores}
+    # La ruta master-only de plataforma es la ÚNICA que llama a `fijar` (y a `leer` para el GET).
+    escritor = "core/api/routers/platform.py"
+    permitidos = {"core/kernel/opciones/bandera.py", escritor, *lectores}
     importadores = []
     for ruta in raiz.rglob("*.py"):
         rel = ruta.relative_to(raiz.parent).as_posix()
@@ -98,6 +100,8 @@ def test_nadie_fuera_del_modulo_ni_de_la_ruta_master_toca_la_bandera() -> None:
         if rel in lectores:
             assert "bandera.fijar" not in texto, f"{rel} lee la bandera de opciones directas; no la escribe"
     assert importadores == [], f"módulos que importan la bandera de opciones directas: {importadores}"
+    plataforma = (raiz.parent / escritor).read_text(encoding="utf-8")
+    assert plataforma.count("bandera.fijar(") == 1 and "_require_master_agent_os(principal)" in plataforma
 
 
 def test_ya_confirmada_solo_la_pasa_el_toque_de_una_opcion() -> None:

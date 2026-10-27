@@ -219,3 +219,50 @@ Decisiones que el ADR dejaba abiertas y cómo quedaron:
   (`tpl_create_rl:{waba_id}:{hora}`) no lleva el negocio (preexistente, mismo defecto que ya se corrigió en
   `acquire_sync_lock`, ADR-0122): seguimiento aparte. (d) La prueba real del payload del QUICK_REPLY y de los límites de 25, 10
   y 256 sigue **PENDIENTE** del dueño y es la puerta para encender la bandera.
+
+## Adenda (2026-10-27) · PR 10a: la ruta de plataforma de la bandera y la primera tool apta
+
+Cierra el seguimiento que las adendas de los PR 6 y 7 dejaron abierto («la ruta master que fija la bandera»). **Con este
+PR no se enciende nada en ningún negocio**: la bandera sigue apagada y solo cambia que ahora hay quién la fije.
+
+- **Ruta.** `GET|PUT /api/v1/admin/platform/tenants/{tenant_id}/opciones-directas` en `core/api/routers/platform.py`,
+  con el mismo patrón que `/colaboracion` y `/gate`: guard `_require_master_agent_os` (solo `role == "master"`; el
+  tester, que en test actúa como master para operar negocios, **no** puede: esto decide qué negocios envían mensajes
+  reales con botones, como cambiar el Agent OS), negocio objetivo en la ruta, ejecución dentro de
+  `tenant_scope(tenant_id)` y `bandera.fijar` como único escritor (la prueba `test_nadie_fuera_del_modulo…` ahora
+  admite `platform.py` y ningún router del dueño). Cuerpo `{habilitada: bool}` estricto (`StrictBool`, `extra="forbid"`:
+  ni «true» como texto ni ningún otro campo). Idempotente en el estado; cada PUT audita `opciones_directas_bandera`
+  (quién pidió qué, aunque no cambie el valor). 404 con el sobre normal si el negocio no existe o está borrado, sin
+  datos del negocio. El listado de negocios es el que ya existe (`GET /admin/platform/tenants`): no se duplica.
+- **Entrada en el registro de configuración (CFG-02): sigue diferida.** §5 decía que «va con esta ruta»; no entra
+  aquí porque el registro modela las banderas del grupo `agent_os` como opciones que dependen de `aos_runtime = v3`
+  (y las cuentas de opciones del master están fijadas por pruebas), y esta bandera no depende de v3. El interruptor del
+  panel (PR 10b) consume la ruta directamente, sin pasar por el registro.
+- **El «límite conocido» de `bandera.py` no se materializa.** Se revisaron todos los escritores de `tenants.settings`:
+  los que reescriben el dict completo (`subscriptions.guardar_proveedor`, `presets.agentes._anotar_creado` y
+  `_registrar`, `presets.apply`, `provisioning._guardar_origen`) abren la sesión nueva, leen con
+  `session.get(Tenant, id, with_for_update=True)` y reemplazan solo su subclave (el gate de evals, ADR-0117 parte 4, ya
+  los había obligado a eso); el resto usa `jsonb_set` o `||` atómicos (`bandera`, `banderas_pila`, `coordinacion`, el
+  gate, el recorrido de primeros pasos, el interruptor del alta). Como `fijar` es un `UPDATE` sobre la misma fila,
+  toma el mismo candado: o espera a que el otro camino confirme y se aplica encima, o el otro camino lee ya el valor
+  nuevo. Una prueba de integración lo ejercita con la fila bloqueada a propósito y una unitaria vigila por AST que
+  ningún escritor nuevo de `tenants.settings` se olvide del `FOR UPDATE`. **No se pasa la bandera a una columna.**
+  Sigue siendo cierto que `app_runtime` PODRÍA reescribir `settings` entero con un `UPDATE` suelto; si algún día un
+  camino lo hace sin candado, el remedio es la columna con trigger como en 0097 (migración, PR aparte).
+- **Acciones aptas.** Se inventariaron las 54 tools del core y los packs. Una tool solo es elegible si, además de su
+  marca, ningún procedimiento de los packs activos la nombra (§5; el lint `tool_en_procedimiento` usa los
+  procedimientos DISPONIBLES de los packs habilitados, con o sin `aos_procedures`). Eso deja fuera, aunque sean
+  seguras, a las de solo lectura que gobierna un procedimiento de su propio pack (`find_next_available`,
+  `list_appointment_types`, `list_calendars` por `agendar_cita`; `sub_consultar` por `cambiar_plan`): marcarlas sería
+  letra muerta. La única que cumple todo es `list_client_appointments` (solo lectura, siempre acotada al cliente y a la
+  conversación, con resultado escalar `proximas`/`total` citable en la respuesta fija): se marca
+  `apta_para_opcion=True`. Una prueba fija la lista de las marcadas. **Seguimientos propuestos (no se hacen aquí):**
+  (a) decidir si una tool de solo lectura puede ignorar la regla del procedimiento (haría elegibles las cuatro de
+  arriba); (b) una tool mínima de solo lectura del core, p. ej. `consultar_horario_de_atencion`, que devuelva
+  `abierto_ahora` y el horario como escalares, sin depender de ningún pack; (c) un `escalar` idempotente si se quiere el
+  botón «Hablar con un asesor».
+- **Tools declarativas con `option_safe`.** Se pueden marcar hoy por API (`PUT /admin/settings/declarative-tools` y el
+  editor crudo del AgentSpec), no desde el panel (no tiene editor de tools declarativas). Esas rutas exigen el permiso
+  `settings` de escritura y no `require_owner_or_master`, a diferencia de definir una plantilla: un colaborador con
+  escritura en Configuración puede marcar apta una tool declarativa (y la POST nace `sensible`). Se deja registrado como
+  hallazgo; endurecerlo es otro cambio.

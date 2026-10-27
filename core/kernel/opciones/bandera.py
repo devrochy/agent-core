@@ -4,13 +4,15 @@ Vive en `tenants.settings["opciones_directas"] = {"habilitada": bool}`: clave pr
 `settings.agent_os`, porque el registro de opciones de configuración exige que toda bandera de ese grupo
 dependa de `aos_runtime = v3` y el resolver de las opciones no depende de v3 ni de los procedimientos.
 
-Solo la cambia el master: `fijar` es el ÚNICO escritor y lo llama la ruta de plataforma master-only del PR
-de la API (como `banderas_pila.fijar` con `/colaboracion`); ningún router del dueño la escribe, y una
-prueba (`test_nadie_fuera_del_modulo…`) lo vigila. Límite conocido (a diferencia de las `aos_*`, 0097, no hay función ni trigger en la base):
-`tenants.settings` es un jsonb que `app_runtime` puede reescribir entero, y los caminos de leer-modificar-
-escribir del dict completo (presets, suscripciones) podrían reponer un `true` que el master apagó. Con la
-bandera apagada y sin consumidor es aceptable en este PR; si la ruta de plataforma lo pide, pasa a columna.
-Un valor desconocido cuenta como apagado (fail-closed).
+Solo la cambia el master: `fijar` es el ÚNICO escritor y lo llama la ruta de plataforma master-only
+(`/admin/platform/tenants/{id}/opciones-directas`, como `banderas_pila.fijar` con `/colaboracion`); ningún router
+del dueño la escribe, y una prueba (`test_nadie_fuera_del_modulo…`) lo vigila. A diferencia de las `aos_*`
+(0097) no hay función ni trigger en la base: `tenants.settings` es un jsonb que `app_runtime` puede reescribir
+entero. El riesgo de que un camino de leer-modificar-escribir (presets, suscripciones, alta) reponga un `true`
+que el master apagó NO es real hoy: todos releen la fila con `FOR UPDATE`, reemplazan solo su subclave, y el
+`UPDATE … jsonb_set` de `fijar` toma el mismo candado (lo cubre `test_opciones_bandera_platform.py`). Una
+prueba estática vigila que ningún escritor nuevo de `settings` olvide el candado. Un valor desconocido cuenta
+como apagado (fail-closed).
 """
 
 from __future__ import annotations
@@ -52,6 +54,24 @@ async def habilitada(session: AsyncSession, tenant_id: uuid.UUID) -> bool:
         )
     ).first()
     return fila is not None and habilitada_desde(fila[0])
+
+
+async def leer(tenant_id: uuid.UUID) -> bool:
+    """Valor de la bandera para la ruta de plataforma: a diferencia de `habilitada`, un negocio que no existe o
+    está borrado es `NegocioNoEncontrado` (404), no «apagada». Dentro del `tenant_scope` del negocio."""
+    from core.db.session import get_session
+
+    if get_current_tenant_id() != tenant_id:
+        raise PermissionError("opciones directas: fuera del tenant_scope del negocio")
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                text("SELECT settings FROM tenants WHERE id = :t AND deleted_at IS NULL"), {"t": tenant_id}
+            )
+        ).first()
+    if fila is None:
+        raise NegocioNoEncontrado(str(tenant_id))
+    return habilitada_desde(fila[0])
 
 
 async def fijar(tenant_id: uuid.UUID, activa: bool, *, actor: str) -> bool:
