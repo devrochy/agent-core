@@ -56,7 +56,7 @@ from core.kernel import confirmacion
 from core.kernel.opciones import activaciones, argumentos, lint, metricas, payload
 from core.kernel.opciones.activaciones import Activacion, Envio
 from core.kernel.opciones.argumentos import ArgumentosInvalidos
-from core.kernel.opciones.definicion import Definicion, Opcion
+from core.kernel.opciones.definicion import Definicion, OpcionDeLaPlantilla
 from core.kernel.opciones.definicion import leer as leer_definicion
 from core.kernel.opciones.lint import FichaTool
 from core.kernel.opciones.payload import PayloadLeido
@@ -223,7 +223,7 @@ async def _atender(toque: Toque, bordes: Bordes, t: _Traza) -> str:
 
 # ------------------------------------------------------------------ los tres payloads
 async def _tocar(
-    toque: Toque, leido: PayloadLeido, definicion: Definicion, opcion: Opcion, envio: Envio, bordes: Bordes,
+    toque: Toque, leido: PayloadLeido, definicion: Definicion, opcion: OpcionDeLaPlantilla, envio: Envio, bordes: Bordes,
     ahora: datetime, t: _Traza,
 ) -> str:
     clave = _dedupe_key(definicion, envio, opcion)
@@ -255,7 +255,7 @@ async def _tocar(
 
 
 async def _confirmar(
-    toque: Toque, leido: PayloadLeido, definicion: Definicion, opcion: Opcion, envio: Envio, args_hash: str,
+    toque: Toque, leido: PayloadLeido, definicion: Definicion, opcion: OpcionDeLaPlantilla, envio: Envio, args_hash: str,
     bordes: Bordes, ahora: datetime, t: _Traza,
 ) -> str:
     async with bordes.abrir_entorno() as entorno:
@@ -294,7 +294,7 @@ async def _confirmar(
 
 
 async def _cancelar(
-    toque: Toque, leido: PayloadLeido, definicion: Definicion, opcion: Opcion, envio: Envio, bordes: Bordes,
+    toque: Toque, leido: PayloadLeido, definicion: Definicion, opcion: OpcionDeLaPlantilla, envio: Envio, bordes: Bordes,
     ahora: datetime, t: _Traza,
 ) -> str:
     cancelada = await activaciones.cerrar_pendiente(
@@ -310,7 +310,7 @@ async def _cancelar(
 
 
 # ------------------------------------------------------------------ autorización y argumentos
-async def _planear(entorno: Entorno, opcion: Opcion, envio: Envio, t: _Traza) -> _Plan | _Rechazo:
+async def _planear(entorno: Entorno, opcion: OpcionDeLaPlantilla, envio: Envio, t: _Traza) -> _Plan | _Rechazo:
     """Autorización fail-closed y argumentos válidos de ESTE momento. Nada se ejecuta aquí."""
     accion = opcion.accion
     try:
@@ -344,7 +344,7 @@ async def _planear(entorno: Entorno, opcion: Opcion, envio: Envio, t: _Traza) ->
 
 # ------------------------------------------------------------------ confirmación
 async def _pedir_confirmacion(
-    toque: Toque, definicion: Definicion, opcion: Opcion, envio: Envio, plan: _Plan, activation_id: uuid.UUID,
+    toque: Toque, definicion: Definicion, opcion: OpcionDeLaPlantilla, envio: Envio, plan: _Plan, activation_id: uuid.UUID,
     clave: str, bordes: Bordes, ahora: datetime, t: _Traza,
 ) -> str:
     secreto = bordes.secreto or payload.secreto_del_servidor()
@@ -374,7 +374,7 @@ async def _pedir_confirmacion(
 
 
 def _mensaje_de_confirmacion(
-    secreto: str, toque: Toque, envio: Envio, opcion: Opcion, plan: _Plan
+    secreto: str, toque: Toque, envio: Envio, opcion: OpcionDeLaPlantilla, plan: _Plan
 ) -> dict[str, Any]:
     """El resumen de lo que se va a ejecutar (los argumentos EXACTOS, ya saneados por el kernel) con los
     botones firmados `optc:`/`optn:`. `ResumenInvalido` si no cabe o un valor no se puede mostrar entero."""
@@ -405,7 +405,7 @@ def _mensaje_de_confirmacion(
 
 # ------------------------------------------------------------------ ejecución y respuesta
 async def _ejecutar(
-    toque: Toque, entorno: Entorno, plan: _Plan, opcion: Opcion, envio: Envio, activation_id: uuid.UUID,
+    toque: Toque, entorno: Entorno, plan: _Plan, opcion: OpcionDeLaPlantilla, envio: Envio, activation_id: uuid.UUID,
     bordes: Bordes, t: _Traza,
 ) -> str:
     """La activación YA es nuestra (`running`). Sin transacción abierta: la tool corre sola."""
@@ -464,7 +464,7 @@ def _codigo_de_fallo(resultado: Any) -> str:
 
 
 async def _segun_estado(
-    previa: Activacion | None, opcion: Opcion, definicion: Definicion, envio: Envio, bordes: Bordes,
+    previa: Activacion | None, opcion: OpcionDeLaPlantilla, definicion: Definicion, envio: Envio, bordes: Bordes,
     ahora: datetime, t: _Traza, *, reenviar: Toque | None,
 ) -> str:
     """Respuesta fija a un toque que choca con una activación que ya existe (doble toque, reintento de Meta,
@@ -499,7 +499,7 @@ async def _segun_estado(
 
 
 async def _reenviar_confirmacion(
-    toque: Toque, opcion: Opcion, envio: Envio, previa: Activacion, bordes: Bordes, t: _Traza
+    toque: Toque, opcion: OpcionDeLaPlantilla, envio: Envio, previa: Activacion, bordes: Bordes, t: _Traza
 ) -> str:
     async with bordes.abrir_entorno() as entorno:
         plan = await _planear(entorno, opcion, envio, t)
@@ -519,7 +519,7 @@ async def _reenviar_confirmacion(
 # ------------------------------------------------------------------ utilidades
 
 
-def _dedupe_key(definicion: Definicion, envio: Envio, opcion: Opcion) -> str:
+def _dedupe_key(definicion: Definicion, envio: Envio, opcion: OpcionDeLaPlantilla) -> str:
     """Exclusivo: UNA activación por envío (la clave no incluye la opción), así el UNIQUE de la base es la
     exclusividad atómica. No exclusivo: una por (envío, opción)."""
     return envio.send_id.hex if definicion.exclusivo else f"{envio.send_id.hex}:{opcion.id}"
@@ -543,11 +543,11 @@ async def _cerrar_pendiente(
     )
 
 
-def _texto_de_error(opcion: Opcion, envio: Envio) -> str:
+def _texto_de_error(opcion: OpcionDeLaPlantilla, envio: Envio) -> str:
     return argumentos.renderizar_respuesta(opcion.respuesta_error, envio.context) or texto("error_generico")
 
 
-async def _responder_error(bordes: Bordes, t: _Traza, opcion: Opcion, envio: Envio, rechazo: _Rechazo) -> str:
+async def _responder_error(bordes: Bordes, t: _Traza, opcion: OpcionDeLaPlantilla, envio: Envio, rechazo: _Rechazo) -> str:
     t.codigo = rechazo.codigo
     await _decir(bordes, _texto_de_error(opcion, envio))
     return rechazo.outcome

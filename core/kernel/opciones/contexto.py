@@ -10,10 +10,10 @@ El contexto de un envío es el mapa plano `ruta → texto` (`cliente.nombre → 
 Dos fuentes, las dos del SERVIDOR (mismo principio que `event_notices.resolve_values`):
 
 1. `VARIABLES_BASE`: rutas que el servidor resuelve de la propia conversación (el nombre del cliente, el del
-   negocio). El catálogo de variables del panel (PR de la API) parte de aquí.
-2. `datos`: rutas que arma el código que dispara el envío (un aviso por evento, un segmento, el botón manual del
-   panel) desde SU contexto de confianza. Cada ruta tiene la forma de una variable y no puede tapar a una de la
-   base. Un valor que no es texto o número simple no se acepta.
+   negocio). El catálogo de variables del panel (`catalogo_de_variables`) parte de aquí.
+2. `datos`: rutas que arma el código que dispara el envío (un aviso por evento, un segmento) desde SU contexto de
+   confianza. Solo valen las de `RUTAS_DE_DATOS` (lista cerrada) y no pueden tapar a una de la base. Un valor que
+   no es texto o número simple no se acepta.
 
 Si el envío no puede resolver una ruta que la acción o el cuerpo NECESITAN, no se envía nada: un botón cuyo
 toque va a fallar con `contexto_faltante` es peor que no mandarlo. Las citas `{ctx.x}` de las respuestas son
@@ -38,6 +38,21 @@ VARIABLES_BASE: dict[str, str] = {
     "cliente.nombre": "Nombre del cliente",
     "negocio.nombre": "Nombre del negocio",
 }
+# Rutas que el CÓDIGO del servidor que dispara un envío (un aviso por evento, un segmento) puede aportar en `datos`
+# (ADR-0172, adenda del PR 6). Lista CERRADA: una ruta fuera de ella es `DatosInvalidos` y el lint la rechaza como
+# variable, así que ninguna definición puede citar un dato que nadie sepa resolver. Hoy está VACÍA a propósito:
+# los llamadores actuales (la tool `enviar_plantilla_opciones` y `enviar-prueba` de la API) no pasan `datos`.
+# Cada origen que los necesite (un aviso por evento, un segmento) agrega aquí SUS rutas con un cambio revisado,
+# como `event_notices.EVENTOS` lo hace por evento.
+RUTAS_DE_DATOS: dict[str, str] = {}
+
+
+def catalogo_de_variables() -> dict[str, str]:
+    """`ruta → descripción` de todo lo que una definición puede citar: la base y las rutas de `datos` permitidas.
+    Es el catálogo del lint (`ContextoLint.variables`) y de `GET /catalogo-variables`."""
+    return {**VARIABLES_BASE, **RUTAS_DE_DATOS}
+
+
 # `customer.name` lo puede escribir el LLM con `update_customer_profile` y viene del perfil del canal: el nombre
 # de una persona se acota a 60 (ADR-0108, como `provisioning/owner.py` y `admin/envios_segmento.py`).
 MAX_NOMBRE = 60
@@ -76,6 +91,8 @@ def normalizar_datos(datos: Mapping[str, Any] | None) -> dict[str, str]:
             raise DatosInvalidos("ruta de dato con forma inválida")
         if ruta in VARIABLES_BASE:
             raise DatosInvalidos(f"«{ruta}» es una variable base: la resuelve el servidor")
+        if ruta not in RUTAS_DE_DATOS:
+            raise DatosInvalidos(f"«{ruta}» no está en la lista permitida de rutas de datos")
         texto = _texto(valor)
         if texto is not None:
             salida[ruta] = texto

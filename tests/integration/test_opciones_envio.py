@@ -459,7 +459,10 @@ async def test_sin_un_dato_que_el_cuerpo_necesita_no_se_envia(negocios, cola) ->
     assert cola == [] and await envios(a.tid, conv) == [] and await mensajes(a.tid, conv) == []
 
 
-async def test_los_datos_del_servidor_completan_el_contexto_y_quedan_en_el_envio(negocios, cola) -> None:
+async def test_los_datos_del_servidor_completan_el_contexto_y_quedan_en_el_envio(negocios, cola, monkeypatch) -> None:
+    from core.kernel.opciones import contexto as ctx_opciones
+
+    monkeypatch.setitem(ctx_opciones.RUTAS_DE_DATOS, "cita.fecha", "Fecha de la cita")
     a, _, _ = negocios
     d = definicion(2, body="Hola {cliente.nombre}, tu cita es el {cita.fecha}")
     d["variables"] = ["cliente.nombre", "cita.fecha"]
