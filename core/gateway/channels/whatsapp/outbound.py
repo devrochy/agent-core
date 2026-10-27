@@ -64,9 +64,12 @@ class WhatsAppMetaOutbound(OutboundAdapter):
     async def send_interactive(
         self, credentials: dict[str, str], to_external_id: str, interactive: dict[str, Any]
     ) -> str:
-        """Botones de respuesta dentro de la ventana de 24 h (HU-AOS-09). El id de cada botón es
-        el payload que vuelve en `interactive.button_reply.id` (p. ej. el `confirmar:` firmado)."""
+        """Botones de respuesta o lista dentro de la ventana de 24 h (HU-AOS-09, HU-INMO-03). El id
+        de cada botón es el payload que vuelve en `interactive.button_reply.id` (p. ej. el
+        `confirmar:` firmado); el de cada fila de lista, en `interactive.list_reply.id`."""
         to = to_external_id.removeprefix("whatsapp:").lstrip("+")
+        if interactive.get("type") == "list":
+            return await self._post(credentials, self._payload_lista(to, interactive))
         botones = [
             {"type": "reply", "reply": {"id": str(b["id"]), "title": str(b["title"])}}
             for b in interactive.get("buttons") or []
@@ -80,6 +83,29 @@ class WhatsAppMetaOutbound(OutboundAdapter):
             "interactive": {"type": "button", "body": {"text": str(interactive["body"])}, "action": {"buttons": botones}},
         }
         return await self._post(credentials, payload)
+
+    @staticmethod
+    def _payload_lista(to: str, interactive: dict[str, Any]) -> dict[str, Any]:
+        """Lista con una sola sección: `action.sections[0].rows[]`. La descripción de fila es
+        opcional y se omite si viene vacía o en blanco (Meta rechaza cadenas vacías)."""
+        filas: list[dict[str, str]] = []
+        for f in interactive.get("rows") or []:
+            fila = {"id": str(f["id"]), "title": str(f["title"])}
+            if str(f.get("description") or "").strip():
+                fila["description"] = str(f["description"])
+            filas.append(fila)
+        if not filas or not interactive.get("body") or not interactive.get("button"):
+            raise ChannelError("Mensaje interactivo inválido (se esperan cuerpo, botón y filas)")
+        return {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "interactive",
+            "interactive": {
+                "type": "list",
+                "body": {"text": str(interactive["body"])},
+                "action": {"button": str(interactive["button"]), "sections": [{"rows": filas}]},
+            },
+        }
 
     @staticmethod
     async def _post(credentials: dict[str, str], payload: dict[str, object]) -> str:

@@ -62,7 +62,6 @@ class CobranzaModule(BaseModule):
         {"label": "Gestores", "path": "/cobranza/gestores", "section": "General", "section_key": "pack_cobranza:gestores"},
         {"label": "Carteras", "path": "/cobranza/carteras", "section": "General", "section_key": "pack_cobranza:carteras"},
         {"label": "Clientes", "path": "/cobranza/clientes", "section": "General", "section_key": "pack_cobranza:clientes"},
-        {"label": "Cobros", "path": "/cobranza/cobros", "section": "General", "section_key": "pack_cobranza:cobros"},
         {"label": "Promesas", "path": "/cobranza/promesas", "section": "General", "section_key": "pack_cobranza:promesas"},
         {"label": "Reportes", "path": "/cobranza/reportes", "section": "General", "section_key": "pack_cobranza:reportes"},
         {"label": "Reglas de negociación", "path": "/cobranza/reglas", "section": "Monitoreo", "section_key": "pack_cobranza:reglas"},
@@ -71,6 +70,9 @@ class CobranzaModule(BaseModule):
         {"label": "Alertas de acceso", "path": "/cobranza/alertas", "section": "Seguridad", "section_key": "pack_cobranza:alertas"},
         {"label": "Auditoría", "path": "/cobranza/auditoria", "section": "Seguridad", "section_key": "pack_cobranza:auditoria"},
     ]
+    # `pack_cobranza:cobros` ya no tiene item de menú (se retiró «Cobros al propietario»),
+    # pero sigue siendo la sub-sección RBAC que guarda «Pagos» en /api/v1/pack/cobranza/payments.
+    section_keys: ClassVar[list[str]] = ["pack_cobranza:cobros"]
     # Roles de colaborador del pack (ADR-0066): un colaborador con rol "gestor"
     # es un gestor de cobranza (perfil `Gestor` ligado a su `admin_id`).
     collaborator_roles: list[dict[str, str]] = [  # noqa: RUF012

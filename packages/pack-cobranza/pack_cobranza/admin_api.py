@@ -46,7 +46,6 @@ from .models import (
     CarteraNota,
     CarteraOptimizadaLog,
     Cliente,
-    CobroPropietario,
     Cuota,
     Device,
     Gasto,
@@ -54,7 +53,6 @@ from .models import (
     GestorPermiso,
     IntentoAcceso,
     Inyeccion,
-    LinkPago,
     Liquidacion,
     Pago,
     PosicionGestor,
@@ -888,164 +886,6 @@ async def set_device_status(
             despues={"estado": payload.estado},
             motivo="Aprobación de dispositivo",
         )
-    return Response(status_code=204)
-
-
-# --------------------------------------------------------- cobros al propietario
-class OwnerCharge(BaseModel):
-    id: uuid.UUID
-    periodo: str
-    monto: float
-    pagado: float | None
-    vence: date
-    estado: str
-
-
-class PaymentLink(BaseModel):
-    referencia: str
-    url: str
-    monto: float
-    estado: str
-
-
-class OwnerCharges(BaseModel):
-    cobros: list[OwnerCharge]
-    links: list[PaymentLink]
-
-
-def _as_charge(row: CobroPropietario) -> OwnerCharge:
-    return OwnerCharge(
-        id=row.id,
-        periodo=row.periodo,
-        monto=float(row.monto_calculado or 0),
-        pagado=float(row.monto_pagado) if row.monto_pagado is not None else None,
-        vence=row.fecha_vencimiento,
-        estado=row.estado,
-    )
-
-
-@router.get("/owner-charges", response_model=OwnerCharges)
-async def list_owner_charges(
-    principal: Annotated[Principal, Depends(require("pack_cobranza:cobros"))],
-) -> OwnerCharges:
-    tid = principal.tenant_id
-    async with get_session() as session:
-        cobros = (
-            (
-                await session.execute(
-                    select(CobroPropietario)
-                    .where(
-                        CobroPropietario.tenant_id == tid,
-                        CobroPropietario.deleted_at.is_(None),
-                    )
-                    .order_by(CobroPropietario.periodo.desc())
-                )
-            )
-            .scalars()
-            .all()
-        )
-        links = (
-            (
-                await session.execute(
-                    select(LinkPago)
-                    .where(LinkPago.tenant_id == tid)
-                    .order_by(LinkPago.created_at.desc())
-                    .limit(20)
-                )
-            )
-            .scalars()
-            .all()
-        )
-    return OwnerCharges(
-        cobros=[_as_charge(c) for c in cobros],
-        links=[
-            PaymentLink(
-                referencia=lk.referencia,
-                url=lk.url,
-                monto=float(lk.monto or 0),
-                estado=lk.estado,
-            )
-            for lk in links
-        ],
-    )
-
-
-class OwnerChargeCreate(BaseModel):
-    periodo: str
-    monto: float
-    fecha_vencimiento: date
-
-
-@router.post("/owner-charges", response_model=OwnerCharge, status_code=201)
-async def create_owner_charge(
-    payload: OwnerChargeCreate,
-    principal: Annotated[Principal, Depends(require("pack_cobranza:cobros", write=True))],
-) -> OwnerCharge:
-    from .admin import registrar_mensaje_propietario
-
-    periodo = payload.periodo.strip()
-    if not periodo:
-        raise ApiError.bad_request("Falta el periodo.", "missing_period")
-    if payload.monto <= 0:
-        raise ApiError.bad_request("El monto debe ser mayor a cero.", "invalid_amount")
-    tid = principal.tenant_id
-    async with get_session() as session:
-        cobro = (
-            await session.execute(
-                select(CobroPropietario).where(
-                    CobroPropietario.tenant_id == tid,
-                    CobroPropietario.periodo == periodo,
-                )
-            )
-        ).scalar_one_or_none()
-        if cobro is None:
-            cobro = CobroPropietario(
-                tenant_id=tid,
-                periodo=periodo,
-                monto_calculado=Decimal(str(payload.monto)),
-                fecha_vencimiento=payload.fecha_vencimiento,
-            )
-            session.add(cobro)
-            await session.flush()
-        else:
-            cobro.monto_calculado = Decimal(str(payload.monto))
-            cobro.fecha_vencimiento = payload.fecha_vencimiento
-        await registrar_mensaje_propietario(
-            session,
-            tid,
-            f"Notificación de cobro · periodo {periodo}: {payload.monto:,.0f} · "
-            f"vence {payload.fecha_vencimiento.isoformat()}",
-            tipo="notificacion",
-            autor_rol="sistema",
-            cobro_id=cobro.id,
-        )
-        await session.refresh(cobro)
-        return _as_charge(cobro)
-
-
-class OwnerPayment(BaseModel):
-    monto_pagado: float
-    metodo_pago: str | None = None
-
-
-@router.post("/owner-charges/{charge_id}/payment", status_code=204)
-async def register_owner_payment(
-    charge_id: uuid.UUID,
-    payload: OwnerPayment,
-    principal: Annotated[Principal, Depends(require("pack_cobranza:cobros", write=True))],
-) -> Response:
-    if payload.monto_pagado <= 0:
-        raise ApiError.bad_request("El monto debe ser mayor a cero.", "invalid_amount")
-    async with get_session() as session:
-        cobro = await _get_active(session, CobroPropietario, charge_id, principal.tenant_id)
-        if cobro is None:
-            raise ApiError.not_found("Cobro no encontrado.")
-        cobro.monto_pagado = Decimal(str(payload.monto_pagado))
-        cobro.fecha_pago = date.today()
-        cobro.estado = "pagado"
-        if payload.metodo_pago:
-            cobro.metodo_pago = payload.metodo_pago
-        cobro.registrado_por = principal.admin.email
     return Response(status_code=204)
 
 
@@ -2789,46 +2629,6 @@ async def approve_expense(
             motivo="Gasto aprobado",
         )
     return Response(status_code=204)
-
-
-class PaymentLinkIn(BaseModel):
-    referencia: str
-    url: str
-
-
-@router.post("/owner-charges/{charge_id}/links", response_model=PaymentLink, status_code=201)
-async def create_payment_link(
-    charge_id: uuid.UUID,
-    payload: PaymentLinkIn,
-    principal: Annotated[Principal, Depends(require("pack_cobranza:cobros", write=True))],
-) -> PaymentLink:
-    """Crea un link de pago para el cobro del propietario (monto = cobro calculado)."""
-    referencia = payload.referencia.strip()
-    url = payload.url.strip()
-    if not referencia or not url:
-        raise ApiError.bad_request("Referencia y URL son obligatorias.", "missing_fields")
-    if not url.startswith(("http://", "https://")):
-        raise ApiError.bad_request("La URL debe empezar por http:// o https://.", "invalid_url")
-    tid = principal.tenant_id
-    async with get_session() as session:
-        cobro = await _get_active(session, CobroPropietario, charge_id, tid)
-        if cobro is None:
-            raise ApiError.not_found("Cobro no encontrado.")
-        link = LinkPago(
-            tenant_id=tid,
-            cobro_id=cobro.id,
-            referencia=referencia,
-            url=url,
-            monto=cobro.monto_calculado,
-        )
-        session.add(link)
-        await session.flush()
-        return PaymentLink(
-            referencia=link.referencia,
-            url=link.url,
-            monto=float(link.monto or 0),
-            estado=link.estado,
-        )
 
 
 class ExpenseIn(BaseModel):
