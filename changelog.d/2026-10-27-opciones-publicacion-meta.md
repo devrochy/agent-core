@@ -24,4 +24,7 @@
   `option_meta_publish` con ids y resultado, sin el texto de Meta.
 - ADR-0172: adenda del PR 7. **Limitación conocida:** una versión se liga a UNA plantilla de Meta (una WABA); un
   negocio con dos WABAs envía por la de la versión (`plantilla_de_otra_cuenta` en la otra).
-- Sin cambios en la API en este PR: el encadenado desde `publicar` (HU-OPC-05) se conecta al fusionar ese PR.
+- **API:** `POST /plantillas-opciones/{clave}/publicar` acepta un cuerpo opcional `meta` (conexión, categoría, idioma, ejemplos) y
+  publica la versión en Meta tras congelarla; si Meta falla la versión sigue publicada y el reintento es
+  `POST …/versiones/{n}/publicar-en-meta`. El detalle de cada versión muestra su estado en Meta. Sin `meta` el comportamiento es el de antes.
+  Mismas puertas que el resto de la API (bandera apagada → 404, `connections` con escritura y dueño o master).

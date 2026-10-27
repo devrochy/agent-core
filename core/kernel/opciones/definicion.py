@@ -10,6 +10,8 @@ Puro: no lee base, red ni entorno.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Annotated, Any
 
@@ -56,7 +58,7 @@ class Accion(_Estricta):
     confirmar: bool = False
 
 
-class Opcion(_Estricta):
+class OpcionDeLaPlantilla(_Estricta):
     id: Annotated[str, StringConstraints(max_length=64)]
     titulo: Annotated[str, StringConstraints(max_length=100)]
     accion: Accion
@@ -72,12 +74,19 @@ class Definicion(_Estricta):
     # Una vez por envío (D-SPEC-40-2): tocar una opción agota el envío entero.
     exclusivo: bool = True
     ttl_horas: int = Field(default=24, ge=0, le=100_000)
-    opciones: list[Opcion] = Field(max_length=50)
+    opciones: list[OpcionDeLaPlantilla] = Field(max_length=50)
 
 
 def leer(crudo: Any) -> Definicion:
     """Valida la FORMA; lanza `ValidationError`. Para el guardado ya validado por el lint."""
     return Definicion.model_validate(crudo)
+
+
+def hash_de(definicion: Definicion) -> str:
+    """SHA-256 (64 hex, el CHECK `ck_option_versions_hash`) de la forma canónica de la definición: la que se
+    congela al publicar y con la que se compara el borrador para saber si hay cambios sin publicar."""
+    canonico = json.dumps(definicion.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonico.encode("utf-8")).hexdigest()
 
 
 def hallazgos_de_forma(exc: ValidationError) -> list[tuple[str, str]]:

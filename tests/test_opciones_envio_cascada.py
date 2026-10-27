@@ -232,7 +232,14 @@ def test_una_cita_de_respuesta_sin_dato_es_opcional() -> None:
     assert contexto.armar(d, BASE) == {"cliente.nombre": "Ana"}
 
 
-def test_los_datos_del_servidor_aportan_rutas_extra_pero_no_tapan_las_de_la_base() -> None:
+@pytest.fixture
+def rutas_de_datos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """La lista permitida de rutas de `datos` está vacía (ADR-0172, PR 6): estos tests agregan las suyas."""
+    monkeypatch.setitem(contexto.RUTAS_DE_DATOS, "cita.fecha", "Fecha de la cita")
+    monkeypatch.setitem(contexto.RUTAS_DE_DATOS, "cita.otra", "Otro dato de la cita")
+
+
+def test_los_datos_del_servidor_aportan_rutas_extra_pero_no_tapan_las_de_la_base(rutas_de_datos) -> None:
     d = con_acciones({"fecha": "cita.fecha"})
     assert contexto.armar(d, BASE, {"cita.fecha": "2026-11-02"}) == {"cliente.nombre": "Ana", "cita.fecha": "2026-11-02"}
     with pytest.raises(contexto.DatosInvalidos):
@@ -241,7 +248,7 @@ def test_los_datos_del_servidor_aportan_rutas_extra_pero_no_tapan_las_de_la_base
         contexto.armar(d, BASE, {"Cita Fecha": "x"})
 
 
-def test_los_valores_se_limpian_y_lo_que_no_es_un_dato_simple_no_cuenta() -> None:
+def test_los_valores_se_limpian_y_lo_que_no_es_un_dato_simple_no_cuenta(rutas_de_datos) -> None:
     d = con_acciones({"fecha": "cita.fecha", "otro": "cita.otra"})
     with pytest.raises(contexto.ContextoIncompleto) as exc:
         contexto.armar(d, BASE, {"cita.fecha": ["no", "simple"], "cita.otra": {"x": 1}})
@@ -250,7 +257,7 @@ def test_los_valores_se_limpian_y_lo_que_no_es_un_dato_simple_no_cuenta() -> Non
     assert limpio == {"cliente.nombre": "Ana Pérez", "cita.fecha": "20261102"}
 
 
-def test_el_nombre_del_cliente_se_acota_a_60_pero_los_datos_del_servidor_no() -> None:
+def test_el_nombre_del_cliente_se_acota_a_60_pero_los_datos_del_servidor_no(rutas_de_datos) -> None:
     d = con_acciones({"fecha": "cita.fecha"})
     largo = contexto.armar(d, {"cliente.nombre": "N" * 500}, {"cita.fecha": "F" * 200})
     assert largo["cliente.nombre"] == "N" * 60 and largo["cita.fecha"] == "F" * 200

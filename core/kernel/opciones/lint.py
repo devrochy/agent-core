@@ -42,7 +42,7 @@ from core.kernel.opciones.definicion import (
     RUTA_VARIABLE,
     Accion,
     Definicion,
-    Opcion,
+    OpcionDeLaPlantilla,
     hallazgos_de_forma,
     llaves_de,
     tiene_llaves_sueltas,
@@ -231,7 +231,7 @@ def _lintar_cabecera(d: Definicion, contexto: ContextoLint, out: list[Hallazgo])
 
 
 def _lintar_identidad(
-    o: Opcion, base: str, i: int, ids: dict[str, int], titulos: dict[str, int], out: list[Hallazgo]
+    o: OpcionDeLaPlantilla, base: str, i: int, ids: dict[str, int], titulos: dict[str, int], out: list[Hallazgo]
 ) -> None:
     if not ID_OPCION.match(o.id):
         _error(
@@ -308,7 +308,7 @@ def _lintar_argumentos(a: Accion, base: str, ficha: FichaTool, contexto: Context
             )
 
 
-def _lintar_respuestas(o: Opcion, base: str, contexto: ContextoLint, out: list[Hallazgo]) -> None:
+def _lintar_respuestas(o: OpcionDeLaPlantilla, base: str, contexto: ContextoLint, out: list[Hallazgo]) -> None:
     claves: set[str] = set()
     if len(o.result_keys) > MAX_RESULT_KEYS:
         _error(out, f"{base}.result_keys", "result_keys_demasiadas", f"Se pueden citar hasta {MAX_RESULT_KEYS} datos del resultado.")

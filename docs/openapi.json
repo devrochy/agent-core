@@ -22414,6 +22414,776 @@
         }
       }
     },
+    "/api/v1/plantillas-opciones/catalogo-acciones": {
+      "get": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Catalogo Acciones",
+        "description": "Las tools que el negocio puede usar como acción de una opción: elegibles (marca de su autor, pack activo,\nbinding explícito y habilitado, sin gobernar por un procedimiento), con su JSON Schema y si son sensibles.",
+        "operationId": "catalogo_acciones_api_v1_plantillas_opciones_catalogo_acciones_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesAccionesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plantillas-opciones/catalogo-variables": {
+      "get": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Catalogo Variables",
+        "description": "Las variables que el servidor resuelve y el dueño puede citar en el cuerpo (`{cliente.nombre}`) y en\n`args_contexto`.",
+        "operationId": "catalogo_variables_api_v1_plantillas_opciones_catalogo_variables_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesVariablesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plantillas-opciones/validar": {
+      "post": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Validar",
+        "description": "Lint de una definición sin guardar nada. Siempre 200: los hallazgos (`error` y `warning`) son el resultado.",
+        "operationId": "validar_api_v1_plantillas_opciones_validar_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpcionesDefinicionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesValidacionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plantillas-opciones/vista-previa": {
+      "post": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Vista Previa",
+        "description": "Lo que saldría por cada vía con valores de muestra, sin enviar nada. 422 con los hallazgos si la\ndefinición tiene errores.",
+        "operationId": "vista_previa_api_v1_plantillas_opciones_vista_previa_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VistaPreviaOpcionesIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VistaPreviaOpcionesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/plantillas-opciones": {
+      "get": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Listar",
+        "operationId": "listar_api_v1_plantillas_opciones_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesPlantillasOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Crear",
+        "description": "Crea un borrador. 409 `clave_repetida` si el negocio ya tiene una plantilla viva con esa clave.",
+        "operationId": "crear_api_v1_plantillas_opciones_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpcionesCrearIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesPlantillaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/plantillas-opciones/{clave}": {
+      "get": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Obtener",
+        "operationId": "obtener_api_v1_plantillas_opciones__clave__get",
+        "parameters": [
+          {
+            "name": "clave",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Clave"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesPlantillaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Eliminar",
+        "description": "Borra (lógicamente) una plantilla que nunca se publicó o ya está retirada y libera su clave. 409 si está publicada.",
+        "operationId": "eliminar_api_v1_plantillas_opciones__clave__delete",
+        "parameters": [
+          {
+            "name": "clave",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Clave"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plantillas-opciones/{clave}/borrador": {
+      "put": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Guardar Borrador",
+        "description": "Reemplaza el borrador. Las versiones publicadas no cambian. 422 `definicion_invalida` si la forma falla.",
+        "operationId": "guardar_borrador_api_v1_plantillas_opciones__clave__borrador_put",
+        "parameters": [
+          {
+            "name": "clave",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Clave"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpcionesBorradorIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesPlantillaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/plantillas-opciones/{clave}/publicar": {
+      "post": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Publicar",
+        "description": "Congela el borrador como la versión siguiente (inmutable). 422 `definicion_con_errores` con los hallazgos si\nfalla el lint: no cambia nada. 409 `sin_cambios` si el borrador es igual a la versión vigente. Con `meta`, encadena\nla alta de la versión como plantilla de Meta (`<clave>_v<n>`); si Meta falla, la versión SIGUE publicada y el\nresultado va en `meta` (se reintenta en `/versiones/{n}/publicar-en-meta`). 422 si la categoría o el idioma son inválidos.",
+        "operationId": "publicar_api_v1_plantillas_opciones__clave__publicar_post",
+        "parameters": [
+          {
+            "name": "clave",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Clave"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/OpcionesPublicarIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesPublicadaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/plantillas-opciones/{clave}/retirar": {
+      "post": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Retirar",
+        "description": "Retira la plantilla publicada: deja de enviarse y sus botones en vuelo responden «ya no está disponible».",
+        "operationId": "retirar_api_v1_plantillas_opciones__clave__retirar_post",
+        "parameters": [
+          {
+            "name": "clave",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Clave"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesPlantillaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plantillas-opciones/{clave}/enviar-prueba": {
+      "post": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Enviar Prueba",
+        "description": "Envía la versión vigente a UNA conversación del negocio (nunca a un número libre), por la vía que\ncorresponda. Es un mensaje real a ese cliente: el panel debe pedir confirmación.",
+        "operationId": "enviar_prueba_api_v1_plantillas_opciones__clave__enviar_prueba_post",
+        "parameters": [
+          {
+            "name": "clave",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Clave"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpcionesEnviarPruebaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesPruebaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        }
+      }
+    },
     "/api/v1/admin/meta/wizard/resume": {
       "post": {
         "tags": [
@@ -27736,6 +28506,95 @@
           }
         }
       }
+    },
+    "/api/v1/plantillas-opciones/{clave}/versiones/{version_n}/publicar-en-meta": {
+      "post": {
+        "tags": [
+          "api",
+          "plantillas con opciones"
+        ],
+        "summary": "Publicar Version En Meta",
+        "description": "Alta, o reintento, de UNA versión ya publicada como plantilla de Meta. Repetirla es seguro: no duplica la\nplantilla ni gasta otra creación. Nunca se edita una plantilla aprobada: una versión nueva es otra plantilla.\nResponde 200 con el resultado (`ok`, `outcome`, `reintentable`); 404 si la versión no existe, 409 si está retirada.",
+        "operationId": "publicar_version_en_meta_api_v1_plantillas_opciones__clave__versiones__version_n__publicar_en_meta_post",
+        "parameters": [
+          {
+            "name": "clave",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Clave"
+            }
+          },
+          {
+            "name": "version_n",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version N"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpcionesMetaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesMetaOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -27879,6 +28738,84 @@
           "critico"
         ],
         "title": "AccessAttempt"
+      },
+      "Accion": {
+        "properties": {
+          "tool": {
+            "type": "string",
+            "maxLength": 120,
+            "title": "Tool"
+          },
+          "args_fijos": {
+            "additionalProperties": true,
+            "propertyNames": {
+              "maxLength": 80
+            },
+            "type": "object",
+            "maxProperties": 30,
+            "title": "Args Fijos"
+          },
+          "args_contexto": {
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "propertyNames": {
+              "maxLength": 80
+            },
+            "type": "object",
+            "maxProperties": 30,
+            "title": "Args Contexto"
+          },
+          "confirmar": {
+            "type": "boolean",
+            "title": "Confirmar",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tool"
+        ],
+        "title": "Accion",
+        "description": "La tool que ejecuta la opción. Los argumentos salen SOLO de aquí: `args_fijos` (los escribe el\ndueño) y `args_contexto` (argumento → ruta de variable que arma el servidor). Nunca del texto del\ncliente ni del LLM (invariante 7, ADR-0108)."
+      },
+      "AccionDelCatalogoOut": {
+        "properties": {
+          "tool": {
+            "type": "string",
+            "title": "Tool"
+          },
+          "descripcion": {
+            "type": "string",
+            "title": "Descripcion"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Parameters",
+            "description": "JSON Schema de los argumentos: de ahí sale el formulario de `args_fijos`."
+          },
+          "sensible": {
+            "type": "boolean",
+            "title": "Sensible"
+          },
+          "confirmacion_obligatoria": {
+            "type": "boolean",
+            "title": "Confirmacion Obligatoria",
+            "description": "El cliente confirmará (`optc`/`optn`) aunque la opción no lo pida."
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool",
+          "descripcion",
+          "parameters",
+          "sensible",
+          "confirmacion_obligatoria"
+        ],
+        "title": "AccionDelCatalogoOut"
       },
       "ActiveEscalation": {
         "properties": {
@@ -35557,6 +36494,26 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "evento",
+              "opcion"
+            ],
+            "title": "Tipo",
+            "default": "evento"
+          },
+          "clave": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clave"
           }
         },
         "type": "object",
@@ -35579,6 +36536,16 @@
             },
             "type": "array",
             "title": "Recent"
+          },
+          "total_eventos_7d": {
+            "type": "integer",
+            "title": "Total Eventos 7D",
+            "default": 0
+          },
+          "total_opciones_7d": {
+            "type": "integer",
+            "title": "Total Opciones 7D",
+            "default": 0
           }
         },
         "type": "object",
@@ -36144,6 +37111,695 @@
         ],
         "title": "Opcion",
         "description": "Una opción de configuración. `extra=\"forbid\"`: un campo mal escrito falla al importar."
+      },
+      "OpcionDeLaPlantilla": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Id"
+          },
+          "titulo": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Titulo"
+          },
+          "accion": {
+            "$ref": "#/components/schemas/Accion"
+          },
+          "respuesta_ok": {
+            "type": "string",
+            "maxLength": 4096,
+            "title": "Respuesta Ok"
+          },
+          "respuesta_error": {
+            "type": "string",
+            "maxLength": 4096,
+            "title": "Respuesta Error"
+          },
+          "result_keys": {
+            "items": {
+              "type": "string",
+              "maxLength": 60
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Result Keys"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "titulo",
+          "accion",
+          "respuesta_ok",
+          "respuesta_error"
+        ],
+        "title": "OpcionDeLaPlantilla"
+      },
+      "OpcionesAccionesOut": {
+        "properties": {
+          "acciones": {
+            "items": {
+              "$ref": "#/components/schemas/AccionDelCatalogoOut"
+            },
+            "type": "array",
+            "title": "Acciones"
+          }
+        },
+        "type": "object",
+        "required": [
+          "acciones"
+        ],
+        "title": "OpcionesAccionesOut"
+      },
+      "OpcionesBorradorIn": {
+        "properties": {
+          "nombre": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre"
+          },
+          "definicion": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Definicion",
+            "description": "Reemplaza el borrador. Solo se valida la forma; el lint completo corre al publicar."
+          }
+        },
+        "type": "object",
+        "required": [
+          "definicion"
+        ],
+        "title": "OpcionesBorradorIn"
+      },
+      "OpcionesCrearIn": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]{1,40}$",
+            "title": "Clave",
+            "description": "Única entre las plantillas vivas del negocio."
+          },
+          "nombre": {
+            "type": "string",
+            "maxLength": 120,
+            "title": "Nombre",
+            "default": ""
+          },
+          "definicion": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definicion",
+            "description": "Borrador inicial (forma de `Definicion`)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave"
+        ],
+        "title": "OpcionesCrearIn"
+      },
+      "OpcionesDefinicionIn": {
+        "properties": {
+          "definicion": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Definicion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "definicion"
+        ],
+        "title": "OpcionesDefinicionIn"
+      },
+      "OpcionesDetallesDeError": {
+        "properties": {
+          "hallazgos": {
+            "items": {
+              "$ref": "#/components/schemas/OpcionesHallazgoOut"
+            },
+            "type": "array",
+            "title": "Hallazgos"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "title": "OpcionesDetallesDeError"
+      },
+      "OpcionesEnviarPruebaIn": {
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Conversation Id",
+            "description": "Una conversación de este negocio. Nunca un número libre."
+          },
+          "clave_idempotencia": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 8,
+            "title": "Clave Idempotencia",
+            "description": "Repetir la misma clave no duplica el envío."
+          }
+        },
+        "type": "object",
+        "required": [
+          "conversation_id",
+          "clave_idempotencia"
+        ],
+        "title": "OpcionesEnviarPruebaIn"
+      },
+      "OpcionesError": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpcionesDetallesDeError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "OpcionesError"
+      },
+      "OpcionesErrorOut": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/OpcionesError"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "OpcionesErrorOut",
+        "description": "El sobre de error de la API (`{error: {code, message, details?}}`). En un 422 de esta API,\n`error.details.hallazgos` trae los mismos `{path, code, severity, mensaje}` del lint."
+      },
+      "OpcionesHallazgoOut": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Dónde está la falla, p. ej. `opciones[1].accion.tool`."
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning"
+            ],
+            "title": "Severity",
+            "description": "Un `error` impide publicar; un `warning` solo informa."
+          },
+          "mensaje": {
+            "type": "string",
+            "title": "Mensaje"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "code",
+          "severity",
+          "mensaje"
+        ],
+        "title": "OpcionesHallazgoOut"
+      },
+      "OpcionesPlantillaOut": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "published",
+              "retired"
+            ],
+            "title": "Estado"
+          },
+          "version_vigente": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Vigente"
+          },
+          "tiene_borrador_sin_publicar": {
+            "type": "boolean",
+            "title": "Tiene Borrador Sin Publicar"
+          },
+          "creada_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Creada En"
+          },
+          "actualizada_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Actualizada En"
+          },
+          "borrador": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Definicion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "definicion_vigente": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Definicion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "versiones": {
+            "items": {
+              "$ref": "#/components/schemas/OpcionesVersionOut"
+            },
+            "type": "array",
+            "title": "Versiones"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "nombre",
+          "estado",
+          "version_vigente",
+          "tiene_borrador_sin_publicar",
+          "creada_en",
+          "actualizada_en",
+          "borrador",
+          "definicion_vigente",
+          "versiones"
+        ],
+        "title": "OpcionesPlantillaOut"
+      },
+      "OpcionesPlantillaResumen": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "published",
+              "retired"
+            ],
+            "title": "Estado"
+          },
+          "version_vigente": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Vigente"
+          },
+          "tiene_borrador_sin_publicar": {
+            "type": "boolean",
+            "title": "Tiene Borrador Sin Publicar"
+          },
+          "creada_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Creada En"
+          },
+          "actualizada_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Actualizada En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "nombre",
+          "estado",
+          "version_vigente",
+          "tiene_borrador_sin_publicar",
+          "creada_en",
+          "actualizada_en"
+        ],
+        "title": "OpcionesPlantillaResumen"
+      },
+      "OpcionesPlantillasOut": {
+        "properties": {
+          "plantillas": {
+            "items": {
+              "$ref": "#/components/schemas/OpcionesPlantillaResumen"
+            },
+            "type": "array",
+            "title": "Plantillas"
+          }
+        },
+        "type": "object",
+        "required": [
+          "plantillas"
+        ],
+        "title": "OpcionesPlantillasOut"
+      },
+      "OpcionesPruebaOut": {
+        "properties": {
+          "enviado": {
+            "type": "boolean",
+            "title": "Enviado"
+          },
+          "ya_enviado": {
+            "type": "boolean",
+            "title": "Ya Enviado",
+            "description": "La clave de idempotencia ya había enviado este mensaje."
+          },
+          "via": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "interactivo",
+                  "plantilla",
+                  "texto"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Via"
+          },
+          "ejecucion_directa": {
+            "type": "boolean",
+            "title": "Ejecucion Directa",
+            "description": "El cliente puede tocar una opción (interactivo o plantilla)."
+          },
+          "degradado": {
+            "type": "boolean",
+            "title": "Degradado"
+          },
+          "send_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Send Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enviado",
+          "ya_enviado",
+          "via",
+          "ejecucion_directa",
+          "degradado",
+          "send_id"
+        ],
+        "title": "OpcionesPruebaOut"
+      },
+      "OpcionesPublicadaOut": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "version_n": {
+            "type": "integer",
+            "title": "Version N"
+          },
+          "definition_hash": {
+            "type": "string",
+            "title": "Definition Hash"
+          },
+          "publicada_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Publicada En"
+          },
+          "message_template_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Template Id",
+            "description": "La plantilla de Meta ligada si se pidió publicar en Meta; si no, nulo."
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpcionesMetaOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Resultado de la publicación en Meta; nulo si no se pidió."
+          },
+          "hallazgos": {
+            "items": {
+              "$ref": "#/components/schemas/OpcionesHallazgoOut"
+            },
+            "type": "array",
+            "title": "Hallazgos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "version_n",
+          "definition_hash",
+          "publicada_en",
+          "message_template_id",
+          "meta",
+          "hallazgos"
+        ],
+        "title": "OpcionesPublicadaOut"
+      },
+      "OpcionesValidacionOut": {
+        "properties": {
+          "valida": {
+            "type": "boolean",
+            "title": "Valida",
+            "description": "Sin hallazgos de severidad `error`."
+          },
+          "hallazgos": {
+            "items": {
+              "$ref": "#/components/schemas/OpcionesHallazgoOut"
+            },
+            "type": "array",
+            "title": "Hallazgos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valida",
+          "hallazgos"
+        ],
+        "title": "OpcionesValidacionOut"
+      },
+      "OpcionesVariableOut": {
+        "properties": {
+          "ruta": {
+            "type": "string",
+            "title": "Ruta"
+          },
+          "descripcion": {
+            "type": "string",
+            "title": "Descripcion"
+          },
+          "origen": {
+            "type": "string",
+            "enum": [
+              "conversacion",
+              "servidor"
+            ],
+            "title": "Origen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ruta",
+          "descripcion",
+          "origen"
+        ],
+        "title": "OpcionesVariableOut"
+      },
+      "OpcionesVariablesOut": {
+        "properties": {
+          "variables": {
+            "items": {
+              "$ref": "#/components/schemas/OpcionesVariableOut"
+            },
+            "type": "array",
+            "title": "Variables"
+          }
+        },
+        "type": "object",
+        "required": [
+          "variables"
+        ],
+        "title": "OpcionesVariablesOut"
+      },
+      "OpcionesVersionOut": {
+        "properties": {
+          "version_n": {
+            "type": "integer",
+            "title": "Version N"
+          },
+          "publicada_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Publicada En"
+          },
+          "retirada_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retirada En"
+          },
+          "definition_hash": {
+            "type": "string",
+            "title": "Definition Hash"
+          },
+          "message_template_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Template Id",
+            "description": "Plantilla de Meta de esta versión; la fija la publicación a Meta."
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpcionesMetaEstadoOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Estado de la plantilla de Meta; nulo si la versión no se publicó en Meta."
+          },
+          "vigente": {
+            "type": "boolean",
+            "title": "Vigente"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version_n",
+          "publicada_en",
+          "retirada_en",
+          "definition_hash",
+          "message_template_id",
+          "meta",
+          "vigente"
+        ],
+        "title": "OpcionesVersionOut"
       },
       "Operational": {
         "properties": {
@@ -45570,6 +47226,63 @@
         ],
         "title": "DeclarativeToolsOut"
       },
+      "Definicion": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "maxLength": 4096,
+            "title": "Body"
+          },
+          "footer": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Footer"
+          },
+          "variables": {
+            "items": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "type": "array",
+            "maxItems": 30,
+            "title": "Variables"
+          },
+          "exclusivo": {
+            "type": "boolean",
+            "title": "Exclusivo",
+            "default": true
+          },
+          "ttl_horas": {
+            "type": "integer",
+            "maximum": 100000.0,
+            "minimum": 0.0,
+            "title": "Ttl Horas",
+            "default": 24
+          },
+          "opciones": {
+            "items": {
+              "$ref": "#/components/schemas/OpcionDeLaPlantilla"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Opciones"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "body",
+          "opciones"
+        ],
+        "title": "Definicion"
+      },
       "DejarListoIn": {
         "properties": {
           "agent_id": {
@@ -50799,6 +52512,81 @@
         ],
         "title": "VistaPreviaIn"
       },
+      "VistaPreviaOpcionesIn": {
+        "properties": {
+          "definicion": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Definicion"
+          },
+          "ejemplos": {
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "type": "object",
+            "maxProperties": 30,
+            "title": "Ejemplos",
+            "description": "Valor de muestra por ruta de variable; si falta se usa uno genérico."
+          }
+        },
+        "type": "object",
+        "required": [
+          "definicion"
+        ],
+        "title": "VistaPreviaOpcionesIn"
+      },
+      "VistaPreviaOpcionesOut": {
+        "properties": {
+          "interactivo": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Interactivo",
+            "description": "Mensaje interactivo de WhatsApp (ventana de 24 h abierta), con ids de relleno."
+          },
+          "cabe_en_whatsapp": {
+            "type": "boolean",
+            "title": "Cabe En Whatsapp",
+            "description": "El interactivo cumple los topes de Meta; si no, saldría el texto de respaldo."
+          },
+          "componentes_meta": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Componentes Meta",
+            "description": "Componentes de la plantilla de Meta (ventana cerrada)."
+          },
+          "cuerpo_meta_renderizado": {
+            "type": "string",
+            "title": "Cuerpo Meta Renderizado"
+          },
+          "texto_de_respaldo": {
+            "type": "string",
+            "title": "Texto De Respaldo",
+            "description": "Canal sin botones: el cuerpo y las opciones numeradas, sin ejecución directa."
+          },
+          "hallazgos": {
+            "items": {
+              "$ref": "#/components/schemas/OpcionesHallazgoOut"
+            },
+            "type": "array",
+            "title": "Hallazgos",
+            "description": "Solo avisos: con errores la ruta responde 422."
+          }
+        },
+        "type": "object",
+        "required": [
+          "interactivo",
+          "cabe_en_whatsapp",
+          "componentes_meta",
+          "cuerpo_meta_renderizado",
+          "texto_de_respaldo",
+          "hallazgos"
+        ],
+        "title": "VistaPreviaOpcionesOut"
+      },
       "VistaPreviaOut": {
         "properties": {
           "envio_id": {
@@ -55689,6 +57477,251 @@
           "connected"
         ],
         "title": "CalendarSummary"
+      },
+      "OpcionesMetaEstadoOut": {
+        "properties": {
+          "message_template_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Message Template Id"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre",
+            "description": "`<clave>_v<n>`: cada versión es una plantilla nueva de Meta."
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado",
+            "description": "`DRAFT` (reservada, aún sin respuesta de Meta), `PENDING`, `APPROVED`, `REJECTED`, `PAUSED`…"
+          },
+          "categoria": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categoria",
+            "description": "La que tiene la plantilla ahora (Meta puede recategorizarla)."
+          },
+          "categoria_anterior": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categoria Anterior"
+          },
+          "motivo_rechazo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Rechazo"
+          },
+          "recomendacion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recomendacion"
+          },
+          "error_de_publicacion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error De Publicacion",
+            "description": "El último error al crearla en Meta; vacío si no hubo."
+          }
+        },
+        "type": "object",
+        "required": [
+          "message_template_id",
+          "nombre",
+          "estado",
+          "categoria",
+          "categoria_anterior",
+          "motivo_rechazo",
+          "recomendacion",
+          "error_de_publicacion"
+        ],
+        "title": "OpcionesMetaEstadoOut",
+        "description": "Lo que Meta dice de la plantilla de una versión. Se lee de `message_templates` (lo escriben los webhooks de\nestado y de categoría), no se guarda aparte."
+      },
+      "OpcionesMetaIn": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "categoria": {
+            "type": "string",
+            "enum": [
+              "UTILITY",
+              "MARKETING"
+            ],
+            "title": "Categoria"
+          },
+          "idioma": {
+            "type": "string",
+            "maxLength": 10,
+            "title": "Idioma",
+            "default": "es"
+          },
+          "ejemplos": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "maxProperties": 30,
+            "title": "Ejemplos",
+            "description": "`ruta de variable → valor de muestra` (hasta 60 caracteres, nunca datos de un cliente)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "categoria"
+        ],
+        "title": "OpcionesMetaIn",
+        "description": "Publicar la versión como plantilla de Meta: en qué conexión (su WABA), con qué categoría (la elige el dueño y\ncambia el costo y la aprobación) e idioma, y un valor de muestra por variable del cuerpo (Meta los revisa)."
+      },
+      "OpcionesMetaOut": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome",
+            "description": "`published`, `already_published`, `network_error`, `rate_limited`, `in_progress`, `internal_error` (reintentables) o `meta_rejected`, `invalid_definition`, `name_taken`, `other_account`, `template_deleted`, `meta_id_taken`, `connection_not_ready`, `template_quota_full`, `version_retired`, `version_not_found`, `invalid_category`, `invalid_language`."
+          },
+          "reintentable": {
+            "type": "boolean",
+            "title": "Reintentable",
+            "description": "Repetir la misma petición puede resolverlo y no duplica la plantilla en Meta."
+          },
+          "nombre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre"
+          },
+          "estado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estado"
+          },
+          "categoria": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categoria"
+          },
+          "message_template_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Template Id"
+          },
+          "meta_template_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta Template Id"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo",
+            "description": "Texto acotado del motivo (de Meta si rechazó); nunca datos de un cliente."
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "outcome",
+          "reintentable",
+          "nombre",
+          "estado",
+          "categoria",
+          "message_template_id",
+          "meta_template_id",
+          "motivo"
+        ],
+        "title": "OpcionesMetaOut",
+        "description": "Resultado de publicar una versión en Meta. Un fallo NO revierte la versión publicada: `ok` falso con `outcome`."
+      },
+      "OpcionesPublicarIn": {
+        "properties": {
+          "meta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpcionesMetaIn"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Si llega, encadena la alta de la versión en Meta; si no, solo congela la versión."
+          }
+        },
+        "type": "object",
+        "title": "OpcionesPublicarIn"
       }
     }
   }
