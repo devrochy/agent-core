@@ -1590,6 +1590,56 @@
         }
       }
     },
+    "/api/v1/admin/dashboard/agents": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · dashboard"
+        ],
+        "summary": "Dashboard Agents",
+        "operationId": "dashboard_agents_api_v1_admin_dashboard_agents_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumenPorAgente"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/onboarding": {
       "get": {
         "tags": [
@@ -29153,6 +29203,22 @@
         "type": "object",
         "title": "BlockPatch"
       },
+      "BloqueGeneral": {
+        "properties": {
+          "kpis": {
+            "items": {
+              "$ref": "#/components/schemas/KpiOut"
+            },
+            "type": "array",
+            "title": "Kpis"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kpis"
+        ],
+        "title": "BloqueGeneral"
+      },
       "Body_import_products_csv_api_v1_pack_commerce_products_import_post": {
         "properties": {
           "file": {
@@ -34070,6 +34136,117 @@
         ],
         "title": "ItemBusqueda"
       },
+      "KpiOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "valor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valor",
+            "description": "`null` si no hay datos suficientes."
+          },
+          "unidad": {
+            "type": "string",
+            "enum": [
+              "count",
+              "pct",
+              "usd",
+              "money",
+              "ms"
+            ],
+            "title": "Unidad"
+          },
+          "previo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previo",
+            "description": "Mismo KPI en el período anterior; `null` si es una foto de hoy."
+          },
+          "delta_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta Pct",
+            "description": "Variación contra el período anterior; `null` si no se puede calcular."
+          },
+          "polaridad": {
+            "type": "string",
+            "enum": [
+              "up-good",
+              "up-bad"
+            ],
+            "title": "Polaridad"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          },
+          "versus": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Versus",
+            "description": "Contra qué se compara `previo` («los 7 días anteriores», «el mes anterior»)."
+          },
+          "destino": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DestinoOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "valor",
+          "unidad",
+          "previo",
+          "delta_pct",
+          "polaridad"
+        ],
+        "title": "KpiOut"
+      },
       "LeadColumn": {
         "properties": {
           "key": {
@@ -35463,6 +35640,44 @@
           "cost"
         ],
         "title": "ModelCost"
+      },
+      "ModuloOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "kpis": {
+            "items": {
+              "$ref": "#/components/schemas/KpiOut"
+            },
+            "type": "array",
+            "title": "Kpis"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "El módulo no pudo calcularse; el resto del Resumen sí."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "nombre",
+          "kpis"
+        ],
+        "title": "ModuloOut"
       },
       "ModulosOut": {
         "properties": {
@@ -40555,6 +40770,35 @@
         ],
         "title": "ResultadoSeccion"
       },
+      "ResumenPorAgente": {
+        "properties": {
+          "periodo": {
+            "$ref": "#/components/schemas/PeriodoOut"
+          },
+          "runtime": {
+            "type": "string",
+            "title": "Runtime"
+          },
+          "general": {
+            "$ref": "#/components/schemas/BloqueGeneral"
+          },
+          "agentes": {
+            "items": {
+              "$ref": "#/components/schemas/AgenteResumen"
+            },
+            "type": "array",
+            "title": "Agentes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "periodo",
+          "runtime",
+          "general",
+          "agentes"
+        ],
+        "title": "ResumenPorAgente"
+      },
       "RevokeRequest": {
         "properties": {
           "section": {
@@ -43635,6 +43879,28 @@
         ],
         "title": "DescartarIn"
       },
+      "DestinoOut": {
+        "properties": {
+          "ruta": {
+            "type": "string",
+            "title": "Ruta",
+            "description": "Ruta lógica: `conversaciones`, `agente`, `comercio.pedidos`, …"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Params"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ruta"
+        ],
+        "title": "DestinoOut",
+        "description": "A dónde lleva un KPI: una ruta lógica y sus filtros; cada cliente la traduce a su navegación."
+      },
       "DocumentoLegalIn": {
         "properties": {
           "tipo": {
@@ -44997,6 +45263,51 @@
           "created_at"
         ],
         "title": "AgentVersionSummary"
+      },
+      "AgenteResumen": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "title": "Ref",
+            "description": "Id del agente o el literal `general`, como en `/admin/agents/{ref}`."
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "kpis": {
+            "items": {
+              "$ref": "#/components/schemas/KpiOut"
+            },
+            "type": "array",
+            "title": "Kpis"
+          },
+          "modulos": {
+            "items": {
+              "$ref": "#/components/schemas/ModuloOut"
+            },
+            "type": "array",
+            "title": "Modulos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ref",
+          "key",
+          "name",
+          "kind",
+          "kpis",
+          "modulos"
+        ],
+        "title": "AgenteResumen"
       },
       "ConfiguredSecret": {
         "properties": {
@@ -50888,6 +51199,38 @@
         },
         "type": "object",
         "title": "PerfilUpdate"
+      },
+      "PeriodoOut": {
+        "properties": {
+          "desde": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Desde"
+          },
+          "hasta": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Hasta"
+          },
+          "previo_desde": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Previo Desde"
+          },
+          "previo_hasta": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Previo Hasta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "desde",
+          "hasta",
+          "previo_desde",
+          "previo_hasta"
+        ],
+        "title": "PeriodoOut"
       },
       "PermissionChange": {
         "properties": {
