@@ -41,6 +41,9 @@ def _filas(n: int) -> list[dict[str, str]]:
 def test_lista_valida_con_y_sin_descripcion() -> None:
     assert interactivo_valido(_lista())
     assert interactivo_valido(_lista(rows=[{"id": "a", "title": "A", "description": None}]))
+    # Vacía o en blanco = sin descripción: no degrada la lista a texto plano.
+    assert interactivo_valido(_lista(rows=[{"id": "a", "title": "A", "description": ""}]))
+    assert interactivo_valido(_lista(rows=[{"id": "a", "title": "A", "description": "   "}]))
 
 
 def test_limites_exactos_de_lista_pasan_y_uno_mas_no() -> None:
@@ -76,7 +79,6 @@ def test_limites_exactos_de_lista_pasan_y_uno_mas_no() -> None:
         {"rows": [{"id": "a", "title": ""}]},
         {"rows": [{"id": "a", "title": "   "}]},
         {"rows": [{"id": "a", "title": 3}]},
-        {"rows": [{"id": "a", "title": "A", "description": ""}]},
         {"rows": [{"id": "a", "title": "A", "description": 9}]},
         # Meta exige ids de fila únicos.
         {"rows": [{"id": "a", "title": "A"}, {"id": "a", "title": "B"}]},
@@ -153,10 +155,16 @@ async def test_whatsapp_arma_la_lista(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_descripcion_vacia_o_nula_no_viaja(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = await _capturar(
         monkeypatch,
-        _lista(rows=[{"id": "a", "title": "A", "description": ""}, {"id": "b", "title": "B", "description": None}]),
+        _lista(
+            rows=[
+                {"id": "a", "title": "A", "description": ""},
+                {"id": "b", "title": "B", "description": None},
+                {"id": "c", "title": "C", "description": "  "},
+            ]
+        ),
     )
     filas = payload["interactive"]["action"]["sections"][0]["rows"]
-    assert filas == [{"id": "a", "title": "A"}, {"id": "b", "title": "B"}]
+    assert filas == [{"id": "a", "title": "A"}, {"id": "b", "title": "B"}, {"id": "c", "title": "C"}]
 
 
 @pytest.mark.asyncio
@@ -176,8 +184,8 @@ async def test_lista_incompleta_no_sale(cambios: dict[str, Any]) -> None:
 # ---------------------------------------------------------------- respuesta entrante
 
 
-def test_respuesta_de_lista_llega_como_interactive_id() -> None:
-    payload = {
+def _entrante(fila_id: str) -> dict[str, Any]:
+    return {
         "object": "whatsapp_business_account",
         "entry": [
             {
@@ -193,7 +201,7 @@ def test_respuesta_de_lista_llega_como_interactive_id() -> None:
                                     "type": "interactive",
                                     "interactive": {
                                         "type": "list_reply",
-                                        "list_reply": {"id": "inmueble:1", "title": "Apto Chipre", "description": "x"},
+                                        "list_reply": {"id": fila_id, "title": "Apto Chipre", "description": "x"},
                                     },
                                 }
                             ],
@@ -203,6 +211,14 @@ def test_respuesta_de_lista_llega_como_interactive_id() -> None:
             }
         ],
     }
-    [mensaje] = WhatsAppMetaInbound().parse_inbound(payload)
+
+
+def test_respuesta_de_lista_llega_como_interactive_id() -> None:
+    [mensaje] = WhatsAppMetaInbound().parse_inbound(_entrante("inmueble:1"))
     assert mensaje.interactive_id == "inmueble:1" and mensaje.content == "Apto Chipre"
-    assert len("x" * 200) <= 256  # el tope de id de fila (200) cabe en el recorte del entrante
+
+
+def test_id_de_fila_de_200_caracteres_vuelve_sin_recortar() -> None:
+    fila_id = "x" * 200  # el tope de id de fila cabe en el recorte [:256] del entrante
+    [mensaje] = WhatsAppMetaInbound().parse_inbound(_entrante(fila_id))
+    assert mensaje.interactive_id == fila_id

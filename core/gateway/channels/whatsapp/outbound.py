@@ -87,11 +87,11 @@ class WhatsAppMetaOutbound(OutboundAdapter):
     @staticmethod
     def _payload_lista(to: str, interactive: dict[str, Any]) -> dict[str, Any]:
         """Lista con una sola sección: `action.sections[0].rows[]`. La descripción de fila es
-        opcional y se omite si viene vacía (Meta rechaza cadenas vacías)."""
+        opcional y se omite si viene vacía o en blanco (Meta rechaza cadenas vacías)."""
         filas: list[dict[str, str]] = []
         for f in interactive.get("rows") or []:
             fila = {"id": str(f["id"]), "title": str(f["title"])}
-            if f.get("description"):
+            if str(f.get("description") or "").strip():
                 fila["description"] = str(f["description"])
             filas.append(fila)
         if not filas or not interactive.get("body") or not interactive.get("button"):

@@ -616,7 +616,8 @@ _MAX_TEXTO_BOTON_LISTA = 20
 def _lista_valida(interactive: dict[str, Any]) -> bool:
     """`{"type": "list", "body", "button", "rows": [{"id", "title", "description"?}]}`: una sola
     sección (la primera versión no admite títulos de sección ni varias). Meta exige ids de fila
-    únicos y rechaza textos vacíos, así que se validan aquí y no con un 400 del Graph."""
+    únicos y rechaza textos vacíos, así que se validan aquí y no con un 400 del Graph. Una descripción
+    vacía o en blanco equivale a no tenerla (el adaptador no la envía): no degrada la lista a texto."""
     boton = interactive.get("button")
     filas = interactive.get("rows")
     if not isinstance(boton, str) or not boton.strip() or len(boton) > _MAX_TEXTO_BOTON_LISTA:
@@ -632,9 +633,7 @@ def _lista_valida(interactive: dict[str, Any]) -> bool:
             return False
         if not isinstance(titulo, str) or not titulo.strip() or len(titulo) > _MAX_TITULO_FILA:
             return False
-        if descripcion is not None and (
-            not isinstance(descripcion, str) or not descripcion.strip() or len(descripcion) > _MAX_DESCRIPCION_FILA
-        ):
+        if descripcion is not None and (not isinstance(descripcion, str) or len(descripcion) > _MAX_DESCRIPCION_FILA):
             return False
         ids.add(fid)
     return True
