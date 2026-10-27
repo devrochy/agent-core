@@ -16,6 +16,7 @@ from test_calendar_interno import FECHA, _configurar, _contexto, _seed_email, _t
 
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
+    pytest.mark.aislamiento,  # agendas y citas entre negocios (ADR-0120, HU-CAL-08)
     pytest.mark.skipif(
         os.environ.get("AGENT_CORE_INTEGRATION") != "1",
         reason="tests de integración: requiere AGENT_CORE_INTEGRATION=1 y el stack local",
@@ -336,3 +337,43 @@ async def test_cita_sin_agenda_cae_en_la_principal_y_choca_con_ella() -> None:
             async with get_session() as session:
                 session.add(_fila(calendar_id=principal.id))
                 await session.flush()
+
+
+async def test_un_negocio_no_ve_ni_toca_las_agendas_de_otro(app_client) -> None:
+    from _api_helpers import api_headers
+
+    tenant_a = await _tenant_calendario()
+    tenant_b = await _tenant_calendario()
+    await _configurar(tenant_a)
+    await _configurar(tenant_b)
+    ana = await _segunda_agenda(tenant_a, nombre="Solo del negocio A")
+    headers_a = await api_headers(app_client, tenant_a)
+    headers_b = await api_headers(app_client, tenant_b)
+    base = "/api/v1/pack/calendar"
+
+    propias_b = (await app_client.get(f"{base}/calendars", headers=headers_b)).json()["calendars"]
+    assert [c["name"] for c in propias_b] == ["Agenda principal"]
+    assert str(ana) not in {c["id"] for c in propias_b}
+
+    # B no puede editar, borrar ni mover citas hacia la agenda de A.
+    assert (await app_client.put(f"{base}/calendars/{ana}", headers=headers_b, json={"name": "Robada"})).status_code == 404
+    assert (await app_client.post(f"{base}/calendars/{ana}/delete", headers=headers_b)).status_code == 404
+    cita = {"title": "Visita", "start_at": f"{FECHA}T15:00:00+00:00", "end_at": f"{FECHA}T16:00:00+00:00"}
+    ajena = await app_client.post(f"{base}/appointments", headers=headers_b, json={**cita, "calendar_id": str(ana)})
+    assert ajena.status_code in (400, 404), ajena.text
+
+    # Una cita de A no aparece en la agenda de B, ni filtrando por el id de A.
+    assert (
+        await app_client.post(f"{base}/appointments", headers=headers_a, json={**cita, "calendar_id": str(ana)})
+    ).status_code == 201
+    rango = {"start": f"{FECHA}T00:00:00+00:00", "end": f"{FECHA}T23:59:59+00:00"}
+    for params in (rango, {**rango, "calendar_ids": str(ana)}):
+        eventos = (await app_client.get(f"{base}/events", headers=headers_b, params=params)).json()
+        assert [e for e in eventos["events"] if e["kind"] == "appointment"] == []
+        assert str(ana) not in {c["id"] for c in eventos["calendars"]}
+
+    # A sigue intacta.
+    assert [c["name"] for c in (await app_client.get(f"{base}/calendars", headers=headers_a)).json()["calendars"]] == [
+        "Agenda principal",
+        "Solo del negocio A",
+    ]
