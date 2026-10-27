@@ -79,6 +79,15 @@ class CalendarConfig(BasePluginConfig):
     calendar_id: str = Field(
         default="primary", description="ID del calendario (primary = calendario principal)"
     )
+    multi_agenda_modo: str = Field(
+        default="cliente_elige",
+        description=(
+            "Varias agendas (HU-CAL-08): 'cliente_elige' (con 2 o más agendas el asistente "
+            "le informa al cliente la disponibilidad de cada una y le pregunta con cuál quiere "
+            "la cita) o 'desactivado' (el asistente usa siempre la agenda principal). Con una "
+            "sola agenda no cambia nada."
+        ),
+    )
     timezone: str = Field(default="America/Bogota", description="Zona horaria de las citas")
     # Minutos: la duración y el bloque son de al menos 1; el margen puede ser 0 (422 si no).
     event_duration_minutes: int = Field(
@@ -227,6 +236,8 @@ class CalendarConfig(BasePluginConfig):
         """Modo `google` exige credenciales OAuth; `interno` no las necesita."""
         if self.source not in ("interno", "google"):
             raise ValueError("source debe ser 'interno' o 'google'")
+        if self.multi_agenda_modo not in ("cliente_elige", "desactivado"):
+            raise ValueError("multi_agenda_modo debe ser 'cliente_elige' o 'desactivado'")
         if self.source == "google" and (
             not self.client_id or not self.client_secret.get_secret_value()
         ):
