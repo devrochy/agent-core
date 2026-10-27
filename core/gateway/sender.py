@@ -601,21 +601,58 @@ async def send_template_to_conversation(
     return True
 
 
-# Topes de un mensaje interactivo con botones de respuesta de WhatsApp Cloud.
+# Topes de un mensaje interactivo de WhatsApp Cloud: botones de respuesta y lista.
 _MAX_CUERPO_INTERACTIVO = 1024
 _MAX_TITULO_BOTON = 20
 _MAX_ID_BOTON = 256
 _MAX_BOTONES = 3
+_MAX_FILAS_LISTA = 10
+_MAX_ID_FILA = 200
+_MAX_TITULO_FILA = 24
+_MAX_DESCRIPCION_FILA = 72
+_MAX_TEXTO_BOTON_LISTA = 20
+
+
+def _lista_valida(interactive: dict[str, Any]) -> bool:
+    """`{"type": "list", "body", "button", "rows": [{"id", "title", "description"?}]}`: una sola
+    sección (la primera versión no admite títulos de sección ni varias). Meta exige ids de fila
+    únicos y rechaza textos vacíos, así que se validan aquí y no con un 400 del Graph."""
+    boton = interactive.get("button")
+    filas = interactive.get("rows")
+    if not isinstance(boton, str) or not boton.strip() or len(boton) > _MAX_TEXTO_BOTON_LISTA:
+        return False
+    if not isinstance(filas, list) or not 1 <= len(filas) <= _MAX_FILAS_LISTA:
+        return False
+    ids: set[str] = set()
+    for f in filas:
+        if not isinstance(f, dict):
+            return False
+        fid, titulo, descripcion = f.get("id"), f.get("title"), f.get("description")
+        if not isinstance(fid, str) or not fid or len(fid) > _MAX_ID_FILA or fid in ids:
+            return False
+        if not isinstance(titulo, str) or not titulo.strip() or len(titulo) > _MAX_TITULO_FILA:
+            return False
+        if descripcion is not None and (
+            not isinstance(descripcion, str) or not descripcion.strip() or len(descripcion) > _MAX_DESCRIPCION_FILA
+        ):
+            return False
+        ids.add(fid)
+    return True
 
 
 def interactivo_valido(interactive: dict[str, Any]) -> bool:
     """¿Cumple los topes de Meta? Se valida antes de encolar: un payload inválido no gasta la
     cola ni termina escalado por la DLQ."""
-    botones = interactive.get("buttons")
     cuerpo = interactive.get("body")
-    if interactive.get("type") != "button" or not isinstance(cuerpo, str) or not cuerpo.strip():
+    tipo = interactive.get("type")
+    if tipo not in ("button", "list") or not isinstance(cuerpo, str) or not cuerpo.strip():
         return False
-    if len(cuerpo) > _MAX_CUERPO_INTERACTIVO or not isinstance(botones, list) or not 1 <= len(botones) <= _MAX_BOTONES:
+    if len(cuerpo) > _MAX_CUERPO_INTERACTIVO:
+        return False
+    if tipo == "list":
+        return _lista_valida(interactive)
+    botones = interactive.get("buttons")
+    if not isinstance(botones, list) or not 1 <= len(botones) <= _MAX_BOTONES:
         return False
     return all(
         isinstance(b, dict)
@@ -632,10 +669,10 @@ async def send_interactive_to_conversation(
     fallback_text: str,
     sender_type: str = "agent",
 ) -> bool:
-    """Encola un mensaje con botones de respuesta (HU-AOS-09).
+    """Encola un mensaje con botones de respuesta o con lista (HU-AOS-09, HU-INMO-03).
 
     La capacidad del canal se decide aquí, no por excepción en el adaptador: solo WhatsApp
-    Cloud (`meta`) con la ventana de 24 h abierta envía botones. En cualquier otro caso (web,
+    Cloud (`meta`) con la ventana de 24 h abierta envía interactivos. En cualquier otro caso (web,
     waweb, Messenger, ventana cerrada, payload fuera de topes) sale `fallback_text` por el camino
     de texto de siempre, que registra el fallo si la ventana está cerrada. `content` guarda el
     cuerpo para el panel; `interactive`, el payload. Devuelve True si quedó encolado."""

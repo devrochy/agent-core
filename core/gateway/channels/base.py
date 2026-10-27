@@ -76,9 +76,10 @@ class OutboundAdapter(ABC):
     async def send_interactive(
         self, credentials: dict[str, str], to_external_id: str, interactive: dict[str, Any]
     ) -> str:
-        """Envía un mensaje interactivo con botones de respuesta (HU-AOS-09). `interactive` es
-        `{"type": "button", "body": str, "buttons": [{"id", "title"}]}`, ya saneado por el
-        kernel. Solo WhatsApp Cloud lo implementa: el sender decide la capacidad del canal antes de
+        """Envía un mensaje interactivo con botones de respuesta (HU-AOS-09) o con lista
+        (HU-INMO-03). `interactive` es `{"type": "button", "body": str, "buttons": [{"id", "title"}]}`
+        o `{"type": "list", "body": str, "button": str, "rows": [{"id", "title", "description"?}]}`,
+        ya saneado por el kernel. Solo WhatsApp Cloud lo implementa: el sender decide la capacidad del canal antes de
         encolar, así que los demás canales reciben la confirmación como texto y nunca llegan aquí."""
         from core.shared.exceptions import ChannelError
 
