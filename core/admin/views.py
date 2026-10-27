@@ -95,6 +95,11 @@ from core.admin.waweb_service import (
 from core.admin.waweb_service import (
     session_state as waweb_session_state,
 )
+from core.agents.habilitacion import (
+    configure_plugin_for_tenant,
+    set_pack_for_tenant,
+)
+from core.agents.habilitacion import ensure_pack_activated as _ensure_pack_activated
 from core.agents.spec import (
     CORE_PACK_ID,
     activate_spec_version,
@@ -143,7 +148,6 @@ from core.llm.difficulty_router import (
 from core.mcp.host import mcp_host
 from core.plugin_manager import plugin_manager
 from core.shared.crypto import get_secret_box
-from core.shared.exceptions import PluginConfigError, PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, negocios_de_cuenta, tenant_scope
 from core.shared.test_mode import TEST_CHANNEL
@@ -1093,48 +1097,6 @@ async def spec_editor() -> RedirectResponse:
     return RedirectResponse("/admin/configuracion?tab=avanzado", status_code=307)
 
 
-async def _ensure_pack_activated(pack: str) -> str | None:
-    """Activa un pack si su código todavía no estaba cargado. Devuelve el error
-    (str) o None si quedó activo (o ya lo estaba).
-
-    Un pack con config obligatoria y sin fila previa para el tenant actual (ej.
-    nunca pasó por `tenant create --packs` ni por `/admin/plugins/<id>/configurar`)
-    no activa: `load_config` exige una fila existente. Se intenta una config
-    vacía por default (mismo patrón que ya usa `onboard_tenant` en
-    core/onboarding.py) para los packs cuyo schema no tiene campos obligatorios.
-
-    Si el schema SÍ exige campos reales (ej. credenciales de una pasarela de
-    pago), antes esto dejaba pasar el `ValidationError` crudo de pydantic tal
-    cual al flash del admin ("3 validation errors for PaymentsConfig...") --
-    inentendible para quien solo apretó el botón "Activar" en vez de
-    "Configurar" primero. Ahora se traduce a un mensaje accionable, sin pisar
-    una configuración real si ya existía.
-    """
-    if plugin_manager.is_active(pack):
-        return None
-    try:
-        module = plugin_manager.get(pack)
-        if module is not None and module.config_schema is not None:
-            async with get_session() as session:
-                has_config = (
-                    await session.execute(
-                        select(PluginConfig).where(
-                            PluginConfig.plugin_id == pack,
-                            PluginConfig.tenant_id == get_current_tenant_id(),
-                        )
-                    )
-                ).scalar_one_or_none() is not None
-            if not has_config:
-                try:
-                    await plugin_manager.save_config(pack, {})
-                except PluginConfigError:
-                    return f'{pack} necesita configuración -- usá el botón "Configurar" (⚙️) primero'
-        await plugin_manager.activate(pack)
-        return None
-    except PluginError as exc:
-        return f"{pack}: {exc}"
-
-
 async def _save_spec_version(new_spec: AgentSpec) -> str | None:
     """Delegación a `core.agents.spec.save_spec_version` (fuente única)."""
     return await save_spec_version(new_spec)
@@ -1629,110 +1591,6 @@ def _quota_redirect(exc: QuotaExceeded) -> RedirectResponse:
         f"({exc.used}/{exc.limit}). Mejorá tu plan en /admin/plan.&flash_type=danger",
         status_code=303,
     )
-
-
-async def configure_plugin_for_tenant(plugin_id: str, values: dict[str, Any]) -> None:
-    """Guarda la config del plugin, lo activa y lo habilita para el tenant actual.
-
-    Punto ÚNICO compartido por el panel SSR y la API `/api/v1` (ADR-0076/0077): la
-    lógica de cifrado, activación y cuota del pack no se duplica. Levanta
-    `QuotaExceeded` si el plan no permite habilitar otro pack.
-    """
-    # La cuota se decide ANTES de persistir: al tope del plan no se guarda nada (P0 de
-    # pruebas 2026-10-17; antes quedaba la config guardada con el pack deshabilitado).
-    await _verificar_cuota_si_no_habilitado(plugin_id)
-    await plugin_manager.save_config(plugin_id, values)
-    await plugin_manager.activate(plugin_id)
-    await _enable_pack_for_tenant(plugin_id)
-
-
-async def _verificar_cuota_si_no_habilitado(pack: str) -> None:
-    spec = await load_active_spec()
-    if pack in spec.packs:
-        return
-    tenant_id = get_current_tenant_id()
-    if tenant_id is None:
-        return
-    from core.agents.spec import count_tenant_packs
-    from core.billing.enforcement import quota_decision
-
-    decision = await quota_decision(tenant_id, "plugins")
-    if not decision.allowed:
-        raise QuotaExceeded("plugins", count_tenant_packs(spec), decision.limit or 0)
-
-
-async def _enable_pack_for_tenant(pack: str) -> int | None:
-    """Agrega `pack` a `AgentSpec.packs` del tenant actual (nueva versión).
-
-    Aplica la cuota de plugins del plan (ADR-0045): si ya está en el límite y el
-    pack no estaba habilitado, levanta `QuotaExceeded`.
-    """
-    spec = await load_active_spec()
-    if pack in spec.packs:
-        return None
-    tenant_id = get_current_tenant_id()
-    if tenant_id is not None:
-        from core.agents.spec import count_tenant_packs
-        from core.billing.enforcement import quota_decision
-
-        decision = await quota_decision(tenant_id, "plugins")
-        if not decision.allowed:
-            raise QuotaExceeded(
-                "plugins", count_tenant_packs(spec), decision.limit or 0
-            )
-    new_spec = spec.model_copy(update={"packs": sorted({*spec.packs, pack})})
-    version = await _save_spec_version(new_spec)
-    await _seed_flow_for_current_tenant(pack)
-    return version
-
-
-async def _seed_flow_for_current_tenant(pack: str) -> None:
-    """Siembra/actualiza el flujo del pack en el `flow.json` del tenant (ADR-0054).
-
-    Best-effort: un fallo de filesystem no puede tumbar la activación (el runtime
-    cae al default del pack si el archivo no está). No pisa las secciones propias
-    del tenant ni las de otros packs.
-    """
-    tenant_id = get_current_tenant_id()
-    if tenant_id is None:
-        return
-    try:
-        from core.agents.flow import seed_tenant_flow
-        from core.shared.tenant import tenant_slug
-
-        slug = await tenant_slug(tenant_id)
-        if slug:
-            seed_tenant_flow(slug, [pack])
-    except Exception:
-        log.warning("tenant_flow_seed_failed", plugin=pack, exc_info=True)
-
-
-async def _disable_pack_for_tenant(pack: str) -> int | None:
-    """Quita `pack` de `AgentSpec.packs` del tenant actual (nueva versión).
-
-    NO desactiva el código globalmente — otro tenant puede seguir usándolo.
-    """
-    spec = await load_active_spec()
-    if pack not in spec.packs:
-        return None
-    new_spec = spec.model_copy(update={"packs": sorted(set(spec.packs) - {pack})})
-    return await _save_spec_version(new_spec)
-
-
-async def set_pack_for_tenant(pack: str, enabled: bool) -> str | None:
-    """Habilita/deshabilita un pack para el tenant actual (fuente única SSR + API).
-
-    Devuelve un mensaje de error, o `None` si quedó aplicado. Levanta
-    `QuotaExceeded` si el plan no permite habilitar otro pack.
-    """
-    if enabled:
-        error = await _ensure_pack_activated(pack)
-        if error is not None:
-            return error
-        await _enable_pack_for_tenant(pack)
-        return None
-    await _disable_pack_for_tenant(pack)
-    return None
 
 
 @router.post("/plugins/{plugin_id}/activar")
