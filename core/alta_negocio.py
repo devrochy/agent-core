@@ -103,6 +103,72 @@ async def motivo_para_rechazar_alta_de_tester(slug: str, admin_email: str | None
     return None
 
 
+async def _agentes_base_al_alta(tenant_id: uuid.UUID, *, nuevo: bool) -> list[str]:
+    """El Coordinador y el General nacen con el negocio (HU-AOS-53, SPEC-39).
+
+    Reusa el backfill B2 (`backfill_agentes`, idempotente): crea los dos agentes reservados con su
+    versión, derivados del AgentSpec v2 que acaba de dejar el alta, y las instancias de las conexiones
+    que ya existan (las posteriores las crea `instancias_de_conexion_nueva`). No cambia `aos_runtime`:
+    el negocio sigue en `legacy` hasta que se migre (P-34), así que no cambia cómo atiende.
+    En un negocio NUEVO deja encendido el recorte del General (`agent_os.recortar_general`), de modo
+    que cada especialista que cree el asistente le quite al General lo suyo; un negocio que ya existía
+    conserva su bandera (la enciende el master). Frontera deliberada: un fallo se registra y el alta
+    sigue, el backfill lo repara."""
+    pasos: list[str] = []
+    try:
+        from core.agents.backfill_agentes import backfill_agentes
+
+        reporte = await backfill_agentes(dry_run=False, tenant_id=tenant_id)
+        if reporte.errores or reporte.bloqueados:
+            problema = (reporte.errores or reporte.bloqueados)[0].mensaje
+            log.warning("alta_agentes_base_pendiente", tenant_id=str(tenant_id), motivo=problema)
+            pasos.append("agentes base pendientes (los crea el backfill)")
+        else:
+            pasos.append("agentes General y Coordinador listos")
+    except Exception:  # frontera deliberada: el alta no depende del Agent OS
+        log.warning("alta_agentes_base_fallo", tenant_id=str(tenant_id), exc_info=True)
+        pasos.append("agentes base pendientes (los crea el backfill)")
+        return pasos
+    if nuevo:
+        from core.agents.coordinacion import fijar_bandera
+
+        async with tenant_scope(tenant_id):
+            await fijar_bandera(tenant_id, True, actor="alta")
+        pasos.append("recorte del General encendido")
+    return pasos
+
+
+async def _runtime_al_alta(tenant_id: uuid.UUID) -> str:
+    """Un negocio NUEVO nace en `aos_runtime = 'v3'` (HU-AOS-53, P-34) para que su dueño pueda crear
+    agentes con el asistente (en `legacy` solo escribe el master, 403 `aos_runtime_legacy`).
+
+    Usa el escritor de siempre, `migrar_a_v3` (rol dueño, orden de banderas y auditoría; el mismo
+    camino de «Preparar mis datos»), sin construir ni promover releases: la release de cada
+    conexión llega con ella, y mientras no la tenga el turno sigue por el motor de siempre. Con
+    `AOS_CONNECTION_ROUTING` apagada (entorno) o ante cualquier bloqueo, el negocio queda en `legacy`
+    y se registra: el alta no depende del Agent OS y el master puede migrarlo después."""
+    from core.config import get_settings
+
+    if not get_settings().aos_connection_routing:
+        log.info("alta_runtime_pendiente", tenant_id=str(tenant_id), motivo="AOS_CONNECTION_ROUTING apagada")
+        return "runtime v3 pendiente (AOS_CONNECTION_ROUTING apagada en este entorno)"
+    try:
+        from core.releases.migracion_v3 import migrar_a_v3
+
+        reporte = await migrar_a_v3(
+            tenant_ids=[tenant_id], dry_run=False, construir=False, modules=plugin_manager.list_modules()
+        )
+        negocio = reporte.negocios[0] if reporte.negocios else None
+        if negocio is not None and negocio.accion in ("encendido", "ya_estaba"):
+            return "runtime v3 encendido"
+        motivo = "; ".join(negocio.bloqueos)[:300] if negocio else "negocio no encontrado"
+    except Exception as exc:  # frontera deliberada: el alta no depende del Agent OS
+        log.warning("alta_runtime_fallo", tenant_id=str(tenant_id), error=type(exc).__name__, exc_info=True)
+        motivo = type(exc).__name__
+    log.warning("alta_runtime_pendiente", tenant_id=str(tenant_id), motivo=motivo)
+    return f"runtime v3 pendiente ({motivo})"
+
+
 async def onboard_tenant(
     *,
     name: str,
@@ -119,6 +185,7 @@ async def onboard_tenant(
     preset: str | None = None,
     plan: str | None = None,
     sembrar_ejemplos: bool = True,
+    agentes_base: bool = True,
 ) -> tuple[uuid.UUID, list[str]]:
     """Da de alta un tenant con su asistente. Idempotente.
 
@@ -128,7 +195,9 @@ async def onboard_tenant(
     `phone_number_id` no puede pertenecer ya a OTRO tenant (evita ruteo
     cross-tenant del webhook). `preset`: id de `core/presets/` (ADR-0110), se aplica
     después de los `packs` sueltos; `plan` asigna el plan de la suscripción inicial
-    (sin él queda free y un preset de plan mayor falla). Devuelve (tenant_id, pasos).
+    (sin él queda free y un preset de plan mayor falla). `agentes_base=False` no crea el General ni el
+    Coordinador ni fija el runtime: lo usan los journeys, que montan su propio runtime (legacy o v3).
+    Devuelve (tenant_id, pasos).
     """
     _validate_slug(slug)
 
@@ -140,6 +209,7 @@ async def onboard_tenant(
 
     tenant_id = tenant_id or uuid.uuid4()
     steps: list[str] = []
+    negocio_nuevo = False
 
     plugin_manager.scan()
     await plugin_manager.sync_registry()
@@ -176,6 +246,7 @@ async def onboard_tenant(
             )
             session.add(tenant)
             await session.flush()
+            negocio_nuevo = True
             steps.append(f"tenant creado ({slug})")
         else:
             tenant_id = tenant.id
@@ -314,6 +385,11 @@ async def onboard_tenant(
             steps.extend(seed_tenant_flow(slug, list(packs)))
         except Exception:
             log.warning("tenant_flow_seed_failed", slug=slug, exc_info=True)
+
+    if agentes_base:
+        steps.extend(await _agentes_base_al_alta(tenant_id, nuevo=negocio_nuevo))
+        if negocio_nuevo:
+            steps.append(await _runtime_al_alta(tenant_id))
 
     onboarding.ensure_tenant_docs(slug, name, business_description)
     await onboarding.ensure_brand_voice(tenant_id, slug)

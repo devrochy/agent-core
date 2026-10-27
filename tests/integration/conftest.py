@@ -90,6 +90,30 @@ class FakeOutbound:
         return None
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _alta_sin_agent_os():
+    """Casi todos los tests de integración modelan negocios «de antes»: legacy y sin agentes (lo que dejaba el
+    alta hasta HU-AOS-53). El alta de hoy crea el General y el Coordinador y, con el ruteo encendido, deja el
+    negocio en v3; esos dos pasos se apagan aquí y solo los reactiva `test_alta_agentes_base` (con
+    `_alta_agent_os.ACTIVO = True`)."""
+    import _alta_agent_os
+
+    import core.alta_negocio as alta
+
+    reales = (alta._agentes_base_al_alta, alta._runtime_al_alta)
+
+    async def _agentes(tenant_id: uuid.UUID, *, nuevo: bool) -> list[str]:
+        return await reales[0](tenant_id, nuevo=nuevo) if _alta_agent_os.ACTIVO else []
+
+    async def _runtime(tenant_id: uuid.UUID) -> str:
+        return await reales[1](tenant_id) if _alta_agent_os.ACTIVO else "runtime v3 no aplicado (test)"
+
+    alta._agentes_base_al_alta = _agentes  # type: ignore[assignment]
+    alta._runtime_al_alta = _runtime  # type: ignore[assignment]
+    yield
+    alta._agentes_base_al_alta, alta._runtime_al_alta = reales  # type: ignore[assignment]
+
+
 @pytest.fixture(scope="module")
 def recorded() -> list[str]:
     return []
