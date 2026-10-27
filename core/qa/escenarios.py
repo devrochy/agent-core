@@ -459,7 +459,8 @@ def _registro() -> dict[str, Escenario]:
         Escenario(
             "canary-en-curso", "Prueba con una parte",
             "Una candidata en prueba con el 20 % de las conversaciones nuevas y una muestra parcial en las dos "
-            "versiones (por debajo de las 200 conversaciones).",
+            "versiones (por debajo de las 200 conversaciones). Si vuelves a pulsar «Preparar mis datos», la versión "
+            "en prueba se publica.",
             "Tus datos preparados con el Agent OS listo y sin otra prueba en curso.",
             "Conexiones \u203a Versiones, bloque de la prueba", "/conexiones", True, True, aos.canary_en_curso,
         ),

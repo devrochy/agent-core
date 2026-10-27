@@ -192,11 +192,9 @@ por el chat web para los flujos de punta a punta. Esta adenda fija los escenario
       `veredicto.consistencia_vigente`. No aprueba candidatas: el gate solo vale con la base igual a la activa. Corta
       la cadena de `consistencia_vigente` (da igual en un negocio de prueba) y Versiones muestra una «aprobada»
       posterior a la promoción.
-11. **«Preparar mis datos» con una prueba en curso.** `_activar_releases` construye igual, pero no promueve en la
-    conexión que tiene `canary_release_id` (fallaría con `canary_en_curso`) y lo deja en el log; el Agent OS sigue
-    `listo`. La tarjeta del escenario avisa que la prueba se detiene o se publica en Versiones. Una candidata sin
-    prueba sí la publica «Preparar» al volver a pulsarlo (el build cae en ella por el hash): queda dicho en la tarjeta
-    del escenario.
+11. **«Preparar mis datos» después de un escenario de versiones.** Volver a pulsarlo publica la candidata (el build cae
+    en ella por el hash) y, con una prueba en curso, la reemplaza y publica la versión en prueba (`migrar_a_v3` con
+    su exención). Es el comportamiento de HU-QA-09 y no se cambia: lo dicen las tarjetas de los dos escenarios.
 12. **Registro.** Cada escenario creado deja un `qa_events` (`campo='datos.escenario'`,
     `item_slug='datos-escenario-<slug>'`, `admin_id` del tester, `despues` con el resumen en JSON). El GET lee la
     última fila por tester y escenario.

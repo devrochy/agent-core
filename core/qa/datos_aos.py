@@ -160,20 +160,20 @@ async def _preset(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
         raise FalloAgentOS(f"preset v2: {reporte.errores[0][:300]}")
 
 
-async def _conexiones(tenant_id: uuid.UUID) -> list[tuple[uuid.UUID, uuid.UUID | None, uuid.UUID | None]]:
+async def _conexiones(tenant_id: uuid.UUID) -> list[tuple[uuid.UUID, uuid.UUID | None]]:
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             filas = (
                 await session.execute(
                     text(
-                        "SELECT cc.id, cc.active_release_id, cc.canary_release_id FROM channel_connections cc "
+                        "SELECT cc.id, cc.active_release_id FROM channel_connections cc "
                         "JOIN connection_types ct ON ct.id = cc.type_id WHERE cc.tenant_id = :t "
                         "AND cc.deleted_at IS NULL AND ct.produces_conversations ORDER BY cc.id"
                     ),
                     {"t": tenant_id},
                 )
             ).all()
-    return [(f[0], f[1], f[2]) for f in filas]
+    return [(f[0], f[1]) for f in filas]
 
 
 async def _activar_releases(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
@@ -181,15 +181,10 @@ async def _activar_releases(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
     from core.releases.promocion import promover
 
     async with tenant_scope(tenant_id):
-        for cid, activa, en_prueba in await _conexiones(tenant_id):
+        for cid, activa in await _conexiones(tenant_id):
             build = await construir(
                 tenant_id, cid, actor=ACTOR, modules=modulos, notas="Centro de pruebas: Preparar mis datos (HU-QA-09)."
             )
-            if en_prueba is not None:
-                # Con una prueba con una parte en curso (el escenario `canary-en-curso`, HU-QA-13), promover
-                # fallaría con `canary_en_curso`: se construye igual y no se promueve.
-                log.info("qa_datos_no_promueve_con_prueba", connection_id=str(cid))
-                continue
             if build.release_id != activa:
                 await promover(tenant_id, cid, build.release_id, actor=ACTOR, motivo="qa_datos", exencion="qa_datos")
 
