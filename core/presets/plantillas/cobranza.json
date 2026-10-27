@@ -6,6 +6,34 @@
   "habilidades": ["pack_cobranza"],
   "procedimientos": ["pack_cobranza.promesa_de_pago"],
   "playbooks": ["cobranza", "seguimiento-cobranza"],
+  "preguntas": [
+    {
+      "id": "largo_respuesta",
+      "texto": "¿Qué tan largas quieres sus respuestas?",
+      "ayuda": "Es un tope blando: el agente intenta no pasarse. Puedes cambiarlo después en el editor.",
+      "tipo": "opcion",
+      "defecto": "normal",
+      "opciones": [
+        {
+          "id": "cortas",
+          "texto": "Cortas",
+          "ayuda": "Directas, pensadas para el celular.",
+          "largo_maximo": 300
+        },
+        {
+          "id": "normal",
+          "texto": "Normales",
+          "ayuda": "Lo habitual de tu negocio."
+        },
+        {
+          "id": "detalladas",
+          "texto": "Detalladas",
+          "ayuda": "Explica con más detalle.",
+          "largo_maximo": 900
+        }
+      ]
+    }
+  ],
   "reglas": [
     {"id": "preset_cobranza_palabras", "when": {"keywordAny": ["saldo", "deuda", "estado de cuenta", "mora", "abono"]}}
   ]

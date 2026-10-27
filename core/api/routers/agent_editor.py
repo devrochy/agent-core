@@ -8,6 +8,9 @@ el editor del panel necesita y no existía:
 - `POST /api/v1/admin/agent-templates/{key}/agents` — `{name?}` → especialista con la key de la
   plantilla y su borrador derivado (sin publicar). 409 `key_taken` (con `fields.agent_id`) si
   ya existe; 409 `template_unavailable` si faltan habilidades.
+- `POST /api/v1/admin/agents/from-script` — `{template_key, answers, name?}` → lo mismo desde las
+  respuestas del guion de la plantilla (`questions` de `agent-templates`, HU-AOS-48), más los
+  `requirements` pendientes. 422 `invalid_answers` por pregunta; 409 igual que arriba.
 - `GET  /api/v1/admin/agent-superpowers` — superpoderes que ofrece el negocio con sus frases;
   con `?agent_id=` solo los del enfoque de ese agente (404 si no es del negocio).
 - `GET  /api/v1/admin/agents/{id}/requirements` — lo que falta configurar para el enfoque del agente
@@ -60,7 +63,7 @@ from core.api.routers.agents import (
     _version,
 )
 from core.billing.enforcement import QuotaExceeded
-from core.presets import PresetError, load_plantilla
+from core.presets import PreguntaDePlantilla, PresetError, load_plantilla
 from core.presets.agentes import herramientas_de_plantilla
 
 router = APIRouter(prefix="/admin", tags=["admin · editor de agentes"])
@@ -87,6 +90,24 @@ class Requirement(BaseModel):
     content: Literal["catalogo", "servicios", "cartera"] | None = None
 
 
+class QuestionOption(BaseModel):
+    id: str
+    text: str
+    help: str
+
+
+class Question(BaseModel):
+    """Pregunta del guion del asistente de creación (HU-AOS-48). `type` «option» elige entre
+    `options` (`default` es la que se aplica sin respuesta); «text» es el nombre del agente."""
+
+    id: str
+    text: str
+    help: str
+    type: Literal["option", "text"]
+    options: list[QuestionOption]
+    default: str | None
+
+
 class AgentTemplate(BaseModel):
     key: str
     name: str
@@ -94,6 +115,7 @@ class AgentTemplate(BaseModel):
     # Sección del menú a la que pertenece (HU-AOS-51) y tools de pack que tendrá el agente.
     section: str
     tools: list[str]
+    questions: list[Question]
     skills: list[str]
     optional_skills: list[str]
     available: bool
@@ -112,6 +134,23 @@ class FromTemplateOut(BaseModel):
     agent: AgentSummary
     draft: AgentDraft
     warnings: list[str]
+
+
+class FromScriptIn(BaseModel):
+    """Respuestas del guion de una plantilla: `answers` es `id de la pregunta` → id de la opción
+    (o el texto, en la de nombre). Lo que no se contesta toma el valor por defecto del guion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    template_key: str = Field(pattern=r"^[a-z0-9_]{2,40}$")
+    answers: dict[str, str] = Field(default_factory=dict, max_length=10)
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+class FromScriptOut(FromTemplateOut):
+    """El borrador creado (sin publicar) y lo que le falta al negocio configurar para que funcione."""
+
+    requirements: list[Requirement]
 
 
 class LlmModel(BaseModel):
@@ -191,6 +230,17 @@ def _requirement(r: requisitos.Requisito) -> Requirement:
     )
 
 
+def _question(q: PreguntaDePlantilla) -> Question:
+    return Question(
+        id=q.id,
+        text=q.texto,
+        help=q.ayuda,
+        type="option" if q.tipo == "opcion" else "text",
+        options=[QuestionOption(id=o.id, text=o.texto, help=o.ayuda) for o in q.opciones],
+        default=q.defecto,
+    )
+
+
 def _error(exc: svc.ErrorDelEditor) -> ApiError:
     return ApiError(exc.status, exc.code, str(exc), fields=exc.campos or None)
 
@@ -227,6 +277,7 @@ async def list_templates(
             tools=herramientas_de_plantilla(
                 cargadas[v.key], catalogo, habilitados=habilitados, proveedor_suscripciones=proveedor
             ),
+            questions=[_question(q) for q in cargadas[v.key].preguntas],
             skills=list(v.skills),
             optional_skills=list(v.optional_skills),
             available=v.available,
@@ -257,6 +308,39 @@ async def create_from_template(
     except versiones.ErroresDeContrato as exc:
         raise _contrato_422(exc.issues) from None
     return FromTemplateOut(agent=_summary(agente, None), draft=_draft(borrador), warnings=avisos)
+
+
+@router.post("/agents/from-script", response_model=FromScriptOut, status_code=status.HTTP_201_CREATED)
+async def create_from_script(
+    payload: FromScriptIn,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> FromScriptOut:
+    """Crea el borrador de un especialista (sin publicar) desde las respuestas del guion de su
+    plantilla. 409 `key_taken` (con el `agent_id` existente) si el negocio ya tiene ese agente; 422
+    por pregunta si una respuesta no está en las opciones, sin crear nada."""
+    tid = await _puede_escribir(principal)
+    try:
+        agente, borrador, avisos = await svc.crear_desde_plantilla(
+            tid,
+            payload.template_key,
+            nombre=payload.name,
+            catalogo=_catalogo(),
+            actor=principal.admin.id,
+            respuestas=payload.answers,
+        )
+    except svc.ErrorDelEditor as exc:
+        raise _error(exc) from None
+    except versiones.ErroresDeContrato as exc:
+        raise _contrato_422(exc.issues) from None
+    pendientes = await requisitos.de_plantillas(
+        tid, await svc.habilitados_del_negocio(tid), [load_plantilla(payload.template_key)]
+    )
+    return FromScriptOut(
+        agent=_summary(agente, None),
+        draft=_draft(borrador),
+        warnings=avisos,
+        requirements=[_requirement(r) for r in pendientes.get(payload.template_key, [])],
+    )
 
 
 @router.get("/agent-superpowers", response_model=Page[Superpower])
