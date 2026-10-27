@@ -47,7 +47,6 @@ from .models import (
     CarteraOptimizadaLog,
     Cliente,
     CobroPropietario,
-    ConversacionPropietario,
     Cuota,
     Device,
     Gasto,
@@ -57,7 +56,6 @@ from .models import (
     Inyeccion,
     LinkPago,
     Liquidacion,
-    MensajePropietario,
     Pago,
     PosicionGestor,
     Prestamo,
@@ -1199,113 +1197,6 @@ async def reports(
             for liq in liquidaciones
         ],
     )
-
-
-# ------------------------------------------------- hilo con el propietario
-class OwnerMessage(BaseModel):
-    id: uuid.UUID
-    direccion: str
-    tipo: str
-    autor: str
-    contenido: str
-    fecha: str
-
-
-class OwnerThread(BaseModel):
-    whatsapp: str
-    asunto: str
-    estado: str
-    abierto: bool
-    mensajes: list[OwnerMessage]
-
-
-@router.get("/owner-thread", response_model=OwnerThread)
-async def owner_thread(
-    principal: Annotated[Principal, Depends(require("pack_cobranza:propietario"))],
-) -> OwnerThread:
-    from .admin import _propietario_whatsapp
-
-    tid = principal.tenant_id
-    async with get_session() as session:
-        conv = (
-            await session.execute(
-                select(ConversacionPropietario).where(
-                    ConversacionPropietario.tenant_id == tid,
-                    ConversacionPropietario.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        mensajes = (
-            []
-            if conv is None
-            else (
-                (
-                    await session.execute(
-                        select(MensajePropietario)
-                        .where(
-                            MensajePropietario.tenant_id == tid,
-                            MensajePropietario.conversacion_id == conv.id,
-                            MensajePropietario.deleted_at.is_(None),
-                        )
-                        .order_by(MensajePropietario.created_at)
-                    )
-                )
-                .scalars()
-                .all()
-            )
-        )
-    return OwnerThread(
-        whatsapp=await _propietario_whatsapp(),
-        asunto=conv.asunto if conv else "Comunicación con el propietario",
-        estado=conv.estado if conv else "abierta",
-        abierto=conv is not None,
-        mensajes=[
-            OwnerMessage(
-                id=m.id,
-                direccion=m.direccion,
-                tipo=m.tipo,
-                autor=m.autor_rol or "",
-                contenido=m.contenido,
-                fecha=m.created_at.strftime("%Y-%m-%d %H:%M") if m.created_at else "",
-            )
-            for m in mensajes
-        ],
-    )
-
-
-class OwnerMessageCreate(BaseModel):
-    contenido: str
-    direccion: str = "saliente"
-
-
-@router.post("/owner-thread/messages", status_code=204)
-async def create_owner_message(
-    payload: OwnerMessageCreate,
-    principal: Annotated[Principal, Depends(require("pack_cobranza:propietario", write=True))],
-) -> Response:
-    from .admin import registrar_mensaje_propietario
-
-    contenido = payload.contenido.strip()
-    if not contenido:
-        raise ApiError.bad_request("Escribe un mensaje.", "missing_content")
-    direccion = payload.direccion if payload.direccion in ("saliente", "entrante") else "saliente"
-    async with get_session() as session:
-        mensaje = await registrar_mensaje_propietario(
-            session,
-            principal.tenant_id,
-            contenido,
-            direccion=direccion,
-            autor_rol="admin" if direccion == "saliente" else "propietario",
-        )
-        _audit(
-            session,
-            principal.tenant_id,
-            "mensaje_propietario",
-            mensaje.id,
-            "crear",
-            despues={"direccion": direccion},
-        )
-    return Response(status_code=204)
 
 
 # ------------------------------------------------------- detalle de cartera

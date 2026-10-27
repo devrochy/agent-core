@@ -610,62 +610,12 @@ async def _conversacion_propietario(session, tid: uuid.UUID) -> ConversacionProp
 
 
 async def registrar_mensaje_propietario(session, tid: uuid.UUID, contenido: str, *, tipo: str = "manual", direccion: str = "saliente", autor_rol: str = "admin", cobro_id: uuid.UUID | None = None) -> MensajePropietario:
-    """Añade un mensaje al hilo con el propietario (lo usan el panel y las notificaciones)."""
+    """Añade un mensaje al hilo con el propietario (lo usan las notificaciones de cobro)."""
     conv = await _conversacion_propietario(session, tid)
     mensaje = MensajePropietario(tenant_id=tid, conversacion_id=conv.id, direccion=direccion, tipo=tipo, autor_rol=autor_rol, contenido=contenido, cobro_id=cobro_id)
     session.add(mensaje)
     await session.flush()
     return mensaje
-
-
-async def _propietario_whatsapp() -> str:
-    from core.plugin_manager import plugin_manager
-    from pack_cobranza.config import CobranzaConfig
-
-    try:
-        cfg = await plugin_manager.load_config(PLUGIN_ID)
-    except Exception:
-        return ""
-    return (cfg.propietario_whatsapp or "").strip() if isinstance(cfg, CobranzaConfig) else ""
-
-
-@router.get("/propietario", response_class=HTMLResponse)
-async def propietario_conversacion(request: Request) -> HTMLResponse:
-    ctx = await base_context(request, SECTION)
-    if ctx is None:
-        return RedirectResponse("/admin/login", status_code=303)
-    if not await _authorized(request, write=False):
-        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
-    tid = get_current_tenant_id()
-    async with get_session() as session:
-        conv = await _conversacion_propietario(session, tid)
-        mensajes = (await session.execute(select(MensajePropietario).where(MensajePropietario.tenant_id == tid, MensajePropietario.conversacion_id == conv.id, MensajePropietario.deleted_at.is_(None)).order_by(MensajePropietario.created_at))).scalars().all()
-    ctx.update(
-        record_id=str(conv.id),
-        whatsapp=await _propietario_whatsapp(),
-        mensajes=[{"id": str(m.id), "direccion": m.direccion, "tipo": m.tipo, "autor": m.autor_rol or "", "contenido": m.contenido, "fecha": m.created_at.strftime("%Y-%m-%d %H:%M") if m.created_at else ""} for m in mensajes],
-    )
-    return _render("cobranza/propietario.html", ctx)
-
-
-@router.post("/propietario/mensaje")
-async def propietario_mensaje(request: Request) -> RedirectResponse:
-    if await current_admin(request) is None:
-        return RedirectResponse("/admin/login", status_code=303)
-    if not await _authorized(request, write=True):
-        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    form = await request.form()
-    contenido = str(form.get("contenido") or "").strip()
-    direccion = str(form.get("direccion") or "saliente")
-    if direccion not in ("saliente", "entrante"):
-        direccion = "saliente"
-    if not contenido:
-        return RedirectResponse("/cobranza/propietario?flash=Escribe un mensaje&flash_type=danger", status_code=303)
-    tid = get_current_tenant_id()
-    async with get_session() as session:
-        mensaje = await registrar_mensaje_propietario(session, tid, contenido, direccion=direccion, autor_rol="admin" if direccion == "saliente" else "propietario")
-        _auditar(session, "mensaje_propietario", mensaje.id, "crear", despues={"direccion": direccion})
-    return RedirectResponse("/cobranza/propietario?flash=Mensaje registrado&flash_type=success", status_code=303)
 
 
 # --------------------------------------------------------------- dispositivos (ADR-0057)
