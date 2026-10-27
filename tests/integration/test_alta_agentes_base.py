@@ -63,6 +63,19 @@ async def test_el_alta_crea_general_y_coordinador_con_su_version() -> None:
     assert "recorte del General encendido" in pasos
 
 
+async def test_sin_agentes_base_el_alta_no_crea_agentes_ni_runtime() -> None:
+    """Los journeys del gate montan su propio runtime: el alta con `agentes_base=False` los deja en paz."""
+    from core.alta_negocio import onboard_tenant
+
+    slug = uniq("hu53-sin")
+    tid, pasos = await onboard_tenant(
+        name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False, agentes_base=False
+    )
+
+    assert await _agentes(tid) == {}
+    assert not any("General" in p or "runtime v3" in p for p in pasos)
+
+
 async def test_el_negocio_nuevo_enciende_el_recorte_y_sigue_en_legacy() -> None:
     from core.alta_negocio import onboard_tenant
 

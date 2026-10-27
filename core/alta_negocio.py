@@ -185,6 +185,7 @@ async def onboard_tenant(
     preset: str | None = None,
     plan: str | None = None,
     sembrar_ejemplos: bool = True,
+    agentes_base: bool = True,
 ) -> tuple[uuid.UUID, list[str]]:
     """Da de alta un tenant con su asistente. Idempotente.
 
@@ -194,7 +195,9 @@ async def onboard_tenant(
     `phone_number_id` no puede pertenecer ya a OTRO tenant (evita ruteo
     cross-tenant del webhook). `preset`: id de `core/presets/` (ADR-0110), se aplica
     después de los `packs` sueltos; `plan` asigna el plan de la suscripción inicial
-    (sin él queda free y un preset de plan mayor falla). Devuelve (tenant_id, pasos).
+    (sin él queda free y un preset de plan mayor falla). `agentes_base=False` no crea el General ni el
+    Coordinador ni fija el runtime: lo usan los journeys, que montan su propio runtime (legacy o v3).
+    Devuelve (tenant_id, pasos).
     """
     _validate_slug(slug)
 
@@ -383,9 +386,10 @@ async def onboard_tenant(
         except Exception:
             log.warning("tenant_flow_seed_failed", slug=slug, exc_info=True)
 
-    steps.extend(await _agentes_base_al_alta(tenant_id, nuevo=negocio_nuevo))
-    if negocio_nuevo:
-        steps.append(await _runtime_al_alta(tenant_id))
+    if agentes_base:
+        steps.extend(await _agentes_base_al_alta(tenant_id, nuevo=negocio_nuevo))
+        if negocio_nuevo:
+            steps.append(await _runtime_al_alta(tenant_id))
 
     onboarding.ensure_tenant_docs(slug, name, business_description)
     await onboarding.ensure_brand_voice(tenant_id, slug)

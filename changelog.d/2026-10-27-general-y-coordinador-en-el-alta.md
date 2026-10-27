@@ -16,3 +16,5 @@
   nuevo comando `agent-core db recorte-general (--tenant | --todos) [--apagar] [--aplicar]` lo cambia en negocios
   existentes (dry-run por defecto; `--todos` solo recorre los que están en v3). Los negocios ya existentes no se
   tocan hasta que alguien lo corra.
+
+`onboard_tenant(agentes_base=False)` salta esos pasos: lo usan los journeys del gate de pass^k, que montan su propio runtime y chocaban con `uq_agents_tenant_key` al crear un segundo Coordinador.
