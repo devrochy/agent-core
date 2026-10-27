@@ -76,7 +76,7 @@ Mismo patrón HMAC de `motor._firma` y `payload_boton_confirmar`:
 - Una tool es elegible solo si: declara `apta_para_opcion=True` (campo nuevo de `MCPTool`; las declarativas usan `"option_safe": true`, solo con el literal `true`); su pack está activo; su binding es **explícito** y está habilitado; y no pertenece a un procedimiento habilitado. Ninguna tool existente nace apta. Las declarativas que escriben (POST) nacen `sensible`. Las declarativas de un AgentSpec v3 no pueden marcarse aptas hasta que el contrato `declarativeTools` (congelado) lo permita.
 - Confirmación obligatoria si la tool es `sensible` (campo nuevo), si el binding tiene `requiresConfirmation` o si la opción lo pide.
 - Los argumentos salen **solo** de la definición (`args_fijos`) o del contexto que arma el servidor (`args_contexto`); nunca del texto del cliente ni del LLM (invariante 7, ADR-0108). El lint los valida contra el JSON Schema de la tool con un validador mínimo (`core/kernel/opciones/esquema.py`: el repo no valida hoy los argumentos del `tool_call` y no hay `jsonschema`); el tipo de un `args_contexto` se valida al resolver (`option_args_drift`).
-- **Bandera por negocio, apagada por defecto, que solo enciende el master:** `tenants.settings["opciones_directas"] = {"habilitada": bool}`. Clave propia, no `settings.agent_os`, porque el registro de configuración exige que toda bandera de ese grupo dependa de `aos_runtime = v3` y las opciones no. `core/kernel/opciones/bandera.py` es el único escritor; la ruta master-only y la entrada en el registro llegan con la API. Límite: a diferencia de las `aos_*` (migración 0097) no hay función ni trigger en la base, y otros caminos que reescriben `settings` entero podrían reponer un `true` apagado; aceptable con la bandera apagada y sin consumidor, y se pasa a columna si hace falta.
+- **Bandera por negocio, apagada por defecto, que solo enciende el master:** `tenants.settings["opciones_directas"] = {"habilitada": bool}`. Clave propia, no `settings.agent_os`, porque el registro de configuración exige que toda bandera de ese grupo dependa de `aos_runtime = v3` y las opciones no. `core/kernel/opciones/bandera.py` es el único escritor; la ruta master-only llegó en el PR 10a (la entrada en el registro de configuración se descartó, ver su adenda). Límite: a diferencia de las `aos_*` (migración 0097) no hay función ni trigger en la base, y otros caminos que reescriben `settings` entero podrían reponer un `true` apagado; aceptable con la bandera apagada y sin consumidor, y se pasa a columna si hace falta.
 
 ### 6. Piezas de cableado que faltan en el core (PRs 1, 2, 4, 5 y 7)
 
@@ -234,10 +234,11 @@ PR no se enciende nada en ningún negocio**: la bandera sigue apagada y solo cam
   ni «true» como texto ni ningún otro campo). Idempotente en el estado; cada PUT audita `opciones_directas_bandera`
   (quién pidió qué, aunque no cambie el valor). 404 con el sobre normal si el negocio no existe o está borrado, sin
   datos del negocio. El listado de negocios es el que ya existe (`GET /admin/platform/tenants`): no se duplica.
-- **Entrada en el registro de configuración (CFG-02): sigue diferida.** §5 decía que «va con esta ruta»; no entra
-  aquí porque el registro modela las banderas del grupo `agent_os` como opciones que dependen de `aos_runtime = v3`
-  (y las cuentas de opciones del master están fijadas por pruebas), y esta bandera no depende de v3. El interruptor del
-  panel (PR 10b) consume la ruta directamente, sin pasar por el registro.
+- **Entrada en el registro de configuración (CFG-02): DESCARTADA** (enmienda a §5, que la prometía «con la API»). El
+  registro es un catálogo de lectura; una prueba (`tests/test_cfg02_registro_opciones.py`) exige que toda opción del
+  grupo `agent_os` dependa de `aos_runtime = v3` y fija los conteos de opciones, y esta bandera no depende de v3.
+  El master la gobierna con la ruta de plataforma y el interruptor del PR 10b, que la consume directamente (precedente:
+  el gate de evals, `settings.evals`, también está fuera del registro). Ya no es un seguimiento pendiente.
 - **El «límite conocido» de `bandera.py` no se materializa.** Se revisaron todos los escritores de `tenants.settings`:
   los que reescriben el dict completo (`subscriptions.guardar_proveedor`, `presets.agentes._anotar_creado` y
   `_registrar`, `presets.apply`, `provisioning._guardar_origen`) abren la sesión nueva, leen con
@@ -266,3 +267,13 @@ PR no se enciende nada en ningún negocio**: la bandera sigue apagada y solo cam
   `settings` de escritura y no `require_owner_or_master`, a diferencia de definir una plantilla: un colaborador con
   escritura en Configuración puede marcar apta una tool declarativa (y la POST nace `sensible`). Se deja registrado como
   hallazgo; endurecerlo es otro cambio.
+- **«Procedimiento habilitado» (enmienda a §5).** En la implementación del PR 4 significa «de un pack habilitado y sano
+  del negocio» (`registro.disponibles`), sin mirar `tenants.aos_procedures`: así encender el motor no vuelve obsoleta
+  una opción ya publicada y no depende de otra bandera por negocio (fail-closed). Costo conocido: las tools de lectura
+  de la agenda quedan fuera en todo negocio con el pack de agenda. Los dos seguimientos que lo cambiarían (que las de solo
+  lectura ignoren la regla; una tool nueva del core) se deciden cuando un negocio pida una acción concreta; el primero
+  es una decisión de ADR. No se crea una tool nueva solo para rodear la regla.
+- **Antes del primer `PUT true`.** (1) Este ADR sigue «propuesto»: debe aceptarse (y registrarse la enmienda a ADR-0108)
+  antes de encender cualquier negocio. (2) La prueba del sandbox de Meta es una puerta HUMANA (runbook §1): la ruta no
+  la verifica, y mientras el master sea el dueño es aceptable. (3) Endurecer `option_safe` a dueño o master antes de
+  encender más allá de test.

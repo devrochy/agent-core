@@ -3,7 +3,8 @@
 Para que ninguno reponga una bandera que el master apagó (`settings.opciones_directas`, SPEC-40; también el gate y
 las banderas de colaboración) todo camino de leer-modificar-escribir tiene que leer la fila con `FOR UPDATE`: el
 `UPDATE … jsonb_set` del master espera ese candado y se aplica encima. Esta prueba vigila que un escritor nuevo no
-se olvide del candado (el caso real está en `tests/integration/test_opciones_bandera_platform.py`).
+se olvide del candado. Es una guarda PARCIAL: solo ve asignaciones `x.settings = …` (no `settings[k] = …`, `update(Tenant)`
+ni SQL crudo; hoy no existe ninguno y los de SQL son `jsonb_set`/`||` atómicos). El caso real está en `tests/integration/test_opciones_bandera_platform.py`).
 """
 
 from __future__ import annotations

@@ -247,6 +247,16 @@ async def test_el_catalogo_ofrece_las_tools_marcadas_solo_con_binding_y_pack(app
     email = citas["parameters"]["properties"]["attendee_email"]
     assert email["type"] == "string" and email["description"] and not citas["parameters"].get("required")
 
+    # La exclusión de `find_next_available` es por el procedimiento, no solo por no estar marcada: lo dicen las fichas reales.
+    from core.admin import plantillas_opciones_service as svc
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(a):
+        fichas = await svc.fichas_del_negocio(a)
+    assert fichas["find_next_available"].gobernada_por_procedimiento is True
+    assert fichas["list_client_appointments"].gobernada_por_procedimiento is False
+    assert fichas["list_client_appointments"].apta_para_opcion and fichas["list_client_appointments"].pack_activo
+
     # Deshabilitar el binding la saca del catálogo.
     cuerpo["tools"][0] = binding("list_client_appointments", "pack_calendar", habilitada=False)
     await app_client.put("/api/v1/admin/settings/skills", headers=ha, json=cuerpo)

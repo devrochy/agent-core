@@ -44,7 +44,8 @@ algo difiere, no se enciende la bandera: se reabre el diseño.
 
 ## 2. Encender la bandera en UN negocio de test
 
-Solo con el paso 1 registrado y el OK del dueño. La bandera la fija **únicamente el master** y es por negocio
+Solo con el paso 1 registrado, el ADR-0172 aceptado y el OK del dueño (la ruta no verifica nada de esto: la puerta es
+humana). La bandera la fija **únicamente el master** y es por negocio
 (`tenants.settings["opciones_directas"] = {"habilitada": true}`). El escritor único es
 `core/kernel/opciones/bandera.py::fijar` (atómico con `jsonb_set`, no pisa el resto de `settings`, audita
 `opciones_directas_bandera`) y su única llamada es la ruta de plataforma de abajo (PR 10a). El interruptor en el panel
