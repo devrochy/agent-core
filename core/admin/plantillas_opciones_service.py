@@ -46,6 +46,7 @@ from core.kernel.opciones.lint import (
 )
 from core.shared.audit import record_audit
 from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
@@ -71,6 +72,13 @@ class ErrorPlantillaOpciones(Exception):
         self.code = code
         self.message = message
         self.details = details
+
+
+def _scope(tenant_id: uuid.UUID) -> None:
+    """El `tenant_id` explícito es el del `tenant_scope` en curso: las consultas filtran por él y la RLS y el envío
+    usan el del contexto, así que un llamador que los desacople se detiene aquí (como `bandera.habilitada`)."""
+    if get_current_tenant_id() != tenant_id:
+        raise PermissionError("plantillas con opciones: fuera del tenant_scope del negocio")
 
 
 def _no_encontrada() -> ErrorPlantillaOpciones:
@@ -107,7 +115,7 @@ def _forma_o_vacia(almacenada: Any) -> Definicion | None:
     try:
         return Definicion.model_validate(almacenada)
     except ValidationError:
-        log.error("option_definition_unreadable")
+        log.error("option_definition_unreadable", tenant_id=str(get_current_tenant_id()))
         return None
 
 
@@ -115,6 +123,7 @@ def _forma_o_vacia(almacenada: Any) -> Definicion | None:
 async def fichas_del_negocio(tenant_id: uuid.UUID) -> dict[str, FichaTool]:
     """Una ficha por tool del negocio (registradas en el host y declarativas del AgentSpec), con el binding
     EXPLÍCITO del AgentSpec activo. Sin AgentSpec activo: vacío (no se siembra nada desde una consulta)."""
+    _scope(tenant_id)
     from core.agents.spec import enabled_packs, leer_spec_activo
     from core.kernel.procedures import registro
     from core.mcp.declarative import PLUGIN_ID as DECLARATIVE_PLUGIN_ID
@@ -270,6 +279,7 @@ def _viva(tenant_id: uuid.UUID, clave: str) -> tuple[Any, ...]:
 
 
 async def listar(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
+    _scope(tenant_id)
     async with get_session() as session:
         plantillas = (
             await session.execute(
@@ -284,6 +294,7 @@ async def listar(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
 
 
 async def obtener(tenant_id: uuid.UUID, clave: str) -> dict[str, Any]:
+    _scope(tenant_id)
     if not CLAVE.fullmatch(clave):
         raise _no_encontrada()
     async with get_session() as session:
@@ -296,6 +307,7 @@ async def obtener(tenant_id: uuid.UUID, clave: str) -> dict[str, Any]:
 
 # ------------------------------------------------------------------ borradores
 async def crear(tenant_id: uuid.UUID, actor: str, clave: str, nombre: str, definicion: Any | None) -> dict[str, Any]:
+    _scope(tenant_id)
     if not CLAVE.fullmatch(clave):
         raise ErrorPlantillaOpciones(422, "clave_invalida", "La clave admite minúsculas, números y _ (hasta 40).")
     forma = leer_forma(definicion) if definicion is not None else None
@@ -330,6 +342,7 @@ def _clave_repetida() -> ErrorPlantillaOpciones:
 
 async def guardar_borrador(tenant_id: uuid.UUID, actor: str, clave: str, nombre: str | None, definicion: Any) -> dict[str, Any]:
     """Reemplaza el borrador (y el nombre, si llega). No toca ninguna versión publicada."""
+    _scope(tenant_id)
     if not CLAVE.fullmatch(clave):
         raise _no_encontrada()
     forma = leer_forma(definicion)
@@ -350,6 +363,7 @@ async def guardar_borrador(tenant_id: uuid.UUID, actor: str, clave: str, nombre:
 async def eliminar(tenant_id: uuid.UUID, actor: str, clave: str) -> None:
     """Borrado lógico (libera la clave). Solo una plantilla que nunca se publicó o ya está retirada: la publicada
     se retira primero. La historia (versiones, envíos y toques) se conserva."""
+    _scope(tenant_id)
     if not CLAVE.fullmatch(clave):
         raise _no_encontrada()
     async with get_session() as session:
@@ -366,6 +380,7 @@ async def eliminar(tenant_id: uuid.UUID, actor: str, clave: str) -> None:
 async def publicar(tenant_id: uuid.UUID, actor: str, clave: str) -> dict[str, Any]:
     """Congela el borrador como la versión `n + 1`. Con errores en el lint (o sin borrador, o sin cambios) se
     rechaza y NO cambia nada. Los avisos (`warning`) no impiden publicar y viajan en la respuesta."""
+    _scope(tenant_id)
     if not CLAVE.fullmatch(clave):
         raise _no_encontrada()
     ctx = await contexto_del_lint(tenant_id)  # antes del candado: no se retiene la fila mientras se consulta
@@ -417,6 +432,7 @@ async def retirar(tenant_id: uuid.UUID, actor: str, clave: str) -> dict[str, Any
     """Retira la plantilla publicada: ya no se envía, y el toque de un botón que quedó en vuelo responde el texto
     fijo de «ya no está disponible». Marca `retired_at` en TODAS sus versiones (lo único que el trigger de
     inmutabilidad deja cambiar junto con `message_template_id`). Se puede volver a publicar un borrador después."""
+    _scope(tenant_id)
     if not CLAVE.fullmatch(clave):
         raise _no_encontrada()
     async with get_session() as session:
@@ -460,6 +476,7 @@ async def enviar_prueba(tenant_id: uuid.UUID, actor: str, clave: str, conversati
     """Envía la versión vigente a UNA conversación del propio negocio (nunca a un número libre) por la vía que
     corresponda, con `sender.send_options_to_conversation`: crea el `option_sends`, queda en `audit_log` y respeta
     la bandera, la pausa y las plantillas. Idempotente por `clave_idempotencia`."""
+    _scope(tenant_id)
     from core.gateway.sender import send_options_to_conversation
 
     if not CLAVE.fullmatch(clave):
@@ -484,6 +501,10 @@ async def enviar_prueba(tenant_id: uuid.UUID, actor: str, clave: str, conversati
             "degradado": r.degradado,
             "send_id": r.send_id,
         }
+    if r.outcome in (ev.NO_ENCONTRADA, ev.CLAVE_INVALIDA):
+        raise _no_encontrada()  # un solo mensaje para «inexistente» y «de otro negocio»
     status, code = _HTTP_DE_SALIDA.get(r.outcome, (502, "no_se_pudo_enviar"))
     mensaje = ev.para_el_agente(r).get("mensaje") or "No se pudo enviar la plantilla."
-    raise ErrorPlantillaOpciones(status, code, str(mensaje), {"motivo": r.motivo} if r.motivo else None)
+    # `motivo` es un código cerrado solo en estos resultados; en un fallo interno es el nombre de una excepción.
+    cerrado = r.outcome in (ev.SIN_PLANTILLA, ev.PAUSADA, ev.CONTEXTO_INCOMPLETO, ev.NO_PUBLICADA)
+    raise ErrorPlantillaOpciones(status, code, str(mensaje), {"motivo": r.motivo} if r.motivo and cerrado else None)

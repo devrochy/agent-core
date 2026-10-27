@@ -71,6 +71,28 @@ class OpcionesHallazgoOut(BaseModel):
     mensaje: str
 
 
+class OpcionesDetallesDeError(BaseModel):
+    hallazgos: list[OpcionesHallazgoOut] = Field(default_factory=list)
+    motivo: str | None = None
+
+
+class OpcionesError(BaseModel):
+    code: str
+    message: str
+    fields: dict[str, str] | None = None
+    details: OpcionesDetallesDeError | None = None
+
+
+class OpcionesErrorOut(BaseModel):
+    """El sobre de error de la API (`{error: {code, message, details?}}`). En un 422 de esta API,
+    `error.details.hallazgos` trae los mismos `{path, code, severity, mensaje}` del lint."""
+
+    error: OpcionesError
+
+
+_ERROR_CON_HALLAZGOS: dict[int | str, dict[str, Any]] = {422: {"model": OpcionesErrorOut}, 409: {"model": OpcionesErrorOut}}
+
+
 class OpcionesVersionOut(BaseModel):
     version_n: int
     publicada_en: datetime
@@ -205,7 +227,7 @@ async def validar(body: OpcionesDefinicionIn, principal: Annotated[Principal, De
     return {"valida": not any(h.severity == "error" for h in hallazgos), "hallazgos": svc.hallazgos_como_dicts(hallazgos)}
 
 
-@router.post("/vista-previa", response_model=VistaPreviaOpcionesOut)
+@router.post("/vista-previa", response_model=VistaPreviaOpcionesOut, responses=_ERROR_CON_HALLAZGOS)
 async def vista_previa(body: VistaPreviaOpcionesIn, principal: Annotated[Principal, Depends(lectura)]) -> dict[str, Any]:
     """Lo que saldría por cada vía con valores de muestra, sin enviar nada. 422 con los hallazgos si la
     definición tiene errores."""
@@ -221,7 +243,7 @@ async def listar(principal: Annotated[Principal, Depends(lectura)]) -> dict[str,
     return {"plantillas": await svc.listar(_negocio(principal))}
 
 
-@router.post("", response_model=OpcionesPlantillaOut, status_code=201)
+@router.post("", response_model=OpcionesPlantillaOut, status_code=201, responses=_ERROR_CON_HALLAZGOS)
 async def crear(body: OpcionesCrearIn, principal: Annotated[Principal, Depends(escritura)]) -> dict[str, Any]:
     """Crea un borrador. 409 `clave_repetida` si el negocio ya tiene una plantilla viva con esa clave."""
     try:
@@ -238,7 +260,7 @@ async def obtener(clave: str, principal: Annotated[Principal, Depends(lectura)])
         raise _api(exc) from exc
 
 
-@router.put("/{clave}/borrador", response_model=OpcionesPlantillaOut)
+@router.put("/{clave}/borrador", response_model=OpcionesPlantillaOut, responses=_ERROR_CON_HALLAZGOS)
 async def guardar_borrador(clave: str, body: OpcionesBorradorIn, principal: Annotated[Principal, Depends(escritura)]) -> dict[str, Any]:
     """Reemplaza el borrador. Las versiones publicadas no cambian. 422 `definicion_invalida` si la forma falla."""
     try:
@@ -258,7 +280,7 @@ async def eliminar(clave: str, principal: Annotated[Principal, Depends(escritura
 
 
 # ------------------------------------------------------------------ ciclo de vida
-@router.post("/{clave}/publicar", response_model=OpcionesPublicadaOut, status_code=201)
+@router.post("/{clave}/publicar", response_model=OpcionesPublicadaOut, status_code=201, responses=_ERROR_CON_HALLAZGOS)
 async def publicar(clave: str, principal: Annotated[Principal, Depends(escritura)]) -> dict[str, Any]:
     """Congela el borrador como la versión siguiente (inmutable). 422 `definicion_con_errores` con los hallazgos si
     falla el lint: no cambia nada. 409 `sin_cambios` si el borrador es igual a la versión vigente."""
@@ -277,7 +299,7 @@ async def retirar(clave: str, principal: Annotated[Principal, Depends(escritura)
         raise _api(exc) from exc
 
 
-@router.post("/{clave}/enviar-prueba", response_model=OpcionesPruebaOut)
+@router.post("/{clave}/enviar-prueba", response_model=OpcionesPruebaOut, responses=_ERROR_CON_HALLAZGOS)
 async def enviar_prueba(clave: str, body: OpcionesEnviarPruebaIn, principal: Annotated[Principal, Depends(escritura)]) -> dict[str, Any]:
     """Envía la versión vigente a UNA conversación del negocio (nunca a un número libre), por la vía que
     corresponda. Es un mensaje real a ese cliente: el panel debe pedir confirmación."""

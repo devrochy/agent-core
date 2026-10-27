@@ -126,3 +126,17 @@ def test_un_envio_de_opciones_se_distingue_de_un_aviso_por_evento() -> None:
     assert (sin_id.tipo, sin_id.clave) == ("evento", None), "el tipo lo da el id del mensaje, no el texto"
     raro = settings_router._missing_item(_mensaje("opt_send:x:f1", "texto sin la forma esperada"))
     assert (raro.tipo, raro.clave) == ("opcion", None)
+
+
+@pytest.mark.asyncio
+async def test_el_servicio_se_niega_si_el_tenant_pedido_no_es_el_del_scope() -> None:
+    import uuid
+
+    from core.shared.tenant import tenant_scope
+
+    a, b = uuid.uuid4(), uuid.uuid4()
+    async with tenant_scope(a):
+        for llamada in (svc.listar(b), svc.obtener(b, "x"), svc.publicar(b, "t", "x"), svc.enviar_prueba(b, "t", "x", uuid.uuid4(), "12345678"),
+                        svc.catalogo_acciones(b)):
+            with pytest.raises(PermissionError):
+                await llamada

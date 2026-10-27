@@ -578,3 +578,39 @@ async def test_un_header_de_otro_negocio_ajeno_a_la_cuenta_es_403(app_client, li
     dueno_a = await _headers(app_client, a.tid, rol="owner")
     r = await app_client.get(URL, headers={**dueno_a, "X-Tenant-Id": str(b.tid)})
     assert r.status_code == 403
+
+
+async def test_la_respuesta_de_otro_negocio_es_identica_a_la_de_una_clave_inexistente(app_client, listo) -> None:
+    a, b, _ = listo
+    ha, hb = await _headers(app_client, a.tid), await _headers(app_client, b.tid)
+    clave = await _publicada(app_client, ha)
+    conv_b = await conversacion(b.tid, ventana=timedelta(hours=3))
+    prueba = {"conversation_id": str(conv_b), "clave_idempotencia": "12345678"}
+    for metodo, sufijo, cuerpo in (("get", "", None), ("post", "/publicar", None), ("post", "/retirar", None),
+                                   ("delete", "", None), ("put", "/borrador", {"definicion": definicion()}),
+                                   ("post", "/enviar-prueba", prueba)):
+        ajena = await getattr(app_client, metodo)(f"{URL}/{clave}{sufijo}", headers=hb, **({"json": cuerpo} if cuerpo else {}))
+        falsa = await getattr(app_client, metodo)(f"{URL}/nada_{uuid.uuid4().hex[:8]}{sufijo}", headers=hb, **({"json": cuerpo} if cuerpo else {}))
+        assert (ajena.status_code, ajena.json()) == (falsa.status_code, falsa.json()), (metodo, sufijo)
+
+
+async def test_el_desglose_de_avisos_sin_plantilla_no_cruza_negocios(app_client, listo) -> None:
+    a, b, _ = listo
+    hb = await _headers(app_client, b.tid)
+    conv_a = await conversacion(a.tid, ventana=None)
+    base = (await app_client.get("/api/v1/admin/settings/message-templates/missing", headers=hb)).json()
+    await _sql(
+        a.tid, "insert into messages (id, tenant_id, conversation_id, direction, sender_type, content, status, error_reason, client_message_id) "
+        "values (gen_random_uuid(), :t, :c, 'outbound', 'agent', 'Aviso «opciones:solo_de_a» sin enviar: x', 'failed', 'sin_plantilla', "
+        "'opt_send:abc:f1')", t=a.tid, c=conv_a,
+    )
+    despues = (await app_client.get("/api/v1/admin/settings/message-templates/missing", headers=hb)).json()
+    assert despues == base and "solo_de_a" not in str(despues)
+
+
+async def test_sin_permiso_gana_el_403_aunque_la_bandera_este_apagada(app_client, listo) -> None:
+    _, _, c = listo
+    sin_permiso = await _headers(app_client, c.tid, rol="colaborador", secciones={"connections": "none"})
+    assert (await app_client.get(URL, headers=sin_permiso)).status_code == 403
+    lector = await _headers(app_client, c.tid, rol="colaborador", secciones={"connections": "read"})
+    assert (await app_client.get(URL, headers=lector)).json()["error"]["code"] == "opciones_directas_no_habilitadas"

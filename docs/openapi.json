@@ -22626,14 +22626,24 @@
             }
           },
           "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
                 }
               }
-            }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
           }
         }
       }
@@ -22735,14 +22745,24 @@
             }
           },
           "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
                 }
               }
-            }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
           }
         }
       }
@@ -22915,14 +22935,24 @@
             }
           },
           "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
                 }
               }
-            }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
           }
         }
       }
@@ -22975,14 +23005,24 @@
             }
           },
           "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
                 }
               }
-            }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
           }
         }
       }
@@ -23105,14 +23145,24 @@
             }
           },
           "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
                 }
               }
-            }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
           }
         }
       }
@@ -37093,6 +37143,30 @@
         ],
         "title": "OpcionesDefinicionIn"
       },
+      "OpcionesDetallesDeError": {
+        "properties": {
+          "hallazgos": {
+            "items": {
+              "$ref": "#/components/schemas/OpcionesHallazgoOut"
+            },
+            "type": "array",
+            "title": "Hallazgos"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "title": "OpcionesDetallesDeError"
+      },
       "OpcionesEnviarPruebaIn": {
         "properties": {
           "conversation_id": {
@@ -37115,6 +37189,61 @@
           "clave_idempotencia"
         ],
         "title": "OpcionesEnviarPruebaIn"
+      },
+      "OpcionesError": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpcionesDetallesDeError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "OpcionesError"
+      },
+      "OpcionesErrorOut": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/OpcionesError"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "OpcionesErrorOut",
+        "description": "El sobre de error de la API (`{error: {code, message, details?}}`). En un 422 de esta API,\n`error.details.hallazgos` trae los mismos `{path, code, severity, mensaje}` del lint."
       },
       "OpcionesHallazgoOut": {
         "properties": {
