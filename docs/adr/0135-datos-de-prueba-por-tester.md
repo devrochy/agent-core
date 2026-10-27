@@ -95,3 +95,84 @@ link de Wompi sandbox) para `contratar_plan`. El cobro en línea NO se configura
 uso del rol dueño desde la API. La respuesta (`agent_os`: estado, motivo, chat web con clave y enlace, agentes)
 también va como una entrada «Agent OS» en `contenido`, que la pestaña Datos del panel ya muestra; el botón
 «Preparar» en estado `listo` es un cambio pendiente del panel.
+
+## Adenda (2026-10-26): escenarios de datos de prueba (HU-QA-13)
+
+«Preparar mis datos» deja el negocio `qa-<hex>` listo pero sin actividad: sin conversaciones, turnos,
+escalaciones, versiones, pedidos, suscripciones, avisos ni mensajes fallidos. El dueño decidió dar esos datos de dos
+formas: **escenarios con un botón**, deterministas y sin LLM, para lo difícil de reproducir, y la conversación real
+por el chat web para los flujos de punta a punta. Esta adenda fija los escenarios (`core/qa/escenarios.py`).
+
+1. **Registro de escenarios.** Cada escenario declara `slug` (fijo: el catálogo de pruebas lo cita como
+   `datos-escenario-<slug>`), título, qué crea, qué requiere y la ruta del panel donde se ve. Son diez:
+   `conversacion-con-turnos`, `escalacion-en-curso`, `calidad-con-muestra`, `version-candidata`, `canary-en-curso`,
+   `clientes-y-pedidos`, `suscripciones`, `notificaciones`, `mensajes-fallidos` y `cobranza-completa`.
+2. **API** bajo `/api/v1/admin/qa`, con `_solo_plataforma` y la sección `qa`: `GET /datos/escenarios` (la lista y lo
+   que creó la última vez cada escenario para este tester) y `POST /datos/escenarios/{slug}` (lo que creó y la ruta
+   para «Abrir»). **404 sin `QA_TESTERS_ENABLED`**: fuera de test los escenarios no existen.
+3. **Dónde escriben.** Solo en el negocio de la fila `qa_tester_datasets` del tester: estado `listo`, negocio vivo,
+   `slug = qa-<hex del tester>`, revalidado con `slug LIKE 'qa-%'` en la misma consulta que lo busca (como
+   `datos_aos._negocio_del_tester`). Todo corre en `tenant_scope` de ese negocio. Sin datos preparados, 409 «prepara
+   tus datos primero». Los escenarios del Agent OS (turnos, escalación, calidad, versiones y canary) exigen además el
+   Agent OS listo (v3 con las instancias Ventas y Agenda en el chat web, HU-QA-09).
+4. **Un candado por negocio.** `pg_try_advisory_xact_lock('qa_escenario:<tenant>')` en una sesión abierta durante el
+   escenario (el patrón de `datos_aos.preparar`): dos pulsaciones a la vez dan 409. `version-candidata` y
+   `canary-en-curso` toman también `CANDADO_SQL` (`agent_os:<tenant>`), porque construyen releases igual que
+   «Preparar» y el panel de banderas.
+5. **Deterministas, sin LLM y aditivos.** El contenido es fijo (textos, montos, etapas, conteos); solo cambian los ids y
+   un sufijo corto que hace únicos los SKU, las claves de idempotencia y los nombres. **Repetir crea otro caso** y no
+   borra ni modifica lo anterior: `audit_log`, `task_events`, `core_decisions`, `turn_outcomes` y `usage_ledger` son de
+   solo inserción, y lo creado se va cuando el master purga el negocio de prueba.
+6. **Funciones del core, nunca código de tests.** Tareas con `kernel.state.iniciar`/`registrar`; escalación con
+   `orchestrator.escalation.escalate`; A2A con `kernel.a2a.registrar`/`liquidar` y el traspaso con `kernel.handoff.cerrar`;
+   releases con `releases.build.construir` y `releases.canary.iniciar`; veredicto con `releases.veredicto.registrar`;
+   avisos con `notifications.service.notify_standalone`; perfil con `memory.facts.escribir_hechos`.
+7. **Turnos.** No tienen API pública: el escenario escribe las filas de `core_decisions`, `turn_outcomes`,
+   `audit_log`, `messages` y `usage_ledger` con las mismas columnas, valores y orden que el runtime
+   (`kernel/decisions.py`, `orchestrator/loop.py`, `verificador`). Un cambio de esquema que lo rompa lo detectan los
+   tests de integración del escenario. El traspaso usa el grafo congelado de la release activa y deja
+   `core_decisions.active_instance_id` (Ventas) ≠ `turn_outcomes.final_instance_id` (Agenda), como un turno real.
+8. **Packs: un gancho por pack, sin importarlos.** Pedidos, promociones y leads (Comercio), suscripciones y cobranza son
+   tablas de pack: el core no las toca. Cada pack expone en su módulo, como `seed_data` y `sembrar_datos_de_prueba`:
+
+   ```python
+   async def sembrar_escenario(self, tenant_id: uuid.UUID, escenario: str, datos: dict[str, Any],
+                               contexto: ContextoDeNegocio) -> dict[str, Any]
+   ```
+
+   y el core lo llama con `plugin_manager.get(pack)`. `datos` lleva lo que el core ya creó (ids de clientes y
+   conversaciones) y `contexto` el sufijo del caso. Devuelve conteos e ids para el resumen. Un pack que no lo tenga
+   deja el escenario en 409 con el motivo. Clientes, perfil y notas del equipo son del core. `suscripciones` activa
+   `pack_subscriptions` en el negocio con `configure_plugin_for_tenant` (lo mismo que `PUT /admin/plugins/{id}/config`).
+9. **Efectos externos acotados al negocio de prueba.** Ningún cliente sembrado lleva teléfono ni conversación
+   `channel='whatsapp'` (el «cliente de WhatsApp» que piden las pruebas es `customers.channel='whatsapp'` sin
+   `contact_phone`, con sus conversaciones en `web`), así que ningún aviso al cliente sale por WhatsApp. Sin
+   `pack_payments`, nada cobra. `escalate()` y los avisos `warning`/`critical` sí envían push, pero solo a los
+   `push_tokens` del negocio `qa-` (las cuentas de prueba del propio tester): es lo que piden las pruebas de la APK. El
+   mensaje fallido es una entrada del stream `agent_core:inbound:dlq` cuyo cliente se crea antes con
+   `bot_paused = true`: «Reintentar» lo re-encola sin turno ni envío. El evento de dominio fallido usa un topic sin
+   handlers (`qa.escenario_de_prueba`).
+10. **Estado único: se respeta, no se pisa.**
+    - `version-candidata` cambia `app_settings.assistant_name` (la misma asignación que `PUT /settings/identity`) a un
+      nombre único por pulsación (`Asistente QA <sufijo>`) y construye: si el dedupe devolviera la activa o una
+      detenida, 409. **No promueve.**
+    - `canary-en-curso` construye otra candidata e inicia la prueba al 20 % con `canary.iniciar`, más una muestra
+      parcial en `core_decisions` (carriles `stable` y `canary`, dentro de la ventana y por debajo de las 200
+      conversaciones: el job la deja en `sin_muestra` y, sin `turn_outcomes`, no hay señal dura). Con una prueba ya en
+      curso, 409 «detén la prueba primero»: no se detiene la del tester en silencio.
+    - Con el gate de pass^k cerrado en el negocio, 409: el escenario **no fabrica un `approved`** para pasarlo.
+    - `calidad-con-muestra` registra un veredicto de consistencia **sobre la release activa** (`base_release_id`
+      nulo, `origen='manual'`, modelo `escenario-sin-llm`, costo 0), que es lo que lee
+      `veredicto.consistencia_vigente`; no aprueba candidatas, porque el gate solo vale con la base igual a la activa.
+11. **«Preparar mis datos» con una prueba en curso.** `_activar_releases` salta la conexión que tiene
+    `canary_release_id`: promover ahí fallaría con `canary_en_curso` y dejaría el Agent OS en error. Una candidata sin
+    prueba sí la publica «Preparar» al volver a pulsarlo (el build cae en ella por el hash): queda dicho en la tarjeta
+    del escenario.
+12. **Registro.** Cada escenario creado deja un `qa_events` (`campo='datos.escenario'`,
+    `item_slug='datos-escenario-<slug>'`, `admin_id` del tester, `despues` con el resumen en JSON). El GET lee la
+    última fila por tester y escenario.
+
+**Consecuencias.** El panel tiene datos para probar cada módulo sin semanas de uso ni un LLM. A cambio, el negocio de
+prueba acumula turnos, avisos y versiones de mentira, que solo se limpian purgando el negocio, y los escenarios de
+turnos dependen del esquema del kernel: los tests de integración de `tests/integration/test_qa_escenarios.py` lo
+cuidan.
