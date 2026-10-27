@@ -46,6 +46,22 @@ def ventas_sin_secretos() -> dict[str, Any]:
     return spec
 
 
+def spec_en_su_enfoque(key: str) -> dict[str, Any]:
+    """`ventas_sin_secretos` recortado al enfoque de la clave (HU-AOS-51): publicar por la API respeta los
+    superpoderes de la plantilla cuando la clave es de una (`ventas`, `agenda`...); con otra clave no cambia."""
+    from core.agents.editor import procedimientos_del_enfoque
+
+    spec = ventas_sin_secretos()
+    permitidos = procedimientos_del_enfoque(key)
+    if permitidos is not None:
+        spec["procedures"] = [p for p in spec.get("procedures", []) if p.get("id") in permitidos]
+        ids = {p["id"] for p in spec["procedures"]}
+        exposes = spec.get("exposes") or {}
+        if "procedures" in exposes:
+            exposes["procedures"] = [i for i in exposes["procedures"] if i in ids]
+    return spec
+
+
 async def _negocio(aos_runtime: str = "legacy") -> uuid.UUID:
     from core.db.session import get_session
 
@@ -80,7 +96,7 @@ async def test_borrador_publicacion_concurrencia_y_validacion(app_client) -> Non
     h = await api_headers(app_client, tid)  # master
 
     r = await app_client.post(
-        "/api/v1/admin/agents", headers=h, json={"key": "ventas", "kind": "specialist", "name": "Ventas"}
+        "/api/v1/admin/agents", headers=h, json={"key": "comercial", "kind": "specialist", "name": "Ventas"}
     )
     assert r.status_code == 201, r.text
     agente = r.json()
@@ -186,7 +202,7 @@ async def test_con_runtime_legacy_solo_el_master_escribe(app_client) -> None:
     tid = await _negocio("legacy")
     h = await api_headers(app_client, tid, email=await _dueno(tid), password=PASSWORD)
     r = await app_client.post(
-        "/api/v1/admin/agents", headers=h, json={"key": "ventas", "kind": "specialist", "name": "Ventas"}
+        "/api/v1/admin/agents", headers=h, json={"key": "comercial", "kind": "specialist", "name": "Ventas"}
     )
     assert r.status_code == 403 and r.json()["error"]["code"] == "aos_runtime_legacy"
     assert (await app_client.get("/api/v1/admin/agents", headers=h)).status_code == 200
@@ -194,7 +210,7 @@ async def test_con_runtime_legacy_solo_el_master_escribe(app_client) -> None:
     v3 = await _negocio("v3")
     h3 = await api_headers(app_client, v3, email=await _dueno(v3), password=PASSWORD)
     r = await app_client.post(
-        "/api/v1/admin/agents", headers=h3, json={"key": "ventas", "kind": "specialist", "name": "Ventas"}
+        "/api/v1/admin/agents", headers=h3, json={"key": "comercial", "kind": "specialist", "name": "Ventas"}
     )
     assert r.status_code == 201, r.text
 
@@ -203,7 +219,7 @@ async def test_un_negocio_no_ve_ni_edita_agentes_de_otro(app_client) -> None:
     a, b = await _negocio(), await _negocio()
     ha, hb = await api_headers(app_client, a), await api_headers(app_client, b)
     r = await app_client.post(
-        "/api/v1/admin/agents", headers=ha, json={"key": "ventas", "kind": "specialist", "name": "Ventas A"}
+        "/api/v1/admin/agents", headers=ha, json={"key": "comercial", "kind": "specialist", "name": "Ventas A"}
     )
     aid = r.json()["id"]
     assert (await app_client.get("/api/v1/admin/agents", headers=hb)).json() == []
@@ -216,7 +232,7 @@ async def test_un_negocio_no_ve_ni_edita_agentes_de_otro(app_client) -> None:
     assert (await app_client.post(f"/api/v1/admin/agents/{aid}/versions", headers=hb, json={})).status_code == 404
     # Misma key en otro negocio: permitida (la unicidad es por negocio).
     r = await app_client.post(
-        "/api/v1/admin/agents", headers=hb, json={"key": "ventas", "kind": "specialist", "name": "Ventas B"}
+        "/api/v1/admin/agents", headers=hb, json={"key": "comercial", "kind": "specialist", "name": "Ventas B"}
     )
     assert r.status_code == 201
 
