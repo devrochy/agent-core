@@ -21926,6 +21926,12 @@
               }
             }
           },
+          "403": {
+            "description": "Solo el admin de plataforma y los testers."
+          },
+          "404": {
+            "description": "Fuera de test (`QA_TESTERS_ENABLED` apagada) o el escenario no existe."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -21985,6 +21991,15 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Solo el admin de plataforma y los testers."
+          },
+          "404": {
+            "description": "Fuera de test (`QA_TESTERS_ENABLED` apagada) o el escenario no existe."
+          },
+          "409": {
+            "description": "Sin datos preparados, otra corrida en curso o el escenario no se puede crear (motivo)."
           },
           "422": {
             "description": "Validation Error",
