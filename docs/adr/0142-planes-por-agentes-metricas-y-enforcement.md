@@ -29,7 +29,8 @@ crédito, que todavía no tiene ledger (HU-BILL-04/06).
    `kind = 'specialist'`, `status = 'active'` y sin borrar, que tengan **al menos una instancia viva en una
    conexión viva**. Se cuentan agentes, no filas de `agent_instances`: un agente en WhatsApp y en el chat web
    ocupa un solo cupo.
-   - El General es un especialista, así que cuenta.
+   - ~~El General es un especialista, así que cuenta.~~ **Enmendado el 2026-10-27:** el General
+     (`key = 'general'`) viene incorporado en todo negocio y **no cuenta** (ver «Enmienda»).
    - El Coordinador (`kind = 'core'`) no cuenta.
    - El back-office queda fuera: es su propia dimensión en HU-AOS-37.
    - Que el agente tenga versión publicada lo garantiza `agregar_instancia`, que solo instancia agentes
@@ -129,3 +130,19 @@ crédito, que todavía no tiene ledger (HU-BILL-04/06).
   - fuente única de los productos del tenant `solvershub` (HU-SH-01);
   - medición y enforcement del crédito (HU-BILL-04/06);
   - operaciones entre agentes y back-office (HU-AOS-37).
+
+## Enmienda (2026-10-27): el General no cuenta
+
+Por indicación del dueño, el agente General no suma al tope de `agentes` ni al consumo del plan: viene
+incorporado y no es una unidad que el negocio compre.
+
+- `_count_agents` excluye `key = 'general'`. Las cifras del catálogo (1 / 2 / 5 / ilimitado) no cambian, pero
+  ahora son agentes **además del General**: un Free arranca en 0 de 1 y puede publicar un especialista.
+- `agregar_instancia` y el pre-chequeo del editor tratan al General como «ya cuenta»: volver a ponerlo en una
+  conexión no se mide contra el tope, aunque el negocio esté lleno. Esto cierra el caso borde «revisable» de
+  más arriba (un Free que quitó al General y lo recupera al crear una conexión).
+- Reemplaza la decisión «Free queda con "1 agente cualquiera"»: el tope de Free es 1 agente propio.
+- *Pendiente:* en el repo de docs, `modelo-de-precios.md §5` y los textos comerciales que digan «1 agente»
+  deberían decir «1 agente + el General incorporado».
+- Los negocios que hoy están al tope por contar al General quedan con un cupo libre; no hay migración de datos
+  (la métrica se deriva de las tablas).
