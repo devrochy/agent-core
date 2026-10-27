@@ -148,3 +148,54 @@ Decisiones que el ADR dejaba abiertas o que el envío cambia respecto a lo escri
 - **Contexto.** `cliente.nombre` (nombre de perfil del canal, que el agente puede reescribir con `update_customer_profile`) se acota a **60** como en los demás consumidores (ADR-0108). `datos` lo arma el código del servidor que dispara el envío; hoy no tiene llamador y la lista permitida de rutas por origen (como `EVENTOS`) se fija con los PR 6 y 7.
 - **Observabilidad.** Log `option_send` por envío, métricas `option_sends_total{canal,via}` y `option_send_failures_total{canal,outcome}` (OTel sin exportador, igual que el toque) y auditoría `option_send` con ids y claves, sin valores; una clave inválida se registra como `invalid`.
 - **Lo que queda fuera.** El `sin_plantilla` de una opción cuenta en `GET /settings/message-templates/missing` junto con los de eventos y su remedio (publicar la versión en Meta) no es el de un evento: distinguirlos en el panel es del PR 7. El texto de respaldo numerado sale por `send_to_conversation` y puede partirse en varias burbujas según el `split_style` del negocio. La ventana desconocida cuenta como cerrada aquí, pero `sender.py` la trata como abierta en otros envíos (preexistente): unificar con un helper cuando haya envíos sin inbound. Falta el eval golden de la tool (exige LLM real: espera el OK del dueño).
+
+## Adenda (2026-10-27) · PR 7: publicar la versión en Meta
+
+Decisiones que el ADR dejaba abiertas y cómo quedaron:
+
+- **Reintento seguro sin tabla ni migración.** `message_templates` ya tiene `UNIQUE (waba_account_id, name, language)` y
+  admite `DRAFT`: antes del POST se RESERVA la fila (`DRAFT`, sin `meta_template_id`, con la categoría y los componentes)
+  y se liga `option_template_versions.message_template_id` (columna que `prevent_mutation` deja mutar) en la misma
+  transacción. Esa fila es la clave de idempotencia y el estado persistido. Una fila `DRAFT` sin id que ya existía al
+  llamar es un intento de resultado desconocido (corte, timeout, caída del worker): se pregunta a Meta por ESE nombre
+  (`GET …/message_templates?name=`, filtro documentado y no verificado desde aquí; se vuelve a comparar nombre e
+  idioma de lo que responde) y, si ya la tiene, se adopta su id y estado sin otro POST. No se usa `sync_templates`
+  para conciliar: pagina toda la WABA y reescribe `components` y `category` de todas las filas.
+- **El completado no pisa al webhook.** Entre la respuesta de Meta y el guardado local puede llegar el webhook de estado;
+  sin `meta_template_id` en la fila se descarta (`template_webhook_sin_fila_del_negocio`). El guardado solo completa una
+  fila que sigue sin id y solo avanza el estado si sigue en `DRAFT`. Si el aviso se perdió en esa ventana (milisegundos)
+  lo corrige el sync horario.
+- **Colisión de nombre.** La clave es única solo entre las vivas: borrar y recrear una clave vuelve a dar `<clave>_v1`.
+  Si ya existe en la WABA una plantilla de ese nombre que no está ligada a esta versión, solo se adopta si dice
+  EXACTAMENTE lo mismo (cuerpo, pie, botones y variables); si no, `name_taken` y no se toca nada. La salida del dueño es
+  publicar una versión nueva (Meta además no deja reusar un nombre borrado durante unas semanas).
+- **Categoría.** La elige el dueño: `UTILITY` o `MARKETING` (`AUTHENTICATION` se rechaza). Queda en la fila reservada
+  antes de llamar a Meta y se lee de `message_templates` (no de la publicación) porque `template_category_update`
+  puede cambiarla. Se manda `allow_category_change=False`: Meta rechaza en vez de recategorizar en silencio, porque el
+  costo cambia con la categoría. Un rechazo por eso llega como `REJECTED` con su motivo.
+- **Idioma.** La definición no lo tiene: parámetro con default `es` (el de la creación manual del panel). Los
+  `ejemplos` de los parámetros NAMED los da quien publica; sin ellos, `ejemplo` (Meta suele rechazarlo): el panel debe
+  pedirlos. Deben ser constantes neutras, nunca datos de un cliente.
+- **La bandera no gobierna la publicación.** Publicar en Meta no envía nada a ningún cliente; la bandera
+  `opciones_directas.habilitada` sigue gobernando los envíos y los toques. Quién puede publicar lo decide la API
+  (HU-OPC-05): `connections` con escritura y dueño o master (§5).
+- **Una versión, una plantilla de Meta, una WABA.** El vínculo es una sola columna y el envío exige que la plantilla sea de
+  la WABA de la conversación: un negocio con dos WABAs envía por la de la versión (`plantilla_de_otra_cuenta` en la
+  otra) y publicarla en otra conexión da `other_account`. Aceptable con pocos negocios con dos WABAs; si se necesita
+  una versión en varias WABAs hace falta una relación N:M (migración) y es otro cambio.
+- **Cupo.** Cada versión gasta una plantilla de las que Meta permite por cuenta. Antes de llamar se mira
+  `message_template_count`/`message_template_limit` (contadores del último sync): lleno → `template_quota_full`. El panel
+  debe mostrar cuáles versiones siguen vigentes para no llenar la WABA (retirar una versión no borra su plantilla).
+- **Si Meta falla, la versión publicada no se revierte.** Queda `published` con su vínculo y el error en
+  `message_templates.sync_error` (visible en el panel); el reintento completa la misma fila. `network_error`, `rate_limited`
+  e `in_progress` son reintentables; un rechazo de Meta, una definición inválida, `name_taken`, `other_account` y
+  `template_deleted` no.
+- **Superficie nueva y lo que NO cambia.** `post_template` se extrae de `create_template` (el panel sigue igual);
+  `find_template_by_name` es nueva. No se llama a `update_template` jamás para una versión. No hay tabla ni migración nuevas.
+- **Lo que queda fuera.** (a) El encadenado desde `publicar` (HU-OPC-05) y la lectura del estado en el listado se conectan al
+  fusionar ese PR (`estado_de_publicacion` ya está lista para el listado). (b) Distinguir en el panel el `sin_plantilla` de
+  una opción del de un evento (adenda del PR 5): es del panel (HU-OPC-06). (c) La clave Redis del límite de creación
+  (`tpl_create_rl:{waba_id}:{hora}`) no lleva el negocio (preexistente, mismo defecto que ya se corrigió en
+  `acquire_sync_lock`, ADR-0122): seguimiento aparte. (d) La prueba real del payload del QUICK_REPLY y de los límites de 25, 10
+  y 256 sigue **PENDIENTE** del dueño y es la puerta para encender la bandera.
+

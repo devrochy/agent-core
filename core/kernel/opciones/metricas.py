@@ -55,3 +55,13 @@ def error_de_tool(tool: str) -> None:
 
     registrada = mcp_host.get_tool(tool)
     _errores_tool.add(1, {"tool": tool[:80] if registrada is not None else "declarativa"})
+
+
+_publicaciones_meta = _meter.create_counter(
+    "option_meta_publications_total", description="Publicaciones de versiones de opciones como plantilla de Meta, por resultado"
+)
+
+
+def publicacion_meta(outcome: str) -> None:
+    """Una publicación a Meta. `outcome` es el conjunto cerrado de `meta` (published, meta_rejected, network_error…)."""
+    _publicaciones_meta.add(1, {"outcome": outcome})
