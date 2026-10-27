@@ -108,6 +108,53 @@ class ReglaDePlantilla(BaseModel):
     when: RoutingWhen
 
 
+class OpcionDePregunta(BaseModel):
+    """Una respuesta posible del guion. Su efecto es solo estructural: qué superpoderes de la
+    plantilla quedan en el agente y el largo máximo de su respuesta. Nunca texto para el prompt."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(pattern=r"^[a-z0-9_]{1,40}$")
+    texto: str = Field(min_length=1, max_length=120)
+    ayuda: str = Field(default="", max_length=200)
+    # Subconjunto de `PlantillaAgente.procedimientos`; vacío = esta respuesta no cambia los superpoderes.
+    procedimientos: list[Annotated[str, Field(pattern=r"^[a-z0-9_]{1,60}\.[a-z0-9_]{1,40}$")]] = Field(
+        default_factory=list, max_length=20
+    )
+    # `AgentSpec.persona.maxLength` del agente (tope blando); `None` = el del General.
+    largo_maximo: int | None = Field(default=None, ge=100, le=2000)
+
+
+class PreguntaDePlantilla(BaseModel):
+    """Pregunta del asistente de creación (HU-AOS-48, SPEC-39). El servidor es la fuente de verdad:
+    el panel y la APK pintan lo que reciben. `opcion` elige entre `opciones`; `texto` es el nombre
+    del agente. Solo se pregunta lo que decide algo: catálogo, citas y cartera se verifican con los
+    requisitos de la plantilla, no se preguntan."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(pattern=r"^[a-z0-9_]{1,40}$")
+    texto: str = Field(min_length=1, max_length=160)
+    ayuda: str = Field(default="", max_length=300)
+    tipo: Literal["opcion", "texto"] = "opcion"
+    opciones: list[OpcionDePregunta] = Field(default_factory=list, max_length=8)
+    # Id de la opción que se aplica si el cliente no responde (obligatoria en las de tipo `opcion`).
+    defecto: str | None = Field(default=None, pattern=r"^[a-z0-9_]{1,40}$")
+
+    @model_validator(mode="after")
+    def _coherente(self) -> PreguntaDePlantilla:
+        if self.tipo == "texto":
+            if self.opciones or self.defecto is not None:
+                raise ValueError("una pregunta de texto no lleva opciones ni valor por defecto")
+            return self
+        ids = [o.id for o in self.opciones]
+        if len(ids) < 2:
+            raise ValueError(f"la pregunta {self.id!r} necesita al menos dos opciones")
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"la pregunta {self.id!r} repite opciones")
+        if self.defecto not in ids:
+            raise ValueError(f"la pregunta {self.id!r} necesita un `defecto` que sea una de sus opciones")
+        return self
+
+
 class PlantillaAgente(BaseModel):
     """Plantilla de un agente especialista «para un fin» (ADR-0139). Es configuración del core,
     como el manifiesto: solo datos (nombres, ids y frases de enrutamiento), nunca prompts. El
@@ -139,6 +186,9 @@ class PlantillaAgente(BaseModel):
     # Datos de prueba del agente (HU-QA-10, ADR-0146) cuando no salen de sus habilidades:
     # `<pack>.<modo>` de una forma que declara otro pack (los planes de Suscripciones son productos).
     datos_de_prueba: str | None = Field(default=None, pattern=r"^[a-z0-9_]{1,60}\.[a-z0-9_]{1,40}$")
+    # Guion del asistente de creación (HU-AOS-48): máximo 10 pasos entre preguntas y verificaciones;
+    # el asistente suma identidad, conexión, verificación del contenido y publicación.
+    preguntas: list[PreguntaDePlantilla] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
     def _coherente(self) -> PlantillaAgente:
@@ -155,6 +205,16 @@ class PlantillaAgente(BaseModel):
         ajenos = sorted(p for p in self.procedimientos if p.split(".", 1)[0] not in propias)
         if ajenos:
             raise ValueError(f"procedimientos de habilidades que la plantilla no declara: {ajenos}")
+        ids = [q.id for q in self.preguntas]
+        if len(set(ids)) != len(ids):
+            raise ValueError("preguntas con id repetido")
+        if sum(q.tipo == "texto" for q in self.preguntas) > 1:
+            raise ValueError("solo una pregunta de texto (el nombre del agente)")
+        for q in self.preguntas:
+            for o in q.opciones:
+                fuera = sorted(set(o.procedimientos) - set(self.procedimientos))
+                if fuera:
+                    raise ValueError(f"la opción {o.id!r} de {q.id!r} nombra procedimientos que la plantilla no tiene: {fuera}")
         return self
 
 
@@ -264,8 +324,10 @@ def load_fragment(pack_id: str, vertical: str, config_schema: Any = None) -> Pac
 
 
 __all__ = [
+    "OpcionDePregunta",
     "PackFragment",
     "PlantillaAgente",
+    "PreguntaDePlantilla",
     "PresetError",
     "PresetManifest",
     "ReglaDePlantilla",

@@ -230,13 +230,19 @@ async def crear_desde_plantilla(
     nombre: str | None,
     catalogo: Mapping[str, Any],
     actor: uuid.UUID | None,
+    respuestas: Mapping[str, Any] | None = None,
 ) -> tuple[Any, Any, list[str]]:
     """Crea el especialista y su borrador derivado de la plantilla. Devuelve (agente, borrador,
     avisos). `ErrorDelEditor` 404 si la plantilla no existe, 409 si falta alguna habilidad
-    (`template_unavailable`) o si ya hay un agente con esa key (`key_taken`, con su id)."""
+    (`template_unavailable`) o si ya hay un agente con esa key (`key_taken`, con su id).
+
+    Con `respuestas` (el guion del asistente, HU-AOS-48) el agente conserva solo los superpoderes que
+    esas respuestas dejan y toma su largo máximo y su nombre; una respuesta fuera del guion es 422
+    (`invalid_answers`, un campo por pregunta) y no se crea nada."""
     from core.agents import versiones
     from core.presets import PresetError, load_plantilla
     from core.presets.agentes import _playbooks_de_packs, derivar_contenido
+    from core.presets.guion import RespuestasInvalidas, resolver
 
     _exigir_scope(tenant_id)
     if key_plantilla not in keys_de_plantillas():
@@ -246,6 +252,14 @@ async def crear_desde_plantilla(
     except PresetError:
         log.error("plantilla_invalida", template=key_plantilla)
         raise ErrorDelEditor(404, "not_found", "Plantilla no encontrada.") from None
+    ajustes = None
+    if respuestas is not None:
+        try:
+            ajustes = resolver(plantilla, respuestas)
+        except RespuestasInvalidas as exc:
+            raise ErrorDelEditor(422, "invalid_answers", "Revisa tus respuestas.", exc.por_pregunta) from None
+        plantilla = plantilla.model_copy(update={"procedimientos": ajustes.procedimientos})
+        nombre = nombre or ajustes.nombre
     habilitados = await habilitados_del_negocio(tenant_id)
     faltan = sorted(set(plantilla.habilidades) - habilitados)
     if faltan:
@@ -278,6 +292,8 @@ async def crear_desde_plantilla(
         raise ErrorDelEditor(
             409, "template_unavailable", "Tu negocio no ofrece ninguno de los superpoderes de esta plantilla."
         ) from None
+    if ajustes is not None and ajustes.largo_maximo is not None:
+        contenido["persona"] = {**contenido.get("persona", {}), "maxLength": ajustes.largo_maximo}
     try:
         agente = await versiones.crear_agente(
             tenant_id,

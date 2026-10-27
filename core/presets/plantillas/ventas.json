@@ -18,6 +18,68 @@
     "seguimiento",
     "pagos"
   ],
+  "preguntas": [
+    {
+      "id": "que_vendes",
+      "texto": "¿Qué vende tu negocio?",
+      "ayuda": "Define qué superpoder tendrá tu agente: tomar pedidos de productos, contratar planes, o los dos.",
+      "tipo": "opcion",
+      "defecto": "productos",
+      "opciones": [
+        {
+          "id": "productos",
+          "texto": "Productos",
+          "ayuda": "Toma el pedido: ítems, entrega y pago.",
+          "procedimientos": [
+            "pack_commerce.tomar_pedido"
+          ]
+        },
+        {
+          "id": "planes",
+          "texto": "Planes o suscripciones",
+          "ayuda": "Contrata el plan que elige el cliente.",
+          "procedimientos": [
+            "pack_commerce.contratar_plan"
+          ]
+        },
+        {
+          "id": "ambos",
+          "texto": "Productos y planes",
+          "ayuda": "Los dos superpoderes.",
+          "procedimientos": [
+            "pack_commerce.tomar_pedido",
+            "pack_commerce.contratar_plan"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "largo_respuesta",
+      "texto": "¿Qué tan largas quieres sus respuestas?",
+      "ayuda": "Es un tope blando: el agente intenta no pasarse. Puedes cambiarlo después en el editor.",
+      "tipo": "opcion",
+      "defecto": "normal",
+      "opciones": [
+        {
+          "id": "cortas",
+          "texto": "Cortas",
+          "ayuda": "Directas, pensadas para el celular.",
+          "largo_maximo": 300
+        },
+        {
+          "id": "normal",
+          "texto": "Normales",
+          "ayuda": "Lo habitual de tu negocio."
+        },
+        {
+          "id": "detalladas",
+          "texto": "Detalladas",
+          "ayuda": "Explica con más detalle.",
+          "largo_maximo": 900
+        }
+      ]
+    }
+  ],
   "reglas": [
     {
       "id": "preset_ventas_palabras",

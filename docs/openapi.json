@@ -23553,6 +23553,67 @@
         }
       }
     },
+    "/api/v1/admin/agents/from-script": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Create From Script",
+        "description": "Crea el borrador de un especialista (sin publicar) desde las respuestas del guion de su\nplantilla. 409 `key_taken` (con el `agent_id` existente) si el negocio ya tiene ese agente; 422\npor pregunta si una respuesta no está en las opciones, sin crear nada.",
+        "operationId": "create_from_script_api_v1_admin_agents_from_script_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FromScriptIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FromScriptOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/agent-superpowers": {
       "get": {
         "tags": [
@@ -48050,6 +48111,13 @@
             "type": "array",
             "title": "Tools"
           },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/Question"
+            },
+            "type": "array",
+            "title": "Questions"
+          },
           "skills": {
             "items": {
               "type": "string"
@@ -48097,6 +48165,7 @@
           "description",
           "section",
           "tools",
+          "questions",
           "skills",
           "optional_skills",
           "available",
@@ -49174,6 +49243,76 @@
           "titulo"
         ],
         "title": "FormaDeDatosOut"
+      },
+      "FromScriptIn": {
+        "properties": {
+          "template_key": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]{2,40}$",
+            "title": "Template Key"
+          },
+          "answers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "maxProperties": 10,
+            "title": "Answers"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "template_key"
+        ],
+        "title": "FromScriptIn",
+        "description": "Respuestas del guion de una plantilla: `answers` es `id de la pregunta` → id de la opción\n(o el texto, en la de nombre). Lo que no se contesta toma el valor por defecto del guion."
+      },
+      "FromScriptOut": {
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/AgentSummary"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/AgentDraft"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "requirements": {
+            "items": {
+              "$ref": "#/components/schemas/Requirement"
+            },
+            "type": "array",
+            "title": "Requirements"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent",
+          "draft",
+          "warnings",
+          "requirements"
+        ],
+        "title": "FromScriptOut",
+        "description": "El borrador creado (sin publicar) y lo que le falta al negocio configurar para que funcione."
       },
       "LoteDePrueba": {
         "properties": {
@@ -50581,6 +50720,82 @@
           "secciones"
         ],
         "title": "QaVersionEvo"
+      },
+      "Question": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "help": {
+            "type": "string",
+            "title": "Help"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "option",
+              "text"
+            ],
+            "title": "Type"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/QuestionOption"
+            },
+            "type": "array",
+            "title": "Options"
+          },
+          "default": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "text",
+          "help",
+          "type",
+          "options",
+          "default"
+        ],
+        "title": "Question",
+        "description": "Pregunta del guion del asistente de creación (HU-AOS-48). `type` «option» elige entre\n`options` (`default` es la que se aplica sin respuesta); «text» es el nombre del agente."
+      },
+      "QuestionOption": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "help": {
+            "type": "string",
+            "title": "Help"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "text",
+          "help"
+        ],
+        "title": "QuestionOption"
       },
       "QaEvolucion": {
         "properties": {
