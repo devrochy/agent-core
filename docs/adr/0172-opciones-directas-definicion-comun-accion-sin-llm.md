@@ -167,7 +167,7 @@ Decisiones que el ADR dejaba abiertas y cómo quedaron:
   lo corrige el sync horario.
 - **Colisión de nombre.** La clave es única solo entre las vivas: borrar y recrear una clave vuelve a dar `<clave>_v1`.
   Si ya existe en la WABA una plantilla de ese nombre que no está ligada a esta versión, solo se adopta si dice
-  EXACTAMENTE lo mismo (cuerpo, pie, botones y variables); si no, `name_taken` y no se toca nada. La salida del dueño es
+  EXACTAMENTE lo mismo (cuerpo, pie, botones y variables) y es de la categoría pedida; si no, `name_taken` (con motivo `categoria_distinta` en el segundo caso) y no se toca nada. El índice del vínculo no es único: dos versiones de una clave borrada y recreada pueden quedar ligadas a la misma plantilla de Meta cuando dicen lo mismo (inocuo: es la misma plantilla). La salida del dueño es
   publicar una versión nueva (Meta además no deja reusar un nombre borrado durante unas semanas).
 - **Categoría.** La elige el dueño: `UTILITY` o `MARKETING` (`AUTHENTICATION` se rechaza). Queda en la fila reservada
   antes de llamar a Meta y se lee de `message_templates` (no de la publicación) porque `template_category_update`
@@ -183,12 +183,13 @@ Decisiones que el ADR dejaba abiertas y cómo quedaron:
   la WABA de la conversación: un negocio con dos WABAs envía por la de la versión (`plantilla_de_otra_cuenta` en la
   otra) y publicarla en otra conexión da `other_account`. Aceptable con pocos negocios con dos WABAs; si se necesita
   una versión en varias WABAs hace falta una relación N:M (migración) y es otro cambio.
-- **Cupo.** Cada versión gasta una plantilla de las que Meta permite por cuenta. Antes de llamar se mira
+- **Cupo.** Se mira justo antes del POST (una versión que ya está en Meta no gasta cupo y su reintento no se topa con la cuenta llena). Cada versión gasta una plantilla de las que Meta permite por cuenta. Antes de llamar se mira
   `message_template_count`/`message_template_limit` (contadores del último sync): lleno → `template_quota_full`. El panel
   debe mostrar cuáles versiones siguen vigentes para no llenar la WABA (retirar una versión no borra su plantilla).
 - **Si Meta falla, la versión publicada no se revierte.** Queda `published` con su vínculo y el error en
-  `message_templates.sync_error` (visible en el panel); el reintento completa la misma fila. `network_error`, `rate_limited`
-  e `in_progress` son reintentables; un rechazo de Meta, una definición inválida, `name_taken`, `other_account` y
+  `message_templates.sync_error` (visible en el panel); el reintento completa la misma fila. `network_error`, `rate_limited`,
+  `in_progress` e `internal_error` son reintentables (un 5xx de Meta o una respuesta sin id cuentan como `network_error`: Meta pudo
+  haberla creado y el reintento concilia por nombre); un rechazo de Meta, una definición inválida, `name_taken`, `other_account` y
   `template_deleted` y `meta_id_taken` (el id que devolvió Meta ya está en otra fila del negocio, p. ej. tras reclamar la WABA, ADR-0122) no.
 - **Superficie nueva y lo que NO cambia.** `post_template` se extrae de `create_template` (el panel sigue igual);
   `find_template_by_name` es nueva. No se llama a `update_template` jamás para una versión. No hay tabla ni migración nuevas.

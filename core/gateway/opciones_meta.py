@@ -163,15 +163,7 @@ async def _publicar(
     if connection is None or waba is None or creds is None:
         return m.ResultadoPublicacion(False, m.CONEXION_NO_LISTA, nombre=nombre, categoria=categoria)
 
-    # 3. Cupo de plantillas de la cuenta (contadores del último sync; None = sin dato, se intenta).
-    if (
-        waba.message_template_limit is not None
-        and waba.message_template_count is not None
-        and waba.message_template_count >= waba.message_template_limit
-    ):
-        return m.ResultadoPublicacion(False, m.LIMITE_DE_CUPO, nombre=nombre, categoria=categoria)
-
-    # 4. Una publicación a la vez por (negocio, versión). Sin Redis no se publica (fail-closed).
+    # 3. Una publicación a la vez por (negocio, versión). Sin Redis no se publica (fail-closed).
     token = uuid.uuid4().hex
     candado = _clave_candado(tenant_id, version_id)
     redis = get_redis()
@@ -204,7 +196,7 @@ async def _con_candado(
     tenant_id: uuid.UUID, version: OptionTemplateVersion, definicion: Definicion, nombre: str, categoria: str,
     idioma: str, componentes: list[dict[str, Any]], connection: Any, waba: WabaAccount, creds: Any,
 ) -> m.ResultadoPublicacion:
-    # 5. Reservar (o releer) la fila: la clave de idempotencia y el estado persistida, antes de llamar a Meta.
+    # 4. Reservar (o releer) la fila: la clave de idempotencia y el estado persistida, antes de llamar a Meta.
     reservada = await _reservar(tenant_id, version.id, waba.id, nombre, idioma, categoria, componentes, definicion)
     if isinstance(reservada, m.ResultadoPublicacion):
         return reservada
@@ -213,7 +205,7 @@ async def _con_candado(
         return _resultado(fila, m.YA_PUBLICADA)
     fila_id = fila.id
 
-    # 6. Una fila que ya existía sin id es un intento anterior de resultado desconocido (corte, timeout, caída del
+    # 5. Una fila que ya existía sin id es un intento anterior de resultado desconocido (corte, timeout, caída del
     # worker entre la reserva y la respuesta): se pregunta a Meta por ESE nombre ANTES de crear.
     if not nueva:
         try:
@@ -222,7 +214,7 @@ async def _con_candado(
                 name=nombre, language=idioma,
             )
         except GraphError as exc:
-            return _resultado(fila, m.ERROR_DE_RED, motivo=_motivo(exc))
+            return _resultado(fila, _salida_de(exc), motivo=_motivo(exc))
         if en_meta is not None and en_meta.get("id"):
             try:
                 adoptada = await _completar(
@@ -233,6 +225,15 @@ async def _con_candado(
             return _resultado(adoptada, m.YA_PUBLICADA)
         # Meta no la tiene: nada se creó, así que la solicitud es la de ESTA llamada (categoría y componentes).
         await _actualizar_reserva(tenant_id, fila_id, categoria, componentes)
+
+    # 6. Cupo de plantillas de la cuenta (contadores del último sync; None = sin dato, se intenta). Va aquí y no antes:
+    # una versión que ya está en Meta no gasta cupo y su reintento no debe toparse con la cuenta llena.
+    if (
+        waba.message_template_limit is not None
+        and waba.message_template_count is not None
+        and waba.message_template_count >= waba.message_template_limit
+    ):
+        return _resultado(await _leer_o(tenant_id, fila_id, fila), m.LIMITE_DE_CUPO)
 
     # 7. Crear en Meta y completar la fila reservada.
     try:
@@ -246,13 +247,10 @@ async def _con_candado(
     except TemplateValidationError as exc:
         return await _fallo(tenant_id, fila_id, m.DEFINICION_INVALIDA, str(exc), marcar=False)
     except GraphError as exc:
-        if exc.category == "RATE_LIMIT":
-            return await _fallo(tenant_id, fila_id, m.LIMITE_DE_CREACION, _motivo(exc), marcar=True)
-        if exc.category == "AUTH":
-            return await _fallo(tenant_id, fila_id, m.CONEXION_NO_LISTA, _motivo(exc), marcar=True)
-        # `TRANSIENT` (corte, timeout, 5xx): no se sabe si Meta la creó. Las demás: Meta recibió y rechazó.
-        salida = m.ERROR_DE_RED if exc.is_transient else m.RECHAZADA_POR_META
-        return await _fallo(tenant_id, fila_id, salida, _motivo(exc), marcar=True)
+        return await _fallo(tenant_id, fila_id, _salida_de(exc), _motivo(exc), marcar=True)
+    if not meta_id:
+        # Meta respondió sin id: no se sabe qué creó. La fila sigue en `DRAFT` y el reintento concilia por nombre.
+        return await _fallo(tenant_id, fila_id, m.ERROR_DE_RED, "respuesta_sin_id", marcar=True)
     try:
         completada = await _completar(tenant_id, fila_id, meta_id, estado, None)
     except IntegrityError:
@@ -310,6 +308,9 @@ async def _reservar(
                 # vez). Solo se adopta si dice EXACTAMENTE lo que esta versión diría; si no, no se pisa nada ajeno.
                 if existente.status in _ESTADOS_BORRADOS or not m.mismos_textos(existente.components, definicion):
                     return _resultado(existente, m.NOMBRE_OCUPADO)
+                if (existente.category or "").upper() != categoria:
+                    # Mismo texto pero otra categoría que la que pidió el dueño: no se liga en silencio (cambia el costo).
+                    return _resultado(existente, m.NOMBRE_OCUPADO, motivo="categoria_distinta")
                 version.message_template_id = existente.id
                 session.expunge(existente)
                 return existente, False
@@ -407,6 +408,23 @@ async def _fallo(
     if fila is None:
         return m.ResultadoPublicacion(False, outcome, motivo=motivo)
     return _resultado(fila, outcome, motivo=motivo)
+
+
+def _salida_de(exc: GraphError) -> str:
+    """El `outcome` de un fallo de Graph. Ambiguo (la plantilla pudo haberse creado): corte o timeout (`is_transient`)
+    o un 5xx, que `graph_fetch` clasifica como permanente pero no dice si Meta llegó a crear. Un 4xx de negocio es
+    un rechazo: Meta recibió y no creó nada."""
+    if exc.category == "RATE_LIMIT":
+        return m.LIMITE_DE_CREACION
+    if exc.category == "AUTH":
+        return m.CONEXION_NO_LISTA
+    if exc.is_transient or (exc.http_status or 0) >= 500:
+        return m.ERROR_DE_RED
+    return m.RECHAZADA_POR_META
+
+
+async def _leer_o(tenant_id: uuid.UUID, fila_id: uuid.UUID, por_defecto: MessageTemplate) -> MessageTemplate:
+    return await _leer(tenant_id, fila_id) or por_defecto
 
 
 def _motivo(exc: Exception) -> str:

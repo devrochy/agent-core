@@ -413,8 +413,71 @@ async def test_con_el_cupo_de_plantillas_de_la_cuenta_lleno_no_se_llama_a_meta(n
     conn, _, _ = await conexion(a.tid, cupo=(250, 250))
     clave, (v1,) = await plantilla(a.tid, [definicion()])
     r = await publicar(a.tid, v1, conn)
-    assert r.outcome == "template_quota_full" and not meta.llamadas
-    assert await filas(a.tid, f"{clave}_v1") == []
+    assert r.outcome == "template_quota_full" and not r.ok and not meta.llamadas
+    (fila,) = await filas(a.tid, f"{clave}_v1")
+    assert fila.status == "DRAFT" and fila.meta_template_id is None  # reservada: al liberar cupo, el reintento la completa
+
+
+async def test_la_cuenta_llena_no_bloquea_el_reintento_de_una_version_que_ya_esta_en_meta(negocios, meta) -> None:
+    from core.shared.tenant import tenant_scope
+
+    a, _ = negocios
+    conn, waba_row, _ = await conexion(a.tid)
+    _, (v1,) = await plantilla(a.tid, [definicion()])
+    assert (await publicar(a.tid, v1, conn)).outcome == "published"
+    await _sql(a.tid, "update waba_accounts set message_template_count = 250, message_template_limit = 250 where id = :w", w=waba_row)
+    async with tenant_scope(a.tid):
+        r = await publicar(a.tid, v1, conn)
+    assert r.ok and r.outcome == "already_published" and len(meta.posts) == 1
+
+
+async def test_un_5xx_de_meta_es_ambiguo_y_el_reintento_concilia(negocios, meta) -> None:
+    a, _ = negocios
+    conn, _, _ = await conexion(a.tid)
+    _, (v1,) = await plantilla(a.tid, [definicion()])
+    meta.falla_despues.append(GraphError("Bad Gateway", category="PERMANENT", http_status=502))
+    r1 = await publicar(a.tid, v1, conn)
+    assert r1.outcome == "network_error" and r1.reintentable and len(meta.plantillas) == 1
+    r2 = await publicar(a.tid, v1, conn)
+    assert r2.outcome == "already_published" and len(meta.posts) == 1
+
+
+async def test_si_meta_responde_sin_id_no_se_da_por_publicada(negocios, meta, monkeypatch) -> None:
+    a, _ = negocios
+    conn, _, _ = await conexion(a.tid)
+    clave, (v1,) = await plantilla(a.tid, [definicion()])
+
+    async def sin_id(path: str, **k: Any) -> Any:
+        if k.get("method") == "POST":
+            return {"status": "PENDING"}
+        return {"data": []}
+
+    monkeypatch.setattr("core.gateway.meta_templates.graph_fetch", sin_id)
+    r = await publicar(a.tid, v1, conn)
+    assert not r.ok and r.outcome == "network_error" and r.motivo == "respuesta_sin_id"
+    (fila,) = await filas(a.tid, f"{clave}_v1")
+    assert fila.status == "DRAFT" and fila.meta_template_id is None
+
+
+async def test_un_error_de_conciliacion_se_clasifica_igual_que_uno_de_creacion(negocios, meta) -> None:
+    a, _ = negocios
+    conn, _, _ = await conexion(a.tid)
+    _, (v1,) = await plantilla(a.tid, [definicion()])
+    meta.falla_antes.append(corte())
+    assert (await publicar(a.tid, v1, conn)).outcome == "network_error"  # deja la fila DRAFT
+
+    async def get_con_token_vencido(path: str, **k: Any) -> Any:
+        raise GraphError("Token inválido", category="AUTH", http_status=401, code=190)
+
+    import core.gateway.meta_templates as mt
+
+    original = mt.graph_fetch
+    mt.graph_fetch = get_con_token_vencido  # type: ignore[assignment]
+    try:
+        r = await publicar(a.tid, v1, conn)
+    finally:
+        mt.graph_fetch = original  # type: ignore[assignment]
+    assert r.outcome == "connection_not_ready" and not r.reintentable
 
 
 async def test_el_limite_de_uso_de_meta_es_reintentable_y_una_credencial_vencida_pide_reconectar(negocios, meta) -> None:
@@ -550,6 +613,25 @@ async def test_una_plantilla_ajena_con_el_mismo_nombre_y_otro_cuerpo_no_se_adopt
     assert await ligada(a.tid, v1) is None
     (fila,) = await filas(a.tid, f"{clave}_v1")
     assert fila.meta_template_id == "meta-vieja" and fila.status == "APPROVED"
+
+
+async def test_una_plantilla_igual_pero_de_otra_categoria_no_se_liga_en_silencio(negocios, meta) -> None:
+    from core.kernel.opciones import mapeo
+    from core.kernel.opciones.definicion import leer
+
+    a, _ = negocios
+    conn, waba_row, _ = await conexion(a.tid)
+    d = definicion()
+    clave, (v1,) = await plantilla(a.tid, [d])
+    await _sql(
+        a.tid,
+        "insert into message_templates (id, tenant_id, waba_account_id, meta_template_id, name, language, category, status, components) "
+        "values (gen_random_uuid(), :t, :w, 'meta-mkt', :n, 'es', 'MARKETING', 'APPROVED', cast(:c as jsonb))",
+        t=a.tid, w=waba_row, n=f"{clave}_v1", c=json.dumps(mapeo.componentes_meta(leer(d))),
+    )
+    r = await publicar(a.tid, v1, conn, "UTILITY")
+    assert r.outcome == "name_taken" and r.motivo == "categoria_distinta" and await ligada(a.tid, v1) is None
+    assert (await publicar(a.tid, v1, conn, "MARKETING")).outcome == "already_published"
 
 
 async def test_una_plantilla_igual_que_ya_trajo_el_sync_se_adopta_sin_llamar_a_meta(negocios, meta) -> None:
