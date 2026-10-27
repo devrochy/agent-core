@@ -128,7 +128,7 @@ por el chat web para los flujos de punta a punta. Esta adenda fija los escenario
    la del propio negocio de prueba: `version-candidata` y `canary-en-curso` cambian el nombre del asistente y
    `suscripciones` activa el pack.
 6. **Funciones del core, nunca código de tests.** Tareas con `kernel.state.iniciar`/`registrar`; escalación con
-   `orchestrator.escalation.escalate`; A2A con `kernel.a2a.registrar`/`liquidar` y el traspaso con `kernel.handoff.cerrar`;
+   `orchestrator.escalation.escalate`; A2A con `kernel.a2a.registrar`/`liquidar` (la fase 2 del traspaso la corre el kernel al cerrar el turno);
    releases con `releases.build.construir` y `releases.canary.iniciar`; veredicto con `releases.veredicto.registrar`;
    avisos con `notifications.service.notify_standalone`; perfil con `memory.facts.escribir_hechos`; pasos con
    `shared.audit.record_audit`.
@@ -152,7 +152,8 @@ por el chat web para los flujos de punta a punta. Esta adenda fija los escenario
    ```
 
    con tipos en `core/qa/contrato_datos.py` (entrada: sufijo, moneda, zona horaria, clientes y conversaciones que ya
-   creó el core; salida: conteos y textos para la tarjeta). El default lanza `EscenarioNoDisponible` y el escenario
+   creó el core y, para `pack_subscriptions`, los planes que sembró Comercio como `PlanSnapshot` armados por el core
+   con su variante; salida: conteos y textos para la tarjeta). Así ningún pack lee las tablas de otro. El default lanza `EscenarioNoDisponible` y el escenario
    responde 409 con el motivo. El core lo llama con `plugin_manager.get(pack)`. Los ganchos cubren solo **actividad**
    (pedidos, promociones, leads, suscripciones con cargos y pagos, promesas, cobros, accesos, dispositivos, reglas y
    cierres): catálogo, planes y cartera se siembran con el `sembrar_datos_de_prueba` que ya existe (ADR-0146). Clientes,
@@ -179,8 +180,8 @@ por el chat web para los flujos de punta a punta. Esta adenda fija los escenario
       nombre único por pulsación (`Asistente QA <sufijo>`) y construye: si el dedupe devolviera la activa o una
       detenida, 409. **No promueve.**
     - `canary-en-curso` construye otra candidata e inicia la prueba al 20 % con `canary.iniciar`, más una muestra
-      parcial en `core_decisions` (carriles `stable` y `canary`, dentro de la ventana y por debajo de las 200
-      conversaciones: el job la deja en `sin_muestra` y, sin `turn_outcomes`, no hay señal dura). Con una prueba ya en
+      parcial (carriles `stable` y `canary`, por debajo de las 200 conversaciones: el job la deja en `sin_muestra`).
+      Sus turnos cierran con `status = 'replied'` (ninguno `failed` ni `escalated`), así que no hay señal dura. Con una prueba ya en
       curso, 409 «detén la prueba primero»: no se detiene la del tester en silencio.
     - Con el gate de pass^k cerrado en el negocio (`gate_pendiente`/`gate_rechazado`) o el canary apagado
       (`CANARY_DISPONIBLE`), 409 con el motivo: el escenario **no fabrica un `approved`** para pasarlo. La muestra son
