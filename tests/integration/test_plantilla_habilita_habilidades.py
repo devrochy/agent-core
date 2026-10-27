@@ -157,6 +157,8 @@ async def test_sin_plugins_write_no_habilita_ni_crea(app_client) -> None:
 
     r = await app_client.post("/api/v1/admin/agents/from-script", headers=h, json={"template_key": "agenda", "answers": {}})
     assert (r.status_code, r.json()["error"]["code"]) == (403, "skills_forbidden")
+    # Las habilidades van en `details`, no en `fields` (el panel pintaría `fields` como error de un paso).
+    assert r.json()["error"]["details"] == {"skills": ["pack_calendar"]} and not r.json()["error"].get("fields")
     assert await _packs(tid) == set() and await _version_del_spec(tid) == version
     assert not await _sql(tid, "select 1 from agents where tenant_id = :t and key = 'agenda'", t=tid)
 
@@ -191,3 +193,13 @@ async def test_dos_plantillas_a_la_vez_dejan_las_dos_habilidades(app_client) -> 
     }
     assert {TODAS[k] for k in creadas} <= await _packs(tid)
     assert creadas, "al menos una de las dos tiene que haber entrado"
+
+
+async def test_el_dueno_del_negocio_puede_habilitar_sin_permisos_explicitos(app_client) -> None:
+    """El owner no tiene filas en `admin_permissions`: su acceso a `plugins` sale del rol. Si no fuera
+    `write`, el dueño recibiría 403 en su propio onboarding."""
+    tid = await _negocio_sin_packs()
+    h = await _usuario(app_client, tid, secciones={}, dueno=True)
+    r = await app_client.post("/api/v1/admin/agents/from-script", headers=h, json={"template_key": "suscripciones", "answers": {}})
+    assert r.status_code == 201, r.text
+    assert r.json()["enabled_skills"] == ["pack_subscriptions"]

@@ -252,7 +252,15 @@ def _question(q: PreguntaDePlantilla) -> Question:
     )
 
 
+# Errores que no son de un campo del formulario: las habilidades van en `details`, no en `fields` (el
+# panel pinta cada `fields` como error del paso que lo contiene).
+_ERRORES_CON_DETALLE = frozenset({"skills_forbidden", "concurrent_edit", "template_unavailable"})
+
+
 def _error(exc: svc.ErrorDelEditor) -> ApiError:
+    if exc.code in _ERRORES_CON_DETALLE:
+        skills = [p.strip() for p in exc.campos.get("skills", "").split(",") if p.strip()]
+        return ApiError(exc.status, exc.code, str(exc), details={"skills": skills})
     return ApiError(exc.status, exc.code, str(exc), fields=exc.campos or None)
 
 
