@@ -90,6 +90,15 @@ class SubscriptionsModule(BaseModule):
     def on_deactivate(self) -> None:
         subscription_registry.unregister(PLUGIN_ID)
 
+    async def sembrar_escenario(self, tenant_id: uuid.UUID, escenario: str, entrada: Any) -> Any:
+        """Suscripciones activa, por vencer y vencida con cargos y pagos (HU-QA-13)."""
+        from core.qa.contrato_datos import EscenarioNoDisponible
+        from pack_subscriptions.escenarios import sembrar
+
+        if escenario != "suscripciones":
+            raise EscenarioNoDisponible(f"Suscripciones no tiene el escenario {escenario}.")
+        return await sembrar(tenant_id, entrada)
+
     def admin_api_routes(self) -> list[Any]:
         """API admin de suscripciones (ADR-0079), montada en `/api/v1`."""
         return [subscriptions_admin_api_router]

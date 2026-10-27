@@ -724,3 +724,59 @@ async def contrasenas_nuevas(
         raise _error(exc) from exc
     response.headers["Cache-Control"] = "no-store"
     return salida
+
+
+# ------------------------------------------------------------------ escenarios de datos (HU-QA-13)
+class QaEscenarioCreado(BaseModel):
+    sufijo: str = Field(description="Marca corta del caso: aparece en los nombres de lo creado.")
+    detalle: list[str] = Field(description="Qué creó, en líneas legibles.")
+    conteos: dict[str, int] = Field(default_factory=dict)
+    ruta: str = Field(description="Ruta del panel donde se ve lo creado (en el negocio de prueba).")
+    creado_en: str | None = None
+
+
+class QaEscenario(BaseModel):
+    slug: str = Field(description="Fijo: el catálogo de pruebas lo cita como `datos-escenario-<slug>`.")
+    titulo: str
+    crea: str
+    requiere: str
+    donde: str = Field(description="Sección del panel donde se ve.")
+    ruta: str
+    agent_os: bool = Field(description="Necesita el Agent OS listo en el negocio de prueba.")
+    ultimo: QaEscenarioCreado | None = Field(default=None, description="Lo que creó la última vez para este tester.")
+
+
+class QaEscenarios(BaseModel):
+    datos_listos: bool = Field(description="El tester ya preparó sus datos: sin eso los escenarios dan 409.")
+    escenarios: list[QaEscenario]
+
+
+class QaEscenarioResultado(QaEscenario):
+    negocio_id: uuid.UUID = Field(description="El negocio de prueba donde se creó (para cambiar a él y abrir la ruta).")
+    creado: QaEscenarioCreado
+
+
+@router.get("/datos/escenarios", response_model=QaEscenarios)
+async def listar_escenarios(principal: Annotated[Principal, Depends(_leer)]) -> dict[str, Any]:
+    """Escenarios de datos de prueba y lo que creó cada uno la última vez (HU-QA-13). 404 fuera de test."""
+    from core.qa import escenarios
+
+    _solo_plataforma(principal)
+    try:
+        return await escenarios.listar(principal.admin)
+    except service.QaError as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/datos/escenarios/{slug}", response_model=QaEscenarioResultado, status_code=201)
+async def crear_escenario(slug: str, principal: Annotated[Principal, Depends(_escribir)]) -> dict[str, Any]:
+    """Crea un caso nuevo del escenario en el negocio de prueba del tester, sin LLM y sin borrar nada
+    (HU-QA-13). 404 si no existe o fuera de test; 409 sin datos preparados, con otra corrida en curso o
+    si el escenario no se puede crear (el motivo va en el mensaje)."""
+    from core.qa import escenarios
+
+    _solo_plataforma(principal)
+    try:
+        return await escenarios.crear(principal.admin, slug)
+    except service.QaError as exc:
+        raise _error(exc) from exc

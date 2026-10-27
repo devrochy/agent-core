@@ -169,6 +169,15 @@ class CobranzaModule(BaseModule):
 
         return await sembrar(tenant_id, modo, datos, contexto)
 
+    async def sembrar_escenario(self, tenant_id: uuid.UUID, escenario: str, entrada: Any) -> Any:
+        """Promesas, cobro al propietario, accesos, dispositivo, reglas y cierre (HU-QA-13)."""
+        from core.qa.contrato_datos import EscenarioNoDisponible
+        from pack_cobranza.escenarios import sembrar
+
+        if escenario != "cobranza-completa":
+            raise EscenarioNoDisponible(f"Cobranza no tiene el escenario {escenario}.")
+        return await sembrar(tenant_id, entrada)
+
     async def retirar_datos_de_prueba(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> int:
         from pack_cobranza.datos_de_prueba import retirar
 

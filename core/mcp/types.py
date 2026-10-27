@@ -38,7 +38,13 @@ if TYPE_CHECKING:
 
     from core.mcp.host import MCPHost
     from core.primeros_pasos.contrato import ContenidoCargado
-    from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
+    from core.qa.contrato_datos import (
+        ContextoDeNegocio,
+        EntradaDeEscenario,
+        FormaDeDatos,
+        RegistroSembrado,
+        ResumenDeEscenario,
+    )
 
 log = get_logger(__name__)
 
@@ -597,6 +603,17 @@ class BaseModule(ABC):
     async def retirar_datos_de_prueba(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> int:
         """Retira lo sembrado (borrado lógico o desactivación, nunca físico). Devuelve cuántos."""
         raise NotImplementedError
+
+    async def sembrar_escenario(
+        self, tenant_id: uuid.UUID, escenario: str, entrada: EntradaDeEscenario
+    ) -> ResumenDeEscenario:
+        """Hook opcional (HU-QA-13, adenda de ADR-0135): crea la actividad de un escenario de datos de
+        prueba en las tablas del pack (pedidos, suscripciones, cobranza), en el negocio de prueba del
+        tester y bajo su `tenant_scope`. Determinista, sin LLM y aditivo: repetirlo crea otro caso.
+        Nunca envía mensajes ni cobra. Default: el pack no lo sabe hacer."""
+        from core.qa.contrato_datos import EscenarioNoDisponible
+
+        raise EscenarioNoDisponible(f"La habilidad {self.manifest.id} no tiene el escenario {escenario}.")
 
     def public_routes(self) -> list[Any]:
         """Routers PÚBLICOS del pack (sin sesión de admin), ej. la app de campo.

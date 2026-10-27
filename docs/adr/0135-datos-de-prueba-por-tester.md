@@ -193,8 +193,8 @@ por el chat web para los flujos de punta a punta. Esta adenda fija los escenario
       la cadena de `consistencia_vigente` (da igual en un negocio de prueba) y Versiones muestra una «aprobada»
       posterior a la promoción.
 11. **«Preparar mis datos» con una prueba en curso.** `_activar_releases` construye igual, pero no promueve en la
-    conexión que tiene `canary_release_id` (fallaría con `canary_en_curso`); lo dice en `agent_os.motivo` con el
-    estado `listo`. Una candidata sin
+    conexión que tiene `canary_release_id` (fallaría con `canary_en_curso`) y lo deja en el log; el Agent OS sigue
+    `listo`. La tarjeta del escenario avisa que la prueba se detiene o se publica en Versiones. Una candidata sin
     prueba sí la publica «Preparar» al volver a pulsarlo (el build cae en ella por el hash): queda dicho en la tarjeta
     del escenario.
 12. **Registro.** Cada escenario creado deja un `qa_events` (`campo='datos.escenario'`,

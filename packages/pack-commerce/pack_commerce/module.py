@@ -1104,6 +1104,12 @@ class CRMModule(BaseModule):
 
         return await retirar(tenant_id, registros)
 
+    async def sembrar_escenario(self, tenant_id: uuid.UUID, escenario: str, entrada: Any) -> Any:
+        """Pedidos, leads, promoción y planes de los escenarios de datos de prueba (HU-QA-13)."""
+        from pack_commerce.escenarios import sembrar_escenario
+
+        return await sembrar_escenario(tenant_id, escenario, entrada)
+
     async def contenido_cargado(self, tenant_id: uuid.UUID) -> ContenidoCargado:
         """Productos a la venta (con alguna variante activa) para el paso «catálogo o servicios»
         de los primeros pasos (HU-SH-06, ADR-0124). Solo lee."""
