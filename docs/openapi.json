@@ -28765,6 +28765,730 @@
           }
         }
       }
+    },
+    "/api/v1/access/devices": {
+      "get": {
+        "tags": [
+          "api",
+          "access"
+        ],
+        "summary": "List Devices",
+        "operationId": "list_devices_api_v1_access_devices_get",
+        "parameters": [
+          {
+            "name": "estado",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pendiente",
+                    "activo",
+                    "bloqueado"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Estado"
+            }
+          },
+          {
+            "name": "admin_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Admin Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessDevicePage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "access"
+        ],
+        "summary": "Create Device",
+        "operationId": "create_device_api_v1_access_devices_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessDeviceCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessDeviceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/access/devices/{device_row_id}": {
+      "get": {
+        "tags": [
+          "api",
+          "access"
+        ],
+        "summary": "Get Device",
+        "operationId": "get_device_api_v1_access_devices__device_row_id__get",
+        "parameters": [
+          {
+            "name": "device_row_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Row Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessDeviceDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/access/devices/{device_row_id}/aprobar": {
+      "post": {
+        "tags": [
+          "api",
+          "access"
+        ],
+        "summary": "Approve Device",
+        "operationId": "approve_device_api_v1_access_devices__device_row_id__aprobar_post",
+        "parameters": [
+          {
+            "name": "device_row_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Row Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessDeviceTransition"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessDeviceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/access/devices/{device_row_id}/bloquear": {
+      "post": {
+        "tags": [
+          "api",
+          "access"
+        ],
+        "summary": "Block Device",
+        "operationId": "block_device_api_v1_access_devices__device_row_id__bloquear_post",
+        "parameters": [
+          {
+            "name": "device_row_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Row Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessDeviceBlock"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessDeviceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/access/devices/{device_row_id}/dar-de-baja": {
+      "post": {
+        "tags": [
+          "api",
+          "access"
+        ],
+        "summary": "Remove Device",
+        "operationId": "remove_device_api_v1_access_devices__device_row_id__dar_de_baja_post",
+        "parameters": [
+          {
+            "name": "device_row_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Row Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessDeviceTransition"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/access/events": {
+      "get": {
+        "tags": [
+          "api",
+          "access"
+        ],
+        "summary": "List Events",
+        "operationId": "list_events_api_v1_access_events_get",
+        "parameters": [
+          {
+            "name": "severidad",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "info",
+                    "aviso",
+                    "critico"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Severidad"
+            }
+          },
+          {
+            "name": "tipo",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "login_fallido",
+                    "login_bloqueado",
+                    "dispositivo_nuevo",
+                    "dispositivo_pendiente",
+                    "dispositivo_aprobado",
+                    "dispositivo_bloqueado_usado",
+                    "acceso_denegado_politica",
+                    "dispositivo_sin_id",
+                    "dispositivo_compartido",
+                    "politica_cambiada",
+                    "acceso_master",
+                    "legado_pack"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tipo"
+            }
+          },
+          {
+            "name": "admin_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Admin Id"
+            }
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Desde"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessEventPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/access/policy": {
+      "get": {
+        "tags": [
+          "api",
+          "access"
+        ],
+        "summary": "Get Policy",
+        "operationId": "get_policy_api_v1_access_policy_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessPolicyOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "access"
+        ],
+        "summary": "Update Policy",
+        "operationId": "update_policy_api_v1_access_policy_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessPolicyUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessPolicyOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -57944,6 +58668,785 @@
         },
         "type": "object",
         "title": "OpcionesPublicarIn"
+      },
+      "AccessAccountRef": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "nombre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "rol": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "master",
+                  "owner",
+                  "colaborador"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rol"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "nombre",
+          "email",
+          "rol"
+        ],
+        "title": "AccessAccountRef"
+      },
+      "AccessDeviceBlock": {
+        "properties": {
+          "esperado": {
+            "type": "string",
+            "enum": [
+              "pendiente",
+              "activo",
+              "bloqueado"
+            ],
+            "title": "Esperado",
+            "default": "activo"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo"
+          },
+          "alcance": {
+            "type": "string",
+            "enum": [
+              "cuenta",
+              "equipo"
+            ],
+            "title": "Alcance",
+            "default": "cuenta"
+          }
+        },
+        "type": "object",
+        "title": "AccessDeviceBlock"
+      },
+      "AccessDeviceCreate": {
+        "properties": {
+          "admin_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Admin Id"
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Device Id"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "plataforma": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ],
+            "title": "Plataforma",
+            "default": "android"
+          }
+        },
+        "type": "object",
+        "required": [
+          "admin_id",
+          "device_id"
+        ],
+        "title": "AccessDeviceCreate"
+      },
+      "AccessDeviceDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cuenta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessAccountRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id_corto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id Corto"
+          },
+          "device_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Label"
+          },
+          "plataforma": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ],
+            "title": "Plataforma"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "pendiente",
+              "activo",
+              "bloqueado"
+            ],
+            "title": "Estado"
+          },
+          "origen": {
+            "type": "string",
+            "enum": [
+              "autoregistro",
+              "politica_abierta",
+              "alta_manual",
+              "migrado_pack"
+            ],
+            "title": "Origen"
+          },
+          "rol_al_registrar": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "owner",
+                  "colaborador",
+                  "gestor"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rol Al Registrar"
+          },
+          "bloqueo_equipo": {
+            "type": "boolean",
+            "title": "Bloqueo Equipo"
+          },
+          "legacy": {
+            "type": "boolean",
+            "title": "Legacy"
+          },
+          "ultimo_uso_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ultimo Uso At"
+          },
+          "ultima_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ultima Ip"
+          },
+          "aprobado_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aprobado At"
+          },
+          "bloqueado_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bloqueado At"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "cuenta",
+          "device_id_corto",
+          "device_label",
+          "plataforma",
+          "estado",
+          "origen",
+          "rol_al_registrar",
+          "bloqueo_equipo",
+          "legacy",
+          "ultimo_uso_at",
+          "ultima_ip",
+          "aprobado_at",
+          "bloqueado_at",
+          "motivo",
+          "created_at",
+          "device_id"
+        ],
+        "title": "AccessDeviceDetail",
+        "description": "El detalle muestra el identificador completo: hay que compararlo al aprobar."
+      },
+      "AccessDeviceOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cuenta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessAccountRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id_corto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id Corto"
+          },
+          "device_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Label"
+          },
+          "plataforma": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ],
+            "title": "Plataforma"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "pendiente",
+              "activo",
+              "bloqueado"
+            ],
+            "title": "Estado"
+          },
+          "origen": {
+            "type": "string",
+            "enum": [
+              "autoregistro",
+              "politica_abierta",
+              "alta_manual",
+              "migrado_pack"
+            ],
+            "title": "Origen"
+          },
+          "rol_al_registrar": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "owner",
+                  "colaborador",
+                  "gestor"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rol Al Registrar"
+          },
+          "bloqueo_equipo": {
+            "type": "boolean",
+            "title": "Bloqueo Equipo"
+          },
+          "legacy": {
+            "type": "boolean",
+            "title": "Legacy"
+          },
+          "ultimo_uso_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ultimo Uso At"
+          },
+          "ultima_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ultima Ip"
+          },
+          "aprobado_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aprobado At"
+          },
+          "bloqueado_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bloqueado At"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "cuenta",
+          "device_id_corto",
+          "device_label",
+          "plataforma",
+          "estado",
+          "origen",
+          "rol_al_registrar",
+          "bloqueo_equipo",
+          "legacy",
+          "ultimo_uso_at",
+          "ultima_ip",
+          "aprobado_at",
+          "bloqueado_at",
+          "motivo",
+          "created_at"
+        ],
+        "title": "AccessDeviceOut"
+      },
+      "AccessDevicePage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccessDeviceOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "AccessDevicePage"
+      },
+      "AccessDeviceTransition": {
+        "properties": {
+          "esperado": {
+            "type": "string",
+            "enum": [
+              "pendiente",
+              "activo",
+              "bloqueado"
+            ],
+            "title": "Esperado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "esperado"
+        ],
+        "title": "AccessDeviceTransition"
+      },
+      "AccessEventOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "login_fallido",
+              "login_bloqueado",
+              "dispositivo_nuevo",
+              "dispositivo_pendiente",
+              "dispositivo_aprobado",
+              "dispositivo_bloqueado_usado",
+              "acceso_denegado_politica",
+              "dispositivo_sin_id",
+              "dispositivo_compartido",
+              "politica_cambiada",
+              "acceso_master",
+              "legado_pack"
+            ],
+            "title": "Tipo"
+          },
+          "severidad": {
+            "type": "string",
+            "enum": [
+              "info",
+              "aviso",
+              "critico"
+            ],
+            "title": "Severidad"
+          },
+          "canal": {
+            "type": "string",
+            "enum": [
+              "campo",
+              "panel_apk",
+              "campo_v1"
+            ],
+            "title": "Canal"
+          },
+          "rol": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "owner",
+                  "colaborador",
+                  "gestor"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rol"
+          },
+          "cuenta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessAccountRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "device_id_corto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id Corto"
+          },
+          "ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip"
+          },
+          "detalle": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detalle"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Occurred At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tipo",
+          "severidad",
+          "canal",
+          "rol",
+          "cuenta",
+          "device_id_corto",
+          "ip",
+          "detalle",
+          "occurred_at"
+        ],
+        "title": "AccessEventOut"
+      },
+      "AccessEventPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccessEventOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "AccessEventPage"
+      },
+      "AccessPolicyOut": {
+        "properties": {
+          "owner": {
+            "type": "string",
+            "enum": [
+              "abierto",
+              "restringido"
+            ],
+            "title": "Owner"
+          },
+          "colaborador": {
+            "type": "string",
+            "enum": [
+              "abierto",
+              "restringido"
+            ],
+            "title": "Colaborador"
+          },
+          "gestor": {
+            "type": "string",
+            "enum": [
+              "abierto",
+              "restringido"
+            ],
+            "title": "Gestor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "owner",
+          "colaborador",
+          "gestor"
+        ],
+        "title": "AccessPolicyOut"
+      },
+      "AccessPolicyUpdate": {
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "abierto",
+                  "restringido"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "colaborador": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "abierto",
+                  "restringido"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Colaborador"
+          },
+          "gestor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "abierto",
+                  "restringido"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gestor"
+          },
+          "confirmar": {
+            "type": "boolean",
+            "title": "Confirmar",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "AccessPolicyUpdate"
       }
     }
   }

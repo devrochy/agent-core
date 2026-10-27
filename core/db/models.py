@@ -636,6 +636,101 @@ class PushToken(Base):
     )
 
 
+class AccountDevice(Base):
+    """Equipo de una cuenta en un negocio (ADR-0174, SPEC-42, migración 0113).
+
+    Tabla de NEGOCIO: tenant_id + RLS forzada (invariante 1). La clave es la cuenta (`admin_id`),
+    no el perfil de gestor del pack: dos cuentas pueden registrar el mismo `device_id` sin chocar
+    (el único parcial es por cuenta). La baja es lógica (`deleted_at`, invariante 8).
+    """
+
+    __tablename__ = "account_devices"
+    __table_args__ = (
+        Index(
+            "uq_account_devices_cuenta_equipo",
+            "tenant_id",
+            "admin_id",
+            "device_id",
+            unique=True,
+            postgresql_where=text("deleted_at is null and device_id is not null"),
+        ),
+        Index(
+            "uq_account_devices_legacy_pack",
+            "tenant_id",
+            "legacy_pack_device_id",
+            unique=True,
+            postgresql_where=text("legacy_pack_device_id is not null"),
+        ),
+        Index("ix_account_devices_estado", "tenant_id", "estado"),
+        Index("ix_account_devices_equipo", "tenant_id", "device_id"),
+        Index("ix_account_devices_cuenta", "tenant_id", "admin_id"),
+        CheckConstraint("plataforma in ('android', 'ios')", name="ck_account_devices_plataforma"),
+        CheckConstraint(
+            "estado in ('pendiente', 'activo', 'bloqueado')", name="ck_account_devices_estado"
+        ),
+        CheckConstraint(
+            "origen in ('autoregistro', 'politica_abierta', 'alta_manual', 'migrado_pack')",
+            name="ck_account_devices_origen",
+        ),
+        CheckConstraint("device_id is not null or legacy", name="ck_account_devices_equipo"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admins.id"), nullable=False)
+    device_id: Mapped[str | None] = mapped_column(Text)
+    device_label: Mapped[str | None] = mapped_column(Text)
+    plataforma: Mapped[str] = mapped_column(Text, default="android")
+    estado: Mapped[str] = mapped_column(Text, default="pendiente")  # pendiente|activo|bloqueado
+    origen: Mapped[str] = mapped_column(Text, default="autoregistro")
+    rol_al_registrar: Mapped[str | None] = mapped_column(Text)
+    bloqueo_equipo: Mapped[bool] = mapped_column(Boolean, default=False)
+    legacy: Mapped[bool] = mapped_column(Boolean, default=False)
+    legacy_pack_device_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    ultimo_uso_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ultima_ip: Mapped[str | None] = mapped_column(Text)
+    aprobado_por: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    aprobado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    bloqueado_por: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    bloqueado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    motivo: Mapped[str | None] = mapped_column(Text)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class AccessEvent(Base):
+    """Evento de acceso de una cuenta o equipo (ADR-0174, migración 0113).
+
+    Tabla de NEGOCIO, append-only: un trigger (`prevent_mutation('deleted_at')`) rechaza todo
+    UPDATE salvo la baja lógica por retención. `detalle` no lleva contraseñas ni tokens.
+    """
+
+    __tablename__ = "access_events"
+    __table_args__ = (
+        Index("ix_access_events_feed", "tenant_id", text("occurred_at desc"), text("id desc")),
+        Index("ix_access_events_severidad", "tenant_id", "severidad", text("occurred_at desc")),
+        Index("ix_access_events_cuenta", "tenant_id", "admin_id", text("occurred_at desc")),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    admin_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    device_row_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    device_id: Mapped[str | None] = mapped_column(Text)
+    rol: Mapped[str | None] = mapped_column(Text)
+    canal: Mapped[str] = mapped_column(Text, default="campo")
+    tipo: Mapped[str] = mapped_column(Text)
+    severidad: Mapped[str] = mapped_column(Text, default="info")
+    ip: Mapped[str | None] = mapped_column(Text)
+    detalle: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    request_id: Mapped[str | None] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Notification(Base):
     """Notificación de un evento del negocio (feed in-app + push, ADR-0167).
 
