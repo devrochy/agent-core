@@ -493,6 +493,13 @@ async def test_publicar_un_especialista_enlaza_al_general_y_con_la_bandera_lo_re
         )
 
     version_antes = (await _sql(tid, "select max(version) from agent_versions where agent_id = :g", g=general))[0][0]
+    # Un negocio nuevo nace con el recorte encendido (HU-AOS-53): aquí se prueba primero apagado.
+    await _sql(
+        tid,
+        "update tenants set settings = jsonb_set(settings, '{agent_os,recortar_general}', 'false'::jsonb) "
+        "where id = :t",
+        t=tid,
+    )
     pub = await _publicar_desde_el_guion(app_client, h, cid, "ventas", {"que_vendes": "ambos"})
     assert pub["general_updated"] is None  # bandera apagada: solo el enlace
     enlaces = await _sql(

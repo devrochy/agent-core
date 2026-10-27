@@ -103,6 +103,48 @@ async def motivo_para_rechazar_alta_de_tester(slug: str, admin_email: str | None
     return None
 
 
+async def _agentes_base_al_alta(tenant_id: uuid.UUID, *, nuevo: bool) -> list[str]:
+    """El Coordinador y el General nacen con el negocio (HU-AOS-53, SPEC-39).
+
+    Reusa el backfill B2 (`backfill_agentes`, idempotente): crea los dos agentes reservados con su
+    versión, derivados del AgentSpec v2 que acaba de dejar el alta, y las instancias de las conexiones
+    que ya existan (las posteriores las crea `instancias_de_conexion_nueva`). No cambia `aos_runtime`:
+    el negocio sigue en `legacy` hasta que se migre (P-34), así que no cambia cómo atiende.
+    En un negocio NUEVO deja encendido el recorte del General (`agent_os.recortar_general`), de modo
+    que cada especialista que cree el asistente le quite al General lo suyo; un negocio que ya existía
+    conserva su bandera (la enciende el master). Frontera deliberada: un fallo se registra y el alta
+    sigue, el backfill lo repara."""
+    pasos: list[str] = []
+    try:
+        from core.agents.backfill_agentes import backfill_agentes
+
+        reporte = await backfill_agentes(dry_run=False, tenant_id=tenant_id)
+        if reporte.errores or reporte.bloqueados:
+            problema = (reporte.errores or reporte.bloqueados)[0].mensaje
+            log.warning("alta_agentes_base_pendiente", tenant_id=str(tenant_id), motivo=problema)
+            pasos.append("agentes base pendientes (los crea el backfill)")
+        else:
+            pasos.append("agentes General y Coordinador listos")
+    except Exception:  # frontera deliberada: el alta no depende del Agent OS
+        log.warning("alta_agentes_base_fallo", tenant_id=str(tenant_id), exc_info=True)
+        pasos.append("agentes base pendientes (los crea el backfill)")
+        return pasos
+    if nuevo:
+        from sqlalchemy import text
+
+        async with get_session() as session:
+            await session.execute(
+                text(
+                    "update tenants set settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{agent_os}', "
+                    "coalesce(settings->'agent_os', '{}'::jsonb) || '{\"recortar_general\": true}'::jsonb) "
+                    "where id = :t"
+                ),
+                {"t": tenant_id},
+            )
+        pasos.append("recorte del General encendido")
+    return pasos
+
+
 async def onboard_tenant(
     *,
     name: str,
@@ -140,6 +182,7 @@ async def onboard_tenant(
 
     tenant_id = tenant_id or uuid.uuid4()
     steps: list[str] = []
+    negocio_nuevo = False
 
     plugin_manager.scan()
     await plugin_manager.sync_registry()
@@ -176,6 +219,7 @@ async def onboard_tenant(
             )
             session.add(tenant)
             await session.flush()
+            negocio_nuevo = True
             steps.append(f"tenant creado ({slug})")
         else:
             tenant_id = tenant.id
@@ -314,6 +358,8 @@ async def onboard_tenant(
             steps.extend(seed_tenant_flow(slug, list(packs)))
         except Exception:
             log.warning("tenant_flow_seed_failed", slug=slug, exc_info=True)
+
+    steps.extend(await _agentes_base_al_alta(tenant_id, nuevo=negocio_nuevo))
 
     onboarding.ensure_tenant_docs(slug, name, business_description)
     await onboarding.ensure_brand_voice(tenant_id, slug)
