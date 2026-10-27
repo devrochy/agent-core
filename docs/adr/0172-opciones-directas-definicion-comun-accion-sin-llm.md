@@ -189,7 +189,7 @@ Decisiones que el ADR dejaba abiertas y cómo quedaron:
 - **Si Meta falla, la versión publicada no se revierte.** Queda `published` con su vínculo y el error en
   `message_templates.sync_error` (visible en el panel); el reintento completa la misma fila. `network_error`, `rate_limited`
   e `in_progress` son reintentables; un rechazo de Meta, una definición inválida, `name_taken`, `other_account` y
-  `template_deleted` no.
+  `template_deleted` y `meta_id_taken` (el id que devolvió Meta ya está en otra fila del negocio, p. ej. tras reclamar la WABA, ADR-0122) no.
 - **Superficie nueva y lo que NO cambia.** `post_template` se extrae de `create_template` (el panel sigue igual);
   `find_template_by_name` es nueva. No se llama a `update_template` jamás para una versión. No hay tabla ni migración nuevas.
 - **Lo que queda fuera.** (a) El encadenado desde `publicar` (HU-OPC-05) y la lectura del estado en el listado se conectan al

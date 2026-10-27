@@ -208,7 +208,7 @@ async def find_template_by_name(
     responde, así que un filtro ignorado no adopta otra plantilla."""
     data = await graph_fetch(
         f"/{waba_id}/message_templates", token=token, app_secret=app_secret,
-        query={"name": name, "fields": "id,name,status,category,language,parameter_format", "limit": "25"},
+        query={"name": name, "fields": "id,name,status,category,language,parameter_format", "limit": "100"},
         version=version, connection_id=connection_id,
     )
     for item in (data or {}).get("data", []):

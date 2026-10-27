@@ -77,6 +77,9 @@ ACCION_AUDITORIA = "option_meta_publish"
 _CANDADO_S = 120
 _ESTADOS_BORRADOS = ("DELETED", "PENDING_DELETION")
 _TOPE_MOTIVO = 200
+_TOPE_EJEMPLO = 60
+# Compare-and-delete atómico: libera el candado solo si sigue siendo el de esta llamada.
+_LIBERAR = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
 
 
 def _clave_candado(tenant_id: uuid.UUID, version_id: uuid.UUID) -> str:
@@ -96,6 +99,9 @@ async def publicar_en_meta(
     """Crea (o concilia) la plantilla `<clave>_v<n>` de Meta para una versión publicada, en la WABA de la conexión.
     Nunca lanza: devuelve un `ResultadoPublicacion`. `ejemplos` da el valor de muestra de cada variable del cuerpo
     (Meta los exige al revisar). Repetir la llamada es seguro: ver el docstring del módulo."""
+    from core.gateway.event_notices import clean_param
+
+    ejemplos = {str(k)[:120]: clean_param(str(v))[:_TOPE_EJEMPLO] for k, v in (ejemplos or {}).items()}  # texto libre → acotado
     categoria_n = m.categoria_valida(categoria)
     if categoria_n is None:
         resultado = m.ResultadoPublicacion(False, m.CATEGORIA_INVALIDA)
@@ -103,7 +109,7 @@ async def publicar_en_meta(
         return resultado
     try:
         async with tenant_scope(tenant_id):
-            resultado = await _publicar(tenant_id, version_id, connection_id, categoria_n, idioma, ejemplos or {})
+            resultado = await _publicar(tenant_id, version_id, connection_id, categoria_n, idioma, ejemplos)
     except Exception as exc:
         log.error("option_meta_publish_internal_error", tenant_id=str(tenant_id), error=type(exc).__name__)
         resultado = m.ResultadoPublicacion(False, m.ERROR_INTERNO, motivo=type(exc).__name__)
@@ -151,8 +157,8 @@ async def _publicar(
     # 2. La conexión y su WABA (las credenciales son las de ESA conexión).
     try:
         connection, waba, creds = await resolve_waba_and_credentials(connection_id, tenant_id)
-    except Exception:
-        log.exception("option_meta_publish_resolucion_fallida", tenant_id=str(tenant_id))
+    except Exception as exc:
+        log.error("option_meta_publish_resolucion_fallida", tenant_id=str(tenant_id), error=type(exc).__name__)
         connection = waba = creds = None
     if connection is None or waba is None or creds is None:
         return m.ResultadoPublicacion(False, m.CONEXION_NO_LISTA, nombre=nombre, categoria=categoria)
@@ -171,8 +177,8 @@ async def _publicar(
     redis = get_redis()
     try:
         tomado = await redis.set(candado, token, ex=_CANDADO_S, nx=True)
-    except Exception:
-        log.exception("option_meta_publish_sin_candado", tenant_id=str(tenant_id))
+    except Exception as exc:
+        log.error("option_meta_publish_sin_candado", tenant_id=str(tenant_id), error=type(exc).__name__)
         return m.ResultadoPublicacion(False, m.EN_CURSO, nombre=nombre, categoria=categoria, motivo="sin_candado")
     if not tomado:
         return m.ResultadoPublicacion(False, m.EN_CURSO, nombre=nombre, categoria=categoria)
@@ -182,14 +188,9 @@ async def _publicar(
         )
     finally:
         try:
-            if _texto_redis(await redis.get(candado)) == token:  # solo el propio: uno vencido no se borra
-                await redis.delete(candado)
+            await redis.eval(_LIBERAR, 1, candado, token)  # solo el propio: uno vencido no se borra
         except Exception:
             log.warning("option_meta_publish_candado_sin_liberar", tenant_id=str(tenant_id))
-
-
-def _texto_redis(valor: Any) -> str | None:
-    return valor.decode() if isinstance(valor, bytes) else valor
 
 
 def _resultado(fila: MessageTemplate, outcome: str, *, motivo: str = "") -> m.ResultadoPublicacion:
@@ -223,9 +224,12 @@ async def _con_candado(
         except GraphError as exc:
             return _resultado(fila, m.ERROR_DE_RED, motivo=_motivo(exc))
         if en_meta is not None and en_meta.get("id"):
-            adoptada = await _completar(
-                tenant_id, fila_id, str(en_meta["id"]), str(en_meta.get("status") or "PENDING"), en_meta.get("category")
-            )
+            try:
+                adoptada = await _completar(
+                    tenant_id, fila_id, str(en_meta["id"]), str(en_meta.get("status") or "PENDING"), en_meta.get("category")
+                )
+            except IntegrityError:
+                return await _fallo(tenant_id, fila_id, m.ID_REPETIDO, "meta_id_taken", marcar=True)
             return _resultado(adoptada, m.YA_PUBLICADA)
         # Meta no la tiene: nada se creó, así que la solicitud es la de ESTA llamada (categoría y componentes).
         await _actualizar_reserva(tenant_id, fila_id, categoria, componentes)
@@ -249,7 +253,11 @@ async def _con_candado(
         # `TRANSIENT` (corte, timeout, 5xx): no se sabe si Meta la creó. Las demás: Meta recibió y rechazó.
         salida = m.ERROR_DE_RED if exc.is_transient else m.RECHAZADA_POR_META
         return await _fallo(tenant_id, fila_id, salida, _motivo(exc), marcar=True)
-    completada = await _completar(tenant_id, fila_id, meta_id, estado, None)
+    try:
+        completada = await _completar(tenant_id, fila_id, meta_id, estado, None)
+    except IntegrityError:
+        # `uq_message_templates_tenant_meta_id`: ese id ya está en OTRA fila del negocio. No se repite solo.
+        return await _fallo(tenant_id, fila_id, m.ID_REPETIDO, "meta_id_taken", marcar=True)
     return _resultado(completada, m.PUBLICADA)
 
 
@@ -314,7 +322,9 @@ async def _reservar(
             version.message_template_id = fila.id
             session.expunge(fila)
             return fila, True
-    except IntegrityError:
+    except IntegrityError as exc:
+        if "uq_message_templates_waba_name_lang" not in str(exc):
+            raise  # otra restricción (p. ej. una FK): no es una carrera, la atrapa `publicar_en_meta` como error interno
         # Carrera perdida contra otra reserva del mismo nombre: el reintento relee la ganadora.
         return m.ResultadoPublicacion(False, m.EN_CURSO, nombre=nombre, categoria=categoria)
 

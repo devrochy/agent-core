@@ -163,6 +163,7 @@ class MetaFalsa:
         self.falla_antes: list[GraphError] = []
         self.falla_despues: list[GraphError] = []
         self.pausa_s = 0.0
+        self.id_fijo: str | None = None
 
     @property
     def posts(self) -> list[tuple[str, str, Any, Any]]:
@@ -175,7 +176,7 @@ class MetaFalsa:
                 raise self.falla_antes.pop(0)
             if self.pausa_s:
                 await asyncio.sleep(self.pausa_s)
-            item = {"id": f"meta-{uuid.uuid4().hex[:10]}", "status": "PENDING", **{k: body[k] for k in ("name", "language", "category")}}
+            item = {"id": self.id_fijo or f"meta-{uuid.uuid4().hex[:10]}", "status": "PENDING", **{k: body[k] for k in ("name", "language", "category")}}
             self.plantillas[body["name"]] = item
             if self.falla_despues:
                 raise self.falla_despues.pop(0)
@@ -500,6 +501,32 @@ async def test_dos_publicaciones_simultaneas_de_la_misma_version_hacen_un_solo_p
 
     assert sorted([r1.outcome, r2.outcome]) in (["in_progress", "published"], ["already_published", "published"])
     assert len(meta.posts) == 1 and len(await filas(a.tid, f"{clave}_v1")) == 1
+
+
+async def test_los_ejemplos_del_dueno_se_acotan_y_no_llevan_saltos_de_linea(negocios, meta) -> None:
+    a, _ = negocios
+    conn, _, _ = await conexion(a.tid)
+    _, (v1,) = await plantilla(a.tid, [definicion()])
+    await publicar(a.tid, v1, conn, ejemplos={"cliente.nombre": "Ana\n" + "x" * 500, "otra.ruta": "no se usa"})
+    ejemplo = meta.posts[0][2]["components"][0]["example"]["body_text_named_params"][0]["example"]
+    assert "\n" not in ejemplo and 1 < len(ejemplo) <= 60
+
+
+async def test_un_id_de_meta_que_ya_esta_en_otra_fila_del_negocio_no_se_reintenta_solo(negocios, meta) -> None:
+    a, _ = negocios
+    conn, waba_row, _ = await conexion(a.tid)
+    clave, (v1,) = await plantilla(a.tid, [definicion()])
+    await _sql(
+        a.tid,
+        "insert into message_templates (id, tenant_id, waba_account_id, meta_template_id, name, language, category, status) "
+        "values (gen_random_uuid(), :t, :w, 'meta-repetido', 'otra_plantilla', 'es', 'UTILITY', 'APPROVED')",
+        t=a.tid, w=waba_row,
+    )
+    meta.id_fijo = "meta-repetido"
+    r = await publicar(a.tid, v1, conn)
+    assert r.outcome == "meta_id_taken" and not r.ok and not r.reintentable
+    (fila,) = await filas(a.tid, f"{clave}_v1")
+    assert fila.meta_template_id is None and fila.sync_error == "meta_id_taken"
 
 
 # ---------------------------------------------------------------- conflictos de nombre y de cuenta

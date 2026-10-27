@@ -44,6 +44,7 @@ VERSION_NO_ENCONTRADA = "version_not_found"
 VERSION_RETIRADA = "version_retired"
 PLANTILLA_BORRADA = "template_deleted"  # la plantilla de Meta ligada se borró: hace falta una versión nueva
 NOMBRE_OCUPADO = "name_taken"  # ya existe en la cuenta una plantilla `<clave>_v<n>` que NO es esta versión
+ID_REPETIDO = "meta_id_taken"  # el id que devolvió Meta ya está en otra fila del negocio (p. ej. tras reclamar la WABA)
 LIMITE_DE_CUPO = "template_quota_full"  # la cuenta de WhatsApp ya no admite más plantillas
 CATEGORIA_INVALIDA = "invalid_category"
 IDIOMA_INVALIDO = "invalid_language"

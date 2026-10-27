@@ -14,7 +14,7 @@
   componentes) y se liga `option_template_versions.message_template_id` ANTES del POST; el
   `UNIQUE (waba, nombre, idioma)` existente es la clave de idempotencia. Un reintento tras un corte de red consulta
   a Meta por ese nombre antes de crear: si la plantilla ya existe la adopta (sin otro POST ni otro cupo del límite de
-  creación). Candado Redis por (negocio, versión) con token; sin Redis no se publica.
+  creación). Candado Redis por (negocio, versión) con token y liberación atómica; sin Redis no se publica. Los `ejemplos` de los parámetros se acotan a 60 caracteres sin saltos de línea.
 - El estado (aprobada, rechazada, pausada) es el de `message_templates`, que ya escribe el webhook de estado de
   plantillas; `estado_de_publicacion(negocio, versiones)` lo lee en una consulta para el panel. Meta no recategoriza
   en silencio (`allow_category_change=False`).
