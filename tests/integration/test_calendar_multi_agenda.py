@@ -303,3 +303,36 @@ async def test_vincular_conexion_crea_una_agenda_por_cuenta_sin_chocar_por_nombr
         assert nombres == ["Agenda principal", "Ana Perez", "Ana Perez 2", "Luis"]
         assert len({a.color for a in ids}) >= 2  # la paleta rota
     _ = uniq
+
+
+async def test_cita_sin_agenda_cae_en_la_principal_y_choca_con_ella() -> None:
+    """El trigger evita que `NULL` y el id de la principal sean «agendas distintas» (pods viejos)."""
+    from datetime import UTC, datetime, timedelta
+
+    from pack_calendar import agendas
+    from pack_calendar.models import Appointment
+    from sqlalchemy.exc import IntegrityError
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tenant_id = await _tenant_calendario()
+    inicio = datetime(2027, 4, 5, 15, tzinfo=UTC)
+
+    def _fila(**extra) -> Appointment:
+        return Appointment(
+            tenant_id=tenant_id, title="x", start_at=inicio, end_at=inicio + timedelta(hours=1), **extra
+        )
+
+    async with tenant_scope(tenant_id):
+        principal = await agendas.ensure_default()
+        async with get_session() as session:
+            vieja = _fila()  # un pod anterior a 0006 escribe sin calendar_id
+            session.add(vieja)
+            await session.flush()
+            await session.refresh(vieja)  # el trigger la rellena en la base
+            assert vieja.calendar_id == principal.id
+        with pytest.raises(IntegrityError):
+            async with get_session() as session:
+                session.add(_fila(calendar_id=principal.id))
+                await session.flush()

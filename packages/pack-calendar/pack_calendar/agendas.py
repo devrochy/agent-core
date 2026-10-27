@@ -26,11 +26,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from pack_calendar.config import CalendarConfig
-from pack_calendar.models import COLORES_TIPO, Calendar
+from pack_calendar.models import COLORES_TIPO, Appointment, Calendar, CalendarBlock
 
 log = structlog.get_logger()
 
@@ -196,6 +196,14 @@ async def ensure_default(config: CalendarConfig | None = None) -> Agenda:
                     fila = Calendar(tenant_id=tenant_id, name=NOMBRE_DEFECTO, is_default=True)
                     session.add(fila)
                     await session.flush()
+                    # Sin BYPASSRLS la migración no pudo hacer el backfill: las filas viejas sin
+                    # agenda pasan a la principal aquí (la RLS ya acota al negocio actual).
+                    for tabla in (Appointment, CalendarBlock):
+                        await session.execute(
+                            update(tabla)
+                            .where(tabla.tenant_id == tenant_id, tabla.calendar_id.is_(None))
+                            .values(calendar_id=fila.id)
+                        )
                 if fila.connection_id is None and config is not None and config.source == "google":
                     activas = await _conexiones_google_activas(session, tenant_id)
                     ya_enlazadas = set(

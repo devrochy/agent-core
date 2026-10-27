@@ -4,10 +4,11 @@
   al cliente. Una conexión de Google = una agenda (`connection_id`, FK lógica: ningún pack
   hace FK al core). Sin conexión es una agenda interna.
 - `calendar_id` (nullable) en citas y bloqueos, con backfill a la agenda por defecto.
-  `NULL` se trata como «la agenda por defecto» hasta la migración «contract» (NOT NULL).
+  `NULL` se trata como «la agenda por defecto» hasta la migración «contract» (NOT NULL); un
+  trigger BEFORE INSERT/UPDATE en las citas rellena el `NULL` con la agenda por defecto.
 - La exclusión de solape pasa a ser por agenda:
   `(tenant_id, coalesce(calendar_id, nil), tstzrange)`. Con una sola agenda es la misma
-  garantía que antes. La clave nueva es más fina que la vieja: no hace falta revisar solapes.
+  garantía que antes (el trigger evita que `NULL` y el id de la principal se traten distinto). La clave nueva es más fina que la vieja: no hace falta revisar solapes.
 
 `CalendarConfig` vive cifrada en `plugin_configs`, así que el SQL no puede leer `source`,
 `timezone` ni `business_hours`: la agenda por defecto nace con horario y zona en `NULL`
@@ -19,7 +20,11 @@ migraciones tiene BYPASSRLS (ADR-0094 §5; test y producción lo tienen). Si no,
 nada y `ensure_default()` crea la agenda por defecto al primer uso.
 
 La exclusión nueva se crea antes de borrar la vieja y todo va en una transacción con
-`lock_timeout` (el ADD CONSTRAINT toma ACCESS EXCLUSIVE sobre una tabla chica).
+`lock_timeout` (el ADD COLUMN y el ADD CONSTRAINT toman ACCESS EXCLUSIVE y lo retienen hasta el commit: la
+construcción del GiST y el backfill corren con la tabla bloqueada; `pack_calendar_appointments`
+es chica, verificar el conteo antes de aplicar en producción). El downgrade borra las agendas
+(nombres, alias, horarios) y reasigna todo a «sin agenda»: un nuevo upgrade vuelve a mandar todo
+a la principal.
 
 Revision ID: 0006
 Revises: 0005
@@ -42,6 +47,8 @@ _APPTS = "pack_calendar_appointments"
 _BLOCKS = "pack_calendar_blocks"
 _VIEJA = "ex_pack_calendar_appointments_sin_solape"
 _NUEVA = "ex_pack_calendar_appointments_sin_solape_cal"
+_FN = "fn_pack_calendar_appt_calendar_default"
+_TRG = "trg_pack_calendar_appt_calendar_default"
 _NIL = "'00000000-0000-0000-0000-000000000000'::uuid"
 _RLS = "nullif(current_setting('app.tenant_id', true), '')::uuid"
 
@@ -104,8 +111,6 @@ def upgrade() -> None:
 
     op.add_column(_APPTS, sa.Column("calendar_id", UUID(as_uuid=True), nullable=True))
     op.add_column(_BLOCKS, sa.Column("calendar_id", UUID(as_uuid=True), nullable=True))
-    op.create_index("ix_pack_calendar_appts_calendar_start", _APPTS, ["tenant_id", "calendar_id", "start_at"])
-    op.create_index("ix_pack_calendar_blocks_calendar_start", _BLOCKS, ["tenant_id", "calendar_id", "start_at"])
 
     # Backfill: una agenda por defecto por negocio que ya usa el pack (idempotente).
     op.execute(
@@ -138,6 +143,28 @@ def upgrade() -> None:
         where c.tenant_id = b.tenant_id and c.is_default and c.deleted_at is null and b.calendar_id is null
         """
     )
+
+    # Mientras `calendar_id` siga siendo nullable (hasta el «contract»), una cita nueva sin agenda
+    # (pods viejos durante el despliegue, o un negocio sin backfill) cae en la agenda por defecto:
+    # si no, `NULL` y el id de la principal no chocarían en la exclusión y se podría reservar doble.
+    op.execute(
+        f"""
+        create or replace function {_FN}() returns trigger language plpgsql as $$
+        begin
+          if new.calendar_id is null then
+            select c.id into new.calendar_id from {_CAL} c
+             where c.tenant_id = new.tenant_id and c.is_default and c.deleted_at is null limit 1;
+          end if;
+          return new;
+        end $$
+        """
+    )
+    op.execute(
+        f"create trigger {_TRG} before insert or update of calendar_id on {_APPTS} "
+        f"for each row execute function {_FN}()"
+    )
+    op.create_index("ix_pack_calendar_appts_calendar_start", _APPTS, ["tenant_id", "calendar_id", "start_at"])
+    op.create_index("ix_pack_calendar_blocks_calendar_start", _BLOCKS, ["tenant_id", "calendar_id", "start_at"])
 
     # Exclusión por agenda: la nueva (más fina) entra antes de soltar la vieja.
     op.execute(
@@ -188,6 +215,8 @@ def downgrade() -> None:
         """
     )
     op.execute(f"alter table {_APPTS} drop constraint if exists {_NUEVA}")
+    op.execute(f"drop trigger if exists {_TRG} on {_APPTS}")
+    op.execute(f"drop function if exists {_FN}()")
     op.drop_index("ix_pack_calendar_blocks_calendar_start", table_name=_BLOCKS)
     op.drop_index("ix_pack_calendar_appts_calendar_start", table_name=_APPTS)
     op.drop_column(_BLOCKS, "calendar_id")

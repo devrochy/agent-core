@@ -132,9 +132,19 @@ async def calendar_status(
     )
 
 
+async def _puede_ver_cuenta(principal: Principal) -> bool:
+    """El correo de la cuenta de Google solo lo ve quien tiene la sección de conexión."""
+    from core.admin.permissions import effective_access
+
+    if principal.admin.role == "master":
+        return True
+    return await effective_access(principal.admin, "pack_calendar:conexion", principal.tenant_id) is not None
+
+
 async def _correos_de_conexiones(ids: list[uuid.UUID | None]) -> dict[uuid.UUID, str]:
     """`{connection_id: correo de la cuenta}` (solo para quien tiene la sección de conexión)."""
     from core.db.models import ChannelConnection
+    from core.shared.tenant import get_current_tenant_id
 
     limpios = [i for i in ids if i is not None]
     if not limpios:
@@ -142,7 +152,9 @@ async def _correos_de_conexiones(ids: list[uuid.UUID | None]) -> dict[uuid.UUID,
     async with get_session() as session:
         rows = await session.execute(
             select(ChannelConnection.id, ChannelConnection.external_id).where(
-                ChannelConnection.id.in_(limpios)
+                ChannelConnection.id.in_(limpios),
+                ChannelConnection.tenant_id == get_current_tenant_id(),
+                ChannelConnection.deleted_at.is_(None),
             )
         )
         return {r.id: (r.external_id or "") for r in rows}
@@ -260,10 +272,13 @@ async def list_calendars(
 
     config, lista = await _config_y_agendas()
     base = config if isinstance(config, CalendarConfig) else CalendarConfig()
-    correos = await _correos_de_conexiones([a.connection_id for a in lista])
+    ver_cuenta = await _puede_ver_cuenta(principal)
+    correos = await _correos_de_conexiones([a.connection_id for a in lista]) if ver_cuenta else {}
     return CalendarListOut(
         calendars=[
-            _calendar_out(a, base, correos.get(a.connection_id, "") if a.connection_id else "", puede_ver_cuenta=True)
+            _calendar_out(
+                a, base, correos.get(a.connection_id, "") if a.connection_id else "", puede_ver_cuenta=ver_cuenta
+            )
             for a in lista
         ],
         multi_activo=agendas.multi_activo(base, lista),
@@ -1691,6 +1706,9 @@ async def oauth_start(
     cookies = [(_OAUTH_STATE_COOKIE, state), (_OAUTH_NEXT_COOKIE, destino)]
     if connection_id is not None:
         cookies.append((_OAUTH_CONN_COOKIE, str(connection_id)))
+    else:
+        # Una reconexión abandonada no debe contaminar un «conectar otra cuenta» posterior.
+        respuesta.delete_cookie(_OAUTH_CONN_COOKIE, path="/")
     for nombre, valor in cookies:
         respuesta.set_cookie(
             nombre, valor, max_age=_OAUTH_COOKIE_MAX_AGE, httponly=True, samesite="lax", path="/"

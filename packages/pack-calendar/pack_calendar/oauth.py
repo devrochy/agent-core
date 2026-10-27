@@ -242,6 +242,13 @@ async def save_tokens(
         if not email and from_refresh:
             email = str(previous.get("account_email", ""))
         anterior = str(previous.get("account_email", "") or "")
+        if not anterior:
+            # Conexión antigua sin `account_email` en las credenciales: vale el `external_id`.
+            from core.gateway.connections import get_connection
+
+            conexion = await get_connection(objetivo)
+            externo = str(getattr(conexion, "external_id", "") or "")
+            anterior = externo if "@" in externo else ""
         if email and anterior and email.lower() != anterior.lower():
             raise OtraCuentaError(
                 PLUGIN_ID, "Autorizaste otra cuenta de Google distinta a la de esta conexión."

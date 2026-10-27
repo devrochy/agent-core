@@ -139,6 +139,7 @@ class Appointment(Base):
     __tablename__ = "pack_calendar_appointments"
     __table_args__ = (
         Index("ix_pack_calendar_appts_tenant_start", "tenant_id", "start_at"),
+        Index("ix_pack_calendar_appts_calendar_start", "tenant_id", "calendar_id", "start_at"),
         Index(
             "uq_pack_calendar_appt_google_event",
             "tenant_id",
@@ -186,6 +187,7 @@ class CalendarBlock(Base):
     __tablename__ = "pack_calendar_blocks"
     __table_args__ = (
         Index("ix_pack_calendar_blocks_tenant_start", "tenant_id", "start_at"),
+        Index("ix_pack_calendar_blocks_calendar_start", "tenant_id", "calendar_id", "start_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
