@@ -116,6 +116,71 @@ def _playbooks_de_packs() -> set[str]:
     return {f.stem for root in playbook_roots() if root != CORE_PLAYBOOKS for f in root.glob("*.md")}
 
 
+# HU-AOS-51 (D-49, SPEC-39): poderes propios por agente. Las tools `sub_*` y la familia de suscripción
+# de Cobranza son de un enfoque (Suscripciones y Cobranza como proveedor), no de todos los especialistas.
+PACK_SUSCRIPCIONES = "pack_subscriptions"
+PACK_COBRANZA = "pack_cobranza"
+
+
+def _es_tool_de_suscripcion(nombre: str, owner: str) -> bool:
+    """`sub_*` las declara el core (`SubscriptionSkill`, ADR-0106) pero son del enfoque Suscripciones."""
+    from core.kernel.procedures.catalogo import CORE_OWNER
+
+    return owner == CORE_OWNER and nombre.startswith("sub_")
+
+
+def _es_tool_de_suscripcion_de_cobranza(nombre: str, owner: str) -> bool:
+    return owner == PACK_COBRANZA and nombre.startswith("cob_") and "_suscripcion" in nombre
+
+
+def herramienta_propia(
+    plantilla: PlantillaAgente,
+    nombre: str,
+    catalogo: Mapping[str, Any],
+    *,
+    habilitados: set[str],
+    proveedor_suscripciones: str | None = None,
+) -> bool:
+    """¿La tool `nombre` es del agente de esta plantilla? Es el único criterio de poderes propios:
+    las de su habilidad (y las acotadas de una opcional), las esenciales del core (escalar, perfil,
+    memoria) y nada de otro pack. Las `sub_*` solo si la plantilla es del pack de suscripciones; la
+    familia `cob_*_suscripcion` solo si Cobranza es el proveedor de suscripciones del negocio."""
+    from core.kernel.procedures.catalogo import CORE_OWNER
+
+    info = catalogo.get(nombre)
+    if info is None:
+        return False
+    propias = set(plantilla.habilidades) | (set(plantilla.opcionales) & habilitados)
+    acotadas = plantilla.acciones_opcionales
+    if info.owner in acotadas:  # opcional acotada (nunca obligatoria: lo valida la plantilla)
+        return info.owner in propias and nombre in acotadas[info.owner]
+    if _es_tool_de_suscripcion(nombre, info.owner):
+        return PACK_SUSCRIPCIONES in propias
+    if _es_tool_de_suscripcion_de_cobranza(nombre, info.owner):
+        return info.owner in propias and proveedor_suscripciones == PACK_COBRANZA
+    return info.owner in propias or info.owner == CORE_OWNER
+
+
+def herramientas_de_plantilla(
+    plantilla: PlantillaAgente,
+    catalogo: Mapping[str, Any],
+    *,
+    habilitados: set[str],
+    proveedor_suscripciones: str | None = None,
+) -> list[str]:
+    """Tools de pack que tendrá un agente de la plantilla (sin las esenciales del core), en orden."""
+    from core.kernel.procedures.catalogo import CORE_OWNER
+
+    return sorted(
+        nombre
+        for nombre, info in catalogo.items()
+        if herramienta_propia(
+            plantilla, nombre, catalogo, habilitados=habilitados, proveedor_suscripciones=proveedor_suscripciones
+        )
+        and (info.owner != CORE_OWNER or _es_tool_de_suscripcion(nombre, info.owner))
+    )
+
+
 def derivar_contenido(
     plantilla: PlantillaAgente,
     general: Mapping[str, Any],
@@ -124,6 +189,7 @@ def derivar_contenido(
     habilitados: set[str],
     publicados: Iterable[Any],
     playbooks_de_packs: set[str],
+    proveedor_suscripciones: str | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Contenido `agentspec/3` del especialista y sus avisos. Hereda del General (la última versión
     del negocio: modelo, persona, memoria, políticas y la configuración de cada acción) y lo acota
@@ -131,8 +197,9 @@ def derivar_contenido(
 
     - `procedures`: los publicados que nombra la plantilla y son ofrecibles con lo habilitado
       (ADR-0113 §1), con el rango compatible `^M.0` (la misma regla que el lector tolerante);
-    - `tools`: los bindings del General de las acciones del core o de sus habilidades; de una
-      opcional con `acciones_opcionales`, solo esas acciones;
+    - `tools`: los bindings del General de las acciones esenciales del core o de sus habilidades; de una
+      opcional con `acciones_opcionales`, solo esas acciones (`herramienta_propia`: nunca las `sub_*`
+      ni la familia de suscripción de Cobranza de otro enfoque, HU-AOS-51);
     - `guardrails`: los del General (un `required_tool` solo si su acción sigue);
     - `playbooks`: los del General que nombra la plantilla o que no son de ningún pack;
     - `declarativeTools`: ninguna (siguen en el General: pueden llevar secretos por referencia).
@@ -145,7 +212,6 @@ def derivar_contenido(
     from core.releases.procedimientos import ofrecible
 
     avisos: list[str] = []
-    propias = set(plantilla.habilidades) | (set(plantilla.opcionales) & habilitados)
     con_core = habilitados | {CORE_OWNER}
     elegidos = [
         p for p in publicados if p.id in plantilla.procedimientos and ofrecible(p, con_core)
@@ -166,12 +232,9 @@ def derivar_contenido(
             avisos.append(f"acciones_opcionales de {pack} que esa habilidad no publica: {ajenas}")
 
     def _propia(nombre: str) -> bool:
-        info = catalogo.get(nombre)
-        if info is None:
-            return False
-        if info.owner in acotadas:  # opcional acotada (nunca obligatoria: lo valida la plantilla)
-            return info.owner in propias and nombre in acotadas[info.owner]
-        return info.owner in propias or info.owner == CORE_OWNER
+        return herramienta_propia(
+            plantilla, nombre, catalogo, habilitados=habilitados, proveedor_suscripciones=proveedor_suscripciones
+        )
 
     tools = [dict(b) for b in general.get("tools") or [] if _propia(str(b.get("tool", "")))]
     nombres = {b["tool"] for b in tools}
@@ -388,6 +451,7 @@ async def _instalar_plantilla(
             habilitados=habilitados,
             publicados=publicados,
             playbooks_de_packs=playbooks_de_packs,
+            proveedor_suscripciones=manifest.proveedor_suscripciones,
         )
 
     async def _publicar_v1(aid: uuid.UUID, contenido: dict[str, Any]) -> int:
@@ -809,4 +873,6 @@ __all__ = [
     "aplicar_agentes",
     "backfill_presets_v2",
     "derivar_contenido",
+    "herramienta_propia",
+    "herramientas_de_plantilla",
 ]

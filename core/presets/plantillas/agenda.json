@@ -2,6 +2,7 @@
   "key": "agenda",
   "nombre": "Agenda",
   "descripcion": "Agenda citas, demos y reuniones en los horarios disponibles del negocio.",
+  "seccion": "Agenda",
   "habilidades": ["pack_calendar"],
   "opcionales": ["pack_commerce"],
   "acciones_opcionales": {"pack_commerce": ["crear_lead"]},

@@ -118,6 +118,9 @@ class PlantillaAgente(BaseModel):
     nombre: str = Field(min_length=1, max_length=80)
     # Metadato del agente (`agents.description` y `description` del agentspec/3): no entra al prompt.
     descripcion: str = Field(default="", max_length=300)
+    # Sección del producto a la que pertenece el agente (menú: Ventas, Agenda, Cobranza, Suscripciones;
+    # HU-AOS-51, SPEC-39). Es solo metadato de catálogo: el asistente de creación la muestra.
+    seccion: str = Field(default="", max_length=40)
     # Todas tienen que estar habilitadas en el negocio; si no, la plantilla no se instala.
     habilidades: list[str] = Field(min_length=1, max_length=10)
     # Se suman si están habilitadas (p. ej. pagos para Ventas, que suele quedar pendiente de claves).

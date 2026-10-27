@@ -352,6 +352,12 @@ async def test_superpoderes_por_enfoque(app_client) -> None:
     assert "procedures[2].id" in campos and "enfoque" in campos["procedures[2].id"]
     assert await _sql(tid, "select 1 from agent_versions where agent_id = :a", a=uuid.UUID(aid)) == []
 
+    # HU-AOS-51: la API genérica de versiones tampoco se salta el enfoque.
+    r = await app_client.post(f"/api/v1/admin/agents/{aid}/versions", headers=h, json={})
+    assert r.status_code == 422, r.text
+    assert "enfoque" in r.json()["error"]["fields"]["procedures[2].id"]
+    assert await _sql(tid, "select 1 from agent_versions where agent_id = :a", a=uuid.UUID(aid)) == []
+
     # Aislamiento: el agente de un negocio no se consulta desde otro.
     otro, _ = await _negocio()
     h_otro = await _dueno(app_client, otro)
@@ -387,3 +393,19 @@ async def test_requisitos_de_configuracion_por_enfoque(app_client) -> None:
     h_otro = await _dueno(app_client, otro)
     r = await app_client.get(f"/api/v1/admin/agents/{aid}/requirements", headers=h_otro)
     assert r.status_code == 404, r.text
+
+
+async def test_plantillas_traen_seccion_y_solo_sus_herramientas(app_client) -> None:
+    """HU-AOS-51: cada plantilla dice a qué sección del menú pertenece y qué tools de pack tendrá su agente;
+    las de Ventas no incluyen `sub_*` ni las de Agenda."""
+    tid, _ = await _negocio()
+    h = await _dueno(app_client, tid)
+    r = await app_client.get("/api/v1/admin/agent-templates", headers=h)
+    assert r.status_code == 200, r.text
+    por_key = {p["key"]: p for p in r.json()["items"]}
+    assert por_key["ventas"]["section"] == "Ventas" and por_key["agenda"]["section"] == "Agenda"
+    ventas, agenda = set(por_key["ventas"]["tools"]), set(por_key["agenda"]["tools"])
+    assert {"crear_pedido", "generar_cotizacion"} <= ventas
+    assert not any(n.startswith("sub_") for n in ventas | agenda)
+    assert not (ventas & {"check_availability", "create_calendar_event"})
+    assert "check_availability" in agenda and "crear_pedido" not in agenda

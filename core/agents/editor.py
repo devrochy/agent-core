@@ -272,6 +272,7 @@ async def crear_desde_plantilla(
             habilitados=habilitados,
             publicados=publicados,
             playbooks_de_packs=_playbooks_de_packs(),
+            proveedor_suscripciones=await _proveedor_de_suscripciones(tenant_id),
         )
     except PresetError:
         raise ErrorDelEditor(
@@ -293,6 +294,13 @@ async def crear_desde_plantilla(
 
 
 # ------------------------------------------------------------------ validación del editor
+async def _proveedor_de_suscripciones(tenant_id: uuid.UUID) -> str | None:
+    """Pack que cobra las suscripciones del negocio (`tenants.settings["subscriptions"]["provider"]`)."""
+    from core.subscriptions import proveedor_configurado
+
+    return await proveedor_configurado(tenant_id)
+
+
 def _normalizada(frase: str) -> str:
     from core.kernel.procedures.textos import normalizar
 
