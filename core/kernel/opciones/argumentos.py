@@ -1,7 +1,8 @@
 """Argumentos de la acción de una opción y respuesta fija al cliente (SPEC-40, ADR-0172 §4 y §5).
 
 Los argumentos salen SOLO de la definición (`args_fijos`) y del contexto que el servidor guardó al enviar
-(`option_sends.context`, `args_contexto`): nunca del texto del cliente ni del LLM (invariante 7, ADR-0108).
+(`option_sends.context`, `args_contexto`): nunca de lo que el LLM pasa a una tool ni de un mensaje del cliente.
+`cliente.nombre` es el nombre de perfil: dato acotado a 60, no instrucción (invariante 7, ADR-0108).
 Se validan contra el JSON Schema de la tool con `esquema.errores` — otra vez al ejecutar, porque la tool
 pudo cambiar de schema desde que se publicó la versión (`option_args_drift`).
 

@@ -80,3 +80,19 @@ async def fijar(tenant_id: uuid.UUID, activa: bool, *, actor: str) -> bool:
         session.add(AuditLog(tenant_id=tenant_id, actor=actor[:120], action=ACCION_AUDITORIA, input=detalle))
     log.info(ACCION_AUDITORIA, tenant_id=str(tenant_id), habilitada=bool(activa))
     return bool(activa)
+
+
+async def oferta_habilitada(_tipos_de_conexion: set[str]) -> bool:
+    """Predicado de oferta (`MCPTool.connection_predicate`) de las tools que solo existen con la bandera encendida:
+    lee la bandera del negocio del contexto. Fail-closed: sin negocio o si no se puede leer, no se ofrece."""
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return False
+    try:
+        from core.db.session import get_session
+
+        async with get_session() as session:
+            return await habilitada(session, tenant_id)
+    except Exception:
+        log.warning("opciones_directas_oferta_ilegible", exc_info=True)
+        return False

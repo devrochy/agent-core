@@ -22,6 +22,7 @@ from core.agents.playbooks import load_playbook
 from core.agents.spec import load_active_spec
 from core.db.models import Conversation, UsageLedger
 from core.db.session import get_session
+from core.kernel.opciones.bandera import oferta_habilitada
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
 from core.memory import perfil as perfil_cliente
@@ -168,6 +169,21 @@ class CoreSkill(BaseSkill):
             }.get(exc.reason, f"No se pudo enviar el correo ({exc.reason}).")
         return {"status": "queued", "to": to, "message_id": message_id}
 
+    async def _enviar_plantilla_opciones(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+        """Envía a la conversación actual una plantilla de opciones YA publicada (SPEC-40, HU-OPC-02). Solo envía:
+        no crea ni edita definiciones, no elige a quién (la conversación es la del turno) ni qué datos lleva (el
+        servidor arma el contexto). La cascada de vías, la bandera y el rastro están en `send_options_to_conversation`."""
+        from core.gateway.sender import send_options_to_conversation
+        from core.kernel.opciones.envio import para_el_agente
+
+        resultado = await send_options_to_conversation(
+            ctx.conversation_id,
+            str(args.get("clave") or "").strip(),
+            clave_idempotencia=ctx.idempotency_key,
+            actor="agent",
+        )
+        return para_el_agente(resultado)
+
     # ------------------------------------------------------------ definición
     def get_tools(self) -> list[MCPTool]:
         """Tools del core: siempre disponibles, fuera del flujo (HU-FWK-01, ADR-0109)."""
@@ -311,6 +327,32 @@ class CoreSkill(BaseSkill):
                 },
                 handler=self._send_email,
                 requires_connection_types=["email_smtp"],
+            ),
+            MCPTool(
+                name="enviar_plantilla_opciones",
+                description=(
+                    "Envía al cliente de esta conversación una plantilla de opciones (botones) ya publicada, "
+                    "para que elija con un toque. Úsala solo con la clave de una plantilla que el negocio te "
+                    "indicó. NO crea ni edita plantillas ni inventa opciones."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "clave": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9_]{1,40}$",
+                            "maxLength": 40,
+                            "description": "Clave de la plantilla de opciones publicada",
+                        }
+                    },
+                    "required": ["clave"],
+                    "additionalProperties": False,
+                },
+                handler=self._enviar_plantilla_opciones,
+                # Solo se ofrece (y se ejecuta) con la bandera `opciones_directas` del negocio encendida.
+                connection_predicate=oferta_habilitada,
+                # NO `apta_para_opcion` (default False): una opción no puede enviar otra plantilla de opciones
+                # (evita bucles de botón que envía botones), y el lint la rechaza como `tool_no_apta`.
             ),
         ]
 

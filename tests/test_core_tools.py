@@ -21,6 +21,7 @@ EXPECTED_TOOLS = {
     "get_conversation_usage",
     "set_conversation_note",
     "send_email",
+    "enviar_plantilla_opciones",
 }
 
 

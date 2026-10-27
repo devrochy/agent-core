@@ -74,10 +74,10 @@ def a_interactivo(definicion: Definicion, cuerpo: str, payloads: Mapping[str, st
 
 
 def texto_de_respaldo(definicion: Definicion, cuerpo: str) -> str:
-    """Canal sin botones, ventana cerrada sin plantilla aprobada o payload fuera de topes: el cuerpo y las
-    opciones como texto. Nada de esto se ejecuta por lo que escriba el cliente."""
+    """Canal sin botones o payload interactivo fuera de topes: el cuerpo y las opciones numeradas. Nada de esto se
+    ejecuta por lo que escriba el cliente (el número que responda llega como texto al agente)."""
     lineas = [cuerpo.strip(), ""]
-    lineas += [f"• {o.titulo}" for o in definicion.opciones]
+    lineas += [f"{i}. {o.titulo}" for i, o in enumerate(definicion.opciones, 1)]
     return "\n".join(lineas).strip()
 
 

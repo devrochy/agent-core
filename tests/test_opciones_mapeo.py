@@ -131,7 +131,7 @@ def test_render_y_parametros_reusan_event_notices() -> None:
 
 def test_texto_de_respaldo_lista_las_opciones_sin_ejecutar_nada() -> None:
     texto = mapeo.texto_de_respaldo(definicion(3), "Hola Ana")
-    assert texto == "Hola Ana\n\n• Opción 1\n• Opción 2\n• Opción 3"
+    assert texto == "Hola Ana\n\n1. Opción 1\n2. Opción 2\n3. Opción 3"
     assert not any(texto.startswith(p) or p in texto for p in PREFIJOS_OPCIONES)
 
 

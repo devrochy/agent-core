@@ -18,7 +18,7 @@ atiende webhooks/HTTP.
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import or_, select
 
@@ -40,6 +40,9 @@ from core.shared.events import ON_MESSAGE_SENT, event_bus
 from core.shared.exceptions import OutboundWindowExpiredError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+
+if TYPE_CHECKING:
+    from core.kernel.opciones.envio import ResultadoEnvio
 
 log = get_logger(__name__)
 
@@ -611,6 +614,7 @@ _MAX_ID_FILA = 200
 _MAX_TITULO_FILA = 24
 _MAX_DESCRIPCION_FILA = 72
 _MAX_TEXTO_BOTON_LISTA = 20
+_MAX_PIE = 60
 
 
 def _lista_valida(interactive: dict[str, Any]) -> bool:
@@ -648,6 +652,9 @@ def interactivo_valido(interactive: dict[str, Any]) -> bool:
         return False
     if len(cuerpo) > _MAX_CUERPO_INTERACTIVO:
         return False
+    pie = interactive.get("footer")
+    if pie is not None and (not isinstance(pie, str) or len(pie) > _MAX_PIE):
+        return False
     if tipo == "list":
         return _lista_valida(interactive)
     botones = interactive.get("buttons")
@@ -668,6 +675,7 @@ async def send_interactive_to_conversation(
     fallback_text: str,
     sender_type: str = "agent",
     sin_degradar: bool = False,
+    client_message_id: str | None = None,
 ) -> bool:
     """Encola un mensaje con botones de respuesta o con lista (HU-AOS-09, HU-INMO-03).
 
@@ -677,7 +685,9 @@ async def send_interactive_to_conversation(
     de texto de siempre, que registra el fallo si la ventana está cerrada. `content` guarda el
     cuerpo para el panel; `interactive`, el payload. Devuelve True si quedó encolado.
     `sin_degradar`: si no se puede mandar el interactivo, no manda `fallback_text` y devuelve False (quien
-    pide un botón para CONFIRMAR algo no puede conformarse con un texto que no confirma nada)."""
+    pide un botón para CONFIRMAR algo no puede conformarse con un texto que no confirma nada).
+    `client_message_id`: id estable del mensaje (índice único por negocio) para que un envío repetido no
+    se duplique (opciones directas, HU-OPC-02); sin él, uno nuevo por llamada."""
     async with get_session() as session:
         conversation = await session.get(Conversation, conversation_id)
         if conversation is None:
@@ -712,6 +722,9 @@ async def send_interactive_to_conversation(
     current_tenant_id = get_current_tenant_id()
     meta_connection_id = await connection_id_for_phone_number(credentials.get("phone_number_id", ""), current_tenant_id)
     paused = await is_paused(current_tenant_id, meta_connection_id)
+    if paused:
+        # Sin el `client_message_id` estable: un reintento cuando pase la pausa puede volver a intentarlo (ADR-0108).
+        client_message_id = None
     async with get_session() as session:
         message = Message(
             tenant_id=current_tenant_id,
@@ -721,7 +734,7 @@ async def send_interactive_to_conversation(
             content=cuerpo,
             status="failed" if paused else "queued",
             error_reason="Envío pausado: uso de la API de Meta cerca del límite (>=90%)" if paused else None,
-            client_message_id=str(uuid.uuid4()),
+            client_message_id=client_message_id or str(uuid.uuid4()),
             interactive=dict(interactive),
         )
         session.add(message)
@@ -736,6 +749,26 @@ async def send_interactive_to_conversation(
     outbound_send_task.delay(str(message_id), str(current_tenant_id))
     await event_bus.emit(ON_MESSAGE_SENT, conversation_id=conversation_id, content=cuerpo)
     return True
+
+
+async def send_options_to_conversation(
+    conversation_id: uuid.UUID,
+    clave: str,
+    *,
+    datos: dict[str, Any] | None = None,
+    clave_idempotencia: str | None = None,
+    actor: str = "agent",
+) -> ResultadoEnvio:
+    """Envía la plantilla con opciones `clave` (versión vigente publicada) a la conversación (SPEC-40,
+    ADR-0172, HU-OPC-02): crea el `option_sends` con su contexto y sus payloads firmados y encola por la
+    cascada interactivo (ventana de 24 h abierta) → plantilla de Meta aprobada → texto numerado sin ejecución
+    directa. Con la bandera `opciones_directas` apagada no sale nada. Nunca lanza: devuelve el resultado.
+    Ver `core/gateway/opciones_envio.py`."""
+    from core.gateway.opciones_envio import enviar_opciones
+
+    return await enviar_opciones(
+        conversation_id, clave, datos=datos, clave_idempotencia=clave_idempotencia, actor=actor
+    )
 
 
 async def _behavior_config() -> dict[str, object]:

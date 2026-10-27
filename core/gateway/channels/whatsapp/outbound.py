@@ -76,13 +76,16 @@ class WhatsAppMetaOutbound(OutboundAdapter):
         ]
         if interactive.get("type") != "button" or not botones or not interactive.get("body"):
             raise ChannelError("Mensaje interactivo inválido (se esperan cuerpo y botones)")
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": to,
-            "type": "interactive",
-            "interactive": {"type": "button", "body": {"text": str(interactive["body"])}, "action": {"buttons": botones}},
-        }
-        return await self._post(credentials, payload)
+        cuerpo: dict[str, Any] = {"type": "button", "body": {"text": str(interactive["body"])}, "action": {"buttons": botones}}
+        self._con_pie(cuerpo, interactive)
+        return await self._post(credentials, {"messaging_product": "whatsapp", "to": to, "type": "interactive", "interactive": cuerpo})
+
+    @staticmethod
+    def _con_pie(destino: dict[str, Any], interactive: dict[str, Any]) -> None:
+        """El pie (`footer.text`, opcional) de un interactivo; se omite si viene vacío o en blanco."""
+        pie = str(interactive.get("footer") or "").strip()
+        if pie:
+            destino["footer"] = {"text": pie}
 
     @staticmethod
     def _payload_lista(to: str, interactive: dict[str, Any]) -> dict[str, Any]:
@@ -96,16 +99,13 @@ class WhatsAppMetaOutbound(OutboundAdapter):
             filas.append(fila)
         if not filas or not interactive.get("body") or not interactive.get("button"):
             raise ChannelError("Mensaje interactivo inválido (se esperan cuerpo, botón y filas)")
-        return {
-            "messaging_product": "whatsapp",
-            "to": to,
-            "type": "interactive",
-            "interactive": {
-                "type": "list",
-                "body": {"text": str(interactive["body"])},
-                "action": {"button": str(interactive["button"]), "sections": [{"rows": filas}]},
-            },
+        cuerpo: dict[str, Any] = {
+            "type": "list",
+            "body": {"text": str(interactive["body"])},
+            "action": {"button": str(interactive["button"]), "sections": [{"rows": filas}]},
         }
+        WhatsAppMetaOutbound._con_pie(cuerpo, interactive)
+        return {"messaging_product": "whatsapp", "to": to, "type": "interactive", "interactive": cuerpo}
 
     @staticmethod
     async def _post(credentials: dict[str, str], payload: dict[str, object]) -> str:
