@@ -452,3 +452,84 @@ async def test_crear_desde_el_guion_de_la_plantilla(app_client) -> None:
     r = await app_client.post("/api/v1/admin/agents/from-script", headers=h, json={"template_key": "agenda"})
     assert r.status_code == 201, r.text
     assert [p["id"] for p in r.json()["draft"]["content"]["procedures"]] == ["pack_calendar.agendar_cita"]
+
+
+async def _general_id(tid: uuid.UUID) -> uuid.UUID:
+    from core.agents.backfill_agentes import backfill_agentes
+
+    reporte = await backfill_agentes(dry_run=False, tenant_id=tid, modules=_modules())
+    assert not reporte.fallo, reporte
+    filas = await _sql(tid, "select id from agents where key = 'general' and deleted_at is null")
+    return filas[0][0]
+
+
+async def _publicar_desde_el_guion(app_client, h, cid, plantilla: str, respuestas: dict[str, str]) -> dict[str, Any]:
+    r = await app_client.post(
+        "/api/v1/admin/agents/from-script", headers=h, json={"template_key": plantilla, "answers": respuestas}
+    )
+    assert r.status_code == 201, r.text
+    creado = r.json()
+    r = await app_client.post(
+        f"/api/v1/admin/agents/{creado['agent']['id']}/publish",
+        headers=h,
+        json={"connection_ids": [str(cid)], "lock_version": creado["draft"]["lock_version"]},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def test_publicar_un_especialista_enlaza_al_general_y_con_la_bandera_lo_recorta(app_client) -> None:
+    """HU-AOS-52: al publicar Ventas se escribe el enlace A2A General → Ventas (handoff). El General solo se
+    recorta con `settings.agent_os.recortar_general`; Agenda después sigue derivando sus tools."""
+    tid, cid = await _negocio()
+    h = await _dueno(app_client, tid)
+    general = await _general_id(tid)
+
+    def _tools_del_general() -> Any:
+        return _sql(
+            tid,
+            "select content from agent_versions where agent_id = :g order by version desc limit 1",
+            g=general,
+        )
+
+    version_antes = (await _sql(tid, "select max(version) from agent_versions where agent_id = :g", g=general))[0][0]
+    pub = await _publicar_desde_el_guion(app_client, h, cid, "ventas", {"que_vendes": "ambos"})
+    assert pub["general_updated"] is None  # bandera apagada: solo el enlace
+    enlaces = await _sql(
+        tid,
+        "select l.modes, ag.key from agent_links l join agents ag on ag.id = l.to_agent_id and ag.tenant_id = l.tenant_id "
+        "where l.from_agent_id = :g",
+        g=general,
+    )
+    assert [(list(m), k) for m, k in enlaces] == [(["handoff"], "ventas")]
+    assert (await _sql(tid, "select max(version) from agent_versions where agent_id = :g", g=general))[0][0] == version_antes
+
+    # Republicar no duplica el enlace.
+    [(ventas_id,)] = await _sql(tid, "select id from agents where key = 'ventas' and deleted_at is null")
+    r = await app_client.post(f"/api/v1/admin/agents/{ventas_id}/publish", headers=h, json={"connection_ids": [str(cid)]})
+    assert r.status_code == 200, r.text
+    assert len(await _sql(tid, "select 1 from agent_links where from_agent_id = :g", g=general)) == 1
+
+    # Con la bandera, el siguiente especialista (Agenda) recorta al General de lo suyo.
+    await _sql(
+        tid,
+        "update tenants set settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{agent_os}', "
+        "coalesce(settings->'agent_os', '{}'::jsonb) || '{\"recortar_general\": true}'::jsonb) where id = :t",
+        t=tid,
+    )
+    pub = await _publicar_desde_el_guion(app_client, h, cid, "agenda", {})
+    assert pub["general_updated"] == version_antes + 1
+    [(contenido,)] = await _tools_del_general()
+    assert not any(p["id"].startswith("pack_calendar.") for p in contenido["procedures"])
+    assert any(p["id"].startswith("pack_commerce.") for p in contenido["procedures"])  # Comercio sigue en el General
+    assert not any(b["tool"] in ("check_availability", "create_calendar_event") for b in contenido["tools"])
+    assert any(b["tool"] == "escalate_to_human" for b in contenido["tools"])
+
+    # Otra plantilla sigue derivando con la configuración que el General tuvo: lo recortado se recupera de
+    # sus versiones anteriores para el siguiente especialista.
+    from core.agents import editor
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        base = await editor._base_del_general(tid)
+    assert any(b["tool"] == "check_availability" for b in base["tools"])
