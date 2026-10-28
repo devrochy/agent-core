@@ -49,6 +49,27 @@ async def _tenant(email: str, slug: str) -> uuid.UUID:
     return tid
 
 
+async def _politica_del_gestor(tenant_id: uuid.UUID, valor: str) -> None:
+    from core.access import policy
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            await policy.escribir(session, tenant_id, {"gestor": valor})
+
+
+async def _sesion_sin_equipo(app_client, tenant_id: uuid.UUID, token: str) -> dict[str, str]:
+    """Sesión de campo de un gestor que no identifica su equipo (token sin `did`). En política
+    restringida ese login es 403 `dispositivo_requerido`, así que se abre con la política abierta y se
+    vuelve a restringir: queda el token con el que una app sin id llama a las rutas de vinculación."""
+    await _politica_del_gestor(tenant_id, "abierto")
+    r = await app_client.post(EXCHANGE, json={}, headers=_h(token, tenant_id))
+    await _politica_del_gestor(tenant_id, "restringido")
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['accessToken']}"}
+
+
 async def _login_admin(app_client, identifier: str) -> str:
     r = await app_client.post("/api/v1/auth/login", json={"identifier": identifier, "password": PW})
     assert r.status_code == 200, r.text
@@ -234,9 +255,7 @@ async def test_bloqueado_no_se_levanta_por_tener_otro_activo(app_client) -> None
 
 async def test_vincular_crea_pendiente_y_es_idempotente(app_client) -> None:
     tid, _, token = await _montar(app_client, "dv-vinc")
-    sesion = await app_client.post(EXCHANGE, json={}, headers=_h(token, tid))
-    assert sesion.status_code == 200, sesion.text
-    campo = {"Authorization": f"Bearer {sesion.json()['accessToken']}"}
+    campo = await _sesion_sin_equipo(app_client, tid, token)
     cuerpo = {"imei": "IMEI-NUEVO", "whatsapp": "3001112222"}
 
     primera = await app_client.post(CAMPO, json=cuerpo, headers=campo)
@@ -253,8 +272,7 @@ async def test_vincular_crea_pendiente_y_es_idempotente(app_client) -> None:
 
 async def test_vincular_exige_imei_y_whatsapp(app_client) -> None:
     tid, _, token = await _montar(app_client, "dv-vacio")
-    sesion = await app_client.post(EXCHANGE, json={}, headers=_h(token, tid))
-    campo = {"Authorization": f"Bearer {sesion.json()['accessToken']}"}
+    campo = await _sesion_sin_equipo(app_client, tid, token)
 
     r = await app_client.post(CAMPO, json={"imei": "", "whatsapp": ""}, headers=campo)
 
@@ -269,9 +287,7 @@ async def test_mismo_equipo_en_dos_cuentas_se_registra_sin_500(app_client) -> No
     otro_email = f"{uniq('dv-dup2')}@test.local"
     otro_gid = await _gestor(otro_email, tid, nombre="Segundo")
     otro_token = await _login_admin(app_client, otro_email)
-    sesion = await app_client.post(EXCHANGE, json={}, headers=_h(otro_token, tid))
-    assert sesion.status_code == 200, sesion.text
-    campo = {"Authorization": f"Bearer {sesion.json()['accessToken']}"}
+    campo = await _sesion_sin_equipo(app_client, tid, otro_token)
 
     r = await app_client.post(
         CAMPO, json={"imei": "IMEI-COMPARTIDO", "whatsapp": "3001112222"}, headers=campo
