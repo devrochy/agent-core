@@ -326,7 +326,9 @@ async def _enforcement_dispositivo(
         return acceso.respuesta_403(code, decision.estado)
 
     code = decision.code or "dispositivo_no_autorizado"
-    if via_header or code == "dispositivo_bloqueado":
+    # Sin equipo identificable (ni header ni imei) en política restringida no hay contrato anterior que
+    # conservar: ninguna versión de la app entra así.
+    if via_header or code in ("dispositivo_bloqueado", "dispositivo_requerido"):
         return _denegar(code)
     # Contrato anterior (sin header). Un gestor que ya tiene un equipo activo con id no entra por
     # «por vincular»: ni con otro equipo ni sin identificar el suyo (los tokens abren toda la API).
@@ -335,6 +337,33 @@ async def _enforcement_dispositivo(
     if code == "dispositivo_pendiente":
         return False, "pendiente", None
     return False, "none", None
+
+
+async def _enforcement_cuenta(
+    request: Request, session, tenant_id: uuid.UUID, admin: Admin, rol: str, imei: str
+) -> uuid.UUID | JSONResponse | None:
+    """Equipo del propietario (política `owner`) o del master (solo el rastro `acceso_master`), ADR-0174.
+
+    Devuelve el `did` del token, `None` si no hay equipo que atar o el 403 con `code`."""
+    device_id, via_header = acceso.equipo_de(request, imei)
+    if not via_header:
+        log.info("access_legacy_param", tenant_id=str(tenant_id), tiene_imei=bool(device_id))
+    try:
+        decision = await evaluar(
+            session,
+            tenant_id=tenant_id,
+            admin_id=admin.id,
+            rol="owner",
+            device_id=device_id,
+            canal="campo" if via_header else "campo_v1",
+            ip=request.client.host if request.client else None,
+            es_master_plataforma=rol == "master",
+        )
+    except AccesoError as exc:
+        return JSONResponse({"error": exc.message, "code": exc.code}, status_code=exc.status)
+    if decision.permitido:
+        return decision.device_row_id
+    return acceso.respuesta_403(decision.code or "dispositivo_no_autorizado", decision.estado)
 
 
 async def _sesion_de_membresia(
@@ -367,6 +396,10 @@ async def _sesion_de_membresia(
                 }
             else:
                 perfil = _perfil_admin(admin)
+                res = await _enforcement_cuenta(request, session, tenant_id, admin, rol, imei)
+                if isinstance(res, JSONResponse):
+                    return res
+                did = res
             tokens = _par_tokens(secret, tenant_id, admin.id, rol=rol, gestor_id=gestor_id, did=did)
             permisos = await _permisos_de(
                 session, tenant_id, {"rol": rol, "gestor_id": str(gestor_id) if gestor_id else None}
@@ -612,13 +645,17 @@ async def refresh(request: Request) -> JSONResponse:
     membresia = membresias[0]
     gestor_id = uuid.UUID(str(membresia["gestorId"])) if membresia.get("gestorId") else None
     did: uuid.UUID | None = None
-    if membresia["rol"] == "gestor" and gestor_id is not None:
+    rol_politica = {"gestor": "gestor", "propietario": "owner"}.get(str(membresia["rol"]))
+    if rol_politica:
         async with tenant_scope(tenant_id):
             async with get_session() as session:
-                gestor = await get_owned(session, Gestor, gestor_id)
-                if gestor is None or gestor.estatus != "activo":
-                    return JSONResponse({"error": "no es gestor de esta cartera"}, status_code=403)
-                res = await acceso.equipo_del_refresh(request, session, tenant_id, gestor, payload.get("did"))
+                if rol_politica == "gestor":
+                    gestor = await get_owned(session, Gestor, gestor_id) if gestor_id else None
+                    if gestor is None or gestor.estatus != "activo":
+                        return JSONResponse({"error": "no es gestor de esta cartera"}, status_code=403)
+                res = await acceso.equipo_del_refresh(
+                    request, session, tenant_id, admin.id, rol_politica, payload.get("did")
+                )
                 if isinstance(res, JSONResponse):
                     return res
                 did = res

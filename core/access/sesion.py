@@ -10,6 +10,7 @@ El core no importa del pack (invariante 5): el pack llama a estas funciones desd
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from typing import Any
@@ -36,8 +37,14 @@ def _clave_equipo(tenant_id: uuid.UUID, row_id: uuid.UUID) -> str:
     return f"acceso:equipo:{tenant_id}:{row_id}"
 
 
-def _clave_cuenta(tenant_id: uuid.UUID, admin_id: uuid.UUID) -> str:
-    return f"acceso:cuenta:{tenant_id}:{admin_id}"
+def _clave_cuenta(tenant_id: uuid.UUID, admin_id: uuid.UUID, rol: str) -> str:
+    return f"acceso:cuenta:{tenant_id}:{admin_id}:{rol}"
+
+
+def _clave_peticion(tenant_id: uuid.UUID, admin_id: uuid.UUID, device_id: str) -> str:
+    # El id del equipo no va en claro en Redis: se identifica por su huella.
+    huella = hashlib.sha256(device_id.encode()).hexdigest()[:24]
+    return f"acceso:req:{tenant_id}:{admin_id}:{huella}"
 
 
 def _redis() -> Any:
@@ -52,7 +59,11 @@ async def _leer(clave: str) -> Any | None:
     except Exception:
         log.warning("access_cache_no_disponible", exc_info=True)
         return None  # a la base: el fallo de Redis nunca abre el acceso
-    return json.loads(crudo) if crudo else None
+    try:
+        return json.loads(crudo) if crudo else None
+    except ValueError:
+        log.warning("access_cache_corrupta", clave=clave)
+        return None  # valor ilegible: se trata como caché fría
 
 
 async def _escribir(clave: str, valor: Any) -> None:
@@ -62,10 +73,20 @@ async def _escribir(clave: str, valor: Any) -> None:
         log.warning("access_cache_no_disponible", exc_info=True)
 
 
-async def invalidar(tenant_id: uuid.UUID, admin_id: uuid.UUID, *row_ids: uuid.UUID) -> None:
-    """Borra de la caché el estado de estos equipos y el de la cuenta. Un fallo de Redis no impide escribir:
-    el TTL acota la revocación."""
-    claves = [_clave_cuenta(tenant_id, admin_id), *(_clave_equipo(tenant_id, r) for r in row_ids)]
+async def invalidar(
+    tenant_id: uuid.UUID,
+    admin_id: uuid.UUID,
+    *row_ids: uuid.UUID,
+    device_id: str | None = None,
+) -> None:
+    """Borra de la caché el estado de estos equipos y el de la cuenta (todos sus roles). Un fallo de Redis
+    no impide escribir: el TTL acota la revocación."""
+    claves = [
+        *(_clave_cuenta(tenant_id, admin_id, r) for r in ("owner", "gestor", "colaborador")),
+        *(_clave_equipo(tenant_id, r) for r in row_ids),
+    ]
+    if device_id:
+        claves.append(_clave_peticion(tenant_id, admin_id, device_id))
     try:
         await _redis().delete(*claves)
     except Exception:
@@ -104,14 +125,16 @@ async def motivo_de_denegacion(
     return code
 
 
-async def cuenta_entra_sin_equipo(session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> bool:
-    """¿Se acepta un token del gestor sin `did`? Sí si la política del gestor es abierta, o si la cuenta ya
-    tiene un equipo activo con id (sesiones anteriores a este cambio: se asume el equipo vinculado)."""
-    clave = _clave_cuenta(tenant_id, admin_id)
+async def cuenta_entra_sin_equipo(
+    session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID, rol: str = "gestor"
+) -> bool:
+    """¿Se acepta un token sin `did`? Sí si la política del rol es abierta, o si la cuenta ya tiene un
+    equipo activo con id (sesiones anteriores a este cambio: se asume el equipo vinculado)."""
+    clave = _clave_cuenta(tenant_id, admin_id, rol)
     en_cache = await _leer(clave)
     if en_cache is not None:
         return bool(en_cache.get("ok"))
-    abierta = (await policy.leer(session, tenant_id))["gestor"] == policy.ABIERTO
+    abierta = (await policy.leer(session, tenant_id))[rol] == policy.ABIERTO
     ok = abierta or (
         await session.execute(
             select(AccountDevice.id)
@@ -140,6 +163,7 @@ async def exigir_equipo_vigente(
     did: str | None,
     *,
     sin_equipo_ok: bool = False,
+    rol: str = "gestor",
 ) -> None:
     """Corta con 403 (`AccesoError`) si el equipo del token ya no vale. `sin_equipo_ok` deja pasar los
     tokens sin `did` en las rutas por las que un equipo pide vincularse."""
@@ -152,6 +176,37 @@ async def exigir_equipo_vigente(
         if code is not None:
             raise _denegar(code)
         return
-    if sin_equipo_ok or await cuenta_entra_sin_equipo(session, tenant_id, admin_id):
+    if sin_equipo_ok or await cuenta_entra_sin_equipo(session, tenant_id, admin_id, rol):
         return
     raise _denegar("dispositivo_requerido")
+
+
+async def evaluar_rapido(
+    session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID, device_id: str
+) -> str | None:
+    """Decisión de solo lectura para la dependencia del principal (HU-ACC-03): `None` si la petición con
+    `X-Device-Id` pasa, o el `code` del 403. No crea filas ni eventos (eso es `POST /access/device-session`).
+    Una lectura de Redis por petición; con la caché fría, una consulta indexada por (tenant, cuenta, equipo)."""
+    from core.access.devices import _fila
+    from core.access.roles import rol_de_acceso
+
+    clave = _clave_peticion(tenant_id, admin_id, device_id)
+    en_cache = await _leer(clave)
+    if en_cache is not None:
+        return en_cache.get("code")
+    rol = await rol_de_acceso(session, tenant_id, admin_id)
+    if rol is None or rol == "master":  # ajeno al negocio: lo decide otra capa; master: nunca se bloquea
+        code: str | None = None
+    else:
+        restringido = (await policy.leer(session, tenant_id))[rol] == policy.RESTRINGIDO
+        fila = await _fila(session, tenant_id, admin_id, device_id)
+        if (fila is not None and fila.estado == BLOQUEADO) or await _equipo_bloqueado(
+            session, tenant_id, device_id
+        ):
+            code = "dispositivo_bloqueado"
+        elif fila is not None and fila.estado == ACTIVO:
+            code = None
+        else:  # sin fila o pendiente: solo estorba en política restringida
+            code = "dispositivo_pendiente" if restringido else None
+    await _escribir(clave, {"code": code})
+    return code
