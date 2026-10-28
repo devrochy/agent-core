@@ -37,10 +37,12 @@ from pack_subscriptions.esquemas import (
 )
 from pack_subscriptions.models import Subscription, SubscriptionCharge
 
-ESTADOS = ("trialing", "activa", "pausada", "vencida", "cancelada")
+# `pendiente_pago` (SPEC-43) es una inscripción que espera su primer pago: NO es una suscripción viva, no
+# suma a MRR, altas, churn, cohortes ni mora, y los crons no la tocan. Solo se puede cancelar.
+ESTADOS = ("pendiente_pago", "trialing", "activa", "pausada", "vencida", "cancelada")
 VIVAS = ("trialing", "activa", "pausada", "vencida")
 ESTADOS_CARGO = ("pendiente", "pagado", "anulado")
-TIPOS_CARGO = ("periodo", "cambio_plan")
+TIPOS_CARGO = ("periodo", "cambio_plan", "inscripcion")
 PERIODICIDADES = ("mensual", "trimestral", "anual")
 ACCIONES_DEL_HISTORIAL = (
     "subs_pausada",
@@ -61,6 +63,8 @@ def acciones_validas(estado: str) -> list[str]:
         return ["pausar", "cancelar"]
     if estado == "pausada":
         return ["reanudar", "cancelar"]
+    if estado == "pendiente_pago":
+        return ["cancelar"]
     return []
 
 
@@ -511,6 +515,9 @@ async def metricas(session: AsyncSession, tid: uuid.UUID, ahora: datetime | None
     inicio_mes = _inicio_de_mes(ahora)
     inicio_mes_ant = _inicio_de_mes(ahora, 1)
     cond = [s.tenant_id == tid, s.deleted_at.is_(None)]
+    # Una inscripción sin pagar (o cancelada sin haber activado nunca) no es alta ni baja: solo cuenta
+    # lo que llegó a tener `fecha_alta`.
+    con_alta = [*cond, s.fecha_alta.is_not(None), s.estado != "pendiente_pago"]
 
     moneda_fila = (
         await session.execute(
@@ -539,7 +546,7 @@ async def metricas(session: AsyncSession, tid: uuid.UUID, ahora: datetime | None
                 s.valor_periodo > 0,
                 s.fecha_alta < inicio_mes,
                 or_(s.fecha_cancelacion.is_(None), s.fecha_cancelacion >= inicio_mes),
-                s.estado != "trialing",
+                s.estado.not_in(("trialing", "pendiente_pago")),
             )
         )
     ).all()
@@ -547,7 +554,7 @@ async def metricas(session: AsyncSession, tid: uuid.UUID, ahora: datetime | None
 
     async def contar(columna: Any, desde: datetime, hasta: datetime) -> int:
         return int(
-            (await session.execute(select(func.count()).where(*cond, columna >= desde, columna < hasta))).scalar_one()
+            (await session.execute(select(func.count()).where(*con_alta, columna >= desde, columna < hasta))).scalar_one()
         )
 
     altas_mes = await contar(s.fecha_alta, inicio_mes, ahora + timedelta(seconds=1))
@@ -559,7 +566,7 @@ async def metricas(session: AsyncSession, tid: uuid.UUID, ahora: datetime | None
         (
             await session.execute(
                 select(func.count()).where(
-                    *cond,
+                    *con_alta,
                     s.fecha_alta < inicio_mes,
                     or_(s.fecha_cancelacion.is_(None), s.fecha_cancelacion >= inicio_mes),
                 )
@@ -603,7 +610,7 @@ async def metricas(session: AsyncSession, tid: uuid.UUID, ahora: datetime | None
                 func.count().label("altas"),
                 func.count().filter(s.estado != "cancelada").label("vigentes"),
             )
-            .where(*cond, s.valor_periodo > 0, s.fecha_alta >= desde_cohortes)
+            .where(*con_alta, s.valor_periodo > 0, s.fecha_alta >= desde_cohortes)
             .group_by(mes_alta, s.concepto)
             .order_by(mes_alta, s.concepto)
         )
@@ -615,6 +622,7 @@ async def metricas(session: AsyncSession, tid: uuid.UUID, ahora: datetime | None
         mrr_mes_anterior=round(mrr_anterior, 2),
         activas=int(conteo.get("activa", 0)),
         en_prueba=int(conteo.get("trialing", 0)),
+        pendientes_de_pago=int(conteo.get("pendiente_pago", 0)),
         pausadas=int(conteo.get("pausada", 0)),
         vencidas=int(conteo.get("vencida", 0)),
         canceladas=int(conteo.get("cancelada", 0)),

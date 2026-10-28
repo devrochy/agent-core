@@ -27,6 +27,7 @@ class DatosDeAlta(TypedDict, total=False):
     nombre: str | None  # nombre de la persona que compró
     customer_id: str | None  # cliente del pedido: el consumidor lo coteja con el del evento
     pagado: bool  # el pedido cubre el plan de la línea (Free nace pagado, D-16)
+    origen: str | None  # SPEC-43: 'agente' (chat) o 'panel' (operador); 'panel' pasa por revisión humana
 
 
 @runtime_checkable
@@ -60,6 +61,30 @@ async def plan_de_la_variante(fuente: FuenteDeAltas | None, variant_id: str | No
     return plan_id if plan_id and get_plan(plan_id) is not None else None
 
 
+async def plan_plataforma_de(
+    fuentes: list[FuenteDeAltas], *, variant_id: str | None = None, plan_id: str | None = None
+) -> str | None:
+    """Plan de la plataforma que vende una línea, preguntando a todas las fuentes del negocio (SPEC-43).
+
+    Con `plan_id` (el plan del catálogo de suscripciones de la inscripción) se usa la operación opcional
+    `plan_de_inscripcion`; con `variant_id`, la de commerce (`plan_de_variante`). La primera fuente que
+    responde con un plan de la plataforma que existe gana. None si ninguna lo conoce."""
+    from core.billing.plans import get_plan
+
+    for fuente in fuentes:
+        metodo, clave = (
+            (getattr(fuente, "plan_de_inscripcion", None), plan_id)
+            if plan_id
+            else (getattr(fuente, "plan_de_variante", None), variant_id)
+        )
+        if metodo is None or not clave:
+            continue
+        candidato = str(await metodo(str(clave)) or "").strip().lower()
+        if candidato and get_plan(candidato) is not None:
+            return candidato
+    return None
+
+
 @dataclass
 class FuentesDeAltasRegistry:
     _fuentes: dict[str, FuenteDeAltas] = field(default_factory=dict)
@@ -74,20 +99,24 @@ class FuentesDeAltasRegistry:
     def provider_ids(self) -> list[str]:
         return sorted(self._fuentes)
 
-    async def para_negocio(self, tenant_id: uuid.UUID) -> FuenteDeAltas | None:
-        """Fuente de un pack habilitado en el AgentSpec del negocio (la primera por id)."""
+    async def del_negocio(self, tenant_id: uuid.UUID) -> list[FuenteDeAltas]:
+        """Fuentes de los packs habilitados en el AgentSpec del negocio, por id. Con SPEC-43 puede haber
+        más de una (commerce con sus pedidos y suscripciones con sus inscripciones): quien consulta
+        pregunta a cada una hasta que una conozca la referencia."""
         from core.agents.spec import enabled_packs, load_active_spec
         from core.shared.tenant import tenant_scope
 
         async with tenant_scope(tenant_id):
             spec = await load_active_spec(tenant_id)
         packs = enabled_packs(spec)
-        for pid in sorted(self._fuentes):
-            if pid in packs:
-                return self._fuentes[pid]
-        return None
+        return [self._fuentes[pid] for pid in sorted(self._fuentes) if pid in packs]
+
+    async def para_negocio(self, tenant_id: uuid.UUID) -> FuenteDeAltas | None:
+        """Fuente de un pack habilitado en el AgentSpec del negocio (la primera por id)."""
+        fuentes = await self.del_negocio(tenant_id)
+        return fuentes[0] if fuentes else None
 
 
 fuentes_de_alta = FuentesDeAltasRegistry()
 
-__all__ = ["DatosDeAlta", "FuenteDeAltas", "FuentesDeAltasRegistry", "fuentes_de_alta", "plan_de_la_variante"]
+__all__ = ["DatosDeAlta", "FuenteDeAltas", "FuentesDeAltasRegistry", "fuentes_de_alta", "plan_de_la_variante", "plan_plataforma_de"]

@@ -166,7 +166,7 @@ async def conciliar_negocio(
             except SubscriptionError as exc:
                 motivo_sin_vista = exc.code
             if vista is not None:
-                plan_asistente = await plan_del_cargo(vendedor, vista.get("plan_code"))
+                plan_asistente = await plan_del_cargo(vendedor, vista.get("plan_code"), vista.get("plan_id"))
 
     async with tenant_scope(negocio):
         async with get_session() as session:

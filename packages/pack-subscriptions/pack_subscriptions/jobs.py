@@ -161,6 +161,70 @@ async def reservar_aviso_del_dia(  # type: ignore[no-untyped-def]
     return fila is not None
 
 
+@register_cron(PACK_ID, "30 3 * * *")
+async def expirar_inscripciones() -> None:
+    await _expirar_inscripciones(datetime.now(UTC))
+
+
+async def _expirar_inscripciones(now: datetime) -> int:
+    """Expira las inscripciones `pendiente_pago` con más de `dias_pago_inscripcion` días (SPEC-43,
+    HU-SUB-28): quedan `cancelada` con motivo `pago_no_recibido` y su cargo `anulado`. Cada una se
+    resuelve en su propia transacción y relee el estado bajo lock (`inscripcion.expirar_una`): idempotente
+    y seguro contra un pago que llega a la vez. Devuelve cuántas expiró."""
+    from pack_subscriptions.inscripcion import expirar_una
+
+    total = 0
+    for tenant_id in await _tenant_ids():
+        try:
+            async with tenant_scope(tenant_id):
+                config = await _config_del_negocio()
+                limite = now - timedelta(days=config.dias_pago_inscripcion)
+                async with get_session() as session:
+                    ids = (
+                        await session.execute(
+                            select(Subscription.id)
+                            .where(
+                                Subscription.tenant_id == tenant_id,
+                                Subscription.estado == "pendiente_pago",
+                                Subscription.deleted_at.is_(None),
+                                Subscription.created_at < limite,
+                            )
+                            .order_by(Subscription.created_at)
+                            .limit(500)
+                        )
+                    ).scalars().all()
+                for sub_id in ids:
+                    if await expirar_una(sub_id, limite=limite):
+                        total += 1
+        except Exception:
+            # Un negocio con problemas no frena a los demás: el próximo corte reintenta.
+            log.exception("subs_inscripciones_expirar_fallo", tenant_id=str(tenant_id))
+    log.info("subs_inscripciones_expiradas", total=total)
+    return total
+
+
+@register_cron(PACK_ID, "10 * * * *")
+async def sincronizar_precios_de_plan() -> None:
+    """Precio de los planes de la plataforma desde core/billing (SPEC-43, HU-SUB-32)."""
+    await _sincronizar_precios_de_plan()
+
+
+async def _sincronizar_precios_de_plan() -> int:
+    from pack_subscriptions.precios_de_plan import sincronizar
+
+    total = 0
+    for tenant_id in await _tenant_ids():
+        try:
+            async with tenant_scope(tenant_id):
+                async with get_session() as session:
+                    total += await sincronizar(session, tenant_id)
+        except Exception:
+            log.exception("precios_de_plan_fallido", tenant_id=str(tenant_id))
+    if total:
+        log.info("precios_de_plan_sincronizados", total=total)
+    return total
+
+
 @register_cron(PACK_ID, "15 3 * * *")
 async def generar_cargos() -> None:
     await _generar_cargos(datetime.now(UTC))

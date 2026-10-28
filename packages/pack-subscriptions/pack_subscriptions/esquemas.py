@@ -27,7 +27,7 @@ class SuscripcionItem(BaseModel):
     cliente: ClienteRef
     plan: str
     variante_id: uuid.UUID | None = None
-    estado: str  # trialing | activa | pausada | vencida | cancelada
+    estado: str  # pendiente_pago | trialing | activa | pausada | vencida | cancelada
     motivo_pausa: str | None = None  # mora | cliente
     periodicidad: str  # mensual | trimestral | anual
     valor_periodo: float
@@ -130,6 +130,9 @@ class Metricas(BaseModel):
     mrr_mes_anterior: float = Field(description="Aproximado: suscripciones vivas al cierre del mes anterior, a su precio actual.")
     activas: int
     en_prueba: int
+    pendientes_de_pago: int = Field(
+        default=0, description="Inscripciones esperando su primer pago: no son suscripciones vivas y no suman a nada."
+    )
     pausadas: int
     vencidas: int
     canceladas: int

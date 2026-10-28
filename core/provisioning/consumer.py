@@ -153,6 +153,11 @@ async def aprovisionar(vendedor: uuid.UUID, payload: Mapping[str, Any]) -> Provi
         return None
     referencia, _sin_pedido = referencia_del_alta(payload.get("referencia"), subscription_id)
     variant_id = str(payload.get("variant_id") or "").strip() or None
+    # SPEC-43: la inscripción (plan del catálogo de suscripciones) manda `plan_id` y, si la suscripción ya
+    # tenía un negocio (Free que paga un plan), `cambio_de_plan`: es un cambio aunque la referencia sea la
+    # misma (el `numero_publico` no cambia entre el alta y el cambio).
+    plan_catalogo = str(payload.get("plan_id") or "").strip() or None
+    es_cambio = bool(payload.get("cambio_de_plan")) and plan_catalogo is not None
     registro = await _registro(
         vendedor,
         subscription_id=subscription_id,
@@ -170,13 +175,15 @@ async def aprovisionar(vendedor: uuid.UUID, payload: Mapping[str, Any]) -> Provi
             subscription_id=str(subscription_id),
         )
         return registro
-    if registro.referencia != referencia:
+    if registro.referencia != referencia or es_cambio:
         # Otro pedido (o un cargo de cambio) sobre una suscripción ya registrada: un cambio
         # de plan. El plan del negocio cambia y se aplica el preset pendiente (HU-SH-04). Si
         # el alta todavía corre, primero se termina; si no se puede, el outbox reintenta.
         if registro.estado == "en_curso":
             registro = await _procesar(vendedor, registro)
-        await sincronizar_cambio_de_plan(vendedor, registro, payload, referencia, variant_id)
+        await sincronizar_cambio_de_plan(
+            vendedor, registro, payload, f"{referencia}:cambio" if es_cambio else referencia, variant_id
+        )
         return registro
     if registro.estado != "en_curso":
         log.info(
@@ -383,14 +390,22 @@ async def _procesar(vendedor: uuid.UUID, registro: ProvisioningRequest) -> Provi
 async def _datos_del_pedido(vendedor: uuid.UUID, registro: ProvisioningRequest) -> DatosDeAlta:
     if registro.referencia.startswith("sub:"):
         raise AltaEnRevision("la suscripción se activó sin un pedido: no hay datos para el alta")
-    fuente = await fuentes_de_alta.para_negocio(vendedor)
-    if fuente is None:
+    fuentes = await fuentes_de_alta.del_negocio(vendedor)
+    if not fuentes:
         raise AltaEnRevision("el vendedor no tiene una habilidad de pedidos que dé los datos del alta")
-    datos = await fuente.datos_de_alta(
-        registro.referencia, variant_id=(registro.detalle or {}).get("variant_id")
-    )
+    # Commerce da los pedidos y suscripciones las inscripciones: gana la primera que conoce la referencia.
+    datos = None
+    for fuente in fuentes:
+        datos = await fuente.datos_de_alta(
+            registro.referencia, variant_id=(registro.detalle or {}).get("variant_id")
+        )
+        if datos is not None:
+            break
     if datos is None:
         raise AltaTransitoria(f"el pedido {registro.referencia} todavía no es visible")
+    if datos.get("origen") == "panel" and not (registro.detalle or {}).get("aprobacion"):
+        # Datos que tecleó un operador (sin los topes del chat): el alta espera a que una persona la apruebe.
+        raise AltaEnRevision("inscripción creada desde el panel: requiere aprobación antes del alta")
     cliente_del_pedido = _uuid(datos.get("customer_id"))
     if registro.customer_id and cliente_del_pedido and cliente_del_pedido != registro.customer_id:
         raise AltaEnRevision("el cliente del pedido no coincide con el de la suscripción")
@@ -897,7 +912,7 @@ async def sincronizar_cambio_de_plan(
 
     resultado: dict[str, Any] = {"negocio_tenant_id": str(registro.negocio_tenant_id) if registro.negocio_tenant_id else None}
     negocio = registro.negocio_tenant_id
-    plan_id = await plan_del_cargo(vendedor, variant_id)
+    plan_id = await plan_del_cargo(vendedor, variant_id, payload.get("plan_id"))
     plan = get_plan(plan_id) if plan_id else None
     if registro.estado != "completado" or negocio is None:
         resultado["estado"] = f"sin_negocio ({registro.estado})"
