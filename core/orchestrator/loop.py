@@ -70,6 +70,7 @@ from core.mcp.translator import skills_summary, to_llm_schemas
 from core.mcp.types import GuardrailResult, ScopedHttp
 from core.memory import entity as entity_memory
 from core.memory import notas as notas_del_equipo
+from core.memory import relacion as relacion_con_modulos
 from core.memory import vector as vector_memory
 from core.memory import working as working_memory
 from core.observability.tracing import get_tracer, span_attributes
@@ -406,6 +407,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # Ids vigentes de la conversación (ADR-0130): el historial es solo texto y el modelo
     # no ve el `quote_id` que devolvió una tool en un turno anterior.
     referencias = await cargar_referencias(enabled, disabled_for_tenant, conversation_id, customer.id)
+    # Ficha de lo que cada módulo habilitado ya sabe del cliente (HU-CRM-14): acotada y tolerante a fallos.
+    relacion = await relacion_con_modulos.para_prompt(customer.id, enabled)
     # Motor de procedimientos (HU-AOS-05): None salvo con `aos_procedures` (activo) o con
     # `aos_runtime = v3` y procedimientos registrados (sombra, no cambia nada de lo que ve el modelo).
     # Activo trae la tarjeta de estado (ADR-0114) y, con tarea en foco, las acciones de su etapa.
@@ -437,6 +440,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         active_skills_summary=skills_summary(active_tools),
         recalled_memories=recalled,
         entity_profile=entity_memory.profile_to_prompt(profile),
+        relacion=relacion,
         referencias=referencias,
         state_card=state_card,
         team_notes=team_notes,

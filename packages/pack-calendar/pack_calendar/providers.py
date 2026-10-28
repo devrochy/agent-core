@@ -24,6 +24,7 @@ from core.admin.lead_registry import (
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
 from pack_calendar import datos as _datos  # noqa: F401  (acciones de la política de datos)
+from pack_calendar import ficha as _ficha
 from pack_calendar.models import Appointment, AppointmentType
 
 PLUGIN_ID = "pack_calendar"
@@ -153,7 +154,7 @@ lead_registry.register(
     agent_key="agenda",
     agent_name="Agenda",
     icon="calendar",
-    relacion=LeadRelacion(con_datos=_con_datos),
+    relacion=LeadRelacion(con_datos=_con_datos, ficha=_ficha.ficha, detalle=_ficha.detalle),
 )
 
 
