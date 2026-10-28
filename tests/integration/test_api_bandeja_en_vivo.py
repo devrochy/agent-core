@@ -156,10 +156,13 @@ async def test_lista_con_ultimo_mensaje_conexion_y_orden_por_actividad(app_clien
     primero = items[0]
     assert primero["last_message"] == "Quiero hablar con alguien"
     assert primero["last_message_sender"] == "customer"
+    assert primero["pending_count"] == 1
     assert (primero["connection_label"], primero["connection_provider"], primero["connection_type"]) == (
         "Soporte", "waweb", "whatsapp_waweb",
     )
+    assert items[1]["pending_count"] == 1
     assert items[2]["last_message"] is None and items[2]["connection_id"] is None
+    assert items[2]["pending_count"] == 0
 
     r = await app_client.get(URL, params={"connection_id": str(n["ventas"])}, headers=headers)
     assert [i["id"] for i in r.json()["items"]] == [str(n["vieja"])]
@@ -171,6 +174,52 @@ async def test_lista_con_ultimo_mensaje_conexion_y_orden_por_actividad(app_clien
     opciones = {c["id"]: (c["label"], c["provider"], c["type_id"]) for c in r.json()}
     assert opciones[str(n["ventas"])] == ("Ventas", "meta", "whatsapp_cloud")
     assert opciones[str(n["soporte"])] == ("Soporte", "waweb", "whatsapp_waweb")
+
+
+async def test_pendientes_se_limpian_solo_con_una_respuesta_entregada(app_client) -> None:
+    from core.db.models import Message
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    n = await _negocio()
+    headers = await api_headers(app_client, n["tid"])
+    ahora = datetime.now(UTC)
+
+    async def agregar(direction: str, status: str, content: str, segundos: int) -> None:
+        async with tenant_scope(n["tid"]):
+            async with get_session() as session:
+                session.add(
+                    Message(
+                        tenant_id=n["tid"],
+                        conversation_id=n["nueva"],
+                        direction=direction,
+                        sender_type="agent" if direction == "outbound" else "customer",
+                        content=content,
+                        status=status,
+                        created_at=ahora + timedelta(seconds=segundos),
+                    )
+                )
+
+    # Un envío fallido o aún encolado no es una respuesta: el cliente sigue esperando.
+    await agregar("outbound", "failed", "No salió", 1)
+    await agregar("outbound", "queued", "En cola", 2)
+    r = await app_client.get(URL, headers=headers)
+    nueva = next(i for i in r.json()["items"] if i["id"] == str(n["nueva"]))
+    assert nueva["pending_count"] == 1
+
+    # Una respuesta entregada sí limpia la cuenta.
+    await agregar("outbound", "sent", "Ya te ayudo", 3)
+    r = await app_client.get(URL, headers=headers)
+    nueva = next(i for i in r.json()["items"] if i["id"] == str(n["nueva"]))
+    assert nueva["pending_count"] == 0
+
+    # Dos mensajes nuevos del cliente vuelven a contar.
+    await agregar("inbound", "sent", "¿Hola?", 4)
+    await agregar("inbound", "sent", "¿Sigues ahí?", 5)
+    r = await app_client.get(URL, headers=headers)
+    items = r.json()["items"]
+    assert items[0]["id"] == str(n["nueva"])
+    assert items[0]["pending_count"] == 2
 
 
 async def test_mensajes_despues_del_cursor(app_client) -> None:
@@ -228,6 +277,7 @@ async def test_detalle_con_escalacion_notas_costo_y_herramientas(app_client) -> 
     assert agente[1]["tool_calls"] == []
     assert d["connection_label"] == "Soporte"
     assert d["last_message"] == "Quiero hablar con alguien"
+    assert d["pending_count"] == 1
 
     # El polling con cursor adjunta las herramientas al mismo mensaje que la carga completa.
     r = await app_client.get(

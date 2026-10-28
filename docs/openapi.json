@@ -40928,6 +40928,12 @@
           },
           "usage": {
             "$ref": "#/components/schemas/ConversationUsage"
+          },
+          "pending_count": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Pending Count",
+            "description": "Mensajes entrantes después de la última respuesta entregada."
           }
         },
         "type": "object",
@@ -41129,6 +41135,12 @@
             ],
             "title": "Connection Type",
             "description": "Tipo del catálogo (p. ej. whatsapp_cloud, whatsapp_waweb, web)"
+          },
+          "pending_count": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Pending Count",
+            "description": "Mensajes entrantes después de la última respuesta entregada."
           }
         },
         "type": "object",

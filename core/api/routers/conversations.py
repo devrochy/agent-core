@@ -52,6 +52,9 @@ MENSAJES_MAX = 200
 # Solape del cursor: un mensaje con `created_at` anterior al cursor pero commiteado después de
 # la consulta anterior se perdería con `>`; se re-entregan 2 s y el panel deduplica por `id`.
 SOLAPE_CURSOR = timedelta(seconds=2)
+# Una respuesta cuenta cuando salió de verdad. `queued` aún no salió y `failed` no llegó: en
+# ambos casos el cliente sigue esperando y el contador de pendientes no debe limpiarse.
+ESTADOS_RESPUESTA = ("sent", "delivered", "read")
 
 
 class ConversationSummary(BaseModel):
@@ -71,6 +74,11 @@ class ConversationSummary(BaseModel):
     connection_provider: str | None = None
     connection_type: str | None = Field(
         default=None, description="Tipo del catálogo (p. ej. whatsapp_cloud, whatsapp_waweb, web)"
+    )
+    # Mensajes del cliente que llegaron después de la última respuesta entregada. Es lo que la
+    # bandeja muestra como pendiente: se limpia al responder, no al abrir el chat.
+    pending_count: int = Field(
+        default=0, ge=0, description="Mensajes entrantes después de la última respuesta entregada."
     )
 
 
@@ -193,6 +201,7 @@ def _summary(
     cust: Customer | None,
     conexion: ChannelConnection | None = None,
     ultimo: tuple[str | None, datetime | None, str | None] = (None, None, None),
+    pendientes: int = 0,
 ) -> ConversationSummary:
     contenido, fecha, remitente = ultimo
     return ConversationSummary(
@@ -210,7 +219,23 @@ def _summary(
         connection_label=(conexion.label or None) if conexion else None,
         connection_provider=conexion.provider if conexion else None,
         connection_type=conexion.type_id if conexion else None,
+        pending_count=pendientes,
     )
+
+
+def _pendientes(messages: list[Message]) -> int:
+    """Mensajes del cliente posteriores a la última respuesta entregada.
+
+    Recorre el hilo en orden: un outbound entregado reinicia la cuenta; un inbound la suma. Un
+    outbound encolado o fallido no reinicia: el cliente todavía no recibió respuesta."""
+    pendientes = 0
+    for message in messages:
+        if message.direction == "outbound":
+            if message.status in ESTADOS_RESPUESTA:
+                pendientes = 0
+        elif message.direction == "inbound":
+            pendientes += 1
+    return pendientes
 
 
 def _join_conexion():  # type: ignore[no-untyped-def]
@@ -381,12 +406,50 @@ async def list_conversations(
         .correlate(Conversation)
         .lateral("ultimo")
     )
+    # Última respuesta entregada: el corte desde el que se cuentan los mensajes pendientes.
+    respuesta = (
+        select(Message.created_at.label("created_at"))
+        .where(
+            Message.tenant_id == Conversation.tenant_id,
+            Message.conversation_id == Conversation.id,
+            Message.direction == "outbound",
+            Message.status.in_(ESTADOS_RESPUESTA),
+            Message.deleted_at.is_(None),
+        )
+        .order_by(Message.created_at.desc())
+        .limit(1)
+        .correlate(Conversation)
+        .lateral("respuesta")
+    )
+    pendientes = (
+        select(func.count().label("pending_count"))
+        .select_from(Message)
+        .where(
+            Message.tenant_id == Conversation.tenant_id,
+            Message.conversation_id == Conversation.id,
+            Message.direction == "inbound",
+            Message.deleted_at.is_(None),
+            Message.created_at > func.coalesce(respuesta.c.created_at, Conversation.started_at),
+        )
+        .correlate(Conversation, respuesta)
+        .lateral("pendientes")
+    )
     actividad = func.coalesce(ultimo.c.created_at, Conversation.started_at)
     query = (
-        select(Conversation, Customer, ChannelConnection, ultimo.c.content, ultimo.c.created_at, ultimo.c.sender_type)
+        select(
+            Conversation,
+            Customer,
+            ChannelConnection,
+            ultimo.c.content,
+            ultimo.c.created_at,
+            ultimo.c.sender_type,
+            pendientes.c.pending_count,
+        )
         .join(Customer, Customer.id == Conversation.customer_id)
         .outerjoin(ChannelConnection, _join_conexion())
         .outerjoin(ultimo, true())
+        .outerjoin(respuesta, true())
+        .outerjoin(pendientes, true())
         .where(Conversation.id.in_(base))
     )
 
@@ -403,8 +466,8 @@ async def list_conversations(
         ).all()
 
     items = [
-        _summary(conv, cust, conexion, (contenido, fecha, remitente))
-        for conv, cust, conexion, contenido, fecha, remitente in rows
+        _summary(conv, cust, conexion, (contenido, fecha, remitente), int(pendientes_count or 0))
+        for conv, cust, conexion, contenido, fecha, remitente, pendientes_count in rows
     ]
     return build_page(items, int(total), params)
 
@@ -510,6 +573,7 @@ async def get_conversation(
         cust,
         conexion,
         (ultimo.content, ultimo.created_at, ultimo.sender_type) if ultimo else (None, None, None),
+        _pendientes(messages),
     )
     return ConversationDetail(
         **summary.model_dump(),
