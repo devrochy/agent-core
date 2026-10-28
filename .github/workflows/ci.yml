@@ -300,19 +300,23 @@ jobs:
           agent-core db migrate
           python scripts/init_db.py
 
+      # Integración en paralelo (pytest-xdist, ADR-0120 adenda 2026-10-28): 3 workers, y `loadfile` para que
+      # los fixtures de scope `module` queden dentro de un solo proceso. Cada worker clona la base migrada y
+      # sembrada arriba (`agent_core_gwN`) y usa su propia base de Redis: ver tests/integration/_aislamiento_xdist.py.
+      # Sin `-n auto`: el host comparte CPU con otros runners.
       - name: Integración — subconjunto crítico (nivel rápido)
         if: needs.nivel.outputs.nivel == 'rapido'
         env:
           AGENT_CORE_INTEGRATION: "1"
         # `--durations` y el junit sirven para medir dónde se va el tiempo (HU de CI rápido,
         # ADR-0120 adenda 2026-10-28): decide si la integración se puede repartir entre workers.
-        run: pytest tests/integration -q -m aislamiento --durations=40 --junitxml="$RUNNER_TEMP/integracion-junit.xml"
+        run: pytest tests/integration -q -m aislamiento -n 3 --dist loadfile --durations=40 --junitxml="$RUNNER_TEMP/integracion-junit.xml"
 
       - name: Integración completa (aislamiento multi-tenant, RLS, webhooks)
         if: needs.nivel.outputs.nivel == 'completo'
         env:
           AGENT_CORE_INTEGRATION: "1"
-        run: pytest tests/integration -q --durations=40 --junitxml="$RUNNER_TEMP/integracion-junit.xml"
+        run: pytest tests/integration -q -n 3 --dist loadfile --durations=40 --junitxml="$RUNNER_TEMP/integracion-junit.xml"
 
       - name: Duraciones de la integración (junit)
         if: always()

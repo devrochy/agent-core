@@ -125,6 +125,7 @@ Antes del merge, en este orden:
 | PR → main / push → main | completo | lo del push a develop, más el drift de `docs/openapi.json` |
 
 - **Jobs en paralelo.** `nivel` (segundos) decide el nivel; `rapido`, `integracion` y `evals-replay` corren a la vez. Con un solo runner igual hacen cola; por eso conviene tener `solvershub-ci-2` en línea (ver abajo). Los unitarios corren con `pytest -n 4`: un `parametrize` con ids aleatorios (`uuid4()`) rompe la colección en xdist; usa `uuid5` o ids fijos.
+- **Integración en paralelo.** `pytest tests/integration -n 3 --dist loadfile`. Cada worker usa su propia base (`agent_core_gwN`, clonada de la migrada) y su Redis (`/N+1`): ver `tests/integration/_aislamiento_xdist.py`. En local, sin `-n`, nada cambia; con `-n 3` hace falta el stack del CI (el rol de `MIGRATIONS_DATABASE_URL` debe poder crear bases y la plantilla no debe tener conexiones abiertas). Un test nuevo no debe depender de datos que deje otro archivo.
 - **Duraciones de la integración.** Cada corrida sube el artifact `integracion-junit` y imprime los 40 tests más lentos (`--durations=40`).
 - **Despliegue a test.** Una PR verde en develop **no** garantiza que pase la integración completa. No se despliega a test hasta que el CI del push a develop esté en verde.
 - **Tests nuevos de aislamiento.** Un test de integración nuevo que proteja el aislamiento entre tenants (RLS, `tenant_id` explícito, IDOR, webhooks multi-tenant) lleva `pytest.mark.aislamiento`.
