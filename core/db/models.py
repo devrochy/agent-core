@@ -2305,17 +2305,19 @@ class AgentRecordOrigin(Base):
 
 
 class TestDataRecord(Base):
-    """Registro sembrado por «Generar datos de prueba» de un agente (HU-QA-10, ADR-0146, 0098).
+    """Registro sembrado por «Generar datos de prueba» (HU-QA-10, ADR-0146, 0098).
 
-    El registro vive en la tabla de su pack; aquí su referencia lógica, el agente y el lote.
-    Retirar marca `deleted_at` (invariante 8). `origen`: `llm` | `plantilla`."""
+    El registro vive en la tabla de su pack; aquí su referencia lógica, el módulo, el agente
+    (si lo hay) y el lote. Retirar marca `deleted_at` (invariante 8). `origen`: `llm` | `plantilla`.
+    `agent_id` es nulo cuando la generación se hizo desde un módulo (incluido el onboarding)."""
 
     __tablename__ = "test_data_records"
     __test__ = False  # pytest no la confunde con una clase de tests
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    agent_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    modulo: Mapped[str | None] = mapped_column(Text)
     lote_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     pack_id: Mapped[str] = mapped_column(Text, nullable=False)
     modo: Mapped[str] = mapped_column(Text, nullable=False)

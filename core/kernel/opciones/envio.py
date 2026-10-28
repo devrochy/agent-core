@@ -6,7 +6,8 @@ HU-OPC-02). La parte con base y cola está en `core/gateway/opciones_envio.py`; 
 0. Playground (canal `test`): interactivo si cabe en los topes de Meta, texto si no; sin ventana ni plantilla. El
    navegador pinta los botones y el toque pasa por el mismo resolver y la misma firma que en WhatsApp.
 1. Canal sin botones (web, WhatsApp Web, Messenger, Instagram, correo; o un WhatsApp cuya conexión no es de Meta):
-   texto numerado con las opciones y SIN ejecución directa.
+   texto numerado con las opciones y SIN ejecución directa del envío (ni botón ni payload): si el canal declara
+   `respuesta_numerica`, la respuesta «1» o el título la resuelve el consumer (pista C2), no este envío.
 2. WhatsApp Cloud con la ventana de 24 h ABIERTA (conocida y vigente: desconocida cuenta como cerrada, ADR-0108):
    mensaje interactivo, `button` hasta 3 opciones y `list` de 4 a 10. Si el payload no cabe en los topes de Meta,
    texto.
@@ -38,6 +39,11 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from core.gateway.connection_types import capacidades_de
+from core.kernel.mensajes import (
+    componente,
+    placeholders_del_cuerpo,
+    tiene_variables_fuera_del_cuerpo,
+)
 from core.kernel.opciones.definicion import MAX_TTL_HORAS, Definicion
 from core.kernel.opciones.mapeo import nombre_de_parametro, variables_del_cuerpo
 
@@ -74,8 +80,10 @@ PLANTILLA_DISTINTA = "plantilla_distinta_de_la_version"
 @dataclass(frozen=True)
 class ResultadoEnvio:
     """Lo que devuelve `send_options_to_conversation`. `via` y `send_id` solo si salió (o se encoló) algo.
-    `degradado`: salió el texto de respaldo en vez del interactivo; `ejecucion_directa`: el cliente puede tocar
-    una opción (interactivo o plantilla). `motivo` es un código, nunca un dato del cliente."""
+    `degradado`: salió el texto de respaldo en vez del interactivo; `ejecucion_directa`: el cliente puede elegir
+    una opción y ejecutarla (tocar el botón del interactivo o de la plantilla, o —pista C2— contestar «1»/el título
+    de un menú de texto en un canal con `respuesta_numerica`). `por_respuesta`: el menú de texto se contesta así.
+    `motivo` es un código, nunca un dato del cliente."""
 
     enviado: bool
     outcome: str
@@ -83,10 +91,11 @@ class ResultadoEnvio:
     send_id: uuid.UUID | None = None
     motivo: str = ""
     degradado: bool = False
+    por_respuesta: bool = False
 
     @property
     def ejecucion_directa(self) -> bool:
-        return self.enviado and self.via in (INTERACTIVO, PLANTILLA)
+        return self.enviado and (self.via in (INTERACTIVO, PLANTILLA) or (self.via == TEXTO and self.por_respuesta))
 
 
 @dataclass(frozen=True)
@@ -157,13 +166,6 @@ def componentes_de_plantilla(cuerpo: Sequence[dict[str, Any]], payloads: Sequenc
 
 
 # ------------------------------------------------------------------ compatibilidad con la contraparte de Meta
-def _componente(componentes: Any, tipo: str) -> dict[str, Any] | None:
-    for c in componentes or []:
-        if isinstance(c, dict) and str(c.get("type", "")).upper() == tipo:
-            return c
-    return None
-
-
 def compatibilidad_plantilla(componentes: Any, definicion: Definicion) -> str | None:
     """None si la plantilla de Meta aprobada puede enviar ESTA versión; si no, `PLANTILLA_DISTINTA`.
 
@@ -171,14 +173,12 @@ def compatibilidad_plantilla(componentes: Any, definicion: Definicion) -> str | 
     plantilla sean exactamente los de la definición, en el mismo orden, es lo que impide que un toque ejecute una
     acción distinta de la que el botón dice. Lo mismo con las variables del cuerpo: la plantilla pide exactamente
     las que la definición resuelve, y ninguna en cabecera, pie ni botones."""
-    from core.gateway.event_notices import template_has_non_body_variables, template_placeholders
-
-    if template_has_non_body_variables(componentes):
+    if tiene_variables_fuera_del_cuerpo(componentes):
         return PLANTILLA_DISTINTA
     esperadas = {nombre_de_parametro(r) for r in variables_del_cuerpo(definicion.body)}
-    if set(template_placeholders(componentes)) != esperadas:
+    if set(placeholders_del_cuerpo(componentes)) != esperadas:
         return PLANTILLA_DISTINTA
-    botones = (_componente(componentes, "BUTTONS") or {}).get("buttons") or []
+    botones = (componente(componentes, "BUTTONS") or {}).get("buttons") or []
     quick = [b for b in botones if isinstance(b, dict) and str(b.get("type", "")).upper() == "QUICK_REPLY"]
     if len(quick) != len(botones) or len(quick) != len(definicion.opciones):
         return PLANTILLA_DISTINTA
@@ -209,5 +209,9 @@ def para_el_agente(r: ResultadoEnvio) -> dict[str, Any]:
     if r.outcome == DUPLICADO:
         return {"status": "already_sent"}
     if r.enviado:
-        return {"status": "sent", "via": ETIQUETA_VIA.get(r.via or "", ""), "ejecucion_directa": r.ejecucion_directa}
+        # El agente corre DENTRO de un turno: su texto final sale después de un menú de texto y lo deja de ser el
+        # último saliente, así que el «1» llegaría al agente. Por eso aquí solo cuentan el botón y la plantilla (no
+        # `r.ejecucion_directa`, que sí es True para el API `enviar-prueba` de un menú de texto contestable, pista C2).
+        directa = r.enviado and r.via in (INTERACTIVO, PLANTILLA)
+        return {"status": "sent", "via": ETIQUETA_VIA.get(r.via or "", ""), "ejecucion_directa": directa}
     return {"error": r.outcome, "mensaje": _MENSAJE_AGENTE.get(r.outcome, "No se pudo enviar la plantilla.")}

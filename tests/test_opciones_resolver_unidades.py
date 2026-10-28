@@ -229,3 +229,26 @@ def test_la_confirmacion_usa_las_instrucciones_de_las_opciones() -> None:
     )
     assert "Toca «Confirmar» o «Cancelar»." in conf.cuerpo
     assert "Responde Confirmar o Cancelar." in conf.texto and "Toca «Confirmar»" not in conf.texto
+
+
+def test_la_metrica_del_toque_lleva_la_via(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """`option_taps_total` separa el botón (`button`) de la respuesta a un menú numerado (`text`)."""
+    from core.kernel.opciones import metricas
+
+    class _Instrumento:
+        def __init__(self) -> None:
+            self.puntos: list[dict] = []
+
+        def add(self, _n, etiquetas) -> None:  # type: ignore[no-untyped-def]
+            self.puntos.append(etiquetas)
+
+        def record(self, _v, etiquetas) -> None:  # type: ignore[no-untyped-def]
+            self.puntos.append(etiquetas)
+
+    toques, latencia = _Instrumento(), _Instrumento()
+    monkeypatch.setattr(metricas, "_toques", toques)
+    monkeypatch.setattr(metricas, "_latencia", latencia)
+    metricas.toque("ok", 0.1)
+    metricas.toque("ok", 0.1, "text")
+    assert toques.puntos == [{"outcome": "ok", "via": "button"}, {"outcome": "ok", "via": "text"}]
+    assert latencia.puntos == toques.puntos

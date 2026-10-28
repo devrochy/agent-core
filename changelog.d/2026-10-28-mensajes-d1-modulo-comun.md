@@ -1,0 +1,6 @@
+## Módulo común de variables y render de mensajes (ADR-0178, pista D1) (2026-10-28)
+
+- Nuevo `core/kernel/mensajes/` (puro: sin base, red ni imports del gateway, el orquestador o los packs): `clean_param`, resolución de rutas con lista permitida (`resolver_ruta`, `RutaNoPermitida`, `DatoFaltante`), el render de cada dialecto (`render_fallback`, `render_llaves`, `render_meta`), la lectura de componentes de una plantilla de Meta y un conversor entre `{a.b}`, `{x}` y `{{n}}` (`variables_de`, `a_meta`, `a_llaves`).
+- `gateway/event_notices.py` y `kernel/opciones/{contexto,mapeo,argumentos,definicion,envio}.py` lo usan; los nombres públicos de siempre (`clean_param`, `MAX_PARAM`, `render_fallback`, `render_body`, `template_placeholders`, `RUTA_VARIABLE`, `LLAVES`, `mapeo.renderizar`…) siguen funcionando. `kernel/opciones` deja de importar del gateway para sanear (salvo `build_components` y `render_body` en `mapeo.py`, que trabajan sobre la fila `MessageTemplate`).
+- Sin cambio de comportamiento, de OpenAPI ni migración. Los textos de los packs (`str.format`) no se tocan. Tests golden contra copias textuales del código anterior.
+- Única diferencia consciente: `mapeo.cuerpo_para_meta` ahora deja intacto un `{{1}}` que ya viene en formato Meta (antes lo convertía en `{{{1}}}`); es inalcanzable porque el lint rechaza las llaves sueltas del cuerpo. Un test la fija.

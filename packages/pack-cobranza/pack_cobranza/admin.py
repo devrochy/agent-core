@@ -31,6 +31,7 @@ from core.db.models import Admin, Conversation, Escalation, TenantInvitation, Te
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from pack_cobranza.enlazar import enlazar_cliente, telefono_para_guardar
 from pack_cobranza.evidencias import ruta_evidencia
 from pack_cobranza.models import (
     Abono,
@@ -368,7 +369,10 @@ async def _save(entity: str, record_id: str | None, values: dict[str, Any]) -> N
                 if f in values:
                     setattr(obj, col, values[f])
             if rid is None:
+                obj.telefono_whatsapp = telefono_para_guardar(obj.telefono_whatsapp)
                 session.add(obj)
+                await session.flush()
+                await enlazar_cliente(session, obj)
         else:  # gastos
             cartera_id = _uuid(str(values.get("cartera_id") or ""))
             if cartera_id is None or await get_owned(session, Cartera, cartera_id) is None:

@@ -27,6 +27,7 @@ async def _buscar_comercio(
                 select(Product)
                 .where(
                     Product.tenant_id == tenant_id,
+                    Product.deleted_at.is_(None),
                     Product.name.ilike(patron, escape="\\"),
                 )
                 .order_by(Product.name)

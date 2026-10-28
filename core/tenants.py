@@ -85,13 +85,21 @@ async def _resolve_tenant(ref) -> Tenant:
         return row
 
 
-async def is_tenant_active(tenant_id: uuid.UUID | None) -> bool:
-    """¿El tenant puede procesar mensajes? (webhook + consumer, defensa en profundidad)."""
+async def cargar_tenant_activo(tenant_id: uuid.UUID | None) -> Tenant | None:
+    """La fila del tenant si puede procesar mensajes (existe, no está borrado y `status = 'active'`), si no `None`.
+    Una sola lectura por PK: el consumer la reutiliza para lo que necesita del negocio en el turno (p. ej. la bandera
+    de las opciones directas) en vez de volver a consultar `tenants`. El objeto sale desligado de la sesión (solo lectura:
+    `settings` no se muta)."""
     if tenant_id is None:
-        return False
+        return None
     async with get_session() as session:
         row = await session.get(Tenant, tenant_id)
-    return row is not None and row.deleted_at is None and row.status == "active"
+    return row if row is not None and row.deleted_at is None and row.status == "active" else None
+
+
+async def is_tenant_active(tenant_id: uuid.UUID | None) -> bool:
+    """¿El tenant puede procesar mensajes? (webhook + consumer, defensa en profundidad)."""
+    return await cargar_tenant_activo(tenant_id) is not None
 
 
 async def resolve_tenant_by_slug(slug: str) -> uuid.UUID | None:

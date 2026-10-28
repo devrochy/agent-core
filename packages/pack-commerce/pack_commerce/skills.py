@@ -507,7 +507,11 @@ async def _get_variant_with_stock(variant_id_or_sku) -> dict[str, Any] | None:  
             select(ProductVariant, Product, Inventory)
             .join(Product, Product.id == ProductVariant.product_id)
             .outerjoin(Inventory, Inventory.variant_id == ProductVariant.id)
-            .where(condition, ProductVariant.tenant_id == tenant_id)
+            .where(
+                condition,
+                ProductVariant.tenant_id == tenant_id,
+                Product.deleted_at.is_(None),
+            )
         )
         row = result.first()
     if row is None:
@@ -545,6 +549,7 @@ async def _plan_por_referencia(referencia: str) -> tuple[ProductVariant, Product
                     condicion,
                     ProductVariant.tenant_id == get_current_tenant_id(),
                     Product.tenant_id == get_current_tenant_id(),
+                    Product.deleted_at.is_(None),
                     ProductVariant.active.is_(True),
                     ProductVariant.billing_period.isnot(None),
                 )
@@ -1066,6 +1071,7 @@ class CatalogSkill(BaseSkill):
                 .where(
                     ProductVariant.tenant_id == get_current_tenant_id(),
                     ProductVariant.active.is_(True),
+                    Product.deleted_at.is_(None),
                 )
             )
             if variant_id is not None:
@@ -1142,6 +1148,7 @@ class CatalogSkill(BaseSkill):
                     ProductVariant.tenant_id == get_current_tenant_id(),
                     # La foto sale del producto: filtro explícito además de RLS (HU-CRM-01).
                     Product.tenant_id == get_current_tenant_id(),
+                    Product.deleted_at.is_(None),
                 )
             )
             if sku:
@@ -1186,6 +1193,7 @@ class CatalogSkill(BaseSkill):
                 .where(
                     ProductVariant.active.is_(True),
                     ProductVariant.tenant_id == get_current_tenant_id(),
+                    Product.deleted_at.is_(None),
                     or_(Inventory.stock_quantity > 0, ProductVariant.billing_period.isnot(None)),
                 )
                 .order_by(Product.name)
@@ -1236,6 +1244,7 @@ class CatalogSkill(BaseSkill):
                         ProductVariant.active.is_(True),
                         or_(Inventory.stock_quantity > 0, ProductVariant.billing_period.isnot(None)),
                         ProductVariant.tenant_id == get_current_tenant_id(),
+                        Product.deleted_at.is_(None),
                     )
                     .order_by(Product.name)
                     .limit(5)

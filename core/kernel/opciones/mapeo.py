@@ -17,15 +17,14 @@ Puro: ni base, ni red, ni entorno.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from typing import Any
 
+from core.kernel.mensajes import a_meta, clean_param, nombre_de_parametro, render_llaves
 from core.kernel.opciones.definicion import MAX_BOTONES, Definicion, llaves_de
 
 TEXTO_BOTON_LISTA = "Ver opciones"
 EJEMPLO_POR_DEFECTO = "ejemplo"
-_LLAVE = re.compile(r"\{([^{}]*)\}")
 
 
 def variables_del_cuerpo(cuerpo: str) -> list[str]:
@@ -37,16 +36,9 @@ def variables_del_cuerpo(cuerpo: str) -> list[str]:
     return vistas
 
 
-def nombre_de_parametro(ruta: str) -> str:
-    """`cliente.nombre` → `cliente_nombre`: el nombre NAMED que Meta acepta (minúsculas, números, _)."""
-    return ruta.replace(".", "_")
-
-
 def renderizar(texto: str, valores: Mapping[str, str]) -> str:
     """Sustituye cada `{ruta}` por su valor saneado; una ruta sin valor queda como está."""
-    from core.gateway.event_notices import clean_param
-
-    return _LLAVE.sub(lambda m: clean_param(valores[m.group(1)]) if m.group(1) in valores else m.group(0), texto)
+    return render_llaves(texto, valores)
 
 
 # ------------------------------------------------------------------ interactivo
@@ -74,8 +66,10 @@ def a_interactivo(definicion: Definicion, cuerpo: str, payloads: Mapping[str, st
 
 
 def texto_de_respaldo(definicion: Definicion, cuerpo: str) -> str:
-    """Canal sin botones o payload interactivo fuera de topes: el cuerpo y las opciones numeradas. Nada de esto se
-    ejecuta por lo que escriba el cliente (el número que responda llega como texto al agente)."""
+    """Canal sin botones o payload interactivo fuera de topes: el cuerpo y las opciones numeradas. El envío no lleva
+    ningún payload: contestar «1» o el título lo interpreta el consumer solo en los canales con `respuesta_numerica`
+    y con las guardas de `kernel/opciones/respuesta_texto.py` (pista C2); en cualquier otro caso el texto llega al
+    agente. El orden de las opciones de esta lista es el que `respuesta_texto.elegir` usa para el número."""
     lineas = [cuerpo.strip(), ""]
     lineas += [f"{i}. {o.titulo}" for i, o in enumerate(definicion.opciones, 1)]
     return "\n".join(lineas).strip()
@@ -84,7 +78,7 @@ def texto_de_respaldo(definicion: Definicion, cuerpo: str) -> str:
 # ------------------------------------------------------------------ plantilla de Meta
 def cuerpo_para_meta(cuerpo: str) -> str:
     """`Hola {cliente.nombre}` → `Hola {{cliente_nombre}}`."""
-    return _LLAVE.sub(lambda m: "{{" + nombre_de_parametro(m.group(1)) + "}}", cuerpo)
+    return a_meta(cuerpo)
 
 
 def componentes_meta(definicion: Definicion, ejemplos: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
@@ -116,8 +110,6 @@ def plantilla_transitoria(definicion: Definicion, ejemplos: Mapping[str, str] | 
 def valores_para_meta(definicion: Definicion, valores: Mapping[str, str]) -> dict[str, str]:
     """`ruta → valor` a `parámetro NAMED → valor`, saneado con `clean_param` (`render_body` no sanea).
     `KeyError` si falta el valor de una variable del cuerpo."""
-    from core.gateway.event_notices import clean_param
-
     return {nombre_de_parametro(r): clean_param(valores[r]) for r in variables_del_cuerpo(definicion.body)}
 
 

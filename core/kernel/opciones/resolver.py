@@ -35,6 +35,13 @@ Flujo de un `opt:` (el `optc:` y el `optn:` son los mismos pasos con la confirma
 7. **Rastro.** Un log `option_tap` por toque, métricas y `record_audit(actor="option:<clave>",
    action="option_tap")` con ids y claves, sin valores.
 
+**Respuesta de texto (pista C2).** En un canal sin botones el cliente contesta «1» o el título de una opción del menú
+numerado (`option_sends.via = 'text'`). El consumer (`orchestrator/opciones_toque.py`) comprueba las guardas (menú último
+saliente y vigente, coincidencia exacta, canal con `respuesta_numerica`, bandera) y entrega a ESTE flujo un `opt:` que
+firma el servidor, con `Toque.via = "text"`: de ahí en adelante todo es igual (firma, dedupe, autorización fail-closed,
+tool, respuesta fija, rastro con `via=text`), salvo que una acción que pide confirmación no se ejecuta por texto
+(`SENSIBLE_POR_TEXTO`: texto fijo, sin activación ni tool; la confirmación numerada queda fuera de v1).
+
 Decisiones que el ADR deja abiertas, tomadas aquí: ver `docs/adr/0172-…` (enmienda) y la descripción del PR.
 """
 
@@ -85,8 +92,15 @@ FIRMA_INVALIDA = "bad_signature"
 ENVIO_DESCONOCIDO = "unknown_send"
 CONVERSACION_AJENA = "foreign_conversation"
 ERROR_INTERNO = "internal_error"
+SENSIBLE_POR_TEXTO = "sensitive_via_text"
 _DESCARTADOS = frozenset({FIRMA_INVALIDA, ENVIO_DESCONOCIDO, CONVERSACION_AJENA})
 _CODIGO = re.compile(r"^[a-z0-9_]{1,60}$")
+
+
+# Cómo llegó el toque (log y auditoría `via`): el botón de un canal con botones, o el texto que un cliente escribió
+# contestando un menú numerado (pista C2): el consumer lo traduce a un `opt:` que firma el SERVIDOR.
+VIA_BOTON = "button"
+VIA_TEXTO = "text"
 
 
 @dataclass(frozen=True)
@@ -95,6 +109,7 @@ class Toque:
     conversation_id: uuid.UUID
     payload: str
     wamid: str | None = None
+    via: str = VIA_BOTON
 
 
 class Entorno(Protocol):
@@ -239,6 +254,12 @@ async def _tocar(
         plan = await _planear(entorno, opcion, envio, t)
         if isinstance(plan, _Rechazo):
             return await _responder_error(bordes, t, opcion, envio, plan)
+        if plan.confirmar and toque.via == VIA_TEXTO:
+            # v1: una acción que pide confirmación NO se ejecuta contestando con un número (no hay botón «Confirmar»
+            # firmado ni resumen que el cliente toque). Sin activación ni tool. El texto fijo es un saliente nuevo:
+            # el menú deja de ser el último y ya no se contesta por texto (un menú se contesta una vez).
+            t.codigo = "sensible_por_texto"
+            return await _responder_sistema(bordes, SENSIBLE_POR_TEXTO, "sensible_por_texto")
         activation_id = uuid.uuid4()
         t.activation_id = activation_id
         if plan.confirmar:
@@ -583,7 +604,7 @@ async def _decir(bordes: Bordes, cuerpo: str) -> None:
 
 
 async def _emitir(t: _Traza, segundos: float) -> None:
-    metricas.toque(t.outcome, segundos)
+    metricas.toque(t.outcome, segundos, t.toque.via)
     envio = t.envio
     log.info(
         "option_tap",
@@ -596,6 +617,7 @@ async def _emitir(t: _Traza, segundos: float) -> None:
         tool=t.tool or None,
         activation_id=str(t.activation_id) if t.activation_id else None,
         tipo=t.tipo or None,
+        via=t.toque.via,
         outcome=t.outcome,
         codigo=t.codigo or None,
         latency_ms=round(segundos * 1000),
@@ -611,6 +633,7 @@ async def _emitir(t: _Traza, segundos: float) -> None:
             "version": t.version_n,
             "option_id": t.option_id,
             "tipo": t.tipo,
+            "via": t.toque.via,
             "tool": t.tool or None,
             "activation_id": str(t.activation_id) if t.activation_id else None,
         },

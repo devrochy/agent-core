@@ -391,14 +391,15 @@ async def test_plantilla_de_otra_cuenta_o_distinta_de_la_version_no_se_usa(negoc
 
 
 # ---------------------------------------------------------------- canal sin botones
-async def test_canal_web_recibe_el_texto_numerado_sin_ejecucion_directa(negocios, cola) -> None:
+async def test_canal_web_recibe_el_texto_numerado_sin_boton_y_se_contesta_por_texto(negocios, cola) -> None:
     a, _, _ = negocios
     clave = await publicar(a.tid, definicion(3))
     conv = await conversacion(a.tid, canal="web", ventana=None)
 
     r = await enviar(a.tid, conv, clave)
 
-    assert (r.enviado, r.via, r.degradado, r.ejecucion_directa, r.motivo) == (True, "text", True, False, "canal_sin_botones")
+    # Sin botón, pero el chat web interpreta «1»/el título (pista C2): el cliente puede elegir una opción.
+    assert (r.enviado, r.via, r.degradado, r.ejecucion_directa, r.motivo) == (True, "text", True, True, "canal_sin_botones")
     [msg] = await mensajes(a.tid, conv)
     assert msg["content"] == "Hola Ana, ¿qué hacemos?\n\n1. Opción 1\n2. Opción 2\n3. Opción 3"
     assert msg["interactive"] is None and "opt:" not in msg["content"]
@@ -418,8 +419,20 @@ async def test_whatsapp_que_no_es_de_meta_recibe_texto(negocios, cola, monkeypat
 
     r = await enviar(a.tid, conv, clave)
 
-    assert (r.via, r.motivo) == ("text", "canal_sin_botones")
+    assert (r.via, r.motivo, r.ejecucion_directa) == ("text", "canal_sin_botones", True), "el QR interpreta la respuesta numérica"
     assert (await mensajes(a.tid, conv))[0]["interactive"] is None
+
+
+async def test_meta_degradado_por_los_topes_sale_como_texto_pero_no_se_contesta_por_texto(negocios, cola) -> None:
+    """11 opciones no caben en una lista de Meta: sale el texto numerado, pero WhatsApp Meta tiene botones y no
+    interpreta la respuesta numérica (pista C2), así que `ejecucion_directa` es False y el «1» llega al agente."""
+    a, _, _ = negocios
+    clave = await publicar(a.tid, definicion(11))
+    conv = await conversacion(a.tid)
+
+    r = await enviar(a.tid, conv, clave)
+
+    assert (r.via, r.motivo, r.degradado, r.ejecucion_directa) == ("text", "interactivo_fuera_de_topes", True, False)
 
 
 # ---------------------------------------------------------------- negativos

@@ -119,6 +119,8 @@ class Product(TenantMixin, Base):
     category_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))  # FK lógica a crm_categories
     ally_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)  # FK lógica (HU-CRM-03)
     has_variants: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Datos de prueba (HU-QA-10): un producto sembrado se retira con borrado lógico.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 

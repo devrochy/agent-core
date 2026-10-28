@@ -238,6 +238,7 @@ class CatalogoDePlanes:
                         condicion,
                         ProductVariant.tenant_id == tenant_id,
                         Product.tenant_id == tenant_id,
+                        Product.deleted_at.is_(None),
                         ProductVariant.active.is_(True),
                         ProductVariant.billing_period.isnot(None),
                     )

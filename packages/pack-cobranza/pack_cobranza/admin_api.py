@@ -41,6 +41,7 @@ from core.db.models import (
 from core.db.session import get_owned, get_session
 from core.shared.audit import record_audit
 from pack_cobranza.acceso import adoptar_legado
+from pack_cobranza.enlazar import enlazar_cliente, telefono_para_guardar
 from pack_cobranza.permisos import GESTOR_PERMISOS
 
 # Registra los providers de búsqueda global del pack (ADR-0096).
@@ -1907,9 +1908,11 @@ async def create_client(
     tid = principal.tenant_id
     async with get_session() as session:
         values = await _client_values(session, payload, tid=tid)
+        values["telefono_whatsapp"] = telefono_para_guardar(values["telefono_whatsapp"]) or ""
         cliente = Cliente(tenant_id=tid, **values)
         session.add(cliente)
         await session.flush()
+        await enlazar_cliente(session, cliente)
         _audit(session, tid, "cliente", cliente.id, "crear", despues={"nombre": values["nombre"]})
         return _as_client(cliente, await _cartera_nombre(session, cliente.cartera_id))
 

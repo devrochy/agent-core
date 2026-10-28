@@ -2,8 +2,8 @@
 
 - **Generar:** el agente de ventas recibe el catálogo que devuelve el LLM (validado), con SKUs del
   lote, y la llamada queda en `usage_ledger` como `generacion`.
-- **Regenerar sin duplicar:** el lote anterior se retira (variantes inactivas, categorías borradas)
-  y lo creado a mano sigue igual.
+- **Regenerar sin duplicar:** el lote anterior se retira (variantes inactivas, productos y categorías
+  con borrado lógico) y lo creado a mano sigue igual.
 - **Borrar:** retira solo lo sembrado; la cartera queda con `deleted_at`.
 - **Respaldo:** salida inválida o proveedor caído → plantilla del pack, con el motivo.
 - **Sin descripción** (o la fija de «Preparar mis datos») → 422; **General** → no disponible;
@@ -175,7 +175,7 @@ async def test_generar_regenerar_y_borrar_catalogo(app_client, monkeypatch, qa_o
 
     r = await app_client.post(f"{_BASE}/{ventas}/datos-de-prueba", headers=h)
     assert r.status_code == 201, r.text
-    assert r.json()["retirados"] == 5  # 3 variantes + 2 categorías
+    assert r.json()["retirados"] == 8  # 3 variantes + 3 productos + 2 categorías
     variantes = await _variantes(tid)
     assert not any(variantes[s] for s in primeras)
     segundas = {s for s in variantes if s.startswith("PRUEBA-")} - primeras
@@ -193,7 +193,7 @@ async def test_generar_regenerar_y_borrar_catalogo(app_client, monkeypatch, qa_o
     assert r.json()["lote"]["conteos"]["variante"] == 3
 
     r = await app_client.delete(f"{_BASE}/{ventas}/datos-de-prueba", headers=h)
-    assert r.status_code == 200 and r.json()["retirados"] == 5
+    assert r.status_code == 200 and r.json()["retirados"] == 8
     variantes = await _variantes(tid)
     assert not any(variantes[s] for s in segundas) and variantes["MANUAL-1"] is True
     assert (await app_client.get(f"{_BASE}/{ventas}/datos-de-prueba", headers=h)).json()["lote"] is None
@@ -340,3 +340,118 @@ async def test_suscripciones_usa_los_planes_que_nombra_su_plantilla(app_client, 
         t=tid,
     )
     assert filas == [("mensual", 0), ("anual", 7)]
+
+
+# ---------------------------------------------------------------- por módulo (ajuste HU-QA-10)
+_MODULOS = "/api/v1/admin/datos-de-prueba"
+
+
+async def test_modulo_ventas_sin_agente_y_borrado_completo(app_client, monkeypatch, qa_on) -> None:
+    """El botón del módulo no depende de un agente y el borrado retira producto y categoría."""
+    tid = await _negocio()
+    h = await api_headers(app_client, tid)
+    _proveedor(monkeypatch, ProveedorGuionado("Aquí van:\n" + json.dumps(CATALOGO)))
+
+    estado = (await app_client.get(f"{_MODULOS}/ventas", headers=h)).json()
+    assert estado["disponible"] is True and estado["lote"] is None
+
+    r = await app_client.post(f"{_MODULOS}/ventas", headers=h)
+    assert r.status_code == 201, r.text
+    assert r.json()["conteos"] == {"categoria": 2, "producto": 3, "variante": 3}
+    productos = await _sql(
+        tid,
+        "select count(*) from pack_commerce_products where tenant_id = :t and deleted_at is null",
+        t=tid,
+    )
+    assert productos[0][0] == 3
+
+    r = await app_client.delete(f"{_MODULOS}/ventas", headers=h)
+    assert r.status_code == 200 and r.json()["retirados"] >= 8
+    vivos = await _sql(
+        tid,
+        "select (select count(*) from pack_commerce_products where tenant_id = :t and deleted_at is null), "
+        "(select count(*) from pack_commerce_categories where tenant_id = :t and deleted_at is null)",
+        t=tid,
+    )
+    assert vivos[0] == (0, 0)
+    assert (await app_client.get(f"{_MODULOS}/ventas", headers=h)).json()["lote"] is None
+
+
+async def test_borrar_modulo_alcanza_lotes_de_agentes(app_client, monkeypatch, qa_on) -> None:
+    tid = await _negocio()
+    agente = await _agente(tid, "ventas", ["pack_commerce.tomar_pedido"])
+    h = await api_headers(app_client, tid)
+    _proveedor(monkeypatch, ProveedorGuionado(json.dumps(CATALOGO)))
+
+    r = await app_client.post(f"{_BASE}/{agente}/datos-de-prueba", headers=h)
+    assert r.status_code == 201, r.text
+    assert (await app_client.get(f"{_MODULOS}/ventas", headers=h)).json()["lote"] is not None
+
+    r = await app_client.delete(f"{_MODULOS}/ventas", headers=h)
+    assert r.status_code == 200 and r.json()["retirados"] >= 5
+    assert (await app_client.get(f"{_MODULOS}/ventas", headers=h)).json()["lote"] is None
+    assert (await app_client.get(f"{_BASE}/{agente}/datos-de-prueba", headers=h)).json()["lote"] is None
+
+
+async def test_modulo_suscripciones_crea_planes_y_clientes(app_client, monkeypatch, qa_on) -> None:
+    from core.alta_negocio import onboard_tenant
+
+    slug = uniq("qa10m")
+    tid, _ = await onboard_tenant(
+        name=f"QA10M {slug}",
+        slug=slug,
+        business_description="Gimnasio de barrio con planes mensuales y anuales.",
+        packs=["pack_commerce", "pack_subscriptions"],
+        admin_email="admin@local",
+        sembrar_ejemplos=False,
+    )
+    h = await api_headers(app_client, tid)
+    planes = {
+        "products": [
+            {"name": "Plan mensual", "variants": [{"price": 90000, "attributes": {"periodicidad": "mensual"}}]},
+            {"name": "Plan anual", "variants": [{"price": 900000, "attributes": {"periodicidad": "anual"}}]},
+        ]
+    }
+    clientes = {
+        "clientes": [
+            {"nombre": "Ana", "apellido": "Ríos", "numero_documento": "10203040"},
+            {"nombre": "Luis", "apellido": "Mora", "numero_documento": "10203041"},
+            {"nombre": "Eva", "apellido": "Paz", "numero_documento": "10203042"},
+            {"nombre": "Mario", "apellido": "León", "numero_documento": "10203043"},
+        ]
+    }
+
+    class Secuencia(ProveedorGuionado):
+        def __init__(self) -> None:
+            super().__init__()
+            self.respuestas = [json.dumps(planes), json.dumps(clientes)]
+
+        async def generate(self, **kwargs: Any) -> Any:
+            self.contenido = self.respuestas[min(self.llamadas, len(self.respuestas) - 1)]
+            return await super().generate(**kwargs)
+
+    _proveedor(monkeypatch, Secuencia())
+    estado = (await app_client.get(f"{_MODULOS}/suscripciones", headers=h)).json()
+    assert estado["disponible"] is True, estado
+
+    r = await app_client.post(f"{_MODULOS}/suscripciones", headers=h)
+    assert r.status_code == 201, r.text
+    conteos = r.json()["conteos"]
+    assert conteos["variante"] == 2
+    assert conteos["cliente"] == 4 and conteos["suscripcion"] == 4 and conteos["cargo"] == 4
+    filas = await _sql(
+        tid,
+        "select count(*) from pack_subscriptions_subscriptions where tenant_id = :t and deleted_at is null",
+        t=tid,
+    )
+    assert filas[0][0] == 4
+
+    r = await app_client.delete(f"{_MODULOS}/suscripciones", headers=h)
+    assert r.status_code == 200
+    vivos = await _sql(
+        tid,
+        "select (select count(*) from pack_subscriptions_subscriptions where tenant_id = :t and deleted_at is null), "
+        "(select count(*) from pack_commerce_products where tenant_id = :t and deleted_at is null)",
+        t=tid,
+    )
+    assert vivos[0] == (0, 0)

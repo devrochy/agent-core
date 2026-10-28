@@ -38,6 +38,7 @@ from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from pack_cobranza import acceso
 from pack_cobranza.auth import acceso_de_campo, issue_token, pack_secret, token_tenant, verify_token
+from pack_cobranza.enlazar import enlazar_cliente, telefono_para_guardar
 from pack_cobranza.estadisticas import conteos_cartera
 from pack_cobranza.evidencias import EvidenciaError, guardar_archivo, guardar_evidencia
 from pack_cobranza.models import (
@@ -1579,13 +1580,14 @@ async def crear_cliente(cartera_id: str, request: Request, authorization: str | 
             tope = _num(form.get("topeMaximoDeuda"))
             c = Cliente(
                 tenant_id=tenant_id, cartera_id=cid, nombre=nombre, apellido=str(form.get("apellido") or "").strip() or None,
-                telefono_whatsapp=str(form.get("telefonoWhatsapp") or "").strip() or None, negocio=str(form.get("negocio") or "").strip() or None,
+                telefono_whatsapp=telefono_para_guardar(form.get("telefonoWhatsapp")), negocio=str(form.get("negocio") or "").strip() or None,
                 tipo_documento=str(form.get("tipoDocumento") or "").strip() or None, numero_documento=str(form.get("numeroDocumento") or "").strip() or None,
                 lat=_num(form.get("latitud")), lng=_num(form.get("longitud")), lat_domicilio=_num(form.get("latitudDomicilio")), lng_domicilio=_num(form.get("longitudDomicilio")),
                 tope_maximo_deuda=Decimal(str(tope)) if tope is not None else None,
             )
             session.add(c)
             await session.flush()
+            await enlazar_cliente(session, c)
             await _guardar_evidencias_cliente(session, tenant_id, c.id, form)
             await session.flush()
             data = await _cliente_publico(session, tenant_id, c)
