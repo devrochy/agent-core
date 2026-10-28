@@ -28,6 +28,7 @@ from sqlalchemy import select
 from core.db.models import AppSettings, Conversation, Message, MessageTemplate, WabaAccount
 from core.db.session import get_session
 from core.kernel.mensajes import (
+    EVENTOS,
     LLAVE_DE_RUTA,
     MAX_PARAM,  # noqa: F401  (reexport: nombre público desde ADR-0108)
     DatoFaltante,
@@ -48,67 +49,6 @@ log = get_logger(__name__)
 
 SIN_PLANTILLA = "sin_plantilla"
 
-# Evento → rutas del contexto que se pueden usar como variables. Lo que no está
-# aquí no se puede mapear (el panel solo ofrece estas rutas).
-_VARIABLES_CARGO = {
-    "cliente.nombre": "Nombre del cliente",
-    "suscripcion.concepto": "Plan o concepto de la suscripción",
-    "cargo.monto": "Monto del cargo",
-    "cargo.moneda": "Moneda",
-    "cargo.periodo": "Período (AAAA-MM)",
-    "cargo.fecha_vencimiento": "Fecha de vencimiento",
-    "cargo.referencia": "Referencia del pago",
-    "cargo.link": "Link de pago",
-    "cargo.datos_transferencia": "Datos de transferencia del negocio (cuentas)",
-    "cargo.forma_de_pago": "Cómo pagar: el link o, si no hay, los datos de transferencia",
-}
-
-_VARIABLES_CITA = {
-    "cliente.nombre": "Nombre del cliente",
-    "cita.titulo": "Tipo o título de la cita",
-    "cita.fecha": "Fecha de la cita",
-    "cita.hora": "Hora de la cita",
-    "cita.zona": "Zona horaria",
-    "cita.enlace": "Enlace de la reunión",
-}
-
-EVENTOS: dict[str, dict[str, str]] = {
-    "subscription.charge_created": dict(_VARIABLES_CARGO),
-    # HU-SUB-05: recordatorios y pausa por mora.
-    "subscription.charge_reminder": {
-        **_VARIABLES_CARGO,
-        "recordatorio.dias": "Cuándo vence (\"en 3 días\", \"hoy\", \"hace 3 días\")",
-    },
-    "subscription.paused": {
-        "cliente.nombre": "Nombre del cliente",
-        "suscripcion.concepto": "Plan o concepto de la suscripción",
-        "cargo.monto": "Monto adeudado",
-        "cargo.periodo": "Período adeudado",
-        "cargo.link": "Link de pago",
-        "cargo.datos_transferencia": "Datos de transferencia del negocio (cuentas)",
-        "cargo.forma_de_pago": "Cómo pagar: el link o, si no hay, los datos de transferencia",
-        "mora.dias": "Días de mora",
-    },
-    # HU-SH-02: citas (al cliente).
-    "appointment.confirmed": dict(_VARIABLES_CITA),
-    "appointment.reminder": dict(_VARIABLES_CITA),
-    "appointment.no_show": dict(_VARIABLES_CITA),
-    # HU-SUB-06: oferta de un plan pago antes de que termine la prueba de Free.
-    "subscription.trial_ending": {
-        "cliente.nombre": "Nombre del cliente",
-        "suscripcion.concepto": "Plan o concepto de la suscripción",
-        "prueba.termina": "Fecha en que termina la prueba",
-    },
-    # HU-SH-03 (ADR-0121): el acceso al negocio comprado llega por correo. Sin enlace ni
-    # token: el enlace va SOLO por correo y el aviso es igual en todos los casos.
-    "provisioning.invitation": {
-        "cliente.nombre": "Nombre del cliente",
-        "negocio.nombre": "Nombre del negocio",
-        "invitacion.correo": "Correo al que llega el acceso (enmascarado)",
-    },
-}
-
-
 class NoticeConfigError(ValueError):
     """La configuración de un evento no es válida (ruta, plantilla o variables)."""
 
@@ -120,8 +60,10 @@ class NoticeNotSentError(RuntimeError):
 
 @dataclass(frozen=True)
 class NoticeResult:
-    # "texto" | "plantilla" | "sin_plantilla" | "duplicado" | "no_enviado" | "conexion_pausada" | "omitido_canal"
-    # (este último solo con la bandera `avisos_por_canal`: un canal de texto sin texto definido o con la política en contra).
+    # "texto" | "plantilla" | "sin_plantilla" | "duplicado" | "no_enviado" | "conexion_pausada" | "omitido_canal" | "opciones"
+    # ("omitido_canal": solo con la bandera `avisos_por_canal`, un canal de texto sin texto definido o con la política en
+    # contra. "opciones": solo con esa bandera y la de `opciones_directas`, el aviso salió como plantilla con opciones,
+    # ADR-0178 D3; `detalle` es la vía: interactivo, plantilla o texto).
     modo: str
     detalle: str = ""
 
@@ -347,6 +289,10 @@ async def send_event_notice(
     fallback = str(entrada.get("fallback_text") or default_fallback_text).strip()
 
     if por_canal:
+        # ADR-0178 D3: si el evento apunta a una plantilla con opciones y se puede enviar, ese es el aviso.
+        por_opciones = await _aviso_con_opciones(conversation, event_key, context, notice_key, entrada)
+        if por_opciones is not None:
+            return por_opciones
         por_texto = await _aviso_por_canal(conversation, event_key, context, notice_key, entrada)
         if por_texto is not None:
             return por_texto
@@ -404,6 +350,24 @@ async def send_event_notice(
     if not enviado:
         raise NoticeNotSentError(f"Aviso {event_key} sin encolar (pausa por uso de la API)")
     return NoticeResult("plantilla")
+
+
+async def _aviso_con_opciones(
+    conversation: Conversation, event_key: str, context: dict[str, Any], notice_key: str, entrada: dict[str, Any]
+) -> NoticeResult | None:
+    """El puente evento → plantilla con opciones (ADR-0178 D3, `avisos_opciones`). None = seguir con el camino de
+    siempre. Un fallo inesperado del puente nunca pierde el aviso: queda en el log y sigue D2/legacy."""
+    from core.gateway import avisos_opciones
+
+    if avisos_opciones.clave_de_opciones(event_key, entrada) is None:
+        return None
+    try:
+        return await avisos_opciones.intentar(conversation, event_key, context, notice_key, entrada)
+    except NoticeNotSentError:
+        raise  # resultado ambiguo del envío: que el outbox reintente (ver `avisos_opciones.intentar`)
+    except Exception:
+        log.error("event_notice_opciones_error", event_key=event_key, conversation_id=str(conversation.id), exc_info=True)
+        return None
 
 
 async def _aviso_por_canal(

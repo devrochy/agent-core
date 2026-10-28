@@ -374,3 +374,18 @@ Los botones reales solo existen en WhatsApp Cloud y la sesión QR de test no sie
 | Fallo al buscar el menú | Se registra `opciones_respuesta_texto_fallo` y el mensaje sigue al agente |
 
 **Qué haría que revisáramos esto.** `bad_signature` o un ejecutado inesperado desde el chat web; una tool apta no sensible que cambie estado; el QR suspendido por el volumen de respuestas; que los dueños pidan confirmación numerada (v2).
+
+## Adenda (2026-10-28) · D3: el aviso por evento es el primer emisor fuera de turno
+
+> **Estado:** propuesta, igual que el resto del ADR. Detalle técnico en ADR-0108 (adenda D3) y ADR-0178 (adenda D3).
+
+- `RUTAS_DE_DATOS` (PR 6) deja de estar vacía: son las rutas de los eventos de `EVENTOS` que no son de cobranza (`cita.*`,
+  `suscripcion.concepto`, `prueba.termina`, `invitacion.correo`). Ninguna es un id. Una ruta nueva exige actualizar la prueba
+  que fija el conjunto.
+- Un evento puede apuntar a una plantilla con opciones (`message_templates_map[<evento>].option_template`) y salir con sus
+  botones, su lista o su menú numerado. Es el **primer emisor fuera de turno** del seguimiento (2) de la adenda C2; las
+  banderas `opciones_directas` y `avisos_por_canal` siguen apagadas hasta probarlo en test. Mismo payload firmado `opt:`,
+  mismo resolver fail-closed y mismas guardas de C2: este camino solo CREA el envío.
+- Para no comerse el «1» que el cliente dirigía al agente, un menú de texto fuera de turno no sale si la conversación tuvo
+  actividad en los últimos 15 minutos (cae al texto de D2). La guarda del último saliente de C2 no se relaja.
+- Los eventos de cobranza no se mapean a plantillas con opciones (ver ADR-0108, adenda D3).

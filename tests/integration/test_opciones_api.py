@@ -478,7 +478,11 @@ async def test_catalogo_de_variables_es_el_del_servidor(app_client, listo) -> No
     h = await _headers(app_client, a.tid)
     r = await app_client.get(f"{URL}/catalogo-variables", headers=h)
     assert r.status_code == 200
-    assert {(v["ruta"], v["origen"]) for v in r.json()["variables"]} == {("cliente.nombre", "conversacion"), ("negocio.nombre", "conversacion")}
+    from core.kernel.opciones.contexto import RUTAS_DE_DATOS
+
+    assert {(v["ruta"], v["origen"]) for v in r.json()["variables"]} == {
+        ("cliente.nombre", "conversacion"), ("negocio.nombre", "conversacion"), *((r_, "servidor") for r_ in RUTAS_DE_DATOS)
+    }
 
 
 # ---------------------------------------------------------------- enviar prueba

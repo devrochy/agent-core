@@ -50,13 +50,31 @@ def test_el_hash_es_estable_no_depende_del_orden_de_las_claves_y_cambia_con_el_c
     assert hash_de(a) != hash_de(_definicion(ttl_horas=48))
 
 
-def test_la_lista_de_rutas_de_datos_esta_cerrada_y_vacia() -> None:
-    assert contexto.RUTAS_DE_DATOS == {}, "cada origen que necesite `datos` agrega SUS rutas con un cambio revisado"
+def test_la_lista_de_rutas_de_datos_esta_cerrada_y_es_la_de_los_eventos_sin_cobranza() -> None:
+    # ADR-0178 D3: son las rutas de los eventos que pueden apuntar a una plantilla con opciones. Cada ruta nueva exige
+    # actualizar este conjunto a propósito (revisión): son datos que una opción puede citar y pasar a una tool.
+    assert set(contexto.RUTAS_DE_DATOS) == {
+        "cita.titulo", "cita.fecha", "cita.hora", "cita.zona", "cita.enlace",
+        "suscripcion.concepto", "prueba.termina", "invitacion.correo",
+    }
+    assert not set(contexto.RUTAS_DE_DATOS) & set(contexto.VARIABLES_BASE)
     with pytest.raises(contexto.DatosInvalidos):
         contexto.normalizar_datos({"pedido.numero": "A-1"})
+    with pytest.raises(contexto.DatosInvalidos):
+        contexto.normalizar_datos({"cargo.monto": "1000"})  # cobranza: no se ofrece
     assert contexto.normalizar_datos(None) == {} and contexto.normalizar_datos({}) == {}
-    assert contexto.catalogo_de_variables() == contexto.VARIABLES_BASE
-    assert {v["ruta"]: v["origen"] for v in svc.catalogo_variables()} == {"cliente.nombre": "conversacion", "negocio.nombre": "conversacion"}
+    assert contexto.catalogo_de_variables() == {**contexto.VARIABLES_BASE, **contexto.RUTAS_DE_DATOS}
+    assert {v["ruta"]: v["origen"] for v in svc.catalogo_variables()} == {
+        **{r: "conversacion" for r in contexto.VARIABLES_BASE}, **{r: "servidor" for r in contexto.RUTAS_DE_DATOS}
+    }
+
+
+def test_ninguna_ruta_de_datos_es_un_id() -> None:
+    """Los datos de un evento son valores para mostrar. Un id (de cita, de cargo, de cliente) que llegara a un
+    argumento de tool exigiría comprobar que pertenece al negocio y al cliente de la conversación."""
+    for ruta in contexto.RUTAS_DE_DATOS:
+        ultimo = ruta.rsplit(".", 1)[-1]
+        assert ultimo != "id" and not ultimo.endswith("_id") and not ultimo.startswith("id_"), ruta
 
 
 def test_una_ruta_agregada_a_la_lista_entra_al_catalogo_y_a_datos(monkeypatch: pytest.MonkeyPatch) -> None:
