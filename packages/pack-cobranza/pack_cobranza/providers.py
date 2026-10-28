@@ -27,6 +27,7 @@ from core.admin.lead_registry import (
 )
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
+from pack_cobranza import ficha as _ficha
 from pack_cobranza.models import AuditoriaCartera, Cartera, Cliente, Cuota, Pago, Prestamo, Promesa
 
 PLUGIN_ID = "pack_cobranza"
@@ -308,7 +309,7 @@ lead_registry.register(
     agent_key="cobranza",
     agent_name="Cobranza",
     icon="wallet",
-    relacion=LeadRelacion(con_datos=_con_datos),
+    relacion=LeadRelacion(con_datos=_con_datos, ficha=_ficha.ficha, detalle=_ficha.detalle),
 )
 
 

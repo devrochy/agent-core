@@ -26,6 +26,7 @@ from core.admin.lead_registry import (
 from core.db.models import Customer
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
+from pack_subscriptions import ficha as _ficha
 from pack_subscriptions.models import Subscription, SubscriptionCharge
 
 PLUGIN_ID = "pack_subscriptions"
@@ -259,7 +260,7 @@ lead_registry.register(
     agent_key="suscripciones",
     agent_name="Suscripciones",
     icon="repeat",
-    relacion=LeadRelacion(con_datos=_con_datos),
+    relacion=LeadRelacion(con_datos=_con_datos, ficha=_ficha.ficha, detalle=_ficha.detalle),
 )
 
 

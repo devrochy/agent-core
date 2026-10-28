@@ -64,6 +64,7 @@ class PromptContext:
     active_skills_summary: str = ""   # descripción de las skills activas del turno
     recalled_memories: list[str] = field(default_factory=list)  # Capa 3 (RAG)
     entity_profile: str = ""          # Capa 2 (perfil del cliente)
+    relacion: str = ""                # ficha de la relación con cada módulo (HU-CRM-14); "" sin datos
     referencias: list[str] = field(default_factory=list)  # ids vigentes de la conversación (ADR-0130)
     state_card: str = ""              # tarjeta de estado (ADR-0114); "" con aos_procedures apagada
     team_notes: str = ""              # notas del equipo sobre el cliente (ADR-0147); "" sin notas
@@ -164,6 +165,9 @@ def bloque_dinamico(ctx: PromptContext) -> str:
         dynamic_parts.append(f"## Capacidades activas en este turno\n{ctx.active_skills_summary}")
     if ctx.entity_profile:
         dynamic_parts.append(f"## Lo que sabes de este cliente\n{ctx.entity_profile}")
+    if ctx.relacion:
+        # Ya serializada y escapada por `core/memory/relacion.py` (rótulos en su playbook del kernel).
+        dynamic_parts.append(ctx.relacion)
     if ctx.recalled_memories:
         recalled = "\n".join(f"- {m}" for m in ctx.recalled_memories)
         dynamic_parts.append(f"## Hechos relevantes de interacciones pasadas\n{recalled}")
