@@ -218,7 +218,7 @@ def _denegar(code: str, estado: str, politica: str, fila: AccountDevice | None =
     return Decision(False, estado, politica, code, fila.id if fila is not None else None)
 
 
-async def evaluar(
+async def _evaluar(
     session: Any,
     *,
     tenant_id: uuid.UUID,
@@ -351,6 +351,18 @@ async def evaluar(
     )
 
 
+async def evaluar(session: Any, **kw: Any) -> Decision:
+    """Decide y deja el rastro (ver `_evaluar`); además saca de la caché de la dependencia del principal
+    la decisión previa de este equipo, que el alta o la promoción pudieron dejar vieja."""
+    decision = await _evaluar(session, **kw)
+    device_id = (kw.get("device_id") or "").strip()
+    if device_id and not kw.get("es_master_plataforma"):
+        from core.access.sesion import invalidar
+
+        await invalidar(kw["tenant_id"], kw["admin_id"], device_id=device_id)
+    return decision
+
+
 # ------------------------------------------------------------------ autoridad
 async def rol_de_cuenta(session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> str | None:
     """`master` (plataforma), `owner` o `colaborador` en este negocio; `None` si no pertenece."""
@@ -408,7 +420,7 @@ async def _invalidar_sesiones(session: Any, fila: AccountDevice, *, bloqueo_de_e
         ).all()
         afectadas += [(a, i) for a, i in otras]
     for admin_id, row_id in dict.fromkeys(afectadas):
-        await invalidar(fila.tenant_id, admin_id, row_id)
+        await invalidar(fila.tenant_id, admin_id, row_id, device_id=fila.device_id)
 
 
 async def _transicion(

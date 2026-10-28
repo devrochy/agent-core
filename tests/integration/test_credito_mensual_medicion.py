@@ -250,6 +250,11 @@ def _alembic(*args: str) -> None:
 async def test_la_migracion_0096_sube_y_baja() -> None:
     columnas = {"credits", "key_mode", "tarifario_version", "trm_cop"}
     assert await _columnas_de_credito() == columnas
+    # El downgrade recrea `ck_usage_kind` con la lista de `kind` de entonces: una fila posterior (p. ej.
+    # 'generacion') que dejó otro archivo en esta misma base lo rompería. En serie este archivo corre pronto y
+    # no la ve; con xdist depende del reparto. El test prepara su propio estado.
+    async with _como_dueno_de_tablas() as conn:
+        await conn.execute(text("truncate usage_ledger"))
     try:
         _alembic("downgrade", "0095")
         assert await _columnas_de_credito() == set()

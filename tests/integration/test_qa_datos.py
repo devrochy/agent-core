@@ -105,7 +105,12 @@ async def test_preparar_mis_datos_crea_negocio_cuentas_y_datos(app_client, tenan
     gestor_cuenta = next(c for c in datos["cuentas"] if c["rol"] == "gestor")
     r = await app_client.post(
         "/api/pack/pack_cobranza/auth/login",
-        json={"usuario": gestor_cuenta["email"], "password": datos["contrasenas"]["gestor"]},
+        # La app manda el id del equipo: sin él, un gestor en política restringida es 403 (ADR-0174).
+        json={
+            "usuario": gestor_cuenta["email"],
+            "password": datos["contrasenas"]["gestor"],
+            "imei": "IMEI-QA-DATOS",
+        },
     )
     assert r.status_code == 200, r.text
     assert r.json().get("accessToken"), r.json()

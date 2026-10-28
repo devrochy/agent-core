@@ -97,13 +97,15 @@ async def test_gestor_intercambia_y_requiere_vinculacion(app_client) -> None:
     await _gestor_compartido(gestor_email, tid)
     token = await _login_admin(app_client, gestor_email)
 
-    r = await app_client.post(EXCHANGE, json={}, headers=_headers(token, tid))
+    # La app que envía su equipo (aquí por el `imei` del cuerpo, contrato anterior) entra por vincular:
+    # sin equipo identificable en política restringida el login es 403 `dispositivo_requerido`.
+    r = await app_client.post(EXCHANGE, json={"imei": "IMEI-EX"}, headers=_headers(token, tid))
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["rol"] == "gestor"
     assert body["gestor"]["nombre"] == "Gestor Ex"
     assert body["requiereVinculacion"] is True
-    assert body["estadoDispositivo"] == "none"
+    assert body["estadoDispositivo"] == "pendiente"
     assert len(body["permisos"]) == 14
     assert all(not p["habilitado"] for p in body["permisos"])
 
