@@ -31,6 +31,7 @@ from core.subscriptions import (
     SubscriptionError,
     SubscriptionView,
 )
+from pack_subscriptions import promociones
 from pack_subscriptions.models import Subscription, SubscriptionCharge
 from pack_subscriptions.periodos import PERIODICIDADES, etiqueta_periodo, sumar_periodo
 
@@ -356,28 +357,47 @@ async def _emitir_activada(
 
 
 async def _anular_cambios_pendientes(
-    session, sub: Subscription, *, salvo: tuple[str, Decimal] | None = None  # type: ignore[no-untyped-def]
+    session,  # type: ignore[no-untyped-def]
+    sub: Subscription,
+    *,
+    salvo: tuple[str, Decimal] | None = None,
+    salvo_promocion: str | None = None,
 ) -> SubscriptionCharge | None:
     """Anula los cargos de cambio pendientes de la suscripción (su link deja de aplicar el
     plan: `_on_payment_confirmed` solo procesa cargos pendientes). Devuelve el que coincide
-    con `salvo` (variante, monto), que se conserva."""
+    con `salvo` (variante, monto NETO) y con la misma promoción (`salvo_promocion`, None = sin promoción),
+    que se conserva. Los anulados devuelven el cupo de su promoción (HU-SUB-33).
+
+    Toma los cargos `FOR UPDATE`: el webhook de pago y el cron que anulan a la vez se serializan."""
     previos = (
         await session.execute(
-            select(SubscriptionCharge).where(
+            select(SubscriptionCharge)
+            .where(
                 SubscriptionCharge.tenant_id == get_current_tenant_id(),
                 SubscriptionCharge.subscription_id == sub.id,
                 SubscriptionCharge.tipo == "cambio_plan",
                 SubscriptionCharge.estado == "pendiente",
                 SubscriptionCharge.deleted_at.is_(None),
             )
+            .with_for_update()
         )
     ).scalars().all()
     conservado = None
+    anulados: list[SubscriptionCharge] = []
     for previo in previos:
-        if salvo and (previo.cambio_plan or {}).get("variante_id") == salvo[0] and Decimal(previo.monto) == salvo[1]:
+        if (
+            salvo
+            and conservado is None
+            and (previo.cambio_plan or {}).get("variante_id") == salvo[0]
+            and Decimal(previo.monto) == salvo[1]
+            and promociones.promocion_del_cargo(previo) == salvo_promocion
+        ):
             conservado = previo
         else:
             previo.estado = "anulado"
+            anulados.append(previo)
+    if anulados:
+        await promociones.liberar_por_cargos(session, anulados)
     return conservado
 
 
@@ -617,6 +637,10 @@ class SubscriptionCapabilityImpl:
                 from pack_subscriptions.inscripcion import anular_cargos_pendientes
 
                 await anular_cargos_pendientes(session, sub)
+            else:
+                # Una Free que había pedido pasar a un plan de pago y se cancela: su cobro de cambio queda
+                # `anulado` y su promoción reservada vuelve al cupo (HU-SUB-33).
+                await _anular_cambios_pendientes(session, sub)
             _auditar(session, actor=actor, accion="subs_cancelada", sub=sub, antes=antes, motivo=reason)
             await session.flush()
             return _view(sub, plan_codigo=await codigo_de_plan(session, sub))
@@ -632,6 +656,7 @@ class SubscriptionCapabilityImpl:
         variant_id: str,
         plan: PlanSnapshot,
         monto_esperado: Decimal | float | None = None,
+        codigo_promocion: str | None = None,
     ) -> SubscriptionView:
         """Cambio de plan con el snapshot del CATÁLOGO (HU-SUB-07, ADR-0111).
 
@@ -644,15 +669,24 @@ class SubscriptionCapabilityImpl:
         la cotización (`cotizar_cambio`). Se compara en la MISMA transacción y con el mismo
         `ahora` que el cálculo; si no coincide no se hace nada (`monto_distinto`). Nunca se usa
         como monto: el cargo sale siempre del cálculo del servidor.
+
+        `codigo_promocion` (HU-SUB-33): solo se acepta cuando el cambio es `desde_cero` (una Free o una
+        prueba que contrata un plan de pago); el cobro sale neto y `monto_esperado` se compara con el neto.
+        En cualquier otro cambio un código se rechaza (`promo_no_aplica_a_cambio`), no se ignora.
         """
         ahora = datetime.now(UTC)
         destino = {"variante_id": str(variant_id), "plan": dict(plan)}
+        codigo = promociones.normalizar_codigo(codigo_promocion)
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
             # Dos cambios a la vez (dos canales) no dejan dos cargos pendientes: se serializan.
             await session.refresh(sub, with_for_update=True)
             evaluacion = evaluar_cambio(sub, variant_id=variant_id, plan=plan, ahora=ahora)
-            if monto_esperado is not None and not mismo_monto(evaluacion.monto, monto_esperado, sub.moneda):
+            promo = None
+            if codigo is not None:
+                promo = await self._evaluar_promocion_de_cambio(session, sub, evaluacion, variant_id, plan, codigo, ahora)
+            a_cobrar = promo.neto if promo is not None else evaluacion.monto
+            if monto_esperado is not None and not mismo_monto(a_cobrar, monto_esperado, sub.moneda):
                 raise SubscriptionError(
                     "El valor del cambio ya no es el que se cotizó: vuelve a cotizarlo y confírmalo de nuevo.",
                     code="monto_distinto",
@@ -667,15 +701,20 @@ class SubscriptionCapabilityImpl:
                 aplicar_plan(sub, {**destino, "desde_cero": evaluacion.desde_cero}, ahora)
                 await session.flush()
                 return {**_view(sub), "cambio": "inmediato"}
-            monto = evaluacion.monto
-            # Un cambio pendiente anterior a OTRO plan (u otro monto) se anula; al mismo se reusa.
-            cargo = await _anular_cambios_pendientes(session, sub, salvo=(str(variant_id), monto))
+            monto = a_cobrar
+            # Un cambio pendiente anterior a OTRO plan (u otro monto o promoción) se anula; al mismo se reusa.
+            cargo = await _anular_cambios_pendientes(
+                session,
+                sub,
+                salvo=(str(variant_id), monto),
+                salvo_promocion=str(promo.promocion_id) if promo is not None else None,
+            )
             if cargo is None:
                 cargo = SubscriptionCharge(
                     tenant_id=get_current_tenant_id(),
                     subscription_id=sub.id,
                     periodo=f"cambio-{ahora:%Y%m%d%H%M%S}",
-                    monto=monto,
+                    monto=evaluacion.monto,
                     estado="pendiente",
                     fecha_vencimiento=ahora,
                     tipo="cambio_plan",
@@ -686,15 +725,80 @@ class SubscriptionCapabilityImpl:
                         "proximo_cargo": sub.proximo_cargo.isoformat() if sub.proximo_cargo else None,
                     },
                 )
+                if promo is not None:
+                    promociones.aplicar_al_cargo(cargo, promo)
                 session.add(cargo)
+                await session.flush()
+                if promo is not None:
+                    _, huella_ = await self._huella_del_cliente(session, sub)
+                    await promociones.reservar(
+                        session, promo, sub=sub, cargo=cargo, customer_id=sub.customer_id, huella_=huella_
+                    )
             await session.flush()
             vista = _view(sub)
         link = await _link_de_cargo(cargo, sub, f"Cambio a {plan.get('nombre')}")
-        return {
-            **vista,
-            "cambio": "pendiente_pago",
-            "cargo_cambio": {"monto": float(monto), "link": link.get("url"), "referencia": link.get("referencia")},
+        cargo_cambio: dict[str, Any] = {
+            "monto": float(monto),
+            "link": link.get("url"),
+            "referencia": link.get("referencia"),
         }
+        if cargo.monto_bruto is not None:
+            cargo_cambio["monto_bruto"] = float(cargo.monto_bruto)
+            cargo_cambio["descuento"] = float(Decimal(cargo.monto_bruto) - Decimal(cargo.monto))
+        return {**vista, "cambio": "pendiente_pago", "cargo_cambio": cargo_cambio}
+
+    async def _huella_del_cliente(self, session, sub: Subscription) -> tuple[str | None, str | None]:  # type: ignore[no-untyped-def]
+        """`(teléfono del canal, huella)` del cliente de la suscripción, para «un canje por persona». Un cambio de
+        plan no trae documento: la huella sale del teléfono del canal o del que quedó en los datos del alta."""
+        from core.db.models import Customer
+        from core.provisioning.antiabuso import telefono_del_canal
+
+        cliente = (
+            await session.execute(
+                select(Customer).where(Customer.tenant_id == get_current_tenant_id(), Customer.id == sub.customer_id)
+            )
+        ).scalar_one_or_none()
+        telefono = telefono_del_canal(cliente)
+        huella_ = promociones.huella_de(
+            documento=None, telefono_canal=telefono, telefono_datos=(sub.datos_alta or {}).get("telefono")
+        )
+        return telefono, huella_
+
+    async def _evaluar_promocion_de_cambio(
+        self, session, sub: Subscription, evaluacion, variant_id: str, plan: PlanSnapshot, codigo: str, ahora: datetime  # type: ignore[no-untyped-def]
+    ) -> promociones.Evaluacion:
+        if evaluacion.cambio != "pendiente_pago" or not evaluacion.desde_cero:
+            raise SubscriptionError(
+                "La promoción solo aplica al contratar un plan de pago desde un plan gratuito.",
+                code="promo_no_aplica_a_cambio",
+            )
+        try:
+            plan_id = uuid.UUID(str(plan.get("plan_id") or variant_id))
+        except ValueError as exc:
+            raise SubscriptionError("El plan no está en el catálogo.", code="plan_no_encontrado") from exc
+        _, huella_ = await self._huella_del_cliente(session, sub)
+        pendientes = (
+            await session.execute(
+                select(SubscriptionCharge.id).where(
+                    SubscriptionCharge.tenant_id == get_current_tenant_id(),
+                    SubscriptionCharge.subscription_id == sub.id,
+                    SubscriptionCharge.tipo == "cambio_plan",
+                    SubscriptionCharge.estado == "pendiente",
+                    SubscriptionCharge.deleted_at.is_(None),
+                )
+            )
+        ).scalars().all()
+        return await promociones.evaluar(
+            session,
+            codigo=codigo,
+            plan_id=plan_id,
+            precio=evaluacion.monto,
+            moneda=plan.get("moneda") or sub.moneda,
+            customer_id=sub.customer_id,
+            huella_=huella_,
+            ahora=ahora,
+            excluir_cargos=list(pendientes),
+        )
 
     async def cotizar_cambio(
         self, subscription_id: uuid.UUID, *, variant_id: str, plan: PlanSnapshot

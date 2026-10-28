@@ -51,6 +51,12 @@ ESTADOS_SUSCRIPCION = ("pendiente_pago", "trialing", "activa", "pausada", "venci
 PENDIENTE_PAGO = "pendiente_pago"
 # Tipos de cargo: `inscripcion` es el primer cobro de un plan de pago (no es un período).
 CARGO_INSCRIPCION = "inscripcion"
+# HU-SUB-33: estados de un canje de promoción. `agotado` y `terminado` SIGUEN contando para el límite por
+# cliente; `liberado` (el cargo se anuló sin pagarse) devuelve el cupo y no cuenta.
+ESTADOS_CANJE = ("reservado", "confirmado", "agotado", "terminado", "liberado")
+CANJE_RESERVADO = "reservado"
+CANJE_CONFIRMADO = "confirmado"
+CANJE_LIBERADO = "liberado"
 
 
 class Plan(Base):
@@ -102,7 +108,8 @@ class Subscription(Base):
     variante_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)  # FK lógica commerce (camino viejo)
     numero_publico: Mapped[str | None] = mapped_column(Text, default=None)  # `SUB-0001`, único por negocio
     # Sin documento: solo alimenta la huella del antiabuso del core. {negocio, vertical, email, telefono, nombre}.
-    datos_alta: Mapped[dict | None] = mapped_column(JSONB, default=None)
+    # `none_as_null`: sin datos el valor es NULL de SQL, no el JSON `null` (que el CHECK de objeto rechaza).
+    datos_alta: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), default=None)
     origen: Mapped[str] = mapped_column(Text, nullable=False, default="agente", server_default="agente")  # agente|panel
     motivo_cancelacion: Mapped[str | None] = mapped_column(Text, default=None)  # cliente|pago_no_recibido|reemplazada|admin
     concepto: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -152,5 +159,58 @@ class SubscriptionCharge(Base):
     # HU-SH-04 (ADR-0123): lo pagó otro canal ({"canal", "referencia", "registrado_en"}).
     pago_externo: Mapped[dict | None] = mapped_column(JSONB, default=None)
     fecha_vencimiento: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # HU-SUB-33 (migración 0011): `monto` es SIEMPRE el neto que se cobra. Con descuento, `monto_bruto` es el
+    # precio de lista y `descuento` la fotografía inmutable ({promocion_id, etiqueta, tipo, valor, monto});
+    # `canje_id` es una referencia lógica (la FK vive en `canjes.charge_id`).
+    monto_bruto: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), default=None)
+    descuento: Mapped[dict | None] = mapped_column(JSONB, default=None)
+    canje_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    periodo_n: Mapped[int | None] = mapped_column(SmallInteger, default=None)
+    consume_periodo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Promocion(Base):
+    """Promoción de plan del negocio (SPEC-43, HU-SUB-33). Propia de suscripciones: las de commerce apuntan a
+    productos y no pueden descontar un plan. El `codigo` es un secreto de cupón (minúsculas, nunca en logs)."""
+
+    __tablename__ = "pack_subscriptions_promociones"
+    __table_args__ = (Index("ix_pack_subscriptions_promos_tenant_activa", "tenant_id", "activa", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=_tenant_or_raise)
+    etiqueta: Mapped[str] = mapped_column(Text, nullable=False)
+    codigo: Mapped[str | None] = mapped_column(Text, default=None)
+    tipo_descuento: Mapped[str] = mapped_column(Text, nullable=False)  # porcentaje | monto
+    valor: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    periodos: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
+    plan_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)  # None = cualquier plan de pago
+    vigente_desde: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    vigente_hasta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    max_canjes: Mapped[int | None] = mapped_column(Integer, default=None)
+    canjes_usados: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # lo no liberado
+    activa: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class Canje(Base):
+    """Un canje de una promoción por un cliente, atado al cargo que descuenta (HU-SUB-33)."""
+
+    __tablename__ = "pack_subscriptions_canjes"
+    __table_args__ = (Index("ix_pack_subscriptions_canjes_promo", "tenant_id", "promocion_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=_tenant_or_raise)
+    promocion_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    charge_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    huella: Mapped[str | None] = mapped_column(Text, default=None)
+    estado: Mapped[str] = mapped_column(Text, nullable=False, default=CANJE_RESERVADO)
+    promocion: Mapped[dict] = mapped_column(JSONB, nullable=False)  # fotografía congelada de la promoción
+    periodos_total: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

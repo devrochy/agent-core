@@ -26,6 +26,9 @@ MONEY_KEYS = {
     # diferencia de un cambio de plan se bloqueaba y escalaba (journeys HU-SUB-12/07).
     # `amount` NO: lo devolvía `generar_link_pago` tal como lo pasó el LLM (retirada, ADR-0087).
     "monto", "valor_periodo",
+    # SPEC-43 (HU-SUB-33): cotización de una inscripción con promoción. Sin estas claves el verificador
+    # bloquea la respuesta con el precio de lista, el descuento o el total del primer cargo.
+    "precio_lista", "descuento", "total_primer_cargo", "precio_periodo_siguiente", "monto_bruto",
 }
 
 
