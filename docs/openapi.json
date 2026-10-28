@@ -13762,7 +13762,7 @@
           "pack · suscripciones"
         ],
         "summary": "Crear Suscripcion Manual",
-        "description": "Crea (o reutiliza) la suscripción de un `Customer` a un plan.",
+        "description": "Inscribe a un `Customer` en un plan del catálogo (o, camino anterior, crea la suscripción de un plan libre).\n\nCon `plan_codigo`: un plan de $0 nace activa (o en prueba); uno de pago nace `pendiente_pago` con su\ncobro y su link (o las instrucciones de transferencia). Repetir la petición devuelve la misma inscripción.",
         "operationId": "crear_suscripcion_manual_api_v1_pack_pack_subscriptions_suscripciones_post",
         "parameters": [
           {
@@ -13831,6 +13831,7 @@
               "anyOf": [
                 {
                   "enum": [
+                    "pendiente_pago",
                     "trialing",
                     "activa",
                     "pausada",
@@ -14163,7 +14164,8 @@
                 {
                   "enum": [
                     "periodo",
-                    "cambio_plan"
+                    "cambio_plan",
+                    "inscripcion"
                   ],
                   "type": "string"
                 },
@@ -29556,6 +29558,321 @@
           }
         }
       }
+    },
+    "/api/v1/pack/pack_subscriptions/planes": {
+      "get": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Listar Planes",
+        "description": "Catálogo de planes del negocio (sin los borrados), en el orden en que se ofrecen.",
+        "operationId": "listar_planes_api_v1_pack_pack_subscriptions_planes_get",
+        "parameters": [
+          {
+            "name": "incluir_inactivos",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Incluye los planes apagados.",
+              "default": true,
+              "title": "Incluir Inactivos"
+            },
+            "description": "Incluye los planes apagados."
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PlanOut"
+                  },
+                  "title": "Response Listar Planes Api V1 Pack Pack Subscriptions Planes Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Crear Plan",
+        "description": "Crea un plan. Código repetido → 409 `codigo_duplicado`; prueba en un plan de pago → 422.",
+        "operationId": "crear_plan_api_v1_pack_pack_subscriptions_planes_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_subscriptions/planes/{plan_id}": {
+      "put": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Editar Plan",
+        "description": "Reemplaza un plan. Las suscripciones ya inscritas conservan su snapshot (precio y nombre de cuando entraron).",
+        "operationId": "editar_plan_api_v1_pack_pack_subscriptions_planes__plan_id__put",
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Plan Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Borrar Plan",
+        "description": "Borra el plan (lógico): deja de ofrecerse; las suscripciones vivas siguen cobrándose.",
+        "operationId": "borrar_plan_api_v1_pack_pack_subscriptions_planes__plan_id__delete",
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Plan Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_subscriptions/suscripciones/{subscription_id}/confirmar-pago": {
+      "post": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Confirmar Pago De Inscripcion",
+        "description": "Confirma a mano el pago por transferencia de una inscripción `pendiente_pago` (o de un cambio de plan).\n\nActiva por el mismo camino que el webhook del pago en línea; repetir con la misma referencia responde\n`ya_confirmado`. Queda auditado con el usuario.",
+        "operationId": "confirmar_pago_de_inscripcion_api_v1_pack_pack_subscriptions_suscripciones__subscription_id__confirmar_pago_post",
+        "parameters": [
+          {
+            "name": "subscription_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Subscription Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmarPagoBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagoConfirmadoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -33794,6 +34111,43 @@
             "title": "Customer Id",
             "description": "Customer del core (pivote multi-pack)."
           },
+          "plan_codigo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Codigo",
+            "description": "Código del plan del catálogo."
+          },
+          "datos_alta": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Datos Alta",
+            "description": "Datos del cliente para el alta (nombre, email, teléfono, negocio, vertical)."
+          },
+          "metodo_pago": {
+            "type": "string",
+            "enum": [
+              "pago_en_linea",
+              "transferencia"
+            ],
+            "title": "Metodo Pago",
+            "default": "pago_en_linea"
+          },
           "variant_id": {
             "anyOf": [
               {
@@ -33805,12 +34159,19 @@
               }
             ],
             "title": "Variant Id",
-            "description": "Variante de commerce (si aplica)."
+            "description": "Camino anterior: variante de commerce."
           },
           "nombre": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Nombre",
-            "description": "Nombre del plan."
+            "description": "Camino anterior: nombre del plan."
           },
           "precio": {
             "type": "number",
@@ -33841,10 +34202,10 @@
         },
         "type": "object",
         "required": [
-          "customer_id",
-          "nombre"
+          "customer_id"
         ],
-        "title": "CrearSuscripcionBody"
+        "title": "CrearSuscripcionBody",
+        "description": "Con `plan_codigo` se inscribe al cliente en un plan del catálogo (SPEC-43). Los campos de plan\nlibre (`nombre`, `precio`, ...) son el camino anterior, que se retira con commerce sin planes (PR-4)."
       },
       "CreditIn": {
         "properties": {
@@ -44348,6 +44709,63 @@
           "estado": {
             "type": "string",
             "title": "Estado"
+          },
+          "numero_publico": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Numero Publico"
+          },
+          "inscripcion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inscripcion",
+            "description": "nueva | repetida | cambio_de_plan"
+          },
+          "monto": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monto",
+            "description": "Valor del cobro de inscripción, si lo hay."
+          },
+          "link_pago": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link Pago"
+          },
+          "instrucciones_transferencia": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instrucciones Transferencia"
           }
         },
         "type": "object",
@@ -56485,6 +56903,12 @@
             "type": "integer",
             "title": "En Prueba"
           },
+          "pendientes_de_pago": {
+            "type": "integer",
+            "title": "Pendientes De Pago",
+            "description": "Inscripciones esperando su primer pago: no son suscripciones vivas y no suman a nada.",
+            "default": 0
+          },
           "pausadas": {
             "type": "integer",
             "title": "Pausadas"
@@ -56523,7 +56947,7 @@
               }
             ],
             "title": "Churn Mes",
-            "description": "Bajas del mes ÷ suscripciones vivas al inicio del mes (0–1)."
+            "description": "Bajas del mes ÷ suscripciones vivas al inicio del mes (0 a 1)."
           },
           "mora": {
             "$ref": "#/components/schemas/MoraResumen"
@@ -59567,6 +59991,281 @@
         },
         "type": "object",
         "title": "AccessPolicyUpdate"
+      },
+      "ConfirmarPagoBody": {
+        "properties": {
+          "referencia": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 3,
+            "title": "Referencia",
+            "description": "Número del comprobante o referencia del pago."
+          }
+        },
+        "type": "object",
+        "required": [
+          "referencia"
+        ],
+        "title": "ConfirmarPagoBody"
+      },
+      "PagoConfirmadoOut": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "enum": [
+              "confirmado",
+              "ya_confirmado"
+            ],
+            "title": "Estado"
+          },
+          "suscripcion_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Suscripcion Id"
+          },
+          "cargo_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cargo Id"
+          },
+          "suscripcion_estado": {
+            "type": "string",
+            "title": "Suscripcion Estado"
+          },
+          "numero_publico": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Numero Publico"
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado",
+          "suscripcion_id",
+          "cargo_id",
+          "suscripcion_estado"
+        ],
+        "title": "PagoConfirmadoOut"
+      },
+      "PlanBody": {
+        "properties": {
+          "codigo": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Codigo",
+            "description": "SKU del plan, único por negocio."
+          },
+          "nombre": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Nombre"
+          },
+          "descripcion": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Descripcion",
+            "default": ""
+          },
+          "precio": {
+            "type": "number",
+            "maximum": 999999999999.0,
+            "minimum": 0.0,
+            "title": "Precio"
+          },
+          "moneda": {
+            "type": "string",
+            "maxLength": 3,
+            "minLength": 3,
+            "title": "Moneda",
+            "default": "COP"
+          },
+          "periodicidad": {
+            "type": "string",
+            "enum": [
+              "mensual",
+              "trimestral",
+              "anual"
+            ],
+            "title": "Periodicidad",
+            "default": "mensual"
+          },
+          "trial_dias": {
+            "type": "integer",
+            "maximum": 365.0,
+            "minimum": 0.0,
+            "title": "Trial Dias",
+            "description": "Solo un plan de $0 tiene prueba (D-16).",
+            "default": 0
+          },
+          "entitlements": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Entitlements",
+            "description": "Lo que incluye el plan (objeto)."
+          },
+          "plan_plataforma": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Plataforma",
+            "description": "Plan de la plataforma que vende."
+          },
+          "activo": {
+            "type": "boolean",
+            "title": "Activo",
+            "default": true
+          },
+          "orden": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": -10000.0,
+            "title": "Orden",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "codigo",
+          "nombre",
+          "precio"
+        ],
+        "title": "PlanBody"
+      },
+      "PlanOut": {
+        "properties": {
+          "codigo": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Codigo",
+            "description": "SKU del plan, único por negocio."
+          },
+          "nombre": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Nombre"
+          },
+          "descripcion": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Descripcion",
+            "default": ""
+          },
+          "precio": {
+            "type": "number",
+            "maximum": 999999999999.0,
+            "minimum": 0.0,
+            "title": "Precio"
+          },
+          "moneda": {
+            "type": "string",
+            "maxLength": 3,
+            "minLength": 3,
+            "title": "Moneda",
+            "default": "COP"
+          },
+          "periodicidad": {
+            "type": "string",
+            "enum": [
+              "mensual",
+              "trimestral",
+              "anual"
+            ],
+            "title": "Periodicidad",
+            "default": "mensual"
+          },
+          "trial_dias": {
+            "type": "integer",
+            "maximum": 365.0,
+            "minimum": 0.0,
+            "title": "Trial Dias",
+            "description": "Solo un plan de $0 tiene prueba (D-16).",
+            "default": 0
+          },
+          "entitlements": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Entitlements",
+            "description": "Lo que incluye el plan (objeto)."
+          },
+          "plan_plataforma": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Plataforma",
+            "description": "Plan de la plataforma que vende."
+          },
+          "activo": {
+            "type": "boolean",
+            "title": "Activo",
+            "default": true
+          },
+          "orden": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": -10000.0,
+            "title": "Orden",
+            "default": 0
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "creado": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creado"
+          },
+          "actualizado": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actualizado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "codigo",
+          "nombre",
+          "precio",
+          "id"
+        ],
+        "title": "PlanOut"
       }
     }
   }

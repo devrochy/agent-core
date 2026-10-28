@@ -1,0 +1,8 @@
+## Planes e inscripción en suscripciones (2026-10-28)
+
+- SPEC-43 (D-55, ADR-0177), PR-2. `pack-subscriptions` es dueño del catálogo de planes (`/planes`, CRUD con auditoría, D-16 en el esquema) y de la inscripción de un cliente en un plan: Free nace `trialing`/`activa`, un plan de pago nace `pendiente_pago` con su cobro y link, y se activa con el pago (webhook o confirmación manual del panel) por un único camino. La inscripción repetida o simultánea devuelve la misma; una `pendiente_pago` expira a los 7 días y un pago tardío o a un cargo anulado no activa nada y se avisa.
+- `pendiente_pago` no es una suscripción viva: queda fuera de MRR, altas, churn, cohortes, mora y crons. Las métricas suman `pendientes_de_pago`.
+- Nuevos endpoints: `GET/POST /planes`, `PUT/DELETE /planes/{id}`, `POST /suscripciones` con `plan_codigo` (el camino de plan libre sigue) y `POST /suscripciones/{id}/confirmar-pago`.
+- Alta automática: el pack registra su propia fuente de altas (`DatosDeAltaDeLaInscripcion`); `subscription.activated` lleva `plan_id`, `numero_publico` y `cambio_de_plan`; el consumer pregunta a todas las fuentes del negocio, trata un Free que paga como cambio de plan y manda a revisión el alta con origen panel.
+- Siembra de planes desde `planes.json` (idempotente, todo o nada) y cron `sincronizar_precios_de_plan`; el seed genérico lee `archivos_de_seed` de cada pack.
+- Migración `pack_subscriptions_0010` (**borra suscripciones y cobros de test**; precheck de conteo en `docs/runbooks/planes-e-inscripcion-despliegue.md`). Aditivo: `activate`, `plan_catalog_registry` y las ramas de commerce siguen vivas hasta el PR de commerce sin planes.
