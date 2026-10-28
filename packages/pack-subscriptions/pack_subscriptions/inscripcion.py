@@ -312,10 +312,26 @@ async def inscribir(
             repetida = (previa.sub, await cargo_de_inscripcion(session, previa.sub))
             await _validar_replay(session, repetida[1], plan, codigo, monto_esperado)
         else:
-            evaluacion = await _evaluar_promocion(
-                session, codigo, plan, customer_id, huella_, previa, contar_intento=True
-            )
-            _comparar_monto(plan, evaluacion, monto_esperado)
+            try:
+                evaluacion = await _evaluar_promocion(
+                    session, codigo, plan, customer_id, huella_, previa, contar_intento=True
+                )
+            except SubscriptionError as exc:
+                if exc.code != "promo_ya_usada":
+                    raise
+                # Una petición idéntica pudo confirmarse entre la lectura de arriba y esta evaluación: si ahora
+                # hay una inscripción repetida es un replay (idempotente), no un segundo canje.
+                previa = decidir(
+                    await _vivas_del_cliente(session, customer_id, bloquear=False),
+                    plan,
+                    varias=bool(config.varias_por_cliente),
+                )
+                if previa.accion != "repetida" or previa.sub is None:
+                    raise
+                repetida = (previa.sub, await cargo_de_inscripcion(session, previa.sub))
+                await _validar_replay(session, repetida[1], plan, codigo, monto_esperado)
+            else:
+                _comparar_monto(plan, evaluacion, monto_esperado)
     if repetida is not None:
         return await _salida_de_repetida(repetida[0], repetida[1], plan, metodo_pago, config)
 

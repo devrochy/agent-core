@@ -402,12 +402,19 @@ class CanjeOut(BaseModel):
     creado: datetime | None = None
 
 
-def _promocion_out(promo) -> PromocionOut:  # type: ignore[no-untyped-def]
+def _enmascarar_codigo(codigo: str | None) -> str | None:
+    """Versión parcial del código del cupón para quien solo puede leer (`lan•••••`)."""
+    if not codigo:
+        return None
+    return codigo[:3] + "•" * max(len(codigo) - 3, 3)
+
+
+def _promocion_out(promo, *, ver_codigo: bool = True) -> PromocionOut:  # type: ignore[no-untyped-def]
     restantes = None if promo.max_canjes is None else max(promo.max_canjes - promo.canjes_usados, 0)
     return PromocionOut(
         id=promo.id,
         etiqueta=promo.etiqueta,
-        codigo=promo.codigo,
+        codigo=promo.codigo if ver_codigo else _enmascarar_codigo(promo.codigo),
         tipo_descuento=promo.tipo_descuento,
         valor=float(promo.valor),
         periodos=int(promo.periodos),
@@ -455,7 +462,9 @@ async def listar_promociones(
     from pack_subscriptions import promociones
 
     _tenant(principal)
-    return [_promocion_out(p) for p in await promociones.listar()]
+    # El código del cupón es un secreto: solo quien puede escribir lo ve completo.
+    ver_codigo = principal.admin.role == "master" or principal.permissions.get("pack_subscriptions:suscripciones") == "write"
+    return [_promocion_out(p, ver_codigo=ver_codigo) for p in await promociones.listar()]
 
 
 @router.post("/promociones", response_model=PromocionOut, status_code=201)

@@ -105,7 +105,10 @@ async def test_el_colaborador_lee_pero_no_escribe_y_otro_negocio_no_ve_nada(app_
     assert (await app_client.get(f"{BASE}/promociones", headers=hb)).json() == []
 
     hc = await api_headers(app_client, a, email=await _colaborador(a), password=PASSWORD)
-    assert (await app_client.get(f"{BASE}/promociones", headers=hc)).status_code == 200
+    lista_colab = await app_client.get(f"{BASE}/promociones", headers=hc)
+    assert lista_colab.status_code == 200
+    assert lista_colab.json()[0]["codigo"] == "lan••••••••", "solo lectura: el código del cupón va enmascarado"
+    assert (await app_client.get(f"{BASE}/promociones", headers=ha)).json()[0]["codigo"] == "lanzamiento"
     assert (await app_client.get(f"{BASE}/promociones/{promo['id']}/canjes", headers=hc)).status_code == 200
     assert (await app_client.post(f"{BASE}/promociones", json={**PROMO, "codigo": "otra"}, headers=hc)).status_code == 403
     assert (await app_client.put(f"{BASE}/promociones/{promo['id']}", json=PROMO, headers=hc)).status_code == 403
