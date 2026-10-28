@@ -93,3 +93,33 @@ botón para las plantillas de cobro (habría que ampliar `build_components`).
 - `core/shared/events.py` (`ON_SUBSCRIPTION_CHARGE_CREATED`), `pack_subscriptions/jobs.py` (emisión).
 - `core/api/routers/conversations.py` (409, plantillas de la conversación, envío del operador),
   `core/api/routers/settings.py` (`/settings/message-templates` y `/missing`).
+
+## Adenda (2026-10-28) — avisos por canal de texto (ADR-0178, pista D2)
+
+Hasta aquí un aviso solo buscaba conversaciones de `whatsapp`: en chat web, Messenger o Instagram se perdía en
+silencio, y en QR (waweb) la ventana desconocida lo dejaba como `sin_plantilla`. Con la bandera por negocio
+`tenants.settings.avisos_por_canal` (APAGADA por defecto; solo el master, `PUT /admin/platform/tenants/{id}/avisos-por-canal`)
+el aviso también sale como texto por esos canales. **Con la bandera apagada nada cambia** (el cuerpo de
+`send_event_notice` es el de siempre; `por_canal=False` es el valor por defecto).
+
+- **Texto por canal.** Clave opcional `fallback_text_by_channel` en `message_templates_map[<evento>]`, por tipo de conexión
+  (`whatsapp_waweb`, `webchat`, `messenger_meta`, `instagram_meta`), con las mismas `{ruta}` permitidas del evento y el mismo
+  render que `fallback_text` (`core/kernel/mensajes`). El `fallback_text` general NO se usa en otros canales: el negocio
+  elige qué le escribe a sus clientes por QR o web.
+- **Cascada** (`core/gateway/avisos_canal.py`, con la tabla de capacidades de C1): WhatsApp Meta → como siempre (plantilla
+  aprobada fuera de la ventana, texto dentro). Canal sin plantillas y con texto definido → ese texto. Sin texto definido →
+  no se envía, y queda `event_notice_omitido_por_canal` en el log y la métrica `event_notice_omitted_total{evento,canal,motivo}`
+  (antes, silencio). No se escribe un `failed`/`sin_plantilla` para estos casos: esa alerta del panel remedia con plantillas de Meta,
+  que estos canales no tienen.
+- **Políticas de cada canal, intactas.** *QR (ADR-0074/0103):* un aviso es un envío no solicitado y el modo por defecto es «solo
+  respuesta», así que solo sale con `waweb_mode = allow_outbound`, con cupo del día y sin pausa (se mira antes de encolar: el
+  conector difiere un mensaje bloqueado hasta ~24 h, 00:02 UTC); el delay humano y el contador los sigue poniendo el conector.
+  *Messenger e Instagram:* solo con la ventana de 24 h abierta (el asistente nunca escribe fuera, ADR-0152); ventana desconocida =
+  cerrada, como con WhatsApp. *Chat web:* sin ventana ni plantillas.
+- **Cobranza.** Quien decide CUÁNDO se emite un aviso de cobro sigue siendo `pack_subscriptions` (HU-SUB-18: cron, diferido
+  del cargo nuevo y reenvío del panel miran el horario legal); este camino no lo cambia. Los eventos `subscription.charge_created`,
+  `charge_reminder` y `paused` **no salen por QR**: el diferimiento del conector podría entregarlos fuera del horario y no se
+  puede garantizar. Sí salen por web, Messenger e Instagram, que entregan al instante.
+- **Qué conversación.** Se busca la de WhatsApp como siempre; solo con la bandera, si el cliente no tiene, la más reciente de
+  web/Messenger/Instagram (prefiriendo una con texto definido para ese evento).
+- **Pendiente (D3).** Que el mapa de eventos apunte a una plantilla con opciones; estos textos no llevan botones.

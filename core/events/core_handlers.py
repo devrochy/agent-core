@@ -97,6 +97,7 @@ async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
     El texto de respaldo lo manda el pack en `payload["texto"]` (su config, editable
     por el negocio); las variables salen solo del contexto que arma este handler.
     """
+    from core.gateway import avisos_bandera, avisos_canal
     from core.gateway.event_notices import clean_param, send_event_notice
 
     try:
@@ -105,6 +106,11 @@ async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
         log.warning("event_notice_payload_invalido", topic=topic)
         return
     conversation = await _whatsapp_conversation_for(customer_id)
+    # ADR-0178 D2: con la bandera `avisos_por_canal` del negocio, sin conversación de WhatsApp se busca una de web,
+    # Messenger o Instagram. Apagada (por defecto) solo cuesta esta lectura: el camino es el de siempre.
+    por_canal = await avisos_bandera.habilitada_actual()
+    if conversation is None and por_canal:
+        conversation = await avisos_canal.conversacion_de_texto_para(customer_id, topic)
     if conversation is None:
         # Sin conversación de WhatsApp no hay a quién escribir: no es un fallo
         # que valga reintentar.
@@ -147,6 +153,8 @@ async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
         context,
         notice_key=notice_key_for(topic, payload),
         default_fallback_text=str(payload.get("texto") or ""),
+        # Solo se pasa con la bandera encendida: apagada, la llamada es la de siempre.
+        **({"por_canal": True} if por_canal else {}),
     )
     log.info(
         "event_notice_resultado",

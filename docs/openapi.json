@@ -15120,6 +15120,208 @@
         }
       }
     },
+    "/api/v1/admin/platform/tenants/{tenant_id}/avisos-por-canal": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Get Avisos Por Canal",
+        "description": "Bandera de los avisos por evento por canal de texto del negocio (apagada por defecto). Solo el master.",
+        "operationId": "get_avisos_por_canal_api_v1_admin_platform_tenants__tenant_id__avisos_por_canal_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvisosPorCanalBandera"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No es el admin master (tampoco el tester ni un colaborador).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "El negocio no existe o está borrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Put Avisos Por Canal",
+        "description": "Enciende o apaga los avisos por canal de texto del negocio (auditado como `avisos_por_canal_bandera`).\nIdempotente. Solo el master; es por negocio y no toca ningún otro.",
+        "operationId": "put_avisos_por_canal_api_v1_admin_platform_tenants__tenant_id__avisos_por_canal_put",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AvisosPorCanalBanderaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvisosPorCanalBandera"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No es el admin master (tampoco el tester ni un colaborador).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "El negocio no existe o está borrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/settings/declarative-tools": {
       "get": {
         "tags": [
@@ -42762,6 +42964,14 @@
             "type": "string",
             "title": "Fallback Text",
             "default": ""
+          },
+          "fallback_text_by_channel": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Fallback Text By Channel",
+            "default": {}
           }
         },
         "type": "object",
@@ -46400,6 +46610,34 @@
           "habilitada"
         ],
         "title": "OpcionesDirectasBanderaIn"
+      },
+      "AvisosPorCanalBandera": {
+        "properties": {
+          "habilitada": {
+            "type": "boolean",
+            "title": "Habilitada",
+            "description": "Si los avisos por evento también salen como texto por QR, chat web, Messenger e Instagram (con el texto que el negocio definió para cada canal en `fallback_text_by_channel`). Apagada: solo conversaciones de WhatsApp, como siempre."
+          }
+        },
+        "type": "object",
+        "required": [
+          "habilitada"
+        ],
+        "title": "AvisosPorCanalBandera"
+      },
+      "AvisosPorCanalBanderaIn": {
+        "properties": {
+          "habilitada": {
+            "type": "boolean",
+            "title": "Habilitada"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "habilitada"
+        ],
+        "title": "AvisosPorCanalBanderaIn"
       },
       "OpcionesEnviarPruebaIn": {
         "properties": {

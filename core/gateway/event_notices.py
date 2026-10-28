@@ -8,6 +8,11 @@ Un aviso (cobro, recordatorio, seguimiento) sale así:
 - ventana cerrada sin mapeo (o la plantilla no está aprobada) → se registra un
   mensaje `failed` con `error_reason = "sin_plantilla"` y el panel lo muestra.
 
+Eso es para WhatsApp. Con la bandera `avisos_por_canal` del negocio encendida (ADR-0178 D2, `avisos_canal`), el aviso
+también sale como texto por QR, chat web, Messenger o Instagram, con el texto que el negocio definió para ese canal
+(`fallback_text_by_channel`); sin ese texto, o si la política del canal lo impide, se omite con log y métrica. Con la
+bandera apagada (`por_canal=False`, el valor por defecto) nada de eso existe: el camino es el de antes, byte a byte.
+
 Las variables salen SOLO del contexto que arma el servidor a partir del evento y de
 la base (rutas permitidas por evento en `EVENTOS`). Nunca del texto del LLM.
 """
@@ -23,6 +28,7 @@ from sqlalchemy import select
 from core.db.models import AppSettings, Conversation, Message, MessageTemplate, WabaAccount
 from core.db.session import get_session
 from core.kernel.mensajes import (
+    LLAVE_DE_RUTA,
     MAX_PARAM,  # noqa: F401  (reexport: nombre público desde ADR-0108)
     DatoFaltante,
     RutaNoPermitida,
@@ -114,7 +120,9 @@ class NoticeNotSentError(RuntimeError):
 
 @dataclass(frozen=True)
 class NoticeResult:
-    modo: str  # "texto" | "plantilla" | "sin_plantilla" | "duplicado" | "no_enviado" | "conexion_pausada"
+    # "texto" | "plantilla" | "sin_plantilla" | "duplicado" | "no_enviado" | "conexion_pausada" | "omitido_canal"
+    # (este último solo con la bandera `avisos_por_canal`: un canal de texto sin texto definido o con la política en contra).
+    modo: str
     detalle: str = ""
 
 
@@ -294,11 +302,13 @@ async def send_event_notice(
     *,
     notice_key: str,
     default_fallback_text: str = "",
+    por_canal: bool = False,
 ) -> NoticeResult:
     """Envía el aviso de `event_key` a la conversación (ver el docstring del módulo).
 
     `notice_key` es estable por aviso (p. ej. `sub_charge:<cargo>`): un reintento
     del evento no duplica el mensaje. Corre dentro del `tenant_scope` del evento.
+    `por_canal`: la bandera `avisos_por_canal` del negocio (la lee quien llama, `avisos_bandera.habilitada_actual`).
     """
     from core.db.models import utcnow
     from core.gateway.sender import send_template_to_conversation, send_to_conversation
@@ -335,6 +345,11 @@ async def send_event_notice(
 
     entrada = (await load_templates_map(conversation.tenant_id)).get(event_key) or {}
     fallback = str(entrada.get("fallback_text") or default_fallback_text).strip()
+
+    if por_canal:
+        por_texto = await _aviso_por_canal(conversation, event_key, context, notice_key, entrada)
+        if por_texto is not None:
+            return por_texto
 
     # Ventana desconocida (sin `service_window_expires_at`: filas viejas o una
     # conversación que no abrió un mensaje entrante) cuenta como CERRADA: un texto
@@ -389,3 +404,52 @@ async def send_event_notice(
     if not enviado:
         raise NoticeNotSentError(f"Aviso {event_key} sin encolar (pausa por uso de la API)")
     return NoticeResult("plantilla")
+
+
+async def _aviso_por_canal(
+    conversation: Conversation, event_key: str, context: dict[str, Any], notice_key: str, entrada: dict[str, Any]
+) -> NoticeResult | None:
+    """La vía de un aviso con la bandera `avisos_por_canal` encendida (ADR-0178 D2). Devuelve el resultado si este
+    camino lo resolvió (salió el texto del canal, o se omitió), o None para seguir con el camino de siempre
+    (WhatsApp Meta, o un canal que ya tenía el suyo). Ver `avisos_canal` por las políticas de cada canal."""
+    from core.db.models import utcnow
+    from core.gateway import avisos_canal as ac
+    from core.gateway.sender import send_to_conversation
+
+    proveedor = await ac.proveedor_de_conversacion(conversation)
+    tipo = ac.tipo_de_conexion(conversation.channel, proveedor)
+    texto = ac.texto_del_canal(entrada, tipo)
+    expira = conversation.service_window_expires_at
+    decision = ac.decidir_via_aviso(
+        canal=conversation.channel,
+        proveedor=proveedor,
+        evento=event_key,
+        texto_definido=bool(texto),
+        ventana_abierta=expira is not None and expira >= utcnow(),
+    )
+    if decision.motivo:
+        ac.aviso_omitido(event_key, conversation.channel, decision.motivo, conversation_id=conversation.id)
+    if decision.via == ac.LEGACY:
+        return None
+    if decision.via == ac.OMITIDO:
+        return NoticeResult("omitido_canal", decision.motivo)
+
+    if decision.tipo == ac.QR and (motivo := await ac.waweb_bloqueo(conversation.tenant_id)):
+        ac.aviso_omitido(event_key, conversation.channel, motivo, conversation_id=conversation.id)
+        return NoticeResult("omitido_canal", motivo)
+    renderizado = render_fallback(texto, context, event_key).strip()
+    if not renderizado:
+        ac.aviso_omitido(event_key, conversation.channel, ac.TEXTO_VACIO, conversation_id=conversation.id)
+        return NoticeResult("omitido_canal", ac.TEXTO_VACIO)
+    if LLAVE_DE_RUTA.search(renderizado):
+        # Una `{ruta}` que no es del evento (texto guardado antes de validarse): nunca se manda cruda al cliente.
+        ac.aviso_omitido(event_key, conversation.channel, ac.VARIABLES_SIN_RESOLVER, conversation_id=conversation.id)
+        return NoticeResult("omitido_canal", ac.VARIABLES_SIN_RESOLVER)
+    try:
+        enviado = await send_to_conversation(conversation.id, renderizado, client_message_id_prefix=notice_key)
+    except OutboundWindowExpiredError:
+        ac.aviso_omitido(event_key, conversation.channel, ac.VENTANA_CERRADA, conversation_id=conversation.id)
+        return NoticeResult("omitido_canal", ac.VENTANA_CERRADA)
+    if not enviado:
+        raise NoticeNotSentError(f"Aviso {event_key} sin encolar (pausa por uso o conversación)")
+    return NoticeResult("texto", decision.tipo or "")

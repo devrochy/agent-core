@@ -357,6 +357,17 @@ def capacidades_de(channel: str, provider: str | None = "") -> CapacidadesCanal:
     return next(iter(distintas)) if len(distintas) == 1 else SOLO_TEXTO
 
 
+def tipo_de_conexion(channel: str, provider: str | None = "") -> str | None:
+    """`ConnectionType.id` de un `(canal, proveedor)`, o None si no se puede saber: el proveedor coincide con el de
+    un tipo del canal, o el canal tiene un solo tipo (`web`, `messenger`, `instagram`). WhatsApp sin un proveedor
+    conocido es None (hay varios tipos). Es la clave de los textos por canal de los avisos (ADR-0178 D2)."""
+    tipos = _tipos_del_canal(channel)
+    for t in tipos:
+        if provider and t.provider == provider:
+            return t.id
+    return tipos[0].id if len(tipos) == 1 else None
+
+
 def capacidades_del_canal(channel: str) -> CapacidadesCanal:
     """Lo MÁXIMO que admite el canal con cualquiera de sus proveedores (O lógico). Es el filtro previo a conocer
     el proveedor (resolverlo cuesta una consulta); la decisión final es `capacidades_de(canal, proveedor)`. Un

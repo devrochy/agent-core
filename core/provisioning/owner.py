@@ -228,7 +228,14 @@ async def avisar_por_whatsapp(
 
     if customer_id is None:
         return "sin_conversacion"
+    from core.gateway import avisos_bandera, avisos_canal
+
     conversacion = await _conversacion_whatsapp(customer_id)
+    # ADR-0178 D2: con la bandera `avisos_por_canal` del negocio también se avisa por web, Messenger o Instagram
+    # (con el texto que el negocio definió para ese canal); apagada, solo WhatsApp como siempre.
+    por_canal = await avisos_bandera.habilitada_actual()
+    if conversacion is None and por_canal:
+        conversacion = await avisos_canal.conversacion_de_texto_para(customer_id, EVENTO_INVITACION)
     if conversacion is None:
         return "sin_conversacion"
     try:
@@ -238,6 +245,7 @@ async def avisar_por_whatsapp(
             contexto_del_aviso(negocio=negocio, nombre=nombre, email=email),
             notice_key=aviso_key,
             default_fallback_text=TEXTO_WHATSAPP,
+            **({"por_canal": True} if por_canal else {}),  # apagada, la llamada es la de siempre
         )
     except NoticeNotSentError:
         log.warning("provisioning_aviso_whatsapp_sin_enviar", conversation_id=str(conversacion.id))
