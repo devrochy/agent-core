@@ -141,3 +141,16 @@ casi el ideal (3 workers: 455 s; 4 workers: 341 s), así que se reabre la opció
   módulo faltante).
 - **Qué haría que revisáramos esto:** un test inestable que solo falle en paralelo (se aísla con `xdist_group`, no se
   reintenta), o la CPU del host saturada al correr dos jobs de integración a la vez (se baja a `-n 2`).
+
+## Adenda (2026-10-28, 3): sin job `nivel`
+
+El job `nivel` de la primera adenda duraba 10–30 s, pero pedía un hueco de runner como cualquier otro: con el host
+cargado empezó a los +129, +164 y +243 s, y la integración no arrancó hasta después (+156, +273, +389 s). Era espera
+pura. Se elimina:
+
+- `evals-replay` lee el nivel del evento (`pull_request` a una rama que no es `main`, o push a `develop`) y ya no
+  depende de nadie.
+- `integracion` calcula las rutas tocadas (`git diff` contra la base) en su primer paso, con el historial completo,
+  y los pasos pesados llevan `if: steps.nivel.outputs.relevante == 'true'`. Una PR que no toca rutas de integración
+  levanta Postgres y Redis sin correr nada; es el caso minoritario (≈10 %, ver la tabla de alternativas).
+- El filtro de forks queda en el `if:` de cada job.
