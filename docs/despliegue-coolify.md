@@ -437,7 +437,7 @@ El canal `waweb` (ADR-0074) necesita un servicio **aparte** del api: sin él, el
 tarjeta del QR pero nadie la genera/publica en Redis. En producción no existe (P-08).
 
 Configuración clave (Coolify → app → General):
-- **Custom Docker Options**: `--entrypoint /app/scripts/entrypoint-connector.sh --tmpfs /tmp/waweb-sessions`
+- **Custom Docker Options**: `--entrypoint /app/scripts/entrypoint-connector.sh --tmpfs /tmp/waweb-sessions:rw,mode=1777`
 - **Health check**: desactivado (no expone HTTP).
 - **Variables**: las mismas del api (copiadas) + `AGENT_CORE_ROLE=connector`,
   `WAWEB_ENABLED=true`, `WAWEB_SESSION_DIR=/tmp/waweb-sessions`.
@@ -446,6 +446,12 @@ Notas aprendidas en vivo (2026-09-30):
 - **No** agregar `--sysctl net.ipv6.conf.all.disable_ipv6=1`: colgaba a Neonize.
 - Neonize (Go) revienta con `concurrent map writes` si se conectan dos sesiones a
   la vez: el conector serializa el puente con un lock global.
+- El `tmpfs` debe ser escribible por `app` (`mode=1777`). Con el modo por defecto
+  (`root:root 0755`) falla `mkdir` y no se emite QR; el store cae a `/tmp` y deja
+  `waweb_session_dir_no_escribible` (incidente 2026-10-28).
+- Si un tenant lleva 5 min sin QR ni cambios de estado, el conector se reinicia
+  solo (`waweb_connector_colgado`): Neonize puede dejar el puente Go trabado y
+  cancelar la tarea no lo recupera.
 - La sesión **que nunca se vinculó** se limpia al iniciar cada ciclo (si no, Neonize
   "reanuda" credenciales viejas y nunca emite QR). "Nunca se vinculó" se decide con un
   dato durable (`waweb_sessions.last_connected_at`/`jid` más `creds_encrypted` no nulo),

@@ -14,10 +14,16 @@ from __future__ import annotations
 
 import base64
 import io
+import os
 import tarfile
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Protocol
+
+from core.shared.logger import get_logger
+
+log = get_logger(__name__)
 
 
 class SessionStore(Protocol):
@@ -56,6 +62,34 @@ def unpack_dir(data: bytes, work_dir: Path) -> None:
         tar.extractall(work_dir)
 
 
+def _base_escribible(base: Path) -> Path:
+    """Devuelve una raíz donde el proceso pueda crear sesiones.
+
+    El `tmpfs` de despliegue puede montarse `root:root 0755` y el conector corre
+    como `app`: `mkdir` fallaba con `PermissionError` y no se emitía ningún QR
+    (visto en test 2026-10-28). Antes de romper el vínculo, se usa una raíz
+    efímera bajo `/tmp` (también escribible por `app`) y se deja traza.
+    """
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        probe = base / f".escritura-{os.getpid()}"
+        try:
+            probe.write_bytes(b"")
+        finally:
+            probe.unlink(missing_ok=True)
+        return base
+    except OSError as exc:
+        fallback = Path(tempfile.gettempdir()) / f"waweb-sessions-{os.getpid()}"
+        fallback.mkdir(parents=True, exist_ok=True)
+        log.error(
+            "waweb_session_dir_no_escribible",
+            base=str(base),
+            fallback=str(fallback),
+            detail=str(exc),
+        )
+        return fallback
+
+
 class DbEncryptedSessionStore:
     """Store durable: `tar.gz` cifrado en `waweb_sessions.creds_encrypted`.
 
@@ -63,7 +97,7 @@ class DbEncryptedSessionStore:
     """
 
     def __init__(self, base_dir: Path) -> None:
-        self._base_dir = Path(base_dir)
+        self._base_dir = _base_escribible(Path(base_dir))
 
     def work_dir(self, tenant_id: uuid.UUID) -> Path:
         return self._base_dir / str(tenant_id)

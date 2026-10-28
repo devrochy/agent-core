@@ -66,14 +66,16 @@ class FakeRegistry:
     def __init__(self, contexts: list[SessionContext]) -> None:
         self.contexts = contexts
         self.statuses: dict[uuid.UUID, str] = {}
+        self.connection_ids: dict[uuid.UUID, Any] = {}
         self.jids_with: dict[str, list[uuid.UUID]] = {}
         self.on_set: Any = None
 
     async def active_sessions(self) -> list[SessionContext]:
         return self.contexts
 
-    async def set_status(self, tenant_id, new_status, *, detail=None, jid=None):
+    async def set_status(self, tenant_id, new_status, *, connection_id=None, detail=None, jid=None):
         self.statuses[tenant_id] = new_status
+        self.connection_ids[tenant_id] = connection_id
         if self.on_set is not None:
             await self.on_set(tenant_id, new_status)
 
@@ -96,6 +98,66 @@ def _stub_handoff(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # Sin esto cada vuelta del drain intentaba hablar con Redis.
     monkeypatch.setattr(manager_mod.handoff, "consume_reset", _sin_reset)
+
+
+async def test_watchdog_de_progreso_reinicia_si_un_tenant_queda_mudo(tmp_path: Path) -> None:
+    """Sin QR ni cambios de estado, el conector se reinicia en vez de quedar mudo."""
+    ctx = _ctx()
+    connector = _connector(tmp_path, FakeRegistry([ctx]))
+    fatal = {"n": 0}
+
+    def _fatal() -> None:
+        fatal["n"] += 1
+        raise RuntimeError("reiniciar conector")
+
+    connector.now = lambda: 1000.0
+    connector.stall_timeout_s = 300.0
+    connector.fatal = _fatal
+
+    async def _vive() -> None:
+        await asyncio.sleep(60)
+
+    task = asyncio.create_task(_vive())
+    try:
+        connector._tasks[ctx.tenant_id] = task
+        connector._progress_at[ctx.tenant_id] = 0.0
+
+        with pytest.raises(RuntimeError, match="reiniciar conector"):
+            await connector._check_stalls()
+
+        assert fatal["n"] == 1
+    finally:
+        task.cancel()
+
+
+async def test_watchdog_de_progreso_no_reinicia_una_sesion_conectada(tmp_path: Path) -> None:
+    """Una sesión `connected` sin tráfico es sana: el watchdog no debe matarla."""
+    ctx = _ctx()
+    connector = _connector(tmp_path, FakeRegistry([ctx]))
+    fatal = {"n": 0}
+
+    def _fatal() -> None:
+        fatal["n"] += 1
+
+    connector.now = lambda: 1000.0
+    connector.stall_timeout_s = 300.0
+    connector.fatal = _fatal
+
+    async def _vive() -> None:
+        await asyncio.sleep(60)
+
+    task = asyncio.create_task(_vive())
+    try:
+        connector._tasks[ctx.tenant_id] = task
+        connector._connected.add(ctx.tenant_id)
+        connector._progress_at[ctx.tenant_id] = 0.0
+
+        await connector._check_stalls()
+
+        assert fatal["n"] == 0
+        assert connector._progress_at[ctx.tenant_id] == 1000.0
+    finally:
+        task.cancel()
 
 
 def _ctx() -> SessionContext:
@@ -210,6 +272,7 @@ async def test_run_session_conecta_y_persiste(tmp_path: Path, monkeypatch: pytes
 
     assert sock.connected is True
     assert registry.statuses[ctx.tenant_id] == status.CONNECTED
+    assert registry.connection_ids[ctx.tenant_id] == ctx.connection_id
     assert set(connector.store.persisted) == {ctx.tenant_id}
 
 

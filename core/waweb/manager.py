@@ -11,6 +11,7 @@ factoría de socket, drainer, sleep, alert) — se puede correr entero con fakes
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import time
 import uuid
@@ -44,6 +45,11 @@ _STATUS_MAP: dict[str, str] = {
     "banned": status.ERROR,  # ban temporal: se alerta pero se reconecta
     "error": status.ERROR,
 }
+
+
+def _salida_fatal() -> None:
+    """Reinicia el proceso para recuperar el puente de Neonize trabado."""
+    os._exit(1)
 
 
 @dataclass
@@ -83,6 +89,13 @@ class WaWebConnector:
     # 2026-10-10). La gracia evita pisar el auto-reconnect normal (~3-30 s).
     liveness_interval_s: float = 30.0
     liveness_grace_s: float = 60.0
+    # Watchdog de progreso: si un tenant no publica QR ni cambia de estado en
+    # este tiempo, el puente de Neonize quedó trabado (visto en test 2026-10-28:
+    # el conector seguía "Up" pero mudo y el reset del panel no se consumía).
+    # Cancelar la tarea no libera una llamada al puente Go en curso; la única
+    # recuperación segura es reiniciar el proceso y dejar que Docker lo levante.
+    stall_timeout_s: float = 300.0
+    fatal: Callable[[], None] = _salida_fatal
     now: Callable[[], float] = time.monotonic
     _tasks: dict[uuid.UUID, asyncio.Task] = field(default_factory=dict, init=False)
     _stop: set[uuid.UUID] = field(default_factory=set, init=False)
@@ -117,12 +130,15 @@ class WaWebConnector:
     _wipe_local: set[uuid.UUID] = field(default_factory=set, init=False)
     # Negocios ya alertados de "sesión perdida" (el QR rota cada ~20 s: una vez).
     _lost_alerted: set[uuid.UUID] = field(default_factory=set, init=False)
+    # Último instante con señal de vida por tenant (QR, estado o sesión conectada).
+    _progress_at: dict[uuid.UUID, float] = field(default_factory=dict, init=False)
 
     async def run(self) -> None:
         """Bucle principal: barre sesiones y arranca/detiene sockets."""
         while True:
             try:
                 await self.sweep()
+                await self._check_stalls()
             except Exception:
                 log.exception("waweb_sweep_failed")
             await self.sleep(self.sweep_interval_s)
@@ -153,6 +169,7 @@ class WaWebConnector:
                 # `connected` a la siguiente: el chequeo de vida reciclaría un
                 # socket que todavía se está vinculando.
                 self._connected.discard(tenant_id)
+                self._progress_at.pop(tenant_id, None)
         for ctx in contexts:
             if ctx.tenant_id not in self._tasks and ctx.tenant_id not in self._stop:
                 self._tasks[ctx.tenant_id] = asyncio.create_task(self.run_session(ctx))
@@ -161,6 +178,7 @@ class WaWebConnector:
         work_dir = self.store.work_dir(ctx.tenant_id)
         attempt = 0
         while ctx.tenant_id not in self._stop:
+            self._progress_at[ctx.tenant_id] = self.now()
             try:
                 reset = ctx.tenant_id in self._reset_pending
                 if reset:
@@ -189,7 +207,9 @@ class WaWebConnector:
                     self._can_persist.add(ctx.tenant_id)
                 else:
                     self._can_persist.discard(ctx.tenant_id)
-                await self.registry.set_status(ctx.tenant_id, status.CONNECTING)
+                await self.registry.set_status(
+                    ctx.tenant_id, status.CONNECTING, connection_id=ctx.connection_id
+                )
                 self._qr_cycles.discard(ctx.tenant_id)
                 sock = self.socket_factory()
                 self._sockets[ctx.tenant_id] = sock
@@ -306,6 +326,44 @@ class WaWebConnector:
                         break
                 await self.sleep(0.05)
 
+    async def _check_stalls(self) -> None:
+        """Reinicia el conector si un tenant lleva demasiado tiempo mudo.
+
+        Una sesión `connected` sin tráfico es sana: se refresca sola. El watchdog
+        apunta a sockets en `connecting`/`pending_qr` cuyo loop quedó esperando
+        una llamada al puente de Neonize que nunca vuelve.
+        """
+        now = self.now()
+        for tenant_id, task in list(self._tasks.items()):
+            if task.done() or tenant_id in self._stop:
+                continue
+            if tenant_id in self._connected:
+                self._progress_at[tenant_id] = now
+                continue
+            last = self._progress_at.get(tenant_id)
+            if last is None:
+                self._progress_at[tenant_id] = now
+                continue
+            silencio = now - last
+            if silencio < self.stall_timeout_s:
+                continue
+            log.critical(
+                "waweb_connector_colgado",
+                tenant_id=str(tenant_id),
+                sin_progreso_s=round(silencio),
+            )
+            try:
+                await self.alert(
+                    "WhatsApp (waweb) conector colgado",
+                    f"Tenant {tenant_id}: {round(silencio)} s sin QR ni cambios de estado. "
+                    "Se reinicia el conector para recuperar el puente de Neonize.",
+                    severity="critical",
+                )
+            except Exception:
+                log.exception("waweb_stall_alert_failed", tenant_id=str(tenant_id))
+            self.fatal()
+            return
+
     def _was_linked(self, ctx: SessionContext) -> bool:
         """¿La sesión se vinculó alguna vez y conserva credenciales?
 
@@ -401,6 +459,7 @@ class WaWebConnector:
             sock.closed.set()
 
     async def _on_qr(self, ctx: SessionContext, qr: str) -> None:
+        self._progress_at[ctx.tenant_id] = self.now()
         self._qr_at[ctx.tenant_id] = self.now()
         self._qr_cycles.add(ctx.tenant_id)
         self._pairing_trips.pop(ctx.tenant_id, None)
@@ -410,7 +469,10 @@ class WaWebConnector:
         perdida = self._was_linked(ctx)
         # `detail=""` limpia un `last_error` previo (p. ej. de un intento fallido).
         await self.registry.set_status(
-            ctx.tenant_id, status.PENDING_QR, detail=SESION_PERDIDA if perdida else ""
+            ctx.tenant_id,
+            status.PENDING_QR,
+            connection_id=ctx.connection_id,
+            detail=SESION_PERDIDA if perdida else "",
         )
         if perdida and ctx.tenant_id not in self._lost_alerted:
             self._lost_alerted.add(ctx.tenant_id)
@@ -425,6 +487,7 @@ class WaWebConnector:
     async def _on_status(
         self, ctx: SessionContext, backend_status: str, detail: str | None = None, jid: str | None = None
     ) -> None:
+        self._progress_at[ctx.tenant_id] = self.now()
         mapped = _STATUS_MAP.get(backend_status, status.ERROR)
         if mapped == status.CONNECTED:
             self._connected.add(ctx.tenant_id)
@@ -435,7 +498,9 @@ class WaWebConnector:
             self._pairing_trips.pop(ctx.tenant_id, None)
         else:
             self._connected.discard(ctx.tenant_id)
-        await self.registry.set_status(ctx.tenant_id, mapped, detail=detail, jid=jid)
+        await self.registry.set_status(
+            ctx.tenant_id, mapped, connection_id=ctx.connection_id, detail=detail, jid=jid
+        )
         if mapped != status.CONNECTED:
             await handoff.clear_ready(str(ctx.tenant_id))
         if backend_status == "banned":
@@ -498,7 +563,10 @@ class WaWebConnector:
         )
         if any(str(other) < str(ctx.tenant_id) for other in others):
             await self.registry.set_status(
-                ctx.tenant_id, status.ERROR, detail="Número vinculado también en otro negocio"
+                ctx.tenant_id,
+                status.ERROR,
+                connection_id=ctx.connection_id,
+                detail="Número vinculado también en otro negocio",
             )
             self._stop.add(ctx.tenant_id)
             sock = self._sockets.get(ctx.tenant_id)

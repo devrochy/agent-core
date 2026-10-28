@@ -121,8 +121,13 @@ async def request_send(
     return str(reply.get("wamid") or "")
 
 
-async def publish_qr(tenant_id: str, qr: str, ttl_s: int = 180) -> None:
-    """Publica el QR vigente para que el panel lo muestre (lo usa el connector)."""
+async def publish_qr(tenant_id: str, qr: str, ttl_s: int = 240) -> None:
+    """Publica el QR vigente para que el panel lo muestre (lo usa el connector).
+
+    El TTL cubre el vencimiento del QR (90 s) más la reconexión: si expira antes
+    de que el connector publique el siguiente, el panel muestra "esperando QR"
+    aunque el vínculo esté sano.
+    """
     await _redis().set(qr_key(tenant_id), qr, ex=ttl_s)
 
 
