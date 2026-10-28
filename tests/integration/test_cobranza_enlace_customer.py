@@ -241,3 +241,20 @@ async def test_cache_negativa_y_redis_caido_no_rompen_la_tool(monkeypatch) -> No
     async with tenant_scope(tid), get_session() as s:
         cliente = await _cliente_de_customer(s, customer)
     assert cliente is not None and cliente.id == cid
+
+
+async def test_customer_de_otro_canal_no_se_enlaza_aunque_declare_el_telefono() -> None:
+    from pack_cobranza.enlazar import enlazar_customer
+
+    from core.db.models import Customer
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid = await _tenant(f"enl-web-{uuid.uuid4().hex[:6]}")
+    _, (cid,), _ = await _sembrar(tid, telefonos=["3001230000"])
+    async with tenant_scope(tid), get_session() as s:
+        web = Customer(tenant_id=tid, channel="web", external_id=f"web:{uuid.uuid4()}", contact_phone="573001230000")
+        s.add(web)
+        await s.flush()
+        assert (await enlazar_customer(s, web.id)).value == "sin_match"
+    assert (await _customer_ids(tid))[cid] is None

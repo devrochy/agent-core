@@ -9,5 +9,5 @@
 - Una coincidencia enlaza con `UPDATE … WHERE customer_id IS NULL`; dos deudores con el mismo teléfono no se
   enlazan (`ambiguo`) y un `Customer` ya enlazado no se reasigna. El log `cobranza_enlace{resultado, origen}`
   no lleva teléfono, documento ni nombre.
-- Limitaciones: los clientes de Instagram u otros canales sin `contact_phone` no se enlazan, y un número local
+- Limitaciones: solo se enlazan Customers de WhatsApp (Instagram, web y otros canales no), y un número local
   solo cruza con un `wa_id` internacional si es del país por defecto (CO; aún no hay país por negocio).

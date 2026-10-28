@@ -109,8 +109,9 @@ def _solo_digitos_sql(columna):
 
 
 async def _vincular(session, cliente_id: uuid.UUID, customer_id: uuid.UUID) -> bool:
-    """`UPDATE … WHERE customer_id IS NULL`: de dos enlaces concurrentes gana uno solo. El `NOT EXISTS`
-    evita que un `Customer` quede enlazado a dos clientes (la lectura perezosa espera uno)."""
+    """`UPDATE … WHERE customer_id IS NULL`: de dos enlaces concurrentes sobre el mismo `Cliente` gana uno
+    solo. El `NOT EXISTS` evita en la práctica que un `Customer` quede con dos clientes (la lectura perezosa
+    espera uno); no es atómico entre dos `Cliente` distintos, y no hay índice único que lo garantice."""
     tid = _tenant_actual()
     otro = aliased(Cliente)
     resultado = await session.execute(
@@ -132,10 +133,15 @@ async def enlazar_customer(
 ) -> Resultado:
     """Del `Customer` al `Cliente`: busca el deudor sin enlazar cuyo teléfono coincide."""
     tid = _tenant_actual()
+    # Solo WhatsApp: el teléfono de un Customer de otro canal (p. ej. el intake web de commerce) lo declara el
+    # propio visitante, sin verificar, y enlazarlo le daría los datos del deudor.
     telefono = (
         await session.execute(
             select(Customer.contact_phone).where(
-                Customer.tenant_id == tid, Customer.id == customer_id, Customer.deleted_at.is_(None)
+                Customer.tenant_id == tid,
+                Customer.id == customer_id,
+                Customer.channel == "whatsapp",
+                Customer.deleted_at.is_(None),
             )
         )
     ).scalar_one_or_none()
