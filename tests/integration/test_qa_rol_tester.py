@@ -232,14 +232,14 @@ async def test_tester_no_gestiona_cuentas_por_el_alta_ni_purga(app_client, tenan
     # Reusar el slug de un negocio existente vincularía un owner títere: 409.
     r = await app_client.post(
         "/api/v1/admin/platform/tenants",
-        json={"name": "Alpha", "slug": "test-alpha", "admin_email": _uniq("titere"), "admin_password": "Passw0rd!"},
+        json={"name": "Alpha", "slug": "test-alpha", "admin_email": _uniq("titere")},
         headers=headers,
     )
     assert r.status_code == 409, r.text
     # Vincular como owner una cuenta que ya existe: 409.
     r = await app_client.post(
         "/api/v1/admin/platform/tenants",
-        json={"name": "Nuevo", "slug": f"qa-{uuid.uuid4().hex[:6]}", "admin_email": "admin@local", "admin_password": "Passw0rd!"},
+        json={"name": "Nuevo", "slug": f"qa-{uuid.uuid4().hex[:6]}", "admin_email": "admin@local"},
         headers=headers,
     )
     assert r.status_code == 409, r.text
@@ -247,11 +247,13 @@ async def test_tester_no_gestiona_cuentas_por_el_alta_ni_purga(app_client, tenan
     slug = f"qa-{uuid.uuid4().hex[:6]}"
     r = await app_client.post(
         "/api/v1/admin/platform/tenants",
-        json={"name": "Negocio QA", "slug": slug, "admin_email": _uniq("owner-qa"), "admin_password": "Passw0rd!"},
+        json={"name": "Negocio QA", "slug": slug, "admin_email": _uniq("owner-qa")},
         headers=headers,
     )
     assert r.status_code == 201, r.text
     tenant_id = r.json()["tenant_id"]
+    # El correo del patch no sale (`None`): el negocio existe y la respuesta lo dice (ADR-0175).
+    assert r.json()["invitation"]["estado"] == "sin_smtp"
 
     # Purgar es solo del master, también en test (invariante 8).
     r = await app_client.post(

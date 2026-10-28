@@ -97,7 +97,10 @@ class TenantCreate(BaseModel):
     packs: list[str] = []
     escalation_triggers: list[str] = []
     admin_email: str = ""
-    admin_password: str = ""
+    # Ya no se define una contraseña al crear el negocio (ADR-0175): el dueño la define con el
+    # enlace que le llega por correo. Se conserva el campo para dar un error claro (400) a quien
+    # todavía lo mande; vacío es válido.
+    admin_password: str = Field(default="", json_schema_extra={"deprecated": True})
 
 
 class TenantPlanUpdate(BaseModel):
@@ -110,10 +113,21 @@ class PurgeRequest(BaseModel):
     confirm_phrase: str
 
 
+class TenantOwnerInvitation(BaseModel):
+    """Qué pasó con el acceso del dueño (ADR-0175). Nunca lleva el enlace ni el token."""
+
+    estado: Literal["enviado", "sin_smtp", "fallido", "ya_emitida", "ya_es_miembro"]
+    # `enlace`: define su contraseña con el enlace del correo; `app`: acepta la invitación en la app.
+    tipo: Literal["enlace", "app"]
+    expires_at: datetime | None = None
+
+
 class TenantCreated(BaseModel):
     tenant_id: uuid.UUID
     slug: str
     steps: list[str]
+    # None si no se pasó `admin_email`.
+    invitation: TenantOwnerInvitation | None = None
 
 
 @router.post("/tenants", response_model=TenantCreated, status_code=201)
@@ -121,27 +135,65 @@ async def create_tenant(
     payload: TenantCreate,
     principal: Annotated[Principal, Depends(get_principal)],
 ) -> TenantCreated:
-    """Alta de un negocio (master): tenant + asistente + cuenta admin opcional."""
+    """Alta de un negocio (master): tenant + asistente + acceso del dueño por correo.
+
+    Con `admin_email` la cuenta del dueño nace sin contraseña y le llega un enlace de un solo
+    uso para definirla (ADR-0175). Si el correo no sale, el negocio se crea igual y la
+    respuesta lo dice (`invitation.estado`); se reenvía con `owner-invitation/resend`."""
     _require_master(principal)
 
     # Import local: la lógica de alta vive en el core; el slug se normaliza igual.
+    from sqlalchemy.exc import IntegrityError
+
     from core.admin.views import _slugify
+    from core.alta_acceso import (
+        AccesoRechazado,
+        asegurar_cuenta_sin_contrasena,
+        correo_valido,
+        emitir_y_enviar_acceso,
+        motivo_para_no_dar_acceso,
+    )
     from core.alta_negocio import onboard_tenant
+    from core.onboarding import _validate_slug
 
     slug = payload.slug.strip() or _slugify(payload.name)
     if not payload.name.strip() or not slug:
         raise ApiError.bad_request("Nombre y slug son obligatorios.")
+    if payload.admin_password:
+        raise ApiError.bad_request(
+            "El acceso del dueño llega por correo: ya no se define una contraseña al crear el negocio.",
+            "admin_password_no_soportado",
+        )
     admin_email = payload.admin_email.strip().lower()
-    if admin_email and len(payload.admin_password) < 8:
-        raise ApiError.bad_request("La contraseña del administrador necesita 8+ caracteres.")
+    try:
+        _validate_slug(slug)
+    except ValueError as exc:
+        raise ApiError.bad_request(str(exc)[:180], "invalid_tenant") from exc
     if es_tester(principal.admin):
         from core.alta_negocio import motivo_para_rechazar_alta_de_tester
 
         motivo = await motivo_para_rechazar_alta_de_tester(slug, admin_email or None)
         if motivo:
             raise ApiError(409, "conflict", motivo)
+    admin_id: uuid.UUID | None = None
+    if admin_email:
+        # Antes de crear nada: un correo que no se puede invitar no deja un negocio sin dueño.
+        motivo = await motivo_para_no_dar_acceso(admin_email)
+        if motivo:
+            raise ApiError(409, "owner_email_rejected", motivo[:1].upper() + motivo[1:] + ".")
+        # La forma se valida después: una cuenta que ya existe (p. ej. `admin@local`) no pasa por acá.
+        if correo_valido(admin_email) is None:
+            raise ApiError.bad_request("El correo del dueño no es válido.", "invalid_owner_email")
+        admin_id, creada = await asegurar_cuenta_sin_contrasena(admin_email)
+        if not creada and es_tester(principal.admin):
+            # El pre-check de arriba es previo a crear la cuenta: se repite sobre el resultado.
+            raise ApiError(
+                409, "conflict", "Ese correo ya tiene una cuenta. Un tester solo da de alta negocios con una cuenta nueva."
+            )
 
     try:
+        # Sin `admin_email`: el dueño NO se vincula acá. Entra por la invitación (enlace o app)
+        # y `canjear_invitacion` crea su membresía; vincularlo antes la haría imposible.
         tenant_id, steps = await onboard_tenant(
             name=payload.name.strip(),
             slug=slug,
@@ -150,12 +202,58 @@ async def create_tenant(
             persona={"tone": payload.tone},
             escalation_triggers=payload.escalation_triggers,
             packs=payload.packs,
-            admin_email=admin_email or None,
-            admin_password=payload.admin_password or None,
         )
     except ValueError as exc:
         raise ApiError.bad_request(str(exc)[:180], "invalid_tenant") from exc
-    return TenantCreated(tenant_id=tenant_id, slug=slug, steps=steps)
+    except IntegrityError as exc:
+        # Otra petición creó el mismo slug a la vez.
+        raise ApiError(409, "slug_en_uso", "Ya existe un negocio con ese slug.") from exc
+
+    invitation: TenantOwnerInvitation | None = None
+    if admin_id is not None and es_tester(principal.admin) and any(p.startswith("tenant ya existía") for p in steps):
+        # El pre-check del slug es previo y no es atómico: si otro lo creó en medio, el tester no
+        # emite una invitación `owner` sobre un negocio que no es suyo.
+        raise ApiError(409, "conflict", "Ya existe un negocio con ese slug. Un tester solo da de alta negocios nuevos.")
+    if admin_id is not None:
+        try:
+            acceso = await emitir_y_enviar_acceso(
+                tenant_id=tenant_id,
+                admin_id=admin_id,
+                email=admin_email,
+                negocio=payload.name.strip(),
+                actor_email=principal.admin.email,
+            )
+        except AccesoRechazado as exc:
+            raise ApiError(409, exc.codigo, f"El negocio se creó, pero {exc.mensaje}") from exc
+        invitation = TenantOwnerInvitation(estado=acceso.estado, tipo=acceso.tipo, expires_at=acceso.expires_at)
+        # `onboard_tenant` no vinculó a nadie (el dueño entra por la invitación): el paso suyo lo dice.
+        steps = [s for s in steps if not s.startswith("sin admin")]
+        steps.append(f"acceso del dueño: invitación {acceso.tipo}, correo {acceso.estado}")
+    return TenantCreated(tenant_id=tenant_id, slug=slug, steps=steps, invitation=invitation)
+
+
+@router.post(
+    "/tenants/{tenant_id}/owner-invitation/resend",
+    response_model=TenantOwnerInvitation,
+    summary="Reenvía el acceso al dueño del negocio",
+)
+async def resend_owner_invitation(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> TenantOwnerInvitation:
+    """Reenvía el correo de acceso a la cuenta de la invitación `owner` pendiente del negocio
+    (ADR-0175). El destinatario no se recibe: es el de la invitación. Reusa el enlace mientras
+    vigente y lo renueva si venció."""
+    _require_master(principal)
+
+    from core.alta_acceso import AccesoRechazado, reenviar_acceso
+
+    try:
+        acceso = await reenviar_acceso(tenant_id=tenant_id, actor_email=principal.admin.email)
+    except AccesoRechazado as exc:
+        status = 404 if exc.codigo == "tenant_no_encontrado" else 409
+        raise ApiError(status, exc.codigo, exc.mensaje) from exc
+    return TenantOwnerInvitation(estado=acceso.estado, tipo=acceso.tipo, expires_at=acceso.expires_at)
 
 
 @router.post("/tenants/{tenant_id}/plan", status_code=204)

@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 
 from core.admin.collaborators_service import apply_pack_roles, ensure_tenant_link, scope_del_negocio
 from core.admin.roles import actua_como_master
@@ -382,50 +383,81 @@ async def crear_invitacion_owner(
     `con_enlace` solo para una cuenta sin contraseña: el enlace la define. Devuelve
     (invitación, None), (None, `YA_PERTENECE`) si ya es miembro o (None, error) si el
     invitado no se puede invitar (master o permisos globales, ADR-0081)."""
+    invitacion, _nuevo, error = await emitir_invitacion_owner(
+        tenant_id=tenant_id, admin_id=admin_id, con_enlace=con_enlace, vigencia=vigencia
+    )
+    return invitacion, error
+
+
+async def emitir_invitacion_owner(
+    *,
+    tenant_id: uuid.UUID,
+    admin_id: uuid.UUID,
+    con_enlace: bool,
+    vigencia: timedelta,
+) -> tuple[TenantInvitation | None, bool, str | None]:
+    """Como `crear_invitacion_owner`, y además dice si esta llamada **emitió** algo: creó la
+    pendiente o le dio su nonce (que se fija una sola vez). Quien entrega el acceso por correo
+    envía solo cuando `nuevo` es True: un reintento no repite el correo (el reenvío es explícito).
+
+    Devuelve (invitación, nuevo, None), (None, False, `YA_PERTENECE`) o (None, False, error)."""
     error = await _invitado_valido(admin_id)
     if error is not None:
-        return None, error
-    async with get_session() as session:
-        link = (
-            await session.execute(
-                select(TenantUser).where(
-                    TenantUser.tenant_id == tenant_id, TenantUser.admin_id == admin_id
-                )
-            )
-        ).scalar_one_or_none()
-        if link is not None:
-            return None, YA_PERTENECE
-        pendiente = (
-            await session.execute(
-                select(TenantInvitation).where(
-                    TenantInvitation.tenant_id == tenant_id,
-                    TenantInvitation.admin_id == admin_id,
-                    TenantInvitation.estado == "pendiente",
-                )
-            )
-        ).scalar_one_or_none()
-        if pendiente is None:
-            pendiente = TenantInvitation(
-                tenant_id=tenant_id,
-                admin_id=admin_id,
-                invited_by=None,  # la identidad de servicio no es un Admin
-                role="owner",
-                pack_roles=[],
-                estado="pendiente",
-            )
-            session.add(pendiente)
-        pendiente.role = "owner"
-        if con_enlace and not pendiente.token_nonce:
-            pendiente.token_nonce = secrets.token_urlsafe(16)
-            pendiente.expires_at = datetime.now(UTC) + vigencia
-        await session.flush()
-    log.info(
-        "tenant_invitation_owner",
-        tenant_id=str(tenant_id),
-        invitation_id=str(pendiente.id),
-        con_enlace=bool(pendiente.token_nonce),
-    )
-    return pendiente, None
+        return None, False, error
+    for intento in (1, 2):
+        nuevo = False
+        try:
+            async with get_session() as session:
+                link = (
+                    await session.execute(
+                        select(TenantUser).where(
+                            TenantUser.tenant_id == tenant_id, TenantUser.admin_id == admin_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                if link is not None:
+                    return None, False, YA_PERTENECE
+                pendiente = (
+                    await session.execute(
+                        select(TenantInvitation).where(
+                            TenantInvitation.tenant_id == tenant_id,
+                            TenantInvitation.admin_id == admin_id,
+                            TenantInvitation.estado == "pendiente",
+                        )
+                    )
+                ).scalar_one_or_none()
+                if pendiente is None:
+                    pendiente = TenantInvitation(
+                        tenant_id=tenant_id,
+                        admin_id=admin_id,
+                        invited_by=None,  # la identidad de servicio no es un Admin
+                        role="owner",
+                        pack_roles=[],
+                        estado="pendiente",
+                    )
+                    session.add(pendiente)
+                    nuevo = True
+                pendiente.role = "owner"
+                if con_enlace and not pendiente.token_nonce:
+                    pendiente.token_nonce = secrets.token_urlsafe(16)
+                    pendiente.expires_at = datetime.now(UTC) + vigencia
+                    nuevo = True
+                await session.flush()
+        except IntegrityError:
+            # Otra petición creó la pendiente a la vez (`uq_tenant_invitation_pending`): al
+            # reintentar la encuentra y no emite nada.
+            if intento == 2:
+                raise
+            continue
+        log.info(
+            "tenant_invitation_owner",
+            tenant_id=str(tenant_id),
+            invitation_id=str(pendiente.id),
+            con_enlace=bool(pendiente.token_nonce),
+            nuevo=nuevo,
+        )
+        return pendiente, nuevo, None
+    raise AssertionError("inalcanzable")  # pragma: no cover
 
 
 @dataclass(frozen=True)
@@ -546,3 +578,89 @@ async def _tiene_otro_acceso(session, admin_id: uuid.UUID, tenant_id: uuid.UUID)
         )
     ).first()
     return otra is not None
+
+
+async def cuenta_limpia(admin_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
+    """¿El enlace puede definir la contraseña de esta cuenta? Solo si sigue sin contraseña y
+    sin acceso a ningún negocio ni invitaciones pendientes en otro (ADR-0121). Es la misma
+    regla con la que `canjear_invitacion` acepta el canje: si no se cumple al emitir, el
+    enlace no serviría y el dueño entra por la app (ADR-0081)."""
+    async with get_session() as session:
+        admin = await session.get(Admin, admin_id)
+        if admin is None or admin.password_hash != SIN_CONTRASENA:
+            return False
+        return not await _tiene_otro_acceso(session, admin_id, tenant_id)
+
+
+SIN_PENDIENTE = "el negocio no tiene una invitación de dueño pendiente"
+
+
+async def renovar_enlace_owner(
+    *, tenant_id: uuid.UUID, vigencia: timedelta
+) -> tuple[TenantInvitation | None, bool, str | None]:
+    """Prepara el reenvío del acceso del dueño de un negocio (panel, master/tester).
+
+    Actúa solo sobre la invitación `owner` **pendiente** de ese negocio. Si la cuenta sigue
+    limpia reusa el nonce mientras no venza (el mismo enlace sigue sirviendo) y lo rota si
+    venció (el anterior deja de valer); si la cuenta ya no es limpia, anula el nonce y queda
+    la invitación en la app. Devuelve (invitación, con_enlace, None) o (None, False, error)."""
+    async with get_session() as session:
+        invitacion = (
+            await session.execute(
+                select(TenantInvitation)
+                .where(
+                    TenantInvitation.tenant_id == tenant_id,
+                    TenantInvitation.role == "owner",
+                    TenantInvitation.estado == "pendiente",
+                )
+                .order_by(TenantInvitation.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if invitacion is None:
+            return None, False, SIN_PENDIENTE
+        admin = await session.get(Admin, invitacion.admin_id)
+        if admin is None or not admin.active:
+            return None, False, "la cuenta del dueño no está disponible"
+        invitacion_id, nonce_visto, vence = invitacion.id, invitacion.token_nonce, invitacion.expires_at
+        admin_id = admin.id
+    error = await _invitado_valido(admin_id)
+    if error is not None:
+        return None, False, error
+    ahora = datetime.now(UTC)
+    async with get_session() as session:
+        cuenta = await session.get(Admin, admin_id)
+        limpia = (
+            cuenta is not None
+            and cuenta.password_hash == SIN_CONTRASENA
+            and not await _tiene_otro_acceso(session, admin_id, tenant_id)
+        )
+        if not limpia:
+            nuevo_nonce, nueva_vigencia = None, None
+        elif nonce_visto and (vence is None or vence > ahora):
+            nuevo_nonce, nueva_vigencia = nonce_visto, vence
+        else:
+            nuevo_nonce, nueva_vigencia = secrets.token_urlsafe(16), ahora + vigencia
+        if nuevo_nonce != nonce_visto:
+            # UPDATE condicional sobre el nonce que vimos: dos reenvíos a la vez no rotan dos
+            # veces; el que pierde relee y manda el vigente.
+            await session.execute(
+                update(TenantInvitation)
+                .where(
+                    TenantInvitation.id == invitacion_id,
+                    TenantInvitation.estado == "pendiente",
+                    TenantInvitation.token_nonce.is_not_distinct_from(nonce_visto),
+                )
+                .values(token_nonce=nuevo_nonce, expires_at=nueva_vigencia)
+            )
+        vigente = await session.get(TenantInvitation, invitacion_id, populate_existing=True)
+    if vigente is None or vigente.estado != "pendiente":
+        return None, False, SIN_PENDIENTE
+    log.info(
+        "tenant_invitation_owner_renovada",
+        tenant_id=str(tenant_id),
+        invitation_id=str(invitacion_id),
+        con_enlace=bool(vigente.token_nonce),
+        rotada=bool(nuevo_nonce and nuevo_nonce != nonce_visto),
+    )
+    return vigente, bool(vigente.token_nonce), None

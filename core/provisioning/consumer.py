@@ -40,6 +40,7 @@ from typing import Any
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from core.alta_acceso import correo_valido
 from core.billing.periodos import Periodo
 from core.db.models import ProvisioningRequest, Tenant
 from core.db.session import get_owned, get_session
@@ -73,7 +74,6 @@ MAX_INTENTOS = 3
 # Espacio de nombres del UUIDv5 de los negocios aprovisionados. NO cambiarlo nunca: es lo
 # que hace que un reintento encuentre el negocio que ya creó.
 _NAMESPACE = uuid.UUID("b8f1c0de-5a3e-4c2b-9d61-0f7e2a4c9b13")
-_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _ESPACIOS = re.compile(r"\s+")
 _NO_SLUG = re.compile(r"[^a-z0-9]+")
 _MAX_NOMBRE = 80
@@ -118,13 +118,6 @@ def nombre_del_negocio(datos: Mapping[str, Any], referencia: str) -> str:
         if valor and not contiene_url(valor):
             return valor[:_MAX_NOMBRE].rstrip()
     return f"Negocio {referencia}"[:_MAX_NOMBRE]
-
-
-def correo_valido(valor: Any) -> str | None:
-    texto = str(valor or "").strip().lower()
-    if not texto or len(texto) > 254 or not _EMAIL.match(texto):
-        return None
-    return texto
 
 
 def huella_del_correo(email: str) -> str:
