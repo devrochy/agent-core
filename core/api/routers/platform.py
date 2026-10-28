@@ -749,3 +749,65 @@ async def put_opciones_directas(
     except bandera.NegocioNoEncontrado:
         raise ApiError.not_found("Negocio no encontrado.") from None
     return OpcionesDirectasBandera(habilitada=encendida)
+
+
+# ---------------------------------------------------------------- avisos por canal (ADR-0178 D2, ADR-0108)
+class AvisosPorCanalBandera(BaseModel):
+    habilitada: bool = Field(
+        description="Si los avisos por evento también salen como texto por QR, chat web, Messenger e Instagram "
+        "(con el texto que el negocio definió para cada canal en `fallback_text_by_channel`). Apagada: solo "
+        "conversaciones de WhatsApp, como siempre."
+    )
+
+
+class AvisosPorCanalBanderaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Estricto: solo `true`/`false`, como la de opciones directas: enciende envíos reales a clientes finales.
+    habilitada: StrictBool
+
+
+@router.get(
+    "/tenants/{tenant_id}/avisos-por-canal",
+    response_model=AvisosPorCanalBandera,
+    responses=_ERRORES_OPCIONES_DIRECTAS,
+)
+async def get_avisos_por_canal(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> AvisosPorCanalBandera:
+    """Bandera de los avisos por evento por canal de texto del negocio (apagada por defecto). Solo el master."""
+    _require_master_agent_os(principal)
+    from core.gateway import avisos_bandera
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            encendida = await avisos_bandera.leer(tenant_id)
+    except avisos_bandera.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return AvisosPorCanalBandera(habilitada=encendida)
+
+
+@router.put(
+    "/tenants/{tenant_id}/avisos-por-canal",
+    response_model=AvisosPorCanalBandera,
+    responses=_ERRORES_OPCIONES_DIRECTAS,
+)
+async def put_avisos_por_canal(
+    tenant_id: uuid.UUID,
+    payload: AvisosPorCanalBanderaIn,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> AvisosPorCanalBandera:
+    """Enciende o apaga los avisos por canal de texto del negocio (auditado como `avisos_por_canal_bandera`).
+    Idempotente. Solo el master; es por negocio y no toca ningún otro."""
+    _require_master_agent_os(principal)
+    from core.gateway import avisos_bandera
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            encendida = await avisos_bandera.fijar(tenant_id, payload.habilitada, actor=f"admin:{principal.admin.email}")
+    except avisos_bandera.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return AvisosPorCanalBandera(habilitada=encendida)

@@ -301,7 +301,9 @@ class CapacidadesCanal:
     lista: bool = False
     # Plantilla aprobada por el proveedor: sirve para escribir fuera de la ventana de atención.
     plantilla_aprobada: bool = False
-    # El canal tiene ventana de 24 h para texto libre/interactivos (Meta). Sin ella, siempre se puede escribir.
+    # El canal tiene ventana de 24 h para texto libre/interactivos Y plantilla para salir de ella (WhatsApp Meta).
+    # Messenger e Instagram tienen su ventana de 24 h SIN plantillas y aquí figuran en False: la regla vigente para
+    # ellos es `sender.validate_service_window` (y `avisos_canal.CON_VENTANA` en los avisos por evento).
     ventana_24h: bool = False
     # El canal interpreta la respuesta «1» / el título de una opción como un toque (menú numerado, pista C2):
     # el consumer la resuelve ANTES del LLM (`kernel/opciones/respuesta_texto.py`, ADR-0172 adenda C2). Solo los
@@ -355,6 +357,17 @@ def capacidades_de(channel: str, provider: str | None = "") -> CapacidadesCanal:
             return CAPACIDADES_POR_TIPO[t.id]
     distintas = {CAPACIDADES_POR_TIPO[t.id] for t in tipos}
     return next(iter(distintas)) if len(distintas) == 1 else SOLO_TEXTO
+
+
+def tipo_de_conexion(channel: str, provider: str | None = "") -> str | None:
+    """`ConnectionType.id` de un `(canal, proveedor)`, o None si no se puede saber: el proveedor coincide con el de
+    un tipo del canal, o el canal tiene un solo tipo (`web`, `messenger`, `instagram`). WhatsApp sin un proveedor
+    conocido es None (hay varios tipos). Es la clave de los textos por canal de los avisos (ADR-0178 D2)."""
+    tipos = _tipos_del_canal(channel)
+    for t in tipos:
+        if provider and t.provider == provider:
+            return t.id
+    return tipos[0].id if len(tipos) == 1 else None
 
 
 def capacidades_del_canal(channel: str) -> CapacidadesCanal:

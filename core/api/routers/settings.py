@@ -1144,6 +1144,10 @@ class EventTemplateEntry(BaseModel):
     # Lista (variables posicionales, en orden) o {placeholder: ruta} (con nombre).
     variables: list[str] | dict[str, str] = []
     fallback_text: str = ""
+    # ADR-0178 D2: texto del aviso por tipo de conexión sin plantillas (`whatsapp_waweb`, `webchat`, `messenger_meta`,
+    # `instagram_meta`), con `{ruta}` del evento. Solo se usa con la bandera `avisos_por_canal` del negocio (master);
+    # sin la bandera se guarda pero no se envía. Al guardar, omitir el campo conserva lo que ya hay; `{}` lo borra.
+    fallback_text_by_channel: dict[str, str] = {}
 
 
 class EventCatalogItem(BaseModel):
@@ -1166,6 +1170,31 @@ class MessageTemplatesSettings(BaseModel):
     events: list[EventCatalogItem]
     mapping: dict[str, EventTemplateEntry]
     templates: list[TenantTemplateItem] = []
+
+
+def _textos_por_canal(evento: str, textos: dict[str, str]) -> tuple[dict[str, str], str]:
+    """Valida y limpia `fallback_text_by_channel` de un evento: claves de `TIPOS_DE_TEXTO`, texto de hasta 1000
+    caracteres y solo `{ruta}` permitidas para el evento. Devuelve (limpio, error); un texto vacío se descarta."""
+    from core.gateway.avisos_canal import COBRANZA, QR, TIPOS_DE_TEXTO
+    from core.gateway.event_notices import EVENTOS
+    from core.kernel.mensajes import variables_de
+
+    limpio: dict[str, str] = {}
+    for tipo, texto in textos.items():
+        if tipo not in TIPOS_DE_TEXTO:
+            return {}, f"Canal sin texto de respaldo: {tipo} (válidos: {', '.join(TIPOS_DE_TEXTO)})."
+        if tipo == QR and evento in COBRANZA:
+            return {}, "Los avisos de cobranza no salen por QR (no se puede garantizar el horario legal de entrega)."
+        texto = texto.strip()
+        if not texto:
+            continue
+        if len(texto) > 1000:
+            return {}, f"El texto para {tipo} pasa de 1000 caracteres."
+        no_permitidas = [v for v in variables_de(texto) if v not in EVENTOS[evento]]
+        if no_permitidas:
+            return {}, f"Variables no permitidas en el texto de {tipo}: {', '.join(no_permitidas)}."
+        limpio[tipo] = texto
+    return limpio, ""
 
 
 class MessageTemplatesUpdate(BaseModel):
@@ -1263,6 +1292,15 @@ async def save_message_templates(
 
     errores: dict[str, str] = {}
     limpio: dict[str, Any] = {}
+    previo: dict[str, Any] | None = None  # se lee solo si un evento omite `fallback_text_by_channel`
+
+    async def _textos_guardados(evento: str) -> dict[str, str]:
+        nonlocal previo
+        if previo is None:
+            guardado = await _load_app_settings(principal.tenant_id)
+            previo = dict((guardado.message_templates_map if guardado else None) or {})
+        return dict((previo.get(evento) or {}).get("fallback_text_by_channel") or {})
+
     for evento, entrada in payload.mapping.items():
         if evento not in EVENTOS:
             errores[evento] = "Evento desconocido."
@@ -1270,9 +1308,22 @@ async def save_message_templates(
         nombre = entrada.template.strip()
         idioma = entrada.language.strip() or "es"
         fallback = entrada.fallback_text.strip()[:1000]
+        # ADR-0178 D2: textos por canal. Omitido en el cuerpo = conservar los guardados (el panel anterior no lo manda
+        # y no debe borrarlos al guardar otra cosa); presente (aun vacío) = reemplazar.
+        pedido = "fallback_text_by_channel" in entrada.model_fields_set
+        por_canal: dict[str, str] = {}
+        if pedido:
+            por_canal, error_canal = _textos_por_canal(evento, entrada.fallback_text_by_channel)
+            if error_canal:
+                errores[evento] = error_canal
+                continue
         if not nombre:
-            if fallback:
-                limpio[evento] = {"template": "", "language": idioma, "variables": [], "fallback_text": fallback}
+            por_canal = por_canal if pedido else await _textos_guardados(evento)
+            if fallback or por_canal:
+                limpio[evento] = {
+                    "template": "", "language": idioma, "variables": [], "fallback_text": fallback,
+                    **({"fallback_text_by_channel": por_canal} if por_canal else {}),
+                }
             continue
         rutas = list(entrada.variables.values()) if isinstance(entrada.variables, dict) else list(entrada.variables)
         no_permitidas = [r for r in rutas if r not in EVENTOS[evento]]
@@ -1302,17 +1353,31 @@ async def save_message_templates(
         ):
             errores[evento] = f"La plantilla tiene {len(placeholders)} variables y mapeaste {len(rutas)}."
             continue
+        por_canal = por_canal if pedido else await _textos_guardados(evento)
         limpio[evento] = {
             "template": nombre,
             "language": idioma,
             "variables": entrada.variables,
             "fallback_text": fallback,
+            **({"fallback_text_by_channel": por_canal} if por_canal else {}),
         }
     if errores:
         detalle = " ".join(f"{EVENTO_LABEL.get(k, k)}: {v}" for k, v in errores.items())
         raise ApiError.bad_request(
             f"Revisa el mapeo de plantillas. {detalle}", "message_templates_invalid", fields=errores
         )
+
+    # Un panel anterior no manda los eventos que no tienen plantilla ni texto general; si uno de ellos tiene textos por
+    # canal guardados (ADR-0178 D2), no se pierden: se conservan solos. Para borrarlos, se manda el evento con `{}`.
+    for evento in EVENTOS:
+        if evento in payload.mapping:
+            continue
+        guardados = await _textos_guardados(evento)
+        if guardados:
+            limpio[evento] = {
+                "template": "", "language": "es", "variables": [], "fallback_text": "",
+                "fallback_text_by_channel": guardados,
+            }
 
     async with get_session() as session:
         app_settings = (
