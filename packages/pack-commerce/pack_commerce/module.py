@@ -307,7 +307,9 @@ async def crm_dashboard(request: Request):
             await session.execute(select(Lead).where(Lead.tenant_id == tenant_id))
         ).scalars().all()
         products = (
-            await session.execute(select(Product).where(Product.tenant_id == tenant_id))
+            await session.execute(
+                select(Product).where(Product.tenant_id == tenant_id, Product.deleted_at.is_(None))
+            )
         ).scalars().all()
         promotions = (
             await session.execute(select(Promotion).where(Promotion.tenant_id == tenant_id))
@@ -505,7 +507,9 @@ async def crm_products(request: Request):
     async with get_session() as session:
         products = (
             await session.execute(
-                select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name)
+                select(Product)
+                .where(Product.tenant_id == tenant_id, Product.deleted_at.is_(None))
+                .order_by(Product.name)
             )
         ).scalars().all()
         variants = (
@@ -871,7 +875,9 @@ async def crm_promotions(request: Request):
         ).scalars().all()
         products = (
             await session.execute(
-                select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name)
+                select(Product)
+                .where(Product.tenant_id == tenant_id, Product.deleted_at.is_(None))
+                .order_by(Product.name)
             )
         ).scalars().all()
     ctx.update(
@@ -994,7 +1000,11 @@ async def crm_orders(request: Request):
             await session.execute(
                 select(ProductVariant, Product)
                 .join(Product, Product.id == ProductVariant.product_id)
-                .where(ProductVariant.tenant_id == tenant_id, Product.tenant_id == tenant_id)
+                .where(
+                    ProductVariant.tenant_id == tenant_id,
+                    Product.tenant_id == tenant_id,
+                    Product.deleted_at.is_(None),
+                )
             )
         ).all()
     var_by_id = {v.id: p for v, p in variants}
@@ -1130,7 +1140,9 @@ class CRMModule(BaseModule):
                 cantidad, primero = (
                     await session.execute(
                         select(func.count(Product.id), func.min(Product.created_at)).where(
-                            Product.tenant_id == tenant_id, a_la_venta
+                            Product.tenant_id == tenant_id,
+                            Product.deleted_at.is_(None),
+                            a_la_venta,
                         )
                     )
                 ).one()

@@ -91,7 +91,9 @@ async def commerce_dashboard(
             )
         ).scalars().all()
         products = (
-            await session.execute(select(Product).where(Product.tenant_id == tenant_id))
+            await session.execute(
+                select(Product).where(Product.tenant_id == tenant_id, Product.deleted_at.is_(None))
+            )
         ).scalars().all()
         promotions = (
             await session.execute(select(Promotion).where(Promotion.tenant_id == tenant_id))
@@ -209,7 +211,7 @@ async def list_products(
     ] = None,
 ) -> list[ProductOut]:
     tenant_id = principal.tenant_id
-    filtro = select(Product).where(Product.tenant_id == tenant_id)
+    filtro = select(Product).where(Product.tenant_id == tenant_id, Product.deleted_at.is_(None))
     if ally_id is not None:
         if ally_id == "none":
             filtro = filtro.where(Product.ally_id.is_(None))
@@ -605,7 +607,13 @@ async def _nombre_libre(session: Any, tenant_id: uuid.UUID | None, nombre: str, 
 async def _ally_out(session: Any, tenant_id: uuid.UUID | None, ally: Ally) -> AllyOut:
     productos = (
         await session.execute(
-            select(func.count()).select_from(Product).where(Product.tenant_id == tenant_id, Product.ally_id == ally.id)
+            select(func.count())
+            .select_from(Product)
+            .where(
+                Product.tenant_id == tenant_id,
+                Product.ally_id == ally.id,
+                Product.deleted_at.is_(None),
+            )
         )
     ).scalar_one()
     return AllyOut(
@@ -672,7 +680,11 @@ async def list_allies(
             (
                 await session.execute(
                     select(Product.ally_id, func.count())
-                    .where(Product.tenant_id == tenant_id, Product.ally_id.is_not(None))
+                    .where(
+                        Product.tenant_id == tenant_id,
+                        Product.ally_id.is_not(None),
+                        Product.deleted_at.is_(None),
+                    )
                     .group_by(Product.ally_id)
                 )
             ).all()
@@ -1096,7 +1108,9 @@ async def list_orders(
                 select(ProductVariant, Product)
                 .join(Product, Product.id == ProductVariant.product_id)
                 .where(
-                    ProductVariant.tenant_id == tenant_id, Product.tenant_id == tenant_id
+                    ProductVariant.tenant_id == tenant_id,
+                    Product.tenant_id == tenant_id,
+                    Product.deleted_at.is_(None),
                 )
             )
         ).all()

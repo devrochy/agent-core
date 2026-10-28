@@ -21,11 +21,12 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from core.api.deps import Principal, require
+from core.api.deps import Principal, effective_access, get_principal, require
 from core.api.errors import ApiError
 from core.config import get_settings
 
 router = APIRouter(prefix="/admin/agents", tags=["admin · agentes"])
+modulos_router = APIRouter(prefix="/admin/datos-de-prueba", tags=["admin · datos de prueba"])
 
 
 
@@ -61,6 +62,21 @@ class DatosRetirados(BaseModel):
     retirados: int
 
 
+class EstadoDatosDePruebaModulo(BaseModel):
+    modulo: str
+    titulo: str
+    disponible: bool
+    motivo: str | None = Field(default=None, description="Por qué el módulo no tiene datos que generar.")
+    falta_descripcion: bool = Field(description="El negocio no tiene descripción propia: hay que escribirla antes.")
+    lote: LoteDePrueba | None
+
+
+def _tenant(principal: Principal) -> uuid.UUID:
+    if principal.tenant_id is None:
+        raise ApiError.not_found()
+    return principal.tenant_id
+
+
 def _habilitado() -> None:
     if not get_settings().qa_testers_enabled:
         raise ApiError.not_found()
@@ -82,7 +98,7 @@ async def estado_datos_de_prueba(
 
     _habilitado()
     try:
-        return await svc.estado(principal.tenant_id, agent_id)
+        return await svc.estado(_tenant(principal), agent_id)
     except svc.ErrorDatosDePrueba as exc:
         raise _error(exc) from exc
 
@@ -96,7 +112,7 @@ async def generar_datos_de_prueba(
 
     _habilitado()
     try:
-        return await svc.generar(principal.tenant_id, agent_id)
+        return await svc.generar(_tenant(principal), agent_id)
     except svc.ErrorDatosDePrueba as exc:
         raise _error(exc) from exc
 
@@ -110,6 +126,65 @@ async def borrar_datos_de_prueba(
 
     _habilitado()
     try:
-        return await svc.borrar(principal.tenant_id, agent_id)
+        return await svc.borrar(_tenant(principal), agent_id)
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+
+
+# ------------------------------------------------------------------ por módulo del negocio
+async def _permiso_modulo(principal: Principal, modulo: str, *, write: bool) -> None:
+    from core.qa.datos_generados import MODULOS
+
+    definicion = MODULOS.get(modulo)
+    if definicion is None:
+        raise ApiError.not_found()
+    if principal.admin.role == "master":
+        return
+    acceso = await effective_access(principal.admin, definicion.seccion, principal.tenant_id)
+    if acceso is None or (write and acceso != "write"):
+        raise ApiError.forbidden(f"Sin permiso para la sección '{definicion.seccion}'.")
+
+
+@modulos_router.get("/{modulo}", response_model=EstadoDatosDePruebaModulo)
+async def estado_modulo(
+    modulo: str, principal: Annotated[Principal, Depends(get_principal)]
+) -> dict[str, object]:
+    """Estado de los datos de prueba del módulo (Ventas, Agenda, Cobranza o Suscripciones)."""
+    from core.qa import datos_generados as svc
+
+    _habilitado()
+    await _permiso_modulo(principal, modulo, write=True)
+    try:
+        return await svc.estado_modulo(_tenant(principal), modulo)
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+
+
+@modulos_router.post("/{modulo}", response_model=LoteGenerado, status_code=201)
+async def generar_modulo(
+    modulo: str, principal: Annotated[Principal, Depends(get_principal)]
+) -> dict[str, object]:
+    """Genera los datos del módulo según la descripción del negocio y reemplaza el lote anterior."""
+    from core.qa import datos_generados as svc
+
+    _habilitado()
+    await _permiso_modulo(principal, modulo, write=True)
+    try:
+        return await svc.generar_modulo(_tenant(principal), modulo)
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+
+
+@modulos_router.delete("/{modulo}", response_model=DatosRetirados)
+async def borrar_modulo(
+    modulo: str, principal: Annotated[Principal, Depends(get_principal)]
+) -> dict[str, object]:
+    """Retira todos los datos de prueba del módulo; lo creado a mano no se toca."""
+    from core.qa import datos_generados as svc
+
+    _habilitado()
+    await _permiso_modulo(principal, modulo, write=True)
+    try:
+        return await svc.borrar_modulo(_tenant(principal), modulo)
     except svc.ErrorDatosDePrueba as exc:
         raise _error(exc) from exc

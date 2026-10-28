@@ -76,7 +76,7 @@ register_sync(
         marcador_sql=Product.updated_at,
         marcador_row=lambda row: row.updated_at,
         serialize=_serializar_producto,
-        tiene_deleted_at=False,
+        tiene_deleted_at=True,
     )
 )
 
