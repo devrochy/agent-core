@@ -55,7 +55,7 @@ def test_la_lista_de_rutas_de_datos_esta_cerrada_y_es_la_de_los_eventos_sin_cobr
     # actualizar este conjunto a propósito (revisión): son datos que una opción puede citar y pasar a una tool.
     assert set(contexto.RUTAS_DE_DATOS) == {
         "cita.titulo", "cita.fecha", "cita.hora", "cita.zona", "cita.enlace",
-        "suscripcion.concepto", "prueba.termina", "invitacion.correo",
+        "suscripcion.concepto", "prueba.termina",
     }
     assert not set(contexto.RUTAS_DE_DATOS) & set(contexto.VARIABLES_BASE)
     with pytest.raises(contexto.DatosInvalidos):

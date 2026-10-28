@@ -66,6 +66,7 @@ PAUSADA = "paused"
 NO_ENCOLADO = "enqueue_failed"
 DATOS_INVALIDOS = "invalid_data"
 DUPLICADO = "duplicate"
+GUARDA = "guarda_del_llamante"  # `antes_de_enviar` del llamante pidió no enviar (el motivo dice cuál)
 ERROR_INTERNO = "internal_error"
 
 # Motivos por los que se degrada o no se envía (códigos para el log y el resultado; nunca datos del cliente).

@@ -30,7 +30,7 @@ from test_avisos_canal_unidad import (  # noqa: F401  (el doble de `send_event_n
 import core.gateway.avisos_canal as ac
 import core.gateway.avisos_opciones as puente
 import core.gateway.event_notices as notices
-from core.kernel.mensajes import COBRANZA
+from core.kernel.mensajes import COBRANZA, SIN_OPCIONES
 from core.kernel.opciones import contexto
 from core.kernel.opciones import envio as ev
 from core.shared.tenant import tenant_scope
@@ -64,7 +64,7 @@ def test_un_evento_desconocido_o_de_cobranza_nunca_tiene_puente() -> None:
     for evento in COBRANZA:
         assert puente.clave_de_opciones(evento, {"option_template": CLAVE}) is None
     for evento in notices.EVENTOS:
-        assert (puente.clave_de_opciones(evento, {"option_template": CLAVE}) is None) == (evento in COBRANZA)
+        assert (puente.clave_de_opciones(evento, {"option_template": CLAVE}) is None) == (evento in SIN_OPCIONES)
 
 
 def test_los_datos_del_evento_son_solo_rutas_del_evento_que_estan_en_la_lista_cerrada() -> None:
@@ -97,7 +97,11 @@ def opciones(monkeypatch, entorno):  # type: ignore[no-untyped-def]  # noqa: F81
     entorno["opciones"] = estado
 
     async def _enviar_opciones(conversation_id, clave, **kwargs):
+        guarda = kwargs.pop("antes_de_enviar", None)
+        estado["guarda"] = guarda  # solo los canales de texto la piden
         estado["llamadas"].append((conversation_id, clave, kwargs))
+        if guarda is not None and (motivo := await guarda()):  # como el envío real: después de la idempotencia
+            return ev.ResultadoEnvio(False, ev.GUARDA, motivo=motivo)
         return estado["resultado"]
 
     async def _habilitada(_tenant):
@@ -129,6 +133,7 @@ async def test_el_aviso_sale_como_plantilla_con_opciones_y_no_manda_ademas_el_te
         "datos": {"cita.titulo": "Corte", "cita.fecha": "2026-11-02", "cita.hora": "10:00"},
         "clave_idempotencia": "k:op", "actor": f"evento:{EVENTO}", "sin_mensaje_de_fallo": True,
     }
+    assert (opciones["guarda"] is not None) == (canal != "whatsapp" or proveedor == "waweb")  # guarda solo en texto
     assert entorno["textos"] == [] and entorno["plantillas"] == [] and entorno["sin_plantilla"] == []
 
 
@@ -182,7 +187,7 @@ async def test_messenger_e_instagram_sin_ventana_no_intentan_el_menu(opciones, e
 async def test_con_la_conversacion_activa_no_se_manda_un_menu_de_texto_que_se_comeria_el_proximo_1(opciones, entorno) -> None:  # type: ignore[no-untyped-def]  # noqa: F811
     opciones["activa"] = True
     r = await _enviar(entorno, _conversacion("web"))
-    assert opciones["llamadas"] == []
+    assert opciones["guarda"] is not None  # la guarda corre dentro del envío (después de la idempotencia)
     assert (r.modo, entorno["textos"][0][0]) == ("texto", "Texto web Ana")  # cae al texto de D2
 
 

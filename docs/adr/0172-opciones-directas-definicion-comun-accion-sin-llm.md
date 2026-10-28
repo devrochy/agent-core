@@ -379,8 +379,8 @@ Los botones reales solo existen en WhatsApp Cloud y la sesión QR de test no sie
 
 > **Estado:** propuesta, igual que el resto del ADR. Detalle técnico en ADR-0108 (adenda D3) y ADR-0178 (adenda D3).
 
-- `RUTAS_DE_DATOS` (PR 6) deja de estar vacía: son las rutas de los eventos de `EVENTOS` que no son de cobranza (`cita.*`,
-  `suscripcion.concepto`, `prueba.termina`, `invitacion.correo`). Ninguna es un id. Una ruta nueva exige actualizar la prueba
+- `RUTAS_DE_DATOS` (PR 6) deja de estar vacía: son las rutas de los eventos de `EVENTOS` que no son de cobranza ni la invitación
+  del comprador (`cita.*`, `suscripcion.concepto`, `prueba.termina`). Ninguna es un id. Una ruta nueva exige actualizar la prueba
   que fija el conjunto.
 - Un evento puede apuntar a una plantilla con opciones (`message_templates_map[<evento>].option_template`) y salir con sus
   botones, su lista o su menú numerado. Es el **primer emisor fuera de turno** del seguimiento (2) de la adenda C2; las

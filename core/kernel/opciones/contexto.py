@@ -31,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from core.kernel.mensajes import COBRANZA, EVENTOS, RUTA_VARIABLE, clean_param
+from core.kernel.mensajes import EVENTOS, RUTA_VARIABLE, SIN_OPCIONES, clean_param
 from core.kernel.opciones.definicion import Definicion, llaves_de
 
 # Rutas que el servidor resuelve de la conversación. El texto describe el dato para el panel (PR de la API).
@@ -44,13 +44,13 @@ VARIABLES_BASE: dict[str, str] = {
 # rechaza como variable, así que ninguna definición puede citar un dato que nadie sepa resolver.
 #
 # Desde D3 son las rutas de los eventos que pueden apuntar a una plantilla con opciones (`kernel/mensajes/eventos.py`:
-# citas, fin de la prueba, invitación), menos las de la base. Se EXCLUYEN los eventos de cobranza (`COBRANZA`): su
+# citas, fin de la prueba), menos las de la base. Se EXCLUYEN los eventos de `SIN_OPCIONES` (cobranza e invitación del comprador): su
 # aviso no se mapea a una plantilla con opciones, así que sus datos (monto, vencimiento, link, mora) no se ofrecen.
 # Son valores para mostrar (fecha, hora, título): ninguna es un id, y una prueba lo fija. Quien agregue un origen
 # nuevo (un segmento) suma SUS rutas aquí con un cambio revisado.
 RUTAS_DE_DATOS: dict[str, str] = {}
 for _evento, _rutas in EVENTOS.items():
-    if _evento not in COBRANZA:
+    if _evento not in SIN_OPCIONES:
         for _ruta, _descripcion in _rutas.items():
             if _ruta not in VARIABLES_BASE:
                 RUTAS_DE_DATOS.setdefault(_ruta, _descripcion)

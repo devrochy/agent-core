@@ -8,7 +8,7 @@ módulos los reexportan.
 """
 
 from core.kernel.mensajes.conversor import a_llaves, a_meta, nombre_de_parametro, variables_de
-from core.kernel.mensajes.eventos import COBRANZA, EVENTOS
+from core.kernel.mensajes.eventos import COBRANZA, EVENTOS, SIN_OPCIONES
 from core.kernel.mensajes.plantillas_meta import (
     componente,
     placeholders_del_cuerpo,
@@ -39,6 +39,7 @@ __all__ = [
     "MAX_PARAM",
     "PLACEHOLDER_META",
     "RUTA_VARIABLE",
+    "SIN_OPCIONES",
     "DatoFaltante",
     "RutaNoPermitida",
     "a_llaves",

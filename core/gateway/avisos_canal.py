@@ -203,7 +203,10 @@ async def conversacion_de_texto_para(customer_id: uuid.UUID, evento: str) -> Con
         return None
     entrada = (await load_templates_map(tenant_id)).get(evento) or {}
     # D3: una plantilla con opciones mapeada al evento también es contenido para el canal (su menú es el aviso).
-    con_opciones = _hay_puente(evento, entrada)
+    # Solo si la bandera `opciones_directas` está encendida: apagada, la elección es exactamente la de D2.
+    from core.gateway.avisos_opciones import _opciones_habilitadas
+
+    con_opciones = _hay_puente(evento, entrada) and await _opciones_habilitadas(tenant_id)
     for fila in filas:
         if con_opciones or texto_del_canal(entrada, tipo_de_conexion(fila.channel, "")):
             return fila

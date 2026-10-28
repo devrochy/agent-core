@@ -157,10 +157,14 @@ los 8 eventos). Código: `core/gateway/avisos_opciones.py`, llamado desde `send_
   eventos que no son de cobranza, menos la base). Nunca del texto del cliente ni del LLM. Ninguna ruta es un id, así que no hay
   un id ajeno que pueda llegar a un argumento de tool. `EVENTOS` y `COBRANZA` viven ahora en `core/kernel/mensajes/eventos.py`
   (y se reexportan).
+- **Invitación del comprador excluida** (`provisioning.invitation`). El negocio en scope es el del vendedor y `negocio.nombre`/`cliente.nombre`
+  (la base) los resuelve el envío desde la conversación, no del evento: una plantilla que los citara diría el dato equivocado. Por eso
+  `SIN_OPCIONES = COBRANZA + provisioning.invitation` (kernel) no admite plantilla con opciones; su `invitacion.correo` no está en `RUTAS_DE_DATOS`.
 - **Cuándo cae al camino de siempre** (D2 o legacy, sin dejar un `failed` de más): plantilla sin publicar, retirada, borrada
   o de otro negocio; contexto incompleto (la plantilla pide un dato que el evento no trajo); sin plantilla de Meta aprobada;
   cola que rechaza; QR con la política antibaneo en contra; Messenger/Instagram sin ventana; **conversación con actividad en los
-  últimos 15 minutos en un canal de texto** (un menú fuera de turno se vuelve el último saliente y se comería el «1» que el
+  últimos 15 minutos en un canal de texto (la guarda corre dentro del envío, después de la idempotencia: el menú de un envío
+  previo del mismo aviso también cuenta como actividad y un reintento no puede caer al texto)** (un menú fuera de turno se vuelve el último saliente y se comería el «1» que el
   cliente dirigía al agente, adenda C2). Queda `event_notice_opciones_fallback` (log) y `event_notice_options_fallback_total`
   (métrica) con el motivo, nunca valores. Un envío ya hecho (reintento del outbox) vuelve como `duplicado`; un resultado
   ambiguo (`internal_error`, que pudo ocurrir tras encolar) NO cae al texto: se reintenta (el `send_id` es determinista).

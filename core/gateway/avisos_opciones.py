@@ -54,7 +54,7 @@ from core.db.models import Conversation, Message, utcnow
 from core.db.session import get_session
 from core.gateway import avisos_canal as ac
 from core.gateway.connection_types import capacidades_de, tipo_de_conexion
-from core.kernel.mensajes import COBRANZA, EVENTOS, valor_de_ruta
+from core.kernel.mensajes import COBRANZA, EVENTOS, SIN_OPCIONES, valor_de_ruta
 from core.kernel.opciones import bandera, contexto
 from core.kernel.opciones import envio as ev
 from core.shared.logger import get_logger
@@ -91,7 +91,7 @@ def clave_de_opciones(evento: str, entrada: Any) -> str | None:
     """La clave de la plantilla con opciones que el negocio mapeó al evento, o None si no hay, está mal formada o el
     evento no puede usar el puente (desconocido o de cobranza). Pura."""
     valor = entrada.get(CLAVE_DEL_MAPA) if isinstance(entrada, dict) else None
-    if evento not in EVENTOS or evento in COBRANZA or not isinstance(valor, str):
+    if evento not in EVENTOS or evento in SIN_OPCIONES or not isinstance(valor, str):
         return None
     valor = valor.strip()
     return valor if FORMA_DE_CLAVE.fullmatch(valor) else None
@@ -103,7 +103,7 @@ def datos_del_evento(evento: str, ctx: dict[str, Any]) -> dict[str, str]:
     conversación). Cada valor pasa por `clean_param`; un hueco o un valor no simple deja la ruta sin resolver (si la
     plantilla la necesita, no se envía). Pura."""
     datos: dict[str, str] = {}
-    if evento in COBRANZA:
+    if evento in SIN_OPCIONES:
         return datos
     for ruta in EVENTOS.get(evento, {}):
         if ruta in contexto.RUTAS_DE_DATOS and (valor := valor_de_ruta(ctx, ruta)) is not None:
@@ -178,9 +178,10 @@ async def intentar(
         _cae(evento, conversation.id, canal, SIN_VIA, motivo)
         return None
 
-    if tipo in ac.TIPOS_DE_TEXTO and await _conversacion_activa(conversation.id, tenant_id):
-        _cae(evento, conversation.id, canal, SIN_VIA, CONVERSACION_ACTIVA)
-        return None
+    async def _guarda_de_turno() -> str:
+        # Corre DENTRO del envío, después de la idempotencia: el menú de un envío anterior de este mismo aviso cuenta
+        # como actividad y, comprobada antes, un reintento del outbox caería al texto y duplicaría el aviso.
+        return CONVERSACION_ACTIVA if await _conversacion_activa(conversation.id, tenant_id) else ""
 
     resultado = await enviar_opciones(
         conversation.id,
@@ -189,6 +190,7 @@ async def intentar(
         clave_idempotencia=notice_key,
         actor=f"evento:{evento}"[:120],
         sin_mensaje_de_fallo=True,
+        antes_de_enviar=_guarda_de_turno if tipo in ac.TIPOS_DE_TEXTO else None,
     )
     if resultado.outcome == ev.DUPLICADO:
         return NoticeResult("duplicado")
@@ -216,6 +218,8 @@ async def error_de_mapeo(tenant_id: uuid.UUID, evento: str, clave: str) -> str:
 
     if get_current_tenant_id() != tenant_id:
         raise PermissionError("avisos con opciones: fuera del tenant_scope del negocio")
+    if evento == "provisioning.invitation":
+        return "El aviso de la invitación del comprador no admite plantilla con opciones: sus datos (negocio, cliente) son del comprador."
     if evento in COBRANZA:
         return "Los avisos de cobranza no admiten plantilla con opciones: no se puede garantizar el horario legal de entrega."
     if not FORMA_DE_CLAVE.fullmatch(clave):

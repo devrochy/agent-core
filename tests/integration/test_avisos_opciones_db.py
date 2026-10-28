@@ -249,6 +249,9 @@ async def test_el_mapa_rechaza_lo_que_no_es_una_plantilla_con_opciones_vigente_d
     for evento in ("subscription.charge_created", "subscription.charge_reminder", "subscription.paused"):
         r = await app_client.put(MAP, headers=h, json={"mapping": {evento: {"option_template": buena}}})
         assert r.status_code == 400 and "cobranza" in r.text, evento
+    # La invitación del comprador tampoco: negocio/cliente del evento son los del comprador, no los de la conversación.
+    r = await app_client.put(MAP, headers=h, json={"mapping": {"provisioning.invitation": {"option_template": buena}}})
+    assert r.status_code == 400 and "comprador" in r.text
     r = await app_client.put(MAP, headers=h, json={"mapping": {EVENTO: {"option_template": buena}}})
     assert r.status_code == 200, r.text
 
@@ -420,6 +423,57 @@ async def test_con_la_conversacion_activa_el_menu_de_texto_no_sale_y_cae_al_text
     await _avisar(a.tid, cliente)
     salientes = [m for m in await _enviado(a.tid, conv)]
     assert [m["content"] for m in salientes] == ["Texto web"]
+
+
+async def test_el_reintento_del_outbox_en_un_canal_de_texto_no_duplica_aunque_el_menu_cuente_como_actividad(
+    listo, cola, guarda_real
+) -> None:
+    """El menú de texto recién enviado es actividad en la conversación: la guarda NO puede correr antes de la
+    idempotencia, o el reintento caería al texto de D2 y el cliente recibiría el aviso dos veces."""
+    a, _, _ = listo
+    clave = await publicar(a.tid, _definicion(2))
+    await _mapear(a.tid, EVENTO, option_template=clave, fallback_text_by_channel={"webchat": "Texto web"})
+    conv = await conversacion(a.tid, canal="web", ventana=None)
+    cliente = await _cliente_de(a.tid, conv)
+    payload = _payload_cita()
+
+    await _avisar(a.tid, cliente, payload)
+    await _avisar(a.tid, cliente, payload)  # reintento del mismo aviso
+
+    [msg] = await _enviado(a.tid, conv)
+    assert msg["client_message_id"].startswith("opt_send:"), "el único saliente es el menú, no el texto de D2"
+
+
+async def test_la_eleccion_de_conversacion_de_texto_es_la_de_d2_si_opciones_directas_esta_apagada(listo, cola) -> None:
+    """Un `option_template` guardado no cambia a qué conversación de texto va el aviso mientras la bandera de
+    opciones directas esté apagada (D2 exacto: la que tiene texto definido, no la más reciente)."""
+    from core.gateway import avisos_canal
+    from core.shared.tenant import tenant_scope
+
+    a, _, _ = listo
+    clave = await publicar(a.tid, _definicion(2))
+    await _mapear(a.tid, EVENTO, option_template=clave, fallback_text_by_channel={"messenger_meta": "Texto Messenger"})
+    messenger = await conversacion(a.tid, canal="messenger", ventana=timedelta(hours=2))
+    cliente = await _cliente_de(a.tid, messenger)
+    from test_opciones_envio import _scoped
+
+    from core.db.models import Conversation
+
+    async def _web(sesion: Any) -> uuid.UUID:  # la más reciente, del mismo cliente y sin texto definido para ella
+        conv = Conversation(tenant_id=a.tid, customer_id=cliente, channel="web")
+        sesion.add(conv)
+        await sesion.flush()
+        return conv.id
+
+    web = await _scoped(a.tid, _web)
+    for encendida, esperada in ((False, messenger), (True, web)):
+        await _opciones(a.tid, encendida)
+        try:
+            async with tenant_scope(a.tid):
+                elegida = await avisos_canal.conversacion_de_texto_para(cliente, EVENTO)
+            assert elegida is not None and elegida.id == esperada, encendida
+        finally:
+            await _opciones(a.tid, True)
 
 
 # ------------------------------------------------------------------ journey

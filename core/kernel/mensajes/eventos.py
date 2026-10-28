@@ -73,3 +73,9 @@ EVENTOS: dict[str, dict[str, str]] = {
 # garantizar en todos los caminos (cola diferida de QR, reintentos del outbox, reenvío manual del panel). Por eso
 # no salen por QR como texto (ADR-0178 D2) ni se mapean a plantillas con opciones (ADR-0178 D3).
 COBRANZA = frozenset({"subscription.charge_created", "subscription.charge_reminder", "subscription.paused"})
+
+# Eventos que NO se mapean a plantillas con opciones (ADR-0178 D3): los de cobranza (arriba) y la invitación del
+# comprador. En `provisioning.invitation` el negocio en scope es el del VENDEDOR y el nombre del cliente/negocio que
+# trae el evento es el del comprador; el envío resuelve `negocio.nombre` y `cliente.nombre` desde la conversación (la
+# base), así que una plantilla que los citara diría un dato equivocado, en silencio.
+SIN_OPCIONES = COBRANZA | frozenset({"provisioning.invitation"})
