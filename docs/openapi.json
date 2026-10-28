@@ -4486,6 +4486,24 @@
             "description": "Filtro de un pack como `clave:valor` (ver `filters` de la respuesta)."
           },
           {
+            "name": "agente",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Solo los clientes con datos reales de este agente (clave de `agents`). `general` no filtra; una clave sin datos propios responde 400 `filtro_invalido`.",
+              "title": "Agente"
+            },
+            "description": "Solo los clientes con datos reales de este agente (clave de `agents`). `general` no filtra; una clave sin datos propios responde 400 `filtro_invalido`."
+          },
+          {
             "name": "page",
             "in": "query",
             "required": false,
@@ -31670,6 +31688,24 @@
               "title": "Filtro"
             },
             "description": "Filtro de un pack como `clave:valor` (ver `filters` de la respuesta)."
+          },
+          {
+            "name": "agente",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Solo los clientes con datos reales de este agente (clave de `agents`). `general` no filtra; una clave sin datos propios responde 400 `filtro_invalido`.",
+              "title": "Agente"
+            },
+            "description": "Solo los clientes con datos reales de este agente (clave de `agents`). `general` no filtra; una clave sin datos propios responde 400 `filtro_invalido`."
           },
           {
             "name": "X-Tenant-Id",

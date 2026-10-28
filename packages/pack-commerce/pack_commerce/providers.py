@@ -17,7 +17,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Select, and_, case, func, literal, select
+from sqlalchemy import Select, and_, case, func, literal, select, union
 
 from core.admin.lead_registry import (
     Cursor,
@@ -25,6 +25,7 @@ from core.admin.lead_registry import (
     LeadColumn,
     LeadEdicion,
     LeadFilter,
+    LeadRelacion,
     TimelineEvent,
     antes_del_cursor,
     lead_registry,
@@ -255,6 +256,21 @@ async def _escribir_lead(customer_id: uuid.UUID, valores: dict[str, str]) -> Non
             lead.interest = valores["interes"]
 
 
+async def _con_datos(ids: list[uuid.UUID] | None) -> Select[Any]:
+    """Clientes con pedido, cotización o lead de venta. No usa `_resolver`: ahí todo cliente trae
+    «Nuevo» y 0 pedidos, que no son datos."""
+    tid = get_current_tenant_id()
+    fuentes = []
+    for modelo in (Order, Quote, Lead):
+        q = select(modelo.customer_id.label("customer_id")).where(
+            modelo.tenant_id == tid, modelo.customer_id.is_not(None)
+        )
+        if ids is not None:
+            q = q.where(modelo.customer_id.in_(ids))
+        fuentes.append(q)
+    return select(union(*fuentes).subquery().c.customer_id)
+
+
 def _pesos(valor: Any) -> str:
     return f"${float(valor or 0):,.0f}".replace(",", ".")
 
@@ -360,6 +376,7 @@ lead_registry.register(
     agent_key="ventas",
     agent_name="Ventas",
     icon="shopping-cart",
+    relacion=LeadRelacion(con_datos=_con_datos),
 )
 
 

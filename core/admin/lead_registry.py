@@ -34,6 +34,12 @@ Edición desde la ficha (ADR-0149, enmienda de esta ADR): un pack puede aportar 
 `leer(customer_id)` con sus valores actuales (códigos, no etiquetas) y `escribir(customer_id,
 valores)`. El core valida claves y valores contra `campos` antes de llamar al pack, así que el
 pack solo recibe valores admitidos y el core sigue sin conocer sus tablas.
+
+Relación con el cliente (HU-CRM-12, ADR-0179 decisión 4): un pack puede aportar `relacion`
+(`LeadRelacion`). `con_datos(ids)` es el SQL que define «este cliente tiene datos reales en el
+módulo» (un `SELECT customer_id`); de ahí salen los iconos veraces de la columna Agentes y el
+filtro `agente=` de la lista. Sin `relacion` se conserva la heurística de las columnas.
+`ficha` y `detalle` quedan declaradas para HU-CRM-14 (ficha en el prompt y tool de historial).
 """
 
 from __future__ import annotations
@@ -113,6 +119,21 @@ class LeadEdicion:
     escribir: Callable[[uuid.UUID, dict[str, str]], Awaitable[None]]
 
 
+@dataclass(frozen=True)
+class LeadRelacion:
+    """Lo que el módulo sabe de su relación con el cliente (ADR-0179).
+
+    `con_datos(ids)` devuelve un `SELECT customer_id` (filtrado siempre por el tenant en curso) con
+    los clientes que tienen datos reales del módulo; `ids=None` es «todos los del tenant». Un
+    registro que el módulo crea para cualquier cliente no cuenta como datos.
+    """
+
+    con_datos: Callable[[list[uuid.UUID] | None], Awaitable[Any]]
+    # HU-CRM-14: líneas cortas para el prompt y detalle para la tool de historial. Sin usar aún.
+    ficha: Callable[[list[uuid.UUID]], Awaitable[dict[uuid.UUID, str]]] | None = None
+    detalle: Callable[[uuid.UUID, int], Awaitable[list[dict[str, Any]]]] | None = None
+
+
 @dataclass
 class LeadProvider:
     plugin_id: str
@@ -128,6 +149,7 @@ class LeadProvider:
     agent_key: str | None = None
     agent_name: str | None = None
     icon: str | None = None
+    relacion: LeadRelacion | None = None
 
 
 class LeadRegistry:
@@ -147,6 +169,7 @@ class LeadRegistry:
         agent_key: str | None = None,
         agent_name: str | None = None,
         icon: str | None = None,
+        relacion: LeadRelacion | None = None,
     ) -> None:
         """Idempotente: registrar dos veces el mismo pack reemplaza la entrada."""
         self._providers[plugin_id] = LeadProvider(
@@ -160,6 +183,7 @@ class LeadRegistry:
             agent_key,
             agent_name,
             icon,
+            relacion,
         )
 
     def providers_for(self, enabled: set[str] | None) -> list[LeadProvider]:
