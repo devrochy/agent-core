@@ -1,3 +1,5 @@
+## El login de campo del gestor decide el equipo en el core (2026-10-27)
+
 ### Cambiado
 - **El login de campo del gestor decide el equipo en el core (HU-ACC-02, ADR-0174).** `_enforcement_dispositivo`, `POST/GET /gestor/dispositivo` y los wrappers del panel (`GET /pack/cobranza/devices`, `POST /pack/cobranza/devices/{id}/status`, `GET /pack/cobranza/alerts`) usan `account_devices` y `access_events` en vez de las tablas del pack. Un equipo `bloqueado` deniega siempre; la política `abierto/restringido` es por negocio.
 - Con el header `X-Device-Id` (app nueva) el 403 lleva `code` (`dispositivo_pendiente`, `dispositivo_bloqueado`). Sin él (app vieja, solo `imei` en el cuerpo) se conserva el contrato anterior: tokens y `requiereVinculacion`.
