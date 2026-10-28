@@ -1,4 +1,4 @@
-### Corregido
+## Dos plantillas a la vez ya no pierden la habilidad de la otra (2026-10-28)
 
 - Elegir dos plantillas a la vez en un negocio sin habilidades ya no deja un agente sin su habilidad ni
   responde `template_unavailable`: `asegurar_habilidades` leía el spec, y si la otra petición confirmaba su
