@@ -8,8 +8,8 @@ el panel y las FKs lo consulten. Mismo patrón que `core/billing/plans.py`.
 `credentials_schema` es un JSON Schema: lo renderiza el FormEngine del panel
 (`core/admin/form_generator.py`) y lo usa `save_connection` para validar/normalizar.
 
-Este catálogo describe **presentación y credenciales** de cada tipo. Los adaptadores
-de canal siguen viviendo en `agent_core.channels` (ADR-0052); acá no hay routing.
+Este catálogo describe **presentación, credenciales y capacidades de envío** (`CAPACIDADES_POR_TIPO`) de cada
+tipo. Los adaptadores de canal siguen viviendo en `agent_core.channels` (ADR-0052); acá no hay routing.
 """
 
 from __future__ import annotations

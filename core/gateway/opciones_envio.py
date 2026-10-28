@@ -209,6 +209,8 @@ async def _enviar(traza: _Traza, datos: dict[str, Any] | None, clave_idempotenci
     ahora = utcnow()
     proveedor, credenciales = "", {}
     if conversation.channel == "whatsapp":
+        # Solo WhatsApp tiene varios proveedores con capacidades distintas: ahí hace falta resolverlo (una consulta);
+        # en los demás canales `capacidades_de(canal, "")` ya es unívoca.
         proveedor, credenciales = await resolve_credentials(
             conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=conversation.tenant_id
         )

@@ -97,6 +97,9 @@ def test_admite_distingue_botones_y_lista() -> None:
 
 def test_canales_con_solo_lista_canales_de_clientes() -> None:
     assert canales_con("botones") == ["whatsapp"]  # el playground (`test`) tiene botones pero no es un canal de clientes
+    # Atado a `core/events/core_handlers.py` (`_whatsapp_conversation_for`, los avisos por evento solo buscan
+    # conversaciones `whatsapp`) y al catálogo de mensajes: si otro canal gana plantilla aprobada, este test obliga
+    # a revisar los avisos por evento (D2) antes de que el catálogo diga que salen por ahí.
     assert canales_con("plantilla_aprobada") == ["whatsapp"]
     assert canales_con("ventana_24h") == ["whatsapp"]
     assert canales_con("respuesta_numerica") == []
