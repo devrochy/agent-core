@@ -79,6 +79,7 @@ source_modules =
     core.kernel
 forbidden_modules =
     core.alta_negocio
+    core.alta_acceso
     core.provisioning.consumer
     core.provisioning.owner
 # Solo imports directos: todo pack llega al despachador del outbox por `core.tasks.celery_app`
@@ -125,6 +126,7 @@ source_modules =
     core.provisioning.vendedores
 forbidden_modules =
     core.alta_negocio
+    core.alta_acceso
     core.provisioning.consumer
     core.provisioning.owner
 # El único eslabón que se ignora es el registro del consumidor como suscriptor del outbox

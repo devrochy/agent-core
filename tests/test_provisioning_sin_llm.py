@@ -23,11 +23,27 @@ from pathlib import Path
 
 import pytest
 
-# Lo que crea negocios: `core.alta_negocio` (`onboard_tenant`), el consumidor y el owner.
+# Lo que crea negocios: `core.alta_negocio` (`onboard_tenant`), el consumidor y el owner;
+# `core.alta_acceso` manda el acceso del dueño en el alta desde el panel (ADR-0175).
 # `core.provisioning.fuentes` es el contrato que implementan los packs (datos del pedido) y
 # `core.onboarding` son utilidades de artefactos (`tenant_dir`): ninguno crea nada.
-_PROHIBIDOS = ("core.alta_negocio", "core.provisioning.consumer", "core.provisioning.owner")
-_SIMBOLOS_PROHIBIDOS = ("onboard_tenant", "aprovisionar", "on_subscription_activated", "reintentar_alta")
+_PROHIBIDOS = (
+    "core.alta_negocio",
+    "core.alta_acceso",
+    "core.provisioning.consumer",
+    "core.provisioning.owner",
+)
+_SIMBOLOS_PROHIBIDOS = (
+    "onboard_tenant",
+    "aprovisionar",
+    "on_subscription_activated",
+    "reintentar_alta",
+    # Primitivas que acuñan o renuevan el enlace de dueño (ADR-0121, ADR-0175): ninguna tool.
+    "crear_invitacion_owner",
+    "emitir_invitacion_owner",
+    "renovar_enlace_owner",
+    "token_de_invitacion",
+)
 _NOMBRE_DE_ALTA = re.compile(
     r"(crear|create|alta|nuevo|new|registrar|register)_?(tenant|negocio|business)|provision|onboard",
     re.IGNORECASE,

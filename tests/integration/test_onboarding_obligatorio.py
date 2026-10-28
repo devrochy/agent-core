@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -127,7 +127,9 @@ async def test_abre_solo_al_propietario_y_los_negocios_anteriores_al_corte_no_ap
 
     from core.config import get_settings
 
-    monkeypatch.setattr(get_settings(), "onboarding_desde", date.today() + timedelta(days=1))
+    # El corte se compara con la fecha UTC de `created_at`: el mañana también va en UTC (con
+    # `date.today()` el test fallaba entre las 00:00 y el fin del día local del runner).
+    monkeypatch.setattr(get_settings(), "onboarding_desde", datetime.now(UTC).date() + timedelta(days=1))
     r = await _recorrido(app_client, dueno)
     assert (r["estado"], r["aplica"], r["abrir"]) == ("no_aplica", False, False)
     # Y sin recorrido no se puede mover.

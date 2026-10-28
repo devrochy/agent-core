@@ -33,6 +33,8 @@ _EXTRA_DENYLIST = [
     "authorization", "cookie", "x-api-key", "x_api_key", "headers", "extensions", "secretos",
     "valores", "actuales", "nuevos", "secrets", "cuerpo", "secretos_enviados", "valor", "texto",
     "limpios", "entrada", "data", "value", "guardado", "contenido",
+    # Acceso del dueño (ADR-0175): el enlace de un solo uso y lo que lo arma o lo lleva.
+    "enlace", "inv", "nonce", "token_nonce",
 ]
 _configured = False
 
