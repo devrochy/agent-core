@@ -642,3 +642,87 @@ Se entrega en partes:
 - las pruebas estadísticas: es una diferencia simple de puntos con muestra mínima;
 - avisar aparte a las conversaciones escaladas por el cambio de release;
 - endurecer `ck_cc_canary`.
+
+## Adenda propuesta HU-AOS-35: caché por versión de lo compilado y prefijo estable (2026-10-27)
+
+**Contexto.** §7 pide cachear lo compilado de cada release con la clave `(tenant_id, release_hash, agent_version_hash)` y bloques fijos idénticos byte a byte. Hoy, con `aos_runtime = v3`, cada turno hace todo esto de nuevo:
+- arma la vista v2 del agente en foco y la valida (`spec_del_turno`);
+- relee de disco los `flow.json` del core y de los packs (`resolve_flow`);
+- lee cada playbook de disco y lo formatea (`build_system_blocks`);
+- hace una query del slug.
+
+La release ya está en caché (`cargar.py`, por `(tenant_id, release_id)`), pero lo que se compila a partir de ella no.
+
+Dos cosas rompen la caché de prefijo del proveedor sin que cambie la release:
+- **El flujo de atención** está en un bloque fijo, pero sus herramientas se filtran en cada turno por la salud del plugin, por las conexiones activas y por el registro del proceso.
+- **Con Anthropic**, `_serialize_system` marca `cache_control` en todos los bloques, también en el dinámico. Con 4 playbooks o más se pasa del máximo de 4 marcas que acepta la API.
+
+La métrica tampoco sirve para medir la meta (≥ 50 % de los tokens de entrada cacheados):
+- `_TurnUsage.add` suma lectura y escritura de caché en un solo `cached_tokens`;
+- el proveedor OpenAI-compatible no lee `prompt_tokens_details.cached_tokens`;
+- `input_tokens` excluye lo cacheado con Anthropic y lo incluye con DeepSeek.
+
+**Decisión** (decisiones del dueño del 2026-10-27; revisión del arquitecto del mismo día).
+
+1. **Alcance: solo releases (`aos_runtime = v3`).** Sin release, el texto del prompt se arma como hoy: los datos se leen en vivo y no hay un hash estable. Lo único que cambia también en legacy es dónde va la marca de caché de Anthropic (punto 5), que no toca el texto.
+
+2. **Clave:** `(tenant_id, release_id, agent_version_id)`. Equivale a la de §7: una release tiene un único `manifest_hash` y las versiones de agente son inmutables. Se usa `agent_version_id` y no `content_hash` porque dos agentes con el mismo contenido y distinta key producen vistas distintas (`id` y `version` de la vista llevan la key).
+
+3. **Dónde vive y qué se compila.**
+   - **Dónde se guarda:** en `ReleaseCongelada`, como ya se hace con `_ruteo`, `_indice` y `_procedimientos`. Es un dict `agent_version_id → Compilado` que se llena la primera vez que se pide (`compilado(foco)`). Hereda la clave `(tenant_id, release_id)`, la guarda de `tenant_scope` de `cargar_release` y la evicción por bytes. Los bytes de lo compilado se suman a `release.bytes` y a `_bytes_en_cache`, así que el tope de 64 MiB sigue valiendo. No hay una segunda LRU.
+   - **Cómo llega al loop:** por un campo nuevo de `ArtefactosDeRelease`, que se llena en `artefactos(foco=...)`.
+   - **Quién compila:** `core/agents/compiler.py`, una función pura. Recibe por parámetro el foco, el kernel, las skills y los plugins, los overrides de playbooks, `flow_tenant` y `app_settings`. Nunca lee la ranura del turno ni el disco del negocio. Por eso `load_playbook` y `resolve_flow` aceptan sus entradas por parámetro.
+   - **Qué produce:**
+     - la vista v2 validada del agente en foco;
+     - el flujo de la release;
+     - los bloques fijos renderizados: playbooks con sus variables, todas de la release, más la voz de marca y el bloque del flujo.
+   - **Contra qué se resuelve el flujo:** contra una fuente estática, el catálogo de módulos del binario de los packs de la release (`catalogo_de_acciones(plugin_manager.list_modules())`, como `derivar_procedimientos`), más las declarativas de la versión y las tools del core. Nunca contra `mcp_host`, la salud ni las conexiones.
+   - **Un solo ensamblado:** `build_system_blocks` se parte en `bloques_fijos(...)` y el `bloque_dinamico(...)` que ya existe. La ruta legacy llama a las dos; el compilador, solo a la primera.
+   - **Fallas de lectura:** un playbook o un flujo que no existe es determinista y se cachea. Un error de lectura (IO o encoding) no se cachea: la compilación falla, el turno usa el armado de siempre para ese turno y se registra el error.
+   - **Sin mutaciones:** el `AgentSpec` compilado se entrega como copia en cada turno (`model_copy(deep=True)`), con el mismo criterio que `cargar.py`.
+   - **Sin TTL ni invalidación:** todo lo que entra es inmutable. Un deploy reinicia el proceso.
+
+4. **Flujo fijo con aviso dinámico.**
+   - El bloque del flujo es el de la release completa.
+   - **Contenido del aviso:** las herramientas del flujo compilado que no están en las `candidate_tools` del turno, después de los filtros de salud y conexiones. Así cubre las tres causas: plugin caído para el negocio, conexión que falta y desactivación global. Se calcula **antes** de `motor.herramientas()`, para no listar lo que el motor filtra a propósito por etapa.
+   - **Cómo se pinta:** es un campo de `PromptContext` que pinta `bloque_dinamico`, antes de la fecha. Así sobrevive al refresco del bloque a mitad del turno. El texto vive en un playbook propio del kernel (`core/playbooks/kernel/`), no en código (invariante 3) ni dentro de `respuestas.md` (ADR-0151 §7). Las herramientas que se ofrecen al modelo siguen filtradas como hoy: el aviso solo explica.
+   - **Sin herramientas disponibles:** si en el turno no queda ninguna herramienta del flujo, el turno sigue la rama de hoy: router por palabras clave y sin bloque de flujo.
+   - **Con todo disponible:** no hay aviso y el bloque del flujo es el de hoy. Esto se comprueba corriendo en replay todas las grabaciones (`evals/cassettes/golden/*` y `journeys/*`) con el cambio aplicado. El runner de evals evalúa las conexiones con un conjunto vacío, así que una grabación v3 con una herramienta que pide conexión cambia. Si alguna cambia, se declara en el PR y la regraba el dueño con su OK.
+
+5. **Anthropic: una sola marca de caché.** Por la convención del loop, el último bloque es el dinámico. Con 2 bloques o más, la marca va en el penúltimo; con uno solo, no va ninguna marca. Aplica a todas las rutas. La clave de las grabaciones no incluye `cache_control`, así que estas no cambian. Se actualizan `docs/PROMPT-CACHING-GUIDE.md` y la entrada de `docs/BACKLOG.md`.
+
+6. **Métrica de tokens cacheados.**
+   - **`LLMUsageInfo`:** su `input_tokens` y `estimate_cost_usd` no cambian, porque de ahí salen `cost_usd`, los créditos, las grabaciones y el costo del gate. `LLMUsageInfo` gana un indicador de si su `input_tokens` ya incluye lo cacheado (Anthropic no, OpenAI-compatible sí). El indicador viaja en cada respuesta, porque un turno puede responderlo el respaldo de otro proveedor (`politica_modelo`).
+   - **OpenAI-compatible** lee `prompt_cache_hit_tokens` y, si no viene, `prompt_tokens_details.cached_tokens`.
+   - **Total de entrada:** se arma solo en `_TurnUsage.add`, sumando lectura y escritura cuando el indicador dice que no están incluidas. De ahí lo escribe el ledger y lo recibe `anotar_uso`, así que `turn_outcomes.tokens_in` también pasa a ser el total.
+   - **Columnas del ledger:**
+     - `usage_ledger.cached_tokens` pasa a ser solo lectura de caché;
+     - se agrega `usage_ledger.cache_write_tokens`, nullable, en la migración 0114 aditiva. Queda en NULL antes del corte, como `credits` antes de la 0096.
+   - **Escritores del ledger:**
+     - la fila del turno escribe las dos columnas;
+     - `a2a.py` (`agent_run`) y `veredicto.py` (gate) escriben `cache_write_tokens = 0` con el nuevo significado;
+     - qa, embeddings e ingesta quedan fuera del porcentaje por su `kind`.
+   - **Porcentaje:** `sum(cached_tokens) / sum(input_tokens)` sobre las filas con `cache_write_tokens IS NOT NULL`. Las filas de antes del corte no entran.
+   - **Lectores de `input_tokens`:** Costos por modelo, la vista SSR, la consola de conexiones, el editor y Conversaciones van a mostrar más tokens con Anthropic desde el corte. Ninguno cobra con esto: los créditos solo miran si hubo tokens. La nota de corte va en el changelog.
+
+7. **Costos por agente.** `GET /admin/costs` gana `by_agent`, con los últimos 30 días agrupados por agente. Une `agent_instance_id` → `agent_instances` por `tenant_id` e `id`, filtra por `principal.tenant_id` y excluye `NO_ES_ACTIVIDAD`, con las mismas condiciones que `data_por_agente.consumo`, que se reutilizan. Trae turnos, tokens de entrada, tokens cacheados, porcentaje (null sin filas medibles) y costo. Las filas sin agente van juntas como «sin agente». Usa la sección `costs`. El panel muestra la tabla en Costos.
+
+8. **Escenarios de prueba:**
+   - una segunda compilación con la misma clave no lee disco ni valida, y otra release o versión compila otra entrada;
+   - dos agentes con el mismo contenido y distinta key dan vistas distintas;
+   - otro negocio no ve lo compilado;
+   - los bytes de lo compilado cuentan en el tope;
+   - un error de lectura no queda en caché;
+   - los bloques fijos son idénticos byte a byte entre dos clientes, dos conversaciones y dos turnos con distinta hora, e iguales a `build_system_blocks` con la misma entrada;
+   - un plugin caído, una conexión que falta o un plugin desactivado globalmente después de compilar salen en el aviso y no cambian el bloque fijo;
+   - el aviso no lista lo que filtra el motor, y sin ninguna herramienta disponible se sigue la rama de hoy;
+   - con Anthropic, una sola marca en el penúltimo bloque;
+   - lectura de lo cacheado con OpenAI y con DeepSeek, total de entrada con Anthropic, y lectura y escritura separadas en el ledger;
+   - `by_agent` aislado por negocio y sin filas anteriores al corte en el porcentaje;
+   - replay de todas las grabaciones.
+
+**Fuera de esta HU:**
+- **Las herramientas en el prefijo.** La lista de herramientas también es parte del prefijo del proveedor, y con Anthropic va antes que el system. Cambia con la etapa del motor de procedimientos. La medición del 50 % se separa por `aos_procedures`. Si lo fijo queda por debajo del mínimo cacheable de Anthropic, no se cachea nada.
+- **La meta del 50 %** se mide en test con una semana de tráfico; no es una condición para el merge.
+- **El texto de cabecera del flujo** sigue en código (invariante 3) para no cambiar las grabaciones. Se propone una HU propia para moverlo a un playbook del kernel junto con la regrabación.
+- **Lo que §7 ya dejó fuera:** caché de resultados de acciones, *epochs* y warm-up.
