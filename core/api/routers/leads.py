@@ -332,13 +332,46 @@ def _meta_de_agentes(providers: list[LeadProvider], registros: list[AgentRecord]
     return list(por_key.values())
 
 
+async def _con_datos_por_pack(
+    providers: list[LeadProvider], customer_ids: list[uuid.UUID]
+) -> dict[str, set[uuid.UUID]]:
+    """Por `plugin_id`, los clientes de la página con datos reales del módulo (HU-CRM-12).
+
+    Solo entran los providers que implementan `relacion`; si su consulta falla se omiten y esos
+    clientes no figuran con datos (nunca se vuelve a la heurística, que es la que mentía)."""
+    salida: dict[str, set[uuid.UUID]] = {}
+    if not customer_ids:
+        return salida
+    for provider in providers:
+        if provider.relacion is None:
+            continue
+        try:
+            sub = await provider.relacion.con_datos(customer_ids)
+            async with get_session() as session:
+                salida[provider.plugin_id] = set((await session.execute(sub)).scalars().all())
+        except Exception:
+            log.warning("lead_con_datos_failed", plugin_id=provider.plugin_id, exc_info=True)
+            salida[provider.plugin_id] = set()
+    return salida
+
+
 def _agentes_de_la_fila(
-    providers: list[LeadProvider], extras: dict[str, Any], meta: list[LeadAgentOut]
+    providers: list[LeadProvider],
+    extras: dict[str, Any],
+    meta: list[LeadAgentOut],
+    customer_id: uuid.UUID | None = None,
+    con_datos: dict[str, set[uuid.UUID]] | None = None,
 ) -> list[str]:
-    """Claves de los agentes que tienen algún dato de este cliente (General siempre)."""
+    """Claves de los agentes que tienen datos de este cliente (General siempre).
+
+    Si el provider implementa `relacion.con_datos` manda esa definición (`con_datos` trae, por
+    pack, los clientes de la página que la cumplen); si no, queda la heurística de las columnas."""
     presentes = {"general"}
     for provider in providers:
-        if any(extras.get(c.key) not in (None, "", [], {}) for c in provider.columns):
+        if provider.relacion is not None:
+            if customer_id is not None and customer_id in (con_datos or {}).get(provider.plugin_id, ()):
+                presentes.add(_clave_de_agente(provider))
+        elif any(extras.get(c.key) not in (None, "", [], {}) for c in provider.columns):
             presentes.add(_clave_de_agente(provider))
     return [a.key for a in meta if a.key in presentes]
 
@@ -403,6 +436,7 @@ async def _consulta(
     connection_id: uuid.UUID | None,
     filtro: list[str] | None,
     customer_id: uuid.UUID | None = None,
+    agente: str | None = None,
 ) -> Select[Any]:
     query = select(Customer).where(
         Customer.tenant_id == tenant_id,
@@ -440,6 +474,17 @@ async def _consulta(
         if sub is None:
             raise ApiError.bad_request(f"Filtro desconocido: {key!r}.", code="filtro_invalido")
         query = query.where(Customer.id.in_(sub))
+    if agente and agente != "general":
+        # Solo los providers habilitados que saben decir «tiene datos» (ADR-0179 decisión 5).
+        propios = [
+            p.relacion
+            for p in lead_registry.providers_for(enabled)
+            if p.relacion is not None and _clave_de_agente(p) == agente
+        ]
+        if not propios:
+            raise ApiError.bad_request(f"Agente no válido para filtrar: {agente!r}.", code="filtro_invalido")
+        subs = [await relacion.con_datos(None) for relacion in propios]
+        query = query.where(or_(*[Customer.id.in_(sub) for sub in subs]))
     return query
 
 
@@ -512,6 +557,14 @@ FiltroQuery = Annotated[
     Query(description="Filtro de un pack como `clave:valor` (ver `filters` de la respuesta)."),
 ]
 
+AgenteQuery = Annotated[
+    str | None,
+    Query(
+        description="Solo los clientes con datos reales de este agente (clave de `agents`). "
+        "`general` no filtra; una clave sin datos propios responde 400 `filtro_invalido`."
+    ),
+]
+
 
 # ------------------------------------------------------------------ rutas
 
@@ -526,11 +579,12 @@ async def list_leads(
         uuid.UUID | None, Query(description="Solo los clientes que escribieron por esta conexión.")
     ] = None,
     filtro: FiltroQuery = None,
+    agente: AgenteQuery = None,
 ) -> LeadsResponse:
     tenant_id = principal.tenant_id
     enabled, providers = await _providers()
     query = await _consulta(
-        tenant_id, enabled=enabled, q=q, channel=channel, connection_id=connection_id, filtro=filtro
+        tenant_id, enabled=enabled, q=q, channel=channel, connection_id=connection_id, filtro=filtro, agente=agente
     )
 
     async with get_session() as session:
@@ -550,6 +604,7 @@ async def list_leads(
         )
 
     pack_values = await _valores_de_packs(providers, [c.id for c in customers])
+    con_datos = await _con_datos_por_pack(providers, [c.id for c in customers])
     meta = _meta_de_agentes(providers, await _registros_de_agentes(tenant_id))
     items = []
     for cliente in customers:
@@ -565,7 +620,7 @@ async def list_leads(
                 alta=cliente.created_at.strftime("%Y-%m-%d") if cliente.created_at else "—",
                 extras=extras,
                 perfil=perfil_cliente_,
-                agentes=_agentes_de_la_fila(providers, extras, meta),
+                agentes=_agentes_de_la_fila(providers, extras, meta, cliente.id, con_datos),
             )
         )
     return LeadsResponse(
@@ -587,12 +642,13 @@ async def export_leads_csv(
     channel: Annotated[str | None, Query()] = None,
     connection_id: Annotated[uuid.UUID | None, Query()] = None,
     filtro: FiltroQuery = None,
+    agente: AgenteQuery = None,
 ) -> Response:
     """La lista filtrada en CSV (hasta 5000 filas, las más recientes)."""
     tenant_id = principal.tenant_id
     enabled, providers = await _providers()
     query = await _consulta(
-        tenant_id, enabled=enabled, q=q, channel=channel, connection_id=connection_id, filtro=filtro
+        tenant_id, enabled=enabled, q=q, channel=channel, connection_id=connection_id, filtro=filtro, agente=agente
     )
     async with get_session() as session:
         customers = (
@@ -601,6 +657,7 @@ async def export_leads_csv(
             .all()
         )
     pack_values = await _valores_de_packs(providers, [c.id for c in customers])
+    con_datos = await _con_datos_por_pack(providers, [c.id for c in customers])
     columnas = _columnas(providers)
     meta = _meta_de_agentes(providers, await _registros_de_agentes(tenant_id))
     nombre_agente = {a.key: a.name for a in meta}
@@ -635,7 +692,7 @@ async def export_leads_csv(
     for c in customers:
         extras = pack_values.get(c.id, {})
         p = _perfil_de(c)
-        agentes = _agentes_de_la_fila(providers, extras, meta)
+        agentes = _agentes_de_la_fila(providers, extras, meta, c.id, con_datos)
         writer.writerow(
             [
                 _celda(p.nombre_visible),

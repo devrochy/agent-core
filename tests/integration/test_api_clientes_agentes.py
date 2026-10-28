@@ -217,3 +217,152 @@ async def test_edita_cobranza_y_deja_auditoria(app_client) -> None:
     )
     assert r.status_code == 400
     assert "color_riesgo" in r.json()["error"]["fields"]
+
+
+async def _cliente_solo(tid: uuid.UUID, *, con_pedido: bool, nombre: str = "Solo") -> uuid.UUID:
+    """Un cliente de WhatsApp; con `con_pedido` agrega un pedido y nada más."""
+    from pack_commerce.models import Order
+    from sqlalchemy import text
+
+    from core.db.models import Conversation, Customer
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            cliente = Customer(
+                tenant_id=tid, channel="whatsapp", external_id=f"whatsapp:{uniq('s')}", name=nombre
+            )
+            session.add(cliente)
+            await session.flush()
+            if con_pedido:
+                conv = Conversation(tenant_id=tid, customer_id=cliente.id)
+                session.add(conv)
+                await session.flush()
+                seq = (await session.execute(text("select pack_commerce_next_order_seq(:t)"), {"t": tid})).scalar()
+                session.add(
+                    Order(
+                        tenant_id=tid,
+                        conversation_id=conv.id,
+                        customer_id=cliente.id,
+                        idempotency_key=uniq("ped"),
+                        order_seq=seq,
+                        public_order_number=f"OC-{seq:04d}",
+                        total=Decimal("50000"),
+                        status="abierto",
+                    )
+                )
+            await session.flush()
+            return cliente.id
+
+
+async def test_iconos_veraces_y_filtro_por_agente_sin_cruzar_negocios(app_client) -> None:
+    tid_a, tid_b = await _negocio(), await _negocio()
+    sin_nada = await _cliente_solo(tid_a, con_pedido=False, nombre="Vacío")
+    con_pedido = await _cliente_solo(tid_a, con_pedido=True, nombre="Compró")
+    del_otro = await _cliente_solo(tid_b, con_pedido=True, nombre="Ajeno")
+    headers = await api_headers(app_client, tid_a)
+
+    # Sin datos solo se ve General (antes el resolver de commerce daba «Nuevo» a todos).
+    lista = (await app_client.get(URL, headers=headers)).json()
+    por_id = {i["id"]: i["agentes"] for i in lista["items"]}
+    assert por_id[str(sin_nada)] == ["general"]
+    assert por_id[str(con_pedido)] == ["general", "ventas"]
+
+    ventas = (await app_client.get(URL, headers=headers, params={"agente": "ventas"})).json()
+    assert {i["id"] for i in ventas["items"]} == {str(con_pedido)}
+    assert ventas["total"] == 1
+    assert str(del_otro) not in {i["id"] for i in ventas["items"]}
+
+    # General no filtra; las demás áreas sin datos del negocio quedan vacías.
+    general = (await app_client.get(URL, headers=headers, params={"agente": "general"})).json()
+    assert {str(sin_nada), str(con_pedido)} <= {i["id"] for i in general["items"]}
+    agenda = (await app_client.get(URL, headers=headers, params={"agente": "agenda"})).json()
+    assert agenda["items"] == [] and agenda["total"] == 0
+
+    # Lo mismo en el CSV, y el filtro se combina con los demás.
+    csv_ventas = await app_client.get(f"{URL}/export.csv", headers=headers, params={"agente": "ventas"})
+    assert csv_ventas.status_code == 200
+    assert "Compró" in csv_ventas.text and "Vacío" not in csv_ventas.text and "Ajeno" not in csv_ventas.text
+    nada = await app_client.get(URL, headers=headers, params={"agente": "ventas", "q": "Vacío"})
+    assert nada.json()["items"] == []
+
+    # El otro negocio ve solo lo suyo.
+    headers_b = await api_headers(app_client, tid_b)
+    de_b = (await app_client.get(URL, headers=headers_b, params={"agente": "ventas"})).json()
+    assert {i["id"] for i in de_b["items"]} == {str(del_otro)}
+
+
+async def test_filtro_por_agente_invalido_es_400(app_client) -> None:
+    from core.alta_negocio import onboard_tenant
+
+    # Un negocio sin Cobranza: su clave no se puede filtrar aunque exista en el registro.
+    slug = uniq("soloventas")
+    tid, _ = await onboard_tenant(
+        name=f"Solo ventas {slug}",
+        slug=slug,
+        persona={"tone": "cercano"},
+        admin_email="admin@local",
+        packs=["pack_commerce"],
+        sembrar_ejemplos=False,
+    )
+    headers = await api_headers(app_client, tid)
+    for clave in ("inventado", "cobranza"):
+        for ruta in (URL, f"{URL}/export.csv"):
+            r = await app_client.get(ruta, headers=headers, params={"agente": clave})
+            assert r.status_code == 400, (ruta, clave, r.text)
+            assert r.json()["error"]["code"] == "filtro_invalido"
+
+
+async def _cliente_con_lead(tid: uuid.UUID, nombre: str, **campos: str) -> uuid.UUID:
+    """Un cliente de WhatsApp con un lead de `auto_create_lead` (clave `auto:`); `campos` lo rellena."""
+    from pack_commerce.models import Lead
+
+    from core.db.models import Conversation, Customer
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            cliente = Customer(
+                tenant_id=tid, channel="whatsapp", external_id=f"whatsapp:{uniq('l')}", name=nombre
+            )
+            session.add(cliente)
+            await session.flush()
+            conv = Conversation(tenant_id=tid, customer_id=cliente.id)
+            session.add(conv)
+            await session.flush()
+            session.add(
+                Lead(
+                    tenant_id=tid,
+                    customer_id=cliente.id,
+                    conversation_id=conv.id,
+                    status="nuevo",
+                    idempotency_key=f"auto:{conv.id}",
+                    **campos,
+                )
+            )
+            await session.flush()
+            return cliente.id
+
+
+async def test_el_borrador_de_lead_vacio_no_cuenta_como_dato_de_ventas(app_client) -> None:
+    tid_a, tid_b = await _negocio(), await _negocio()
+    vacio = await _cliente_con_lead(tid_a, "Borrador vacío")
+    en_blanco = await _cliente_con_lead(tid_a, "Borrador en blanco", name="  ", interest=" ")
+    con_correo = await _cliente_con_lead(tid_a, "Dejó correo", email="ana@example.com")
+    con_interes = await _cliente_con_lead(tid_a, "Dejó interés", interest="zapatos")
+    ajeno = await _cliente_con_lead(tid_b, "Ajeno con correo", email="otro@example.com")
+    headers = await api_headers(app_client, tid_a)
+
+    lista = (await app_client.get(URL, headers=headers)).json()
+    por_id = {i["id"]: i["agentes"] for i in lista["items"]}
+    # El lead que nace vacío con la conversación no es un dato; el que ya trae contacto o interés, sí.
+    assert por_id[str(vacio)] == ["general"]
+    assert por_id[str(en_blanco)] == ["general"]
+    assert por_id[str(con_correo)] == ["general", "ventas"]
+    assert por_id[str(con_interes)] == ["general", "ventas"]
+
+    ventas = (await app_client.get(URL, headers=headers, params={"agente": "ventas"})).json()
+    assert {i["id"] for i in ventas["items"]} == {str(con_correo), str(con_interes)}
+    assert str(ajeno) not in {i["id"] for i in ventas["items"]}

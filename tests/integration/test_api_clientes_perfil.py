@@ -91,7 +91,7 @@ async def test_lista_y_ficha_traen_el_perfil_y_los_agentes(app_client) -> None:
     assert fila["perfil"]["pais_telefono"] == "CO"
     assert fila["perfil"]["municipio"] == "Cali"
     assert fila["perfil"]["id_document"] == "123456"
-    assert {"general", "ventas"} <= set(fila["agentes"])
+    assert fila["agentes"] == ["general"]  # sin pedidos, cotizaciones ni leads, Ventas no figura (HU-CRM-12)
     assert {"general", "ventas"} <= {a["key"] for a in lista["agents"]}
 
     ficha = (await app_client.get(f"{URL}/{ana}", headers=headers)).json()
@@ -186,7 +186,7 @@ async def test_csv_incluye_datos_base_y_agentes(app_client) -> None:
     indice = {nombre: i for i, nombre in enumerate(cabecera)}
     assert fila[indice["Alias"]] == "Anita"
     assert fila[indice["Teléfono"]] == "'+573001234567"
-    assert "General" in fila[indice["Agentes"]] and "Ventas" in fila[indice["Agentes"]]
+    assert fila[indice["Agentes"]] == "General"
 
 
 async def test_no_cruza_negocios(app_client) -> None:

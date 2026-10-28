@@ -11,11 +11,12 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 
 from core.admin.lead_registry import (
     Cursor,
     LeadColumn,
+    LeadRelacion,
     TimelineEvent,
     antes_del_cursor,
     lead_registry,
@@ -92,6 +93,18 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
     return out
 
 
+async def _con_datos(ids: list[uuid.UUID] | None) -> Select[Any]:
+    """Clientes con alguna cita no borrada (agendada, atendida, cancelada o no asistió)."""
+    q = select(Appointment.customer_id).where(
+        Appointment.tenant_id == get_current_tenant_id(),
+        Appointment.customer_id.is_not(None),
+        Appointment.deleted_at.is_(None),
+    )
+    if ids is not None:
+        q = q.where(Appointment.customer_id.in_(ids))
+    return q.distinct()
+
+
 async def _timeline(customer_id: uuid.UUID, cursor: Cursor | None, limit: int) -> list[TimelineEvent]:
     """Citas del cliente por fecha de creación (cuándo se agendó), con la fecha de la cita."""
     tid = get_current_tenant_id()
@@ -139,6 +152,7 @@ lead_registry.register(
     agent_key="agenda",
     agent_name="Agenda",
     icon="calendar",
+    relacion=LeadRelacion(con_datos=_con_datos),
 )
 
 

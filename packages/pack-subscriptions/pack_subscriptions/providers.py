@@ -18,6 +18,7 @@ from core.admin.lead_registry import (
     Cursor,
     LeadColumn,
     LeadFilter,
+    LeadRelacion,
     TimelineEvent,
     antes_del_cursor,
     lead_registry,
@@ -76,6 +77,16 @@ async def _filter_query(key: str, value: str) -> Select[Any] | None:
     if value in _ESTADO:
         return select(Subscription.customer_id).where(*vivas, Subscription.estado == value)
     return None
+
+
+async def _con_datos(ids: list[uuid.UUID] | None) -> Select[Any]:
+    """Clientes con alguna suscripción no borrada, en cualquier estado."""
+    q = select(Subscription.customer_id).where(
+        Subscription.tenant_id == get_current_tenant_id(), Subscription.deleted_at.is_(None)
+    )
+    if ids is not None:
+        q = q.where(Subscription.customer_id.in_(ids))
+    return q.distinct()
 
 
 async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any]]:
@@ -248,6 +259,7 @@ lead_registry.register(
     agent_key="suscripciones",
     agent_name="Suscripciones",
     icon="repeat",
+    relacion=LeadRelacion(con_datos=_con_datos),
 )
 
 

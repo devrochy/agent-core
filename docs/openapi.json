@@ -4486,6 +4486,24 @@
             "description": "Filtro de un pack como `clave:valor` (ver `filters` de la respuesta)."
           },
           {
+            "name": "agente",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Solo los clientes con datos reales de este agente (clave de `agents`). `general` no filtra; una clave sin datos propios responde 400 `filtro_invalido`.",
+              "title": "Agente"
+            },
+            "description": "Solo los clientes con datos reales de este agente (clave de `agents`). `general` no filtra; una clave sin datos propios responde 400 `filtro_invalido`."
+          },
+          {
             "name": "page",
             "in": "query",
             "required": false,
@@ -18606,7 +18624,7 @@
           "pack · suscripciones"
         ],
         "summary": "Reenviar Link De Cargo",
-        "description": "Reenvía al cliente el link de pago de un cargo pendiente, por WhatsApp (outbox, ADR-0107).\n\nReusa el link del cargo (o lo crea si falta, sin duplicar el cargo). Si el cliente no tiene\nuna conversación de WhatsApp no se envía nada y se devuelve el link para copiarlo.",
+        "description": "Reenvía al cliente el link de pago de un cargo pendiente, por WhatsApp (outbox, ADR-0107).\n\nReusa el link del cargo (o lo crea si falta, sin duplicar el cargo). Si el cliente no tiene\nuna conversación de WhatsApp no se envía nada y se devuelve el link para copiarlo.\nEs un contacto de cobro: solo dentro del horario legal del negocio y si el cliente no\nrecibió otro aviso de cobro ese día (HU-SUB-18, Ley 2300 de 2023); si no, 409.",
         "operationId": "reenviar_link_de_cargo_api_v1_pack_pack_subscriptions_cargos__charge_id__reenviar_link_post",
         "parameters": [
           {
@@ -31874,6 +31892,24 @@
             "description": "Filtro de un pack como `clave:valor` (ver `filters` de la respuesta)."
           },
           {
+            "name": "agente",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Solo los clientes con datos reales de este agente (clave de `agents`). `general` no filtra; una clave sin datos propios responde 400 `filtro_invalido`.",
+              "title": "Agente"
+            },
+            "description": "Solo los clientes con datos reales de este agente (clave de `agents`). `general` no filtra; una clave sin datos propios responde 400 `filtro_invalido`."
+          },
+          {
             "name": "X-Tenant-Id",
             "in": "header",
             "required": false,
@@ -37191,6 +37227,22 @@
               ],
               "title": "X-Tenant-Id"
             }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
           }
         ],
         "responses": {
@@ -37242,6 +37294,22 @@
                 }
               ],
               "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
             }
           }
         ],
@@ -37313,6 +37381,22 @@
               ],
               "title": "X-Tenant-Id"
             }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
           }
         ],
         "requestBody": {
@@ -37381,6 +37465,22 @@
               ],
               "title": "X-Tenant-Id"
             }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
           }
         ],
         "responses": {
@@ -37434,6 +37534,22 @@
               ],
               "title": "X-Tenant-Id"
             }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
           }
         ],
         "requestBody": {
@@ -37453,6 +37569,402 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PagoConfirmadoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_subscriptions/promociones": {
+      "get": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Listar Promociones",
+        "description": "Promociones de plan del negocio (sin las borradas), de la más reciente a la más antigua.",
+        "operationId": "listar_promociones_api_v1_pack_pack_subscriptions_promociones_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PromocionOut"
+                  },
+                  "title": "Response Listar Promociones Api V1 Pack Pack Subscriptions Promociones Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Crear Promocion",
+        "description": "Crea una promoción. Código repetido → 409 `codigo_duplicado`; porcentaje fuera de 1–99 o períodos > 1 → 422.",
+        "operationId": "crear_promocion_api_v1_pack_pack_subscriptions_promociones_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromocionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromocionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_subscriptions/promociones/{promocion_id}": {
+      "put": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Editar Promocion",
+        "description": "Reemplaza una promoción. Los canjes ya hechos conservan lo que se descontó.",
+        "operationId": "editar_promocion_api_v1_pack_pack_subscriptions_promociones__promocion_id__put",
+        "parameters": [
+          {
+            "name": "promocion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Promocion Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromocionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromocionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Borrar Promocion",
+        "description": "Borra la promoción (lógico): su código deja de aplicar.",
+        "operationId": "borrar_promocion_api_v1_pack_pack_subscriptions_promociones__promocion_id__delete",
+        "parameters": [
+          {
+            "name": "promocion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Promocion Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_subscriptions/promociones/{promocion_id}/canjes": {
+      "get": {
+        "tags": [
+          "pack · suscripciones"
+        ],
+        "summary": "Canjes De Promocion",
+        "description": "Quién canjeó la promoción, en qué estado está cada canje y cuánto se descontó.",
+        "operationId": "canjes_de_promocion_api_v1_pack_pack_subscriptions_promociones__promocion_id__canjes_get",
+        "parameters": [
+          {
+            "name": "promocion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Promocion Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_CanjeOut_"
                 }
               }
             }
@@ -42027,6 +42539,19 @@
             ],
             "title": "Metodo Pago",
             "default": "pago_en_linea"
+          },
+          "codigo_promocion": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codigo Promocion",
+            "description": "Código de una promoción de plan: el primer cobro sale con descuento (HU-SUB-33)."
           },
           "variant_id": {
             "anyOf": [
@@ -52946,7 +53471,43 @@
               }
             ],
             "title": "Monto",
-            "description": "Valor del cobro de inscripción, si lo hay."
+            "description": "Valor del cobro de inscripción (neto), si lo hay."
+          },
+          "monto_bruto": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monto Bruto",
+            "description": "Precio de lista, si hay una promoción aplicada."
+          },
+          "descuento": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Descuento",
+            "description": "Descuento de la promoción en el primer cobro."
+          },
+          "promocion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promocion",
+            "description": "Etiqueta de la promoción aplicada."
           },
           "link_pago": {
             "anyOf": [
@@ -68834,6 +69395,399 @@
           "lote"
         ],
         "title": "EstadoDatosDePruebaModulo"
+      },
+      "CanjeOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "reservado",
+              "confirmado",
+              "agotado",
+              "terminado",
+              "liberado"
+            ],
+            "title": "Estado"
+          },
+          "cliente_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cliente Id"
+          },
+          "suscripcion_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Suscripcion Id"
+          },
+          "cargo_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cargo Id"
+          },
+          "monto_bruto": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monto Bruto"
+          },
+          "descuento": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Descuento"
+          },
+          "monto": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monto",
+            "description": "Neto cobrado."
+          },
+          "creado": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "estado",
+          "cliente_id",
+          "suscripcion_id",
+          "cargo_id"
+        ],
+        "title": "CanjeOut"
+      },
+      "Page_CanjeOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CanjeOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "has_more"
+        ],
+        "title": "Page[CanjeOut]"
+      },
+      "PromocionBody": {
+        "properties": {
+          "etiqueta": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Etiqueta",
+            "description": "Nombre que ve el dueño (p. ej. «Lanzamiento»)."
+          },
+          "codigo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codigo",
+            "description": "Código que escribe el cliente (3 a 40: letras, números, - o _). Se guarda en minúsculas."
+          },
+          "tipo_descuento": {
+            "type": "string",
+            "enum": [
+              "porcentaje",
+              "monto"
+            ],
+            "title": "Tipo Descuento",
+            "default": "porcentaje"
+          },
+          "valor": {
+            "type": "number",
+            "maximum": 999999999999.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Valor",
+            "description": "1 a 99 si es porcentaje."
+          },
+          "periodos": {
+            "type": "integer",
+            "maximum": 12.0,
+            "minimum": 1.0,
+            "title": "Periodos",
+            "description": "Cobros que descuenta. Hoy solo se acepta 1.",
+            "default": 1
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id",
+            "description": "Plan al que aplica; vacío = cualquier plan de pago."
+          },
+          "vigente_desde": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vigente Desde"
+          },
+          "vigente_hasta": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vigente Hasta"
+          },
+          "max_canjes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Canjes",
+            "description": "Tope de canjes; vacío = sin tope."
+          },
+          "activa": {
+            "type": "boolean",
+            "title": "Activa",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "etiqueta",
+          "valor"
+        ],
+        "title": "PromocionBody"
+      },
+      "PromocionOut": {
+        "properties": {
+          "etiqueta": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Etiqueta",
+            "description": "Nombre que ve el dueño (p. ej. «Lanzamiento»)."
+          },
+          "codigo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codigo",
+            "description": "Código que escribe el cliente (3 a 40: letras, números, - o _). Se guarda en minúsculas."
+          },
+          "tipo_descuento": {
+            "type": "string",
+            "enum": [
+              "porcentaje",
+              "monto"
+            ],
+            "title": "Tipo Descuento",
+            "default": "porcentaje"
+          },
+          "valor": {
+            "type": "number",
+            "maximum": 999999999999.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Valor",
+            "description": "1 a 99 si es porcentaje."
+          },
+          "periodos": {
+            "type": "integer",
+            "maximum": 12.0,
+            "minimum": 1.0,
+            "title": "Periodos",
+            "description": "Cobros que descuenta. Hoy solo se acepta 1.",
+            "default": 1
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id",
+            "description": "Plan al que aplica; vacío = cualquier plan de pago."
+          },
+          "vigente_desde": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vigente Desde"
+          },
+          "vigente_hasta": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vigente Hasta"
+          },
+          "max_canjes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Canjes",
+            "description": "Tope de canjes; vacío = sin tope."
+          },
+          "activa": {
+            "type": "boolean",
+            "title": "Activa",
+            "default": true
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "canjes_usados": {
+            "type": "integer",
+            "title": "Canjes Usados"
+          },
+          "canjes_restantes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canjes Restantes",
+            "description": "Vacío si no tiene tope."
+          },
+          "creada": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creada"
+          },
+          "actualizada": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actualizada"
+          }
+        },
+        "type": "object",
+        "required": [
+          "etiqueta",
+          "valor",
+          "id",
+          "canjes_usados"
+        ],
+        "title": "PromocionOut"
       }
     }
   }

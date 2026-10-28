@@ -1,6 +1,6 @@
 # ADR-0175 — Acceso del dueño en el alta desde el panel: enlace por correo, sin contraseña tecleada
 
-- **Estado:** propuesto
+- **Estado:** aceptado (2026-10-28; mergeado en core#605, desplegado en test)
 - **Fecha:** 2026-10-27
 - **Contexto:** al crear un negocio desde el panel (`POST /api/v1/admin/platform/tenants`) no salía ningún correo: el master tecleaba la contraseña del dueño y `onboard_tenant` lo vinculaba como owner al instante. El único correo de alta vivía en el aprovisionamiento automático (ADR-0121 §3.8).
 - **Usa:** ADR-0121 (invitación `owner` con enlace de un solo uso y canje que define la contraseña), ADR-0124 (el canje abre la sesión), ADR-0081 (invitaciones: nadie queda miembro de un negocio sin aceptar), ADR-0098 (correo de sistema por SMTP) y ADR-0134 (el tester opera como master, pero solo con cuentas nuevas).

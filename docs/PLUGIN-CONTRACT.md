@@ -303,7 +303,8 @@ Antes de los guardrails de los packs corre el **verificador de afirmaciones** de
 - **Montos:** toda cifra en `$`/`COP` tiene que haber salido de una tool, de este turno o de
   uno anterior. Un pack que devuelve un monto verificado lo pone bajo una clave de
   `core.shared.dinero.MONEY_KEYS` (`price`, `unit_price`, `line_total`, `subtotal`, `total`,
-  `discount`, `monto`, `valor_periodo`). Un monto que el LLM pasó como argumento (`amount`)
+  `discount`, `monto`, `valor_periodo`, y de la cotización de un plan con promoción: `precio_lista`, `descuento`,
+  `total_primer_cargo`, `precio_periodo_siguiente`, `monto_bruto`). Un monto que el LLM pasó como argumento (`amount`)
   no cuenta.
 - **Links:** una URL que no devolvió una tool del turno ni está en el contexto (prompt o
   mensajes del cliente) se quita del texto. El link exacto se entrega con `_safe_append`.
