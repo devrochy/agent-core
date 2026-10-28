@@ -18,7 +18,7 @@ from core.agents.spec import enabled_packs, load_active_spec
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.datos_cliente import AccionDatos, Nivel, niveles_efectivos, registro_datos
-from core.datos_cliente.ajustes import con_politica, politica_de
+from core.datos_cliente.ajustes import con_herramientas, con_politica, herramientas_de, politica_de
 from core.datos_cliente.servicio import base_de
 from core.db.models import AppSettings, AuditLog
 from core.db.session import get_session
@@ -47,12 +47,17 @@ class AccionPoliticaOut(BaseModel):
 class PoliticaDatosOut(BaseModel):
     niveles: list[NivelOut]
     acciones: list[AccionPoliticaOut]
+    # Si el asistente puede consultar los datos del cliente con sus herramientas (apagado por defecto).
+    herramientas_del_agente: bool = False
 
 
 class PoliticaDatosUpdate(BaseModel):
-    """`{accion_id: {clave: nivel}}`. Lo que no viene para una acción vuelve al valor del módulo."""
+    """`{accion_id: {clave: nivel}}`. Lo que no viene para una acción vuelve al valor del módulo.
+    Sin `politica` (None) no se tocan los ajustes: sirve para cambiar solo la bandera."""
 
-    politica: dict[str, dict[str, NivelOut]] = Field(default_factory=dict, max_length=50)
+    politica: dict[str, dict[str, NivelOut]] | None = Field(default=None, max_length=50)
+    # None = no cambia. True/False enciende o apaga las herramientas de datos del cliente del asistente.
+    herramientas_del_agente: bool | None = None
 
 
 def _exigir_negocio(principal: Principal) -> None:
@@ -93,7 +98,9 @@ async def _leer(behavior: dict | None, acciones: list[AccionDatos]) -> PoliticaD
                 ],
             )
         )
-    return PoliticaDatosOut(niveles=[n.value for n in Nivel], acciones=salida)
+    return PoliticaDatosOut(
+        niveles=[n.value for n in Nivel], acciones=salida, herramientas_del_agente=herramientas_de(behavior)
+    )
 
 
 async def _behavior_de(tenant_id) -> dict | None:
@@ -125,7 +132,7 @@ async def save_politica(
     _exigir_negocio(principal)
     acciones = {a.id: a for a in await _habilitadas()}
     nuevos: dict[str, dict[str, str]] = {}
-    for accion_id, claves in payload.politica.items():
+    for accion_id, claves in (payload.politica or {}).items():
         accion = acciones.get(accion_id)
         if accion is None:
             raise ApiError(422, "accion_desconocida", "Esa acción no existe en este negocio.", fields={"politica": "Esa acción no existe en este negocio."})
@@ -160,8 +167,11 @@ async def save_politica(
             session.add(app_settings)
         actual = politica_de(app_settings.behavior_config)
         # Las acciones de módulos que hoy no están habilitados conservan su ajuste.
-        resultado = {k: v for k, v in actual.items() if k not in acciones}
-        resultado.update(nuevos)
+        if payload.politica is None:
+            resultado = actual
+        else:
+            resultado = {k: v for k, v in actual.items() if k not in acciones}
+            resultado.update(nuevos)
         if resultado != actual:
             antes = {k: v for k, v in actual.items() if k in acciones}
             app_settings.behavior_config = con_politica(app_settings.behavior_config, resultado)
@@ -171,6 +181,18 @@ async def save_politica(
                     actor=f"admin:{principal.admin.email}",
                     action="settings.datos_cliente",
                     input={"antes": antes, "despues": nuevos},
+                )
+            )
+        if payload.herramientas_del_agente is not None and payload.herramientas_del_agente != herramientas_de(
+            app_settings.behavior_config
+        ):
+            app_settings.behavior_config = con_herramientas(app_settings.behavior_config, payload.herramientas_del_agente)
+            session.add(
+                AuditLog(
+                    tenant_id=principal.tenant_id,
+                    actor=f"admin:{principal.admin.email}",
+                    action="settings.datos_cliente_herramientas",
+                    input={"despues": payload.herramientas_del_agente},
                 )
             )
     return await _leer(await _behavior_de(principal.tenant_id), list(acciones.values()))

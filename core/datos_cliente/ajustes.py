@@ -75,3 +75,38 @@ async def cargar_ajustes(tenant_id: uuid.UUID) -> dict[str, dict[str, str]]:
             )
         ).scalar_one_or_none()
     return politica_de(behavior)
+
+
+def herramientas_de(behavior: dict[str, Any] | None) -> bool:
+    """¿El negocio dejó que el agente use los datos del cliente (tools y ficha)? Apagado por defecto."""
+    bloque = (behavior or {}).get(CLAVE)
+    return bool(bloque.get("herramientas")) if isinstance(bloque, dict) else False
+
+
+def con_herramientas(behavior: dict[str, Any] | None, activas: bool) -> dict[str, Any]:
+    """Copia del `behavior_config` con la bandera de las herramientas del agente puesta o quitada."""
+    nuevo = dict(behavior or {})
+    bloque = dict(nuevo.get(CLAVE) or {}) if isinstance(nuevo.get(CLAVE), dict) else {}
+    if activas:
+        bloque["herramientas"] = True
+    else:
+        bloque.pop("herramientas", None)
+    if bloque:
+        nuevo[CLAVE] = bloque
+    else:
+        nuevo.pop(CLAVE, None)
+    return nuevo
+
+
+async def herramientas_activas(tenant_id: uuid.UUID | None) -> bool:
+    if tenant_id is None:
+        return False
+    async with get_session() as session:
+        behavior = (
+            await session.execute(
+                select(AppSettings.behavior_config).where(
+                    AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
+                )
+            )
+        ).scalar_one_or_none()
+    return herramientas_de(behavior)

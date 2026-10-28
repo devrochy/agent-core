@@ -198,3 +198,24 @@ async def test_el_ajuste_cambia_la_lista_que_exige_ventas_y_la_tool_la_expone(ap
     assert "email" in accion["faltan"] and "id_document" not in accion["faltan"] + accion["ya_registrados"]
     assert {a["accion"] for a in todas["acciones"]} >= {"ventas.pedido_retiro", "agenda.agendar_cita"}
     assert "error" in desconocida
+
+
+async def test_las_herramientas_del_agente_nacen_apagadas_y_se_encienden_sin_tocar_los_ajustes(app_client) -> None:
+    from core.datos_cliente.tools import _hay_acciones
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    h = await api_headers(app_client, tid)
+    assert (await app_client.get(URL, headers=h)).json()["herramientas_del_agente"] is False
+    async with tenant_scope(tid):
+        assert await _hay_acciones(set()) is False  # apagado: el modelo no ve la tool
+
+    await app_client.put(URL, headers=h, json={"politica": {"ventas.pedido_retiro": {"id_document": "no_pedir"}}})
+    r = await app_client.put(URL, headers=h, json={"herramientas_del_agente": True})  # sin `politica`: no la toca
+    assert r.json()["herramientas_del_agente"] is True
+    assert _campo(r.json(), "ventas.pedido_retiro", "id_document")["nivel"] == "no_pedir"
+    async with tenant_scope(tid):
+        assert await _hay_acciones(set()) is True
+
+    r = await app_client.put(URL, headers=h, json={"herramientas_del_agente": False})
+    assert r.json()["herramientas_del_agente"] is False
