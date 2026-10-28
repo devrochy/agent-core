@@ -151,7 +151,7 @@ async def test_dlq_con_error_y_claim_revocado(monkeypatch) -> None:
     entry_id = await r.xadd(INBOUND_STREAM, fields)
     await r.xreadgroup(mod.GROUP, mod.CONSUMER, {INBOUND_STREAM: ">"}, count=10)
 
-    async def boom(_fields: dict[str, str]) -> None:
+    async def boom(_fields: dict[str, str], **_kw: object) -> None:
         raise RuntimeError("fallo forzado de prueba")
 
     monkeypatch.setattr(mod, "_handle_inbound_scoped", boom)
