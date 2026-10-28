@@ -2751,9 +2751,10 @@ class MensajeGuardado(Base):
         Index("uq_mensajes_guardados_tenant_clave", "tenant_id", "clave", unique=True, postgresql_where=text("deleted_at IS NULL")),
         CheckConstraint("estado in ('borrador','activo','archivado')", name="ck_mensajes_guardados_estado"),
         CheckConstraint("clave ~ '^[a-z0-9_]{1,40}$'", name="ck_mensajes_guardados_clave"),
-        CheckConstraint("char_length(btrim(titulo)) between 1 and 120", name="ck_mensajes_guardados_titulo"),
-        CheckConstraint("char_length(btrim(texto)) between 1 and 4096", name="ck_mensajes_guardados_texto"),
-        CheckConstraint("cardinality(canales) <= 20", name="ck_mensajes_guardados_canales"),
+        CheckConstraint("char_length(titulo) between 1 and 120 and titulo !~ '^\\s*$'", name="ck_mensajes_guardados_titulo"),
+        CheckConstraint("char_length(texto) between 1 and 4096 and texto !~ '^\\s*$'", name="ck_mensajes_guardados_texto"),
+        CheckConstraint("cardinality(canales) <= 20 and (array_ndims(canales) is null or array_ndims(canales) = 1) "
+            "and array_position(canales, null) is null and array_position(canales, '') is null", name="ck_mensajes_guardados_canales"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

@@ -168,13 +168,26 @@ async def test_la_base_tambien_impone_la_unicidad_y_las_formas(app_client, negoc
         "values (:i, :t, :c, :ti, :tx, :e)"
     )
     base = {"t": a.tid, "c": _clave(), "ti": "T", "tx": "x", "e": "borrador"}
+    def con_canales(literal: str) -> str:  # literal de prueba (constante), no entrada de nadie
+        return (
+            "insert into mensajes_guardados (id, tenant_id, clave, titulo, texto, canales) "
+            f"values (:i, :t, :c, 'T', 'x', '{literal}'::text[])"
+        )
+
+    for canales in ("{NULL}", "{\"\"}", "{{a},{b}}", "{" + ",".join(f"c{i}" for i in range(21)) + "}"):
+        with pytest.raises(DBAPIError) as exc:
+            await _sql(a.tid, con_canales(canales), i=uuid.uuid4(), t=a.tid, c=_clave())
+        assert "ck_mensajes_guardados_canales" in str(exc.value), canales
+    await _sql(a.tid, con_canales("{webchat,whatsapp_meta}"), i=uuid.uuid4(), t=a.tid, c=_clave())
     for malo in (
         {"c": clave},  # clave viva repetida
         {"c": "Mayúsculas"}, {"c": ""}, {"c": "x" * 41},
         {"ti": "   "}, {"ti": "t" * 121}, {"tx": "  "}, {"tx": "x" * 4097}, {"e": "publicado"},
+        {"tx": "\n\t \r"}, {"ti": "\n"},  # solo espacios en blanco, no solo U+0020
     ):
-        with pytest.raises(DBAPIError):
+        with pytest.raises(DBAPIError) as exc:
             await _sql(a.tid, insertar, i=uuid.uuid4(), **{**base, **malo})
+        assert "violates" in str(exc.value), malo  # una restricción de la base, no un error de tipos
 
 
 async def test_tope_de_mensajes_vivos_por_negocio(app_client, negocios) -> None:  # type: ignore[no-untyped-def]

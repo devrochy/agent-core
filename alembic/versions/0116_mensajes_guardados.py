@@ -72,9 +72,10 @@ def upgrade() -> None:
         sa.UniqueConstraint("tenant_id", "id", name="uq_mensajes_guardados_tenant_id_id"),
         sa.CheckConstraint("estado in ('borrador','activo','archivado')", name="ck_mensajes_guardados_estado"),
         sa.CheckConstraint("clave ~ '^[a-z0-9_]{1,40}$'", name="ck_mensajes_guardados_clave"),
-        sa.CheckConstraint("char_length(btrim(titulo)) between 1 and 120", name="ck_mensajes_guardados_titulo"),
-        sa.CheckConstraint("char_length(btrim(texto)) between 1 and 4096", name="ck_mensajes_guardados_texto"),
-        sa.CheckConstraint("cardinality(canales) <= 20", name="ck_mensajes_guardados_canales"),
+        sa.CheckConstraint("char_length(titulo) between 1 and 120 and titulo !~ '^\\s*$'", name="ck_mensajes_guardados_titulo"),
+        sa.CheckConstraint("char_length(texto) between 1 and 4096 and texto !~ '^\\s*$'", name="ck_mensajes_guardados_texto"),
+        sa.CheckConstraint("cardinality(canales) <= 20 and (array_ndims(canales) is null or array_ndims(canales) = 1) "
+            "and array_position(canales, null) is null and array_position(canales, '') is null", name="ck_mensajes_guardados_canales"),
     )
     op.create_index(
         "uq_mensajes_guardados_tenant_clave",
