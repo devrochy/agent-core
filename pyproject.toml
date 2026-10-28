@@ -60,6 +60,9 @@ waweb = ["neonize>=0.5"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    # Unitarios en paralelo en el CI (`-n`); la integración sigue en serie hasta que
+    # cada worker tenga su base y su Redis (ADR-0120, adenda 2026-10-28).
+    "pytest-xdist>=3.6",
     # La serie 2.x de mypy (2.3/2.4) crashea con INTERNAL ERROR en este repo
     # (metastore/sqlite y plugin pydantic). Se fija a 1.x estable. El gate de
     # tipos en CI usa basedpyright (no depende de sqlite del intérprete).

@@ -92,3 +92,25 @@ Decisión del dueño: **develop no genera costos de LLM y producción los mínim
 - **Qué haría que revisáramos esto:** una regresión del modelo que llegue a una release porque nadie lanzó la
   medición a demanda, o un cambio de proveedor o modelo (eso siempre se mide en vivo antes de activarlo).
 
+
+## Adenda (2026-10-28): menos espera en el CI del backend
+
+Medido sobre los últimos 25 runs de `ci.yml`: el job `rapido` dura 2–3,5 min; la integración, ~11 min en la PR
+(`-m aislamiento`) y ~19–20 min en el push a develop (1829 tests en serie). Además, 6 de 24 runs esperaron entre
+416 y 864 s a que arrancara el primer job: `solvershub-ci-2`, el segundo runner con el que contaba este ADR, llevaba
+apagado desde el 2026-10-09.
+
+- **Job `nivel`.** El cálculo del nivel y de las rutas relevantes sale de `rapido` a un job corto (checkout + diff).
+  `rapido`, `integracion` y `evals-replay` arrancan a la vez, en vez de `integracion` y `evals-replay` esperar a
+  `rapido`. Si lint falla, la integración ya habrá corrido: es el costo aceptado.
+- **Gitleaks** usa un binario cacheado en el host (`~/.cache/ci-bin/`) en vez de bajarlo en cada corrida.
+- **Unitarios con `pytest -n 4`** (pytest-xdist). Exige que la colección sea idéntica en todos los workers: los ids de
+  `parametrize` no pueden usar `uuid4()`; se usan `uuid5` con nombre fijo.
+- **Medición de la integración.** `--durations=40` y un junit XML subido como artifact (`integracion-junit`, 14 días).
+  Con ese perfil se decide si la integración se reparte entre workers.
+- **La integración sigue en serie.** Paralelizarla con xdist (una base `agent_core_gwN` por worker, copiada de la
+  plantilla migrada, y una base de Redis por worker) sigue siendo la opción de mayor ahorro, pero sigue exigiendo
+  aislar tenants fijos, claves de Redis globales, `TENANTS_ROOT` y los roles de `test_tenant_lifecycle`. Se decide con
+  los datos del artifact; este ADR no la acepta todavía.
+- **Qué haría que revisáramos esto:** la mediana de pared de una PR a develop (cola + ejecución) sigue sobre 8 min con
+  dos runners en línea, o la CPU del host se satura al correr dos jobs de integración a la vez.

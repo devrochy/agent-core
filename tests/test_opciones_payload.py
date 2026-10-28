@@ -9,9 +9,11 @@ import pytest
 from core.kernel.opciones import payload as p
 
 SECRETO = "secreto-de-prueba"
-T1, T2 = uuid.uuid4(), uuid.uuid4()
-C1, C2 = uuid.uuid4(), uuid.uuid4()
-S1, S2 = uuid.uuid4(), uuid.uuid4()
+# Ids fijos (uuid5), no uuid4: los ids de `parametrize` deben ser iguales en cada proceso o
+# pytest-xdist rechaza la colección ("Different tests were collected").
+T1, T2 = (uuid.uuid5(uuid.NAMESPACE_DNS, f"tenant-{i}") for i in (1, 2))
+C1, C2 = (uuid.uuid5(uuid.NAMESPACE_DNS, f"cliente-{i}") for i in (1, 2))
+S1, S2 = (uuid.uuid5(uuid.NAMESPACE_DNS, f"sesion-{i}") for i in (1, 2))
 H = p.hash_de_argumentos("consultar", {"id": "1"})
 
 
