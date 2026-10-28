@@ -18,6 +18,7 @@
   - Corte: las filas anteriores tienen `cache_write_tokens` en NULL. Desde el corte, Costos por modelo, la
     consola de conexiones y el editor muestran más tokens de entrada con Anthropic.
   - El costo y los créditos no cambian, porque siguen saliendo de lo que reporta el proveedor.
+  - La estimación de costo por modelo del editor de agentes descuenta lo cacheado de las filas nuevas.
   - El proveedor OpenAI-compatible también lee `prompt_tokens_details.cached_tokens`.
 - **Costos por agente.** `GET /admin/costs` trae `by_agent`, con los últimos 30 días por agente: turnos,
   tokens de entrada, tokens cacheados, porcentaje cacheado y costo.

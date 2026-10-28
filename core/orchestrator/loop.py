@@ -14,6 +14,7 @@ El LLM propone, las tools deciden (contra la BD), el core arbitra.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import re
 import uuid
@@ -379,7 +380,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # desactivado) va como aviso al bloque dinámico, calculado antes del motor (HU-AOS-35).
         disponibles = {t.name for t in candidate_tools}
         if any(nombre in disponibles for nombre in compilado.flujo.tool_names):
-            flow = compilado.flujo
+            flow = copy.deepcopy(compilado.flujo)  # lo compilado es de todos los turnos de la release
             no_disponible = aviso_no_disponible(flow, disponibles, app_settings.language if app_settings else None)
         else:
             # Ninguna herramienta del flujo disponible: la rama de siempre (router por palabras y sin

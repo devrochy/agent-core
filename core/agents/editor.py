@@ -517,11 +517,16 @@ async def contexto_de_modelos(tenant_id: uuid.UUID) -> ContextoDeModelos:
                 {"t": tenant_id},
             )
         ).first()
-        # Una sola consulta agregada sobre `ix_usage_ledger_tenant_created`.
+        # Una sola consulta agregada sobre `ix_usage_ledger_tenant_created`. La entrada que se estima a
+        # precio completo es la que NO salió de la caché: desde la migración 0114 (HU-AOS-35)
+        # `input_tokens` es el total con lo cacheado incluido, así que se descuenta; las filas
+        # anteriores (`cache_write_tokens` NULL) se toman como estaban.
         consumo = (
             await session.execute(
                 text(
-                    "SELECT count(*), avg(input_tokens), avg(output_tokens) FROM usage_ledger "
+                    "SELECT count(*), avg(CASE WHEN cache_write_tokens IS NULL THEN input_tokens "
+                    "  ELSE greatest(input_tokens - cached_tokens - cache_write_tokens, 0) END), "
+                    "  avg(output_tokens) FROM usage_ledger "
                     "WHERE tenant_id = :t AND created_at > now() - make_interval(days => :d)"
                 ),
                 {"t": tenant_id, "d": DIAS_DE_CONSUMO},

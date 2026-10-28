@@ -703,7 +703,7 @@ La métrica tampoco sirve para medir la meta (≥ 50 % de los tokens de entrada 
      - `a2a.py` (`agent_run`) y `veredicto.py` (gate) escriben `cache_write_tokens = 0` con el nuevo significado;
      - qa, embeddings e ingesta quedan fuera del porcentaje por su `kind`.
    - **Porcentaje:** `sum(cached_tokens) / sum(input_tokens)` sobre las filas con `cache_write_tokens IS NOT NULL`. Las filas de antes del corte no entran.
-   - **Lectores de `input_tokens`:** Costos por modelo, la vista SSR, la consola de conexiones, el editor y Conversaciones van a mostrar más tokens con Anthropic desde el corte. Ninguno cobra con esto: los créditos solo miran si hubo tokens. La nota de corte va en el changelog.
+   - **Lectores de `input_tokens`:** Costos por modelo, la vista SSR, la consola de conexiones y Conversaciones van a mostrar más tokens con Anthropic desde el corte. La estimación de costo del editor de agentes descuenta lo leído y lo escrito en caché en las filas desde el corte, para no cobrarlo a precio completo. Ninguno cobra con esto: los créditos solo miran si hubo tokens. La nota de corte va en el changelog.
 
 7. **Costos por agente.** `GET /admin/costs` gana `by_agent`, con los últimos 30 días agrupados por agente. Une `agent_instance_id` → `agent_instances` por `tenant_id` e `id`, filtra por `principal.tenant_id` y excluye `NO_ES_ACTIVIDAD`, con las mismas condiciones que `data_por_agente.consumo`, que se reutilizan. Trae turnos, tokens de entrada, tokens cacheados, porcentaje (null sin filas medibles) y costo. Las filas sin agente van juntas como «sin agente». Usa la sección `costs`. El panel muestra la tabla en Costos.
 
