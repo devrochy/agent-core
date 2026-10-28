@@ -287,9 +287,11 @@ def test_el_resultado_para_el_agente_no_lleva_ids_ni_contexto() -> None:
     assert envio.para_el_agente(ok) == {"status": "sent", "via": "interactivo", "ejecucion_directa": True}
     texto = envio.ResultadoEnvio(True, envio.ENVIADO, via=envio.TEXTO, send_id=SEND, motivo=envio.CANAL_SIN_BOTONES, degradado=True)
     assert envio.para_el_agente(texto) == {"status": "sent", "via": "texto", "ejecucion_directa": False}
-    # Un menú de texto en un canal que interpreta la respuesta (pista C2) sí se ejecuta; el interactivo degradado de Meta no.
+    # Un menú de texto contestable (pista C2) es ejecución directa para el API, pero NO para el agente: dentro de un
+    # turno su texto final sale después del menú y el «1» le llegaría a él.
     contestable = envio.ResultadoEnvio(True, envio.ENVIADO, via=envio.TEXTO, send_id=SEND, degradado=True, por_respuesta=True)
-    assert envio.para_el_agente(contestable) == {"status": "sent", "via": "texto", "ejecucion_directa": True}
+    assert contestable.ejecucion_directa
+    assert envio.para_el_agente(contestable) == {"status": "sent", "via": "texto", "ejecucion_directa": False}
     assert not envio.ResultadoEnvio(False, envio.NO_ENCOLADO, via=envio.TEXTO, por_respuesta=True).ejecucion_directa
     assert envio.para_el_agente(envio.ResultadoEnvio(False, envio.DUPLICADO, send_id=SEND)) == {"status": "already_sent"}
     for outcome in (envio.BANDERA_APAGADA, envio.NO_ENCONTRADA, envio.NO_PUBLICADA, envio.SIN_PLANTILLA, envio.CONTEXTO_INCOMPLETO):

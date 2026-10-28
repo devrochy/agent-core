@@ -78,7 +78,8 @@ def test_whatsapp_con_proveedor_desconocido_es_solo_texto() -> None:
 
 
 def test_capacidades_del_canal_es_lo_maximo_de_sus_proveedores() -> None:
-    # El O lógico de los proveedores de WhatsApp: Meta tiene botones y QR (waweb) responde con número.
+    # El O lógico de los proveedores de WhatsApp (ojo: `respuesta_numerica` es del QR, NO de Meta; el consumer decide con
+    # `capacidades_de(canal, proveedor)`, nunca con esta vista por canal).
     assert capacidades_del_canal("whatsapp") == CapacidadesCanal(
         botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True, respuesta_numerica=True
     )

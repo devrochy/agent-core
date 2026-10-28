@@ -213,5 +213,9 @@ def para_el_agente(r: ResultadoEnvio) -> dict[str, Any]:
     if r.outcome == DUPLICADO:
         return {"status": "already_sent"}
     if r.enviado:
-        return {"status": "sent", "via": ETIQUETA_VIA.get(r.via or "", ""), "ejecucion_directa": r.ejecucion_directa}
+        # El agente corre DENTRO de un turno: su texto final sale después de un menú de texto y lo deja de ser el
+        # último saliente, así que el «1» llegaría al agente. Por eso aquí solo cuentan el botón y la plantilla (no
+        # `r.ejecucion_directa`, que sí es True para el API `enviar-prueba` de un menú de texto contestable, pista C2).
+        directa = r.enviado and r.via in (INTERACTIVO, PLANTILLA)
+        return {"status": "sent", "via": ETIQUETA_VIA.get(r.via or "", ""), "ejecucion_directa": directa}
     return {"error": r.outcome, "mensaje": _MENSAJE_AGENTE.get(r.outcome, "No se pudo enviar la plantilla.")}

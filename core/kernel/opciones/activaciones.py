@@ -91,7 +91,8 @@ async def cargar_envio(tenant_id: uuid.UUID, send_id: uuid.UUID) -> Envio | None
 
 # Los mensajes de un envío salen con `client_message_id = opt_send:<send_id>[:<burbuja>]` (`opciones_envio`): el menú
 # de texto puede partirse en varias burbujas y la última es la que el cliente tiene delante.
-_MENSAJE_DE_ENVIO = re.compile(r"opt_send:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?::[0-9]+)?")
+PREFIJO_ID_MENSAJE = "opt_send"  # lo escribe `gateway/opciones_envio` (que lo importa de aquí) y lo lee `envio_del_ultimo_saliente`
+_MENSAJE_DE_ENVIO = re.compile(PREFIJO_ID_MENSAJE + r":([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?::[0-9]+)?")
 
 
 async def envio_del_ultimo_saliente(tenant_id: uuid.UUID, conversation_id: uuid.UUID) -> uuid.UUID | None:

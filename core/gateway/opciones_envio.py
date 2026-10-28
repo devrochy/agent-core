@@ -56,6 +56,7 @@ from core.db.session import get_session
 from core.gateway.connection_types import capacidades_de
 from core.kernel.opciones import bandera, contexto, mapeo, metricas, payload
 from core.kernel.opciones import envio as ev
+from core.kernel.opciones.activaciones import PREFIJO_ID_MENSAJE
 from core.kernel.opciones.definicion import Definicion
 from core.kernel.opciones.definicion import leer as leer_definicion
 from core.shared.audit import record_audit
@@ -65,7 +66,7 @@ from core.shared.tenant import get_current_tenant_id
 log = get_logger(__name__)
 
 CLAVE = re.compile(r"^[a-z0-9_]{1,40}$")  # misma forma que `ck_option_templates_key`
-PREFIJO_ID = "opt_send"
+PREFIJO_ID = PREFIJO_ID_MENSAJE  # formato `<prefijo>:<send_id>[:<burbuja>]`; el kernel lo lee en `activaciones`
 ACCION_AUDITORIA = "option_send"
 
 _DETALLE = {
