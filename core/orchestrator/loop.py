@@ -14,6 +14,7 @@ El LLM propone, las tools deciden (contra la BD), el core arbitra.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import re
 import uuid
@@ -23,6 +24,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from core.agents import procedencia
+from core.agents.compiler import aviso_no_disponible
 from core.agents.flow import confirmed_actions_v2, render_flow, resolve_flow
 from core.agents.responses import load_response
 from core.agents.spec import enabled_packs, load_active_spec
@@ -144,9 +146,11 @@ class TurnResult:
 class _TurnUsage:
     """Acumula el uso LLM de UN turno para el usage_ledger (ADR-0008)."""
 
+    # Total de entrada, lo cacheado incluido, en todos los proveedores (adenda HU-AOS-35).
     input_tokens: int = 0
     output_tokens: int = 0
-    cached_tokens: int = 0
+    cached_tokens: int = 0  # solo lo leído de la caché
+    cache_write_tokens: int = 0
     latency_ms: int = 0
     cost_usd: float = 0.0
     model: str = ""
@@ -158,14 +162,35 @@ class _TurnUsage:
     llamadas: int = 0  # llamadas al LLM del turno: sin ninguna no hay fee de turno de IA
 
     def add(self, provider, response) -> None:  # type: ignore[no-untyped-def]
-        self.input_tokens += response.usage.input_tokens
-        self.output_tokens += response.usage.output_tokens
-        self.cached_tokens += getattr(response.usage, "cache_read_tokens", 0)
-        self.cached_tokens += getattr(response.usage, "cache_write_tokens", 0)
+        uso = response.usage
+        leidos = getattr(uso, "cache_read_tokens", 0)
+        escritos = getattr(uso, "cache_write_tokens", 0)
+        # El costo sale de `uso.input_tokens` tal cual (`_response_cost`); aquí solo el total que
+        # guarda el ledger: Anthropic no incluye lo cacheado en `input_tokens` (ADR-0117, HU-AOS-35).
+        incluido = getattr(uso, "input_includes_cache", True)
+        self.input_tokens += uso.input_tokens + (0 if incluido else leidos + escritos)
+        self.output_tokens += uso.output_tokens
+        self.cached_tokens += leidos
+        self.cache_write_tokens += escritos
         self.latency_ms += response.latency_ms
         self.cost_usd += _response_cost(provider, response)
         self.model = response.model or self.model
         self.llamadas += 1
+
+
+async def _compilado_del_turno() -> Any:
+    """`Compilado` del agente en foco de la release del turno, o None (legacy, sin foco o sin
+    compilador). Un fallo inesperado no tumba el turno: se arma como siempre."""
+    actual = release_vigente.vigente()
+    if actual is None or actual.foco is None or actual.compilar is None:
+        return None
+    try:
+        return await actual.compilar(actual.foco)
+    except PermissionError:
+        raise
+    except Exception:
+        log.warning("release_compilado_error", exc_info=True)
+        return None
 
 
 def _creditos_del_turno(usage: _TurnUsage) -> dict[str, Any]:
@@ -221,6 +246,7 @@ async def _write_usage_ledger(
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             cached_tokens=usage.cached_tokens,
+            cache_write_tokens=usage.cache_write_tokens,
             latency_ms=usage.latency_ms,
             cost_usd=round(usage.cost_usd, 6),
             tool_calls=usage.tool_calls or None,
@@ -285,7 +311,11 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # Con v3 (HU-AOS-15) el turno ejecuta la versión congelada del especialista en foco y el
     # KernelSpec de la release, en la forma v2 que lee este loop; sin release, el mismo v2.
     await fijar_release_del_turno(conversation, texto=latest_message)  # texto: router de HU-AOS-17
-    spec = spec_del_turno(spec)
+    # Lo compilado del agente en foco, una vez por versión (HU-AOS-35, adenda de ADR-0117): la
+    # vista v2, el flujo de la release y los bloques fijos del prompt. None sin release (legacy) o
+    # si no se pudo compilar de forma determinista: el turno se arma como siempre.
+    compilado = await _compilado_del_turno()
+    spec = compilado.spec() if compilado is not None else spec_del_turno(spec)
 
     # Cuota del período (ADR-0045) y presupuesto agotado (ADR-0015): políticas del kernel.
     bloqueo = await politicas_del_turno(conversation, spec)
@@ -340,9 +370,23 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     connected_types = await active_connection_type_ids(get_current_tenant_id())
     candidate_tools = [t for t in candidate_tools if await _connections_ok(t, connected_types)]
 
-    flow = await resolve_flow(
-        spec, available={t.name for t in candidate_tools}
-    )
+    no_disponible = ""
+    if compilado is None:
+        flow = await resolve_flow(spec, available={t.name for t in candidate_tools})
+    elif compilado.flujo is None:
+        flow = None
+    else:
+        # El flujo fijo es el de la release completa; lo que falta en este turno (salud, conexión o
+        # desactivado) va como aviso al bloque dinámico, calculado antes del motor (HU-AOS-35).
+        disponibles = {t.name for t in candidate_tools}
+        if any(nombre in disponibles for nombre in compilado.flujo.tool_names):
+            flow = copy.deepcopy(compilado.flujo)  # lo compilado es de todos los turnos de la release
+            no_disponible = aviso_no_disponible(flow, disponibles, app_settings.language if app_settings else None)
+        else:
+            # Ninguna herramienta del flujo disponible: la rama de siempre (router por palabras y sin
+            # bloque de flujo), con el armado de siempre: los bloques compilados traen el flujo.
+            flow = None
+            compilado = None
     if flow is not None:
         by_name = {t.name: t for t in candidate_tools}
         active_tools = [by_name[name] for name in flow.tool_names if name in by_name]
@@ -405,7 +449,13 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     )
     # Con release (aos_runtime = v3), los campos de AppSettings congelados en ella (ADR-0117 §2).
     prompt_ctx = con_valores_de_release(prompt_ctx)
-    system_blocks = await build_system_blocks(spec, prompt_ctx)
+    if no_disponible:
+        prompt_ctx = dataclasses.replace(prompt_ctx, no_disponible=no_disponible)
+    if compilado is not None:
+        # Prefijo idéntico byte a byte en todos los turnos de la versión (caché del proveedor).
+        system_blocks = [*compilado.bloques_fijos, bloque_dinamico(prompt_ctx)]
+    else:
+        system_blocks = await build_system_blocks(spec, prompt_ctx)
 
     # ---------------- 2. Proveedor y routing
     # `behavior` se adelanta acá (antes vivía después del routing) porque

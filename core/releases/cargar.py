@@ -106,6 +106,9 @@ class ReleaseCongelada:
     # release (inmutable): no se valida ni se indexa en cada turno.
     _ruteo: Any = field(default=None, repr=False)
     _indice: Any = field(default=None, repr=False)
+    # HU-AOS-35: lo compilado por `agent_version_id` (vista v2, flujo y bloques fijos del prompt),
+    # una vez por release y agente; sus bytes cuentan en el tope de la caché.
+    _compilados: dict[uuid.UUID, Any] = field(default_factory=dict, repr=False)
 
     @property
     def skills(self) -> list[str]:
@@ -228,6 +231,42 @@ class ReleaseCongelada:
             self._indice = (Indice(exponentes_de(procs, extras)), duenos)
         return self._indice
 
+    async def compilado(self, foco: AgenteCongelado) -> Any:
+        """Lo compilado del agente `foco` de esta release (`core.agents.compiler.Compilado`), o None
+        si no se puede compilar de forma determinista: el turno se arma como siempre y no se
+        cachea nada. La clave efectiva es `(tenant_id, release_id, agent_version_id)` (adenda
+        HU-AOS-35 de ADR-0117): la release ya está en la caché por `(tenant_id, release_id)`."""
+        from core.agents.compiler import ErrorDeCompilacion, compilar
+        from core.shared.tenant import get_current_tenant_id
+
+        if get_current_tenant_id() != self.tenant_id:
+            raise PermissionError("releases: fuera del tenant_scope del negocio")
+        guardado = self._compilados.get(foco.version_id)
+        if guardado is not None:
+            return guardado
+        if not any(c.version_id == foco.version_id for c in self.componentes):
+            return None
+        kernel = self.kernel
+        try:
+            nuevo = await compilar(
+                tenant_id=self.tenant_id,
+                foco=foco,
+                kernel=kernel,
+                skills=self.skills,
+                tenant_plugins=self.tenant_plugins,
+                playbooks=self.playbooks,
+                flow_tenant=copy.deepcopy(self.flow_tenant),
+                app_settings=self.app_settings,
+            )
+        except ErrorDeCompilacion as exc:
+            log.warning("release_compilacion_fallida", release_number=self.number, motivo=str(exc))
+            return None
+        if foco.version_id in self._compilados:  # otro turno compiló mientras tanto
+            return self._compilados[foco.version_id]
+        self._compilados[foco.version_id] = nuevo
+        _sumar_bytes(self, nuevo.bytes)
+        return nuevo
+
     def artefactos(self, lane: str = "stable", foco: AgenteCongelado | None = None) -> ArtefactosDeRelease:
         return ArtefactosDeRelease(
             tenant_id=self.tenant_id,
@@ -250,6 +289,7 @@ class ReleaseCongelada:
                 else None
             ),
             a2a_graph=copy.deepcopy(self.a2a) if self.a2a is not None else None,
+            compilar=self.compilado,
         )
 
     def procedimientos(self) -> dict[str, Procedure]:
@@ -330,6 +370,18 @@ def _guardar(release: ReleaseCongelada) -> None:
         return
     _cache[clave] = release
     _bytes_en_cache += release.bytes
+    while _bytes_en_cache > MAX_BYTES and len(_cache) > 1:
+        _, vieja = _cache.popitem(last=False)
+        _bytes_en_cache -= vieja.bytes
+
+
+def _sumar_bytes(release: ReleaseCongelada, extra: int) -> None:
+    """Lo compilado después de guardar la release también cuenta en el tope (HU-AOS-35)."""
+    global _bytes_en_cache
+    release.bytes += extra
+    if _cache.get((release.tenant_id, release.id)) is not release:
+        return  # ya salió de la caché: su memoria se libera con ella
+    _bytes_en_cache += extra
     while _bytes_en_cache > MAX_BYTES and len(_cache) > 1:
         _, vieja = _cache.popitem(last=False)
         _bytes_en_cache -= vieja.bytes

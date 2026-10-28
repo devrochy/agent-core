@@ -1209,7 +1209,11 @@ class UsageLedger(Base):
     model: Mapped[str] = mapped_column(Text)
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    # Desde la migración 0114 (HU-AOS-35): solo lo LEÍDO de la caché del proveedor, y
+    # `input_tokens` es el total de entrada con lo cacheado incluido. Antes, lectura + escritura.
     cached_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    # Lo ESCRITO en la caché (Anthropic). NULL en filas anteriores a la 0114: marca el corte.
+    cache_write_tokens: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), default=0)
     tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)

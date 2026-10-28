@@ -305,13 +305,6 @@ no se escribe nunca).
 `XAUTOCLAIM`/`XPENDING`. Si un proceso muere entre `xreadgroup` y `xack`, esa entrada
 queda pendiente para siempre. Con varias réplicas, todas comparten nombre de consumidor.
 
-**Prompt caching de Anthropic: un breakpoint desperdiciado**
-`core/llm/anthropic_provider.py:55-61` marca `cache_control` en **todos** los bloques
-de system, incluido el dinámico, que cambia cada turno. Ese breakpoint escribe caché
-que nunca se reutiliza. `docs/PROMPT-CACHING-GUIDE.md` describe el comportamiento
-deseado (no cachear el bloque 4) y dice "usamos 3, queda 1 libre", que no es lo que
-hace el código.
-
 **Documentación con deriva**
 - `docs/PLUGIN-CONTRACT.md` §13 prohíbe importar `core.plugin_manager`, y los dos
   plugins de referencia lo importan (`pack_commerce` en `module.py:76`, `skills.py:80`,

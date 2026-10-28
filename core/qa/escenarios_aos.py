@@ -131,6 +131,10 @@ async def _uso(conv: Any, chat: Chat, agente: Agente, release_id: uuid.UUID, tok
                 model=MODELO,
                 input_tokens=tokens[0],
                 output_tokens=tokens[1],
+                # Como lo deja el runtime desde la 0114 (HU-AOS-35): algo leído de la caché, para que
+                # Costos › por agente tenga porcentaje que mostrar.
+                cached_tokens=tokens[0] * 3 // 5,
+                cache_write_tokens=0,
                 latency_ms=900,
                 cost_usd=Decimal(costo),
                 kind="turn",
