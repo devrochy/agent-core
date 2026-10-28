@@ -53,6 +53,9 @@ CORE_SECTIONS: dict[str, str] = {
     "observability": "Observabilidad",
     # Centro de pruebas de la plataforma (SPEC-30, ADR-0133): global, de master y testers.
     "qa": "Pruebas",
+    # Dispositivos de la cuenta y alertas de acceso (SPEC-42, ADR-0174): del negocio, no de un pack.
+    "devices": "Dispositivos",
+    "access_alerts": "Alertas de acceso",
 }
 
 # Secciones que NUNCA se heredan del rol del `tenant_user`: son de master o de
@@ -65,7 +68,9 @@ OWNER_ONLY_SECTIONS: frozenset[str] = frozenset({"collaborators"})
 
 # Secciones que el `owner` hereda pero el `colaborador` no (ADR-0169 §1): el colaborador las tiene
 # solo con un permiso explícito que le da el dueño (ver datos de las acciones de los clientes).
-OPT_IN_SECTIONS: frozenset[str] = frozenset({"observability"})
+# Dispositivos y alertas de acceso (ADR-0174) también: ver los equipos y los intentos de acceso de las cuentas
+# es información de seguridad; el colaborador la tiene solo si el dueño se la concede.
+OPT_IN_SECTIONS: frozenset[str] = frozenset({"observability", "devices", "access_alerts"})
 
 # Secciones que un `owner` puede otorgar a un colaborador de su tenant: el
 # catálogo menos las de plataforma y la propia gestión de cuentas.
