@@ -1,0 +1,4 @@
+## Migración de dispositivos e intentos del pack al core (2026-10-27)
+
+### Añadido
+- **Migración `pack_cobranza_0018` (HU-ACC-02, ADR-0174):** copia los dispositivos de los gestores (`pack_cobranza_devices`) a `account_devices` del core, por cuenta, y los intentos de acceso de los últimos 90 días a `access_events` (tipo `legado_pack`). El estado se conserva (incluido `bloqueado`); los activos sin `imei` quedan `legacy` y se rellenan en el primer login. Es una copia (las tablas del pack no se tocan), idempotente y verificada por negocio (migrados + omitidos = origen). Nada lee todavía lo copiado: el enforcement llega en la siguiente entrega.

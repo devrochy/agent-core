@@ -16,18 +16,31 @@ from decimal import Decimal
 from math import asin, cos, radians, sin, sqrt
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 
+from core.access import devices as accesos
+from core.access.devices import AccesoError
+from core.access.events import sufijo
 from core.admin.auth import hash_password
-from core.api.deps import Principal, get_principal, require
+from core.admin.permissions import _filas_explicitas, effective_access
+from core.api.deps import Principal, es_owner_o_master, get_principal, require
 from core.api.errors import ApiError
 from core.api.plan_limits import plan_limit_error, plan_limit_responses
 from core.billing.enforcement import QuotaExceeded, enforce_growth
-from core.db.models import Admin, Conversation, Escalation, TenantUser
+from core.db.models import (
+    AccessEvent,
+    AccountDevice,
+    Admin,
+    Conversation,
+    Escalation,
+    TenantUser,
+)
 from core.db.session import get_owned, get_session
+from core.shared.audit import record_audit
+from pack_cobranza.acceso import adoptar_legado
 from pack_cobranza.permisos import GESTOR_PERMISOS
 
 # Registra los providers de búsqueda global del pack (ADR-0096).
@@ -51,7 +64,6 @@ from .models import (
     Gasto,
     Gestor,
     GestorPermiso,
-    IntentoAcceso,
     Inyeccion,
     Liquidacion,
     Pago,
@@ -568,42 +580,118 @@ class Alerts(BaseModel):
     items: list[AccessAttempt]
 
 
-@router.get("/alerts", response_model=Alerts)
+# Los wrappers de dispositivos y alertas conviven una release con las pantallas viejas del panel; las
+# nuevas usan `/api/v1/access/*` (ADR-0174). Fecha orientativa del retiro.
+_SUNSET = "Thu, 31 Dec 2026 23:59:59 GMT"
+
+
+def _deprecar(response: Response, sucesor: str) -> None:
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = _SUNSET
+    response.headers["Link"] = f'<{sucesor}>; rel="successor-version"'
+
+
+async def _acceso_a(principal: Principal, nueva: str, vieja: str) -> str | None:
+    """Acceso a la sección nueva del core o a la vieja del pack. Si la nueva tiene una fila explícita
+    (aunque sea `none`) manda ella: negarla en la grilla de Colaboradores no se salta con la vieja."""
+    acceso = await effective_access(principal.admin, nueva, principal.tenant_id)
+    if acceso is not None:
+        return acceso
+    if await _filas_explicitas(principal.admin.id, principal.tenant_id, [nueva]):
+        return None
+    return await effective_access(principal.admin, vieja, principal.tenant_id)
+
+
+def _require_dispositivos(*, write: bool = False) -> Any:
+    """Acepta la sección nueva del core (`devices`) o, si no tiene fila explícita, la vieja del pack
+    (`pack_cobranza:dispositivos`): nadie gana ni pierde acceso por este cambio (ADR-0174)."""
+
+    async def dependency(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
+        if principal.admin.role == "master":
+            return principal
+        acceso = await _acceso_a(principal, "devices", "pack_cobranza:dispositivos")
+        if acceso is None or (write and acceso != "write"):
+            raise ApiError.forbidden("Sin permiso para la sección 'devices'.")
+        return principal
+
+    return dependency
+
+
+def _require_alertas() -> Any:
+    async def dependency(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
+        if principal.admin.role == "master":
+            return principal
+        if await _acceso_a(principal, "access_alerts", "pack_cobranza:alertas") is None:
+            raise ApiError.forbidden("Sin permiso para la sección 'access_alerts'.")
+        return principal
+
+    return dependency
+
+
+_MOTIVO_EVENTO: dict[str, str] = {
+    "login_fallido": "contraseña incorrecta",
+    "login_bloqueado": "cuenta bloqueada por intentos",
+    "dispositivo_nuevo": "equipo nuevo registrado",
+    "dispositivo_pendiente": "equipo pendiente de aprobación",
+    "dispositivo_aprobado": "equipo aprobado",
+    "dispositivo_bloqueado_usado": "dispositivo bloqueado",
+    "acceso_denegado_politica": "acceso denegado por la política",
+    "dispositivo_sin_id": "equipo sin identificador",
+    "dispositivo_compartido": "equipo compartido con otra cuenta",
+    "politica_cambiada": "política cambiada",
+    "acceso_master": "acceso del administrador de plataforma",
+    "legado_pack": "registro anterior",
+}
+
+
+def _fecha(valor: datetime | None) -> str:
+    return valor.strftime("%Y-%m-%d %H:%M") if valor else ""
+
+
+async def _nombres_de_gestores(session: Any, tid: uuid.UUID) -> dict[uuid.UUID, str]:
+    """`admin_id → nombre` de los perfiles de gestor del negocio."""
+    gestores = (
+        (await session.execute(select(Gestor).where(Gestor.tenant_id == tid, Gestor.admin_id.is_not(None), Gestor.deleted_at.is_(None))))
+        .scalars()
+        .all()
+    )
+    return {g.admin_id: f"{g.nombre} {g.apellido or ''}".strip() for g in gestores}
+
+
+@router.get("/alerts", response_model=Alerts, deprecated=True)
 async def list_alerts(
-    principal: Annotated[Principal, Depends(require("pack_cobranza:alertas"))],
+    response: Response,
+    principal: Annotated[Principal, Depends(_require_alertas())],
 ) -> Alerts:
+    """Wrapper de `GET /api/v1/access/events` con la forma anterior (ADR-0174)."""
+    _deprecar(response, "/api/v1/access/events")
     tid = principal.tenant_id
     async with get_session() as session:
+        nombres = await _nombres_de_gestores(session, tid)
         rows = (
             (
                 await session.execute(
-                    select(IntentoAcceso)
-                    .where(IntentoAcceso.tenant_id == tid)
-                    .order_by(IntentoAcceso.created_at.desc())
+                    select(AccessEvent)
+                    .where(
+                        AccessEvent.tenant_id == tid,
+                        AccessEvent.deleted_at.is_(None),
+                        AccessEvent.admin_id.in_(list(nombres)),
+                    )
+                    .order_by(AccessEvent.occurred_at.desc(), AccessEvent.id.desc())
                     .limit(100)
                 )
             )
             .scalars()
             .all()
         )
-        gestores = (
-            (
-                await session.execute(
-                    select(Gestor).where(Gestor.tenant_id == tid)
-                )
-            )
-            .scalars()
-            .all()
-        )
-    nombres = {g.id: f"{g.nombre} {g.apellido or ''}".strip() for g in gestores}
     items = [
         AccessAttempt(
-            fecha=r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "",
-            gestor=nombres.get(r.gestor_id, "—") if r.gestor_id else "—",
-            resultado=r.resultado,
-            motivo=r.motivo or "",
-            imei=r.imei or "",
-            critico=r.resultado != "ok",
+            fecha=_fecha(r.occurred_at),
+            gestor=nombres.get(r.admin_id, "—") if r.admin_id else "—",
+            resultado="ok" if r.severidad == "info" else "denegado",
+            motivo=_MOTIVO_EVENTO.get(r.tipo, r.tipo),
+            imei=sufijo(r.device_id) or "",
+            critico=r.severidad != "info",
         )
         for r in rows
     ]
@@ -768,13 +856,47 @@ def _audit(
     )
 
 
-@router.get("/devices", response_model=Devices)
+@router.get("/devices", response_model=Devices, deprecated=True)
 async def list_devices(
-    principal: Annotated[Principal, Depends(require("pack_cobranza:dispositivos"))],
+    response: Response,
+    principal: Annotated[Principal, Depends(_require_dispositivos())],
 ) -> Devices:
+    """Wrapper de `GET /api/v1/access/devices` con la forma anterior (ADR-0174): los equipos de los
+    gestores salen del core (ids del core) y los dispositivos v1 (código + API key) siguen en el pack."""
+    _deprecar(response, "/api/v1/access/devices")
     tid = principal.tenant_id
     async with get_session() as session:
-        devices = (
+        gestores = (
+            (
+                await session.execute(
+                    select(Gestor).where(
+                        Gestor.tenant_id == tid, Gestor.admin_id.is_not(None), Gestor.deleted_at.is_(None)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        por_cuenta = {g.admin_id: g for g in gestores}
+        # Red de seguridad de `pack_cobranza_0018`: lo que la migración no haya copiado se adopta aquí.
+        for g in gestores:
+            await adoptar_legado(session, tid, g)
+        filas = (
+            (
+                await session.execute(
+                    select(AccountDevice)
+                    .where(
+                        AccountDevice.tenant_id == tid,
+                        AccountDevice.deleted_at.is_(None),
+                        AccountDevice.admin_id.in_(list(por_cuenta)),
+                    )
+                    .order_by(AccountDevice.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        devices_pack = (
             (
                 await session.execute(
                     select(Device)
@@ -785,15 +907,37 @@ async def list_devices(
             .scalars()
             .all()
         )
-        gestores = (
-            (await session.execute(select(Gestor).where(Gestor.tenant_id == tid))).scalars().all()
-        )
-        intentos = (
+        v1 = [d for d in devices_pack if d.gestor_id is None]
+        origen_pack = {d.id: d.whatsapp_number for d in devices_pack}
+        contactos = {
+            e.device_row_id: (e.detalle or {}).get("contacto")
+            for e in (
+                (
+                    await session.execute(
+                        select(AccessEvent)
+                        .where(
+                            AccessEvent.tenant_id == tid,
+                            AccessEvent.device_row_id.in_([f.id for f in filas]),
+                            AccessEvent.tipo.in_(("dispositivo_pendiente", "dispositivo_nuevo")),
+                        )
+                        .order_by(AccessEvent.occurred_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if e.detalle and e.detalle.get("contacto")
+        }
+        eventos_acceso = (
             (
                 await session.execute(
-                    select(IntentoAcceso)
-                    .where(IntentoAcceso.tenant_id == tid)
-                    .order_by(IntentoAcceso.created_at.desc())
+                    select(AccessEvent)
+                    .where(
+                        AccessEvent.tenant_id == tid,
+                        AccessEvent.deleted_at.is_(None),
+                        AccessEvent.admin_id.in_(list(por_cuenta)),
+                    )
+                    .order_by(AccessEvent.occurred_at.desc(), AccessEvent.id.desc())
                     .limit(20)
                 )
             )
@@ -812,35 +956,48 @@ async def list_devices(
             .scalars()
             .all()
         )
-    nombres = {g.id: f"{g.nombre} {g.apellido or ''}".strip() for g in gestores}
-    por_device = {d.id: nombres.get(d.gestor_id, "—") if d.gestor_id else "—" for d in devices}
+    nombres = {a: f"{g.nombre} {g.apellido or ''}".strip() for a, g in por_cuenta.items()}
+    por_gestor = {g.id: nombres[g.admin_id] for g in gestores}
+    por_device = {d.id: por_gestor.get(d.gestor_id, "—") if d.gestor_id else "—" for d in devices_pack}
+    filas_out = [
+        DeviceRow(
+            id=f.id,
+            codigo=str(f.id)[:8],
+            gestor=nombres.get(f.admin_id, "—"),
+            imei=sufijo(f.device_id) or "",  # el id completo permite suplantar el equipo (como en el core)
+            whatsapp=contactos.get(f.id) or origen_pack.get(f.legacy_pack_device_id) or "",
+            estado=f.estado,
+            vinculado=_fecha(f.aprobado_at),
+        )
+        for f in filas
+    ] + [
+        DeviceRow(
+            id=d.id,
+            codigo=d.codigo,
+            gestor="—",
+            imei=d.imei or "",
+            whatsapp=d.whatsapp_number or "",
+            estado=d.estado,
+            vinculado=_fecha(d.fecha_vinculacion),
+        )
+        for d in v1
+    ]
     return Devices(
-        pendientes=sum(1 for d in devices if d.estado == "pendiente"),
+        pendientes=sum(1 for d in filas_out if d.estado == "pendiente"),
         eventos_error=sum(1 for e in eventos if e.estado != "aplicado"),
-        dispositivos=[
-            DeviceRow(
-                id=d.id,
-                codigo=d.codigo,
-                gestor=nombres.get(d.gestor_id, "—") if d.gestor_id else "—",
-                imei=d.imei or "",
-                whatsapp=d.whatsapp_number or "",
-                estado=d.estado,
-                vinculado=d.fecha_vinculacion.strftime("%Y-%m-%d %H:%M") if d.fecha_vinculacion else "",
-            )
-            for d in devices
-        ],
+        dispositivos=filas_out,
         intentos=[
             AttemptRow(
-                resultado=i.resultado,
-                motivo=i.motivo or "",
-                imei=i.imei or "",
-                fecha=i.created_at.strftime("%Y-%m-%d %H:%M") if i.created_at else "",
+                resultado="ok" if i.severidad == "info" else "denegado",
+                motivo=_MOTIVO_EVENTO.get(i.tipo, i.tipo),
+                imei=sufijo(i.device_id) or "",
+                fecha=_fecha(i.occurred_at),
             )
-            for i in intentos
+            for i in eventos_acceso
         ],
         eventos=[
             SyncRow(
-                fecha=e.created_at.strftime("%Y-%m-%d %H:%M") if e.created_at else "",
+                fecha=_fecha(e.created_at),
                 tipo=e.tipo,
                 estado=e.estado,
                 gestor=por_device.get(e.device_id, "—") if e.device_id else "—",
@@ -859,34 +1016,99 @@ class DeviceStatusUpdate(BaseModel):
 DEVICE_STATUSES = ("activo", "pendiente", "bloqueado")
 
 
-@router.post("/devices/{device_id}/status", status_code=204)
+@router.post("/devices/{device_id}/status", status_code=204, deprecated=True)
 async def set_device_status(
     device_id: uuid.UUID,
     payload: DeviceStatusUpdate,
-    principal: Annotated[Principal, Depends(require("pack_cobranza:dispositivos", write=True))],
+    principal: Annotated[Principal, Depends(_require_dispositivos(write=True))],
+    llamante: Annotated[str | None, Header(alias="X-Device-Id")] = None,
 ) -> Response:
+    """Wrapper de las acciones de `/api/v1/access/devices/{id}` (ADR-0174): `activo` aprueba o reactiva,
+    `bloqueado` bloquea la cuenta en ese equipo. El id es el de la fila del core (o el de un dispositivo v1)."""
     if payload.estado not in DEVICE_STATUSES:
         raise ApiError.bad_request(
             f"Estado inválido: {payload.estado}. Válidos: {', '.join(DEVICE_STATUSES)}",
             "invalid_status",
         )
-    async with get_session() as session:
-        device = await _get_active(session, Device, device_id, principal.tenant_id)
-        if device is None:
-            raise ApiError.not_found("Dispositivo no encontrado.")
-        device.estado = payload.estado
-        if payload.estado == "activo" and device.fecha_vinculacion is None:
-            device.fecha_vinculacion = datetime.now(UTC)
-        _audit(
-            session,
-            principal.tenant_id,
-            "dispositivo",
-            device.id,
-            "editar",
-            despues={"estado": payload.estado},
-            motivo="Aprobación de dispositivo",
+    tid = principal.tenant_id
+    auditoria: tuple[str, uuid.UUID] | None = None
+    try:
+        async with get_session() as session:
+            cuentas_de_gestor = list(await _nombres_de_gestores(session, tid))
+            fila = (
+                await session.execute(
+                    select(AccountDevice).where(
+                        AccountDevice.tenant_id == tid,
+                        AccountDevice.id == device_id,
+                        AccountDevice.admin_id.in_(cuentas_de_gestor),
+                        AccountDevice.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if fila is not None:
+                auditoria = await _transicion_core(
+                    session, principal, fila, payload.estado, (llamante or "").strip() or None
+                )
+            else:
+                device = await _get_active(session, Device, device_id, tid)
+                if device is None or device.gestor_id is not None:
+                    raise ApiError.not_found("Dispositivo no encontrado.")
+                # Dispositivo v1 (código + API key): sin cuenta, sigue en el pack.
+                device.estado = payload.estado
+                if payload.estado == "activo" and device.fecha_vinculacion is None:
+                    device.fecha_vinculacion = datetime.now(UTC)
+                _audit(
+                    session,
+                    tid,
+                    "dispositivo",
+                    device.id,
+                    "editar",
+                    despues={"estado": payload.estado},
+                    motivo="Aprobación de dispositivo",
+                )
+    except AccesoError as exc:
+        raise ApiError(exc.status, exc.code, exc.message, details=exc.details) from exc
+    if auditoria is not None:
+        await record_audit(
+            f"admin:{principal.admin.email}",
+            auditoria[0],
+            input_data={"device_row_id": str(auditoria[1]), "via": "pack_cobranza"},
         )
-    return Response(status_code=204)
+    respuesta = Response(status_code=204)
+    _deprecar(respuesta, "/api/v1/access/devices")
+    return respuesta
+
+
+async def _transicion_core(
+    session: Any,
+    principal: Principal,
+    fila: AccountDevice,
+    destino: str,
+    llamante_device_id: str | None,
+) -> tuple[str, uuid.UUID] | None:
+    """Aplica `destino` con las reglas del core; devuelve (acción, id) a auditar, o None si no cambia."""
+    if destino == fila.estado:
+        return None
+    comunes = {
+        "tenant_id": principal.tenant_id,
+        "device_row_id": fila.id,
+        "actor_admin_id": principal.admin.id,
+        "actor_es_owner_o_master": es_owner_o_master(principal),
+    }
+    if destino == "activo":
+        await accesos.aprobar(session, esperado=fila.estado, canal="panel_apk", **comunes)
+        return "dispositivo_aprobado", fila.id
+    if destino == "bloqueado":
+        await accesos.bloquear(
+            session,
+            esperado=fila.estado,
+            motivo=None,
+            alcance="cuenta",
+            llamante_device_id=llamante_device_id,
+            **comunes,
+        )
+        return "dispositivo_bloqueado", fila.id
+    raise AccesoError(400, "transicion_invalida", "Un equipo no vuelve a pendiente.")
 
 
 # ------------------------------------------------------------------ reportes

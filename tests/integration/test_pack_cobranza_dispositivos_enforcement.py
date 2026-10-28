@@ -103,28 +103,63 @@ async def _device(
             return d.id
 
 
-async def _intentos(tenant_id: uuid.UUID, gestor_id: uuid.UUID) -> list[tuple[str, str | None]]:
-    from pack_cobranza.models import IntentoAcceso
+async def _eventos(tenant_id: uuid.UUID, gestor_id: uuid.UUID) -> list[str]:
+    """Tipos de evento de acceso de la cuenta del gestor (core, ADR-0174)."""
+    from pack_cobranza.models import Gestor
     from sqlalchemy import select
 
+    from core.db.models import AccessEvent
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tenant_id):
         async with get_session() as session:
+            admin_id = (
+                await session.execute(select(Gestor.admin_id).where(Gestor.id == gestor_id))
+            ).scalar_one()
             rows = (
                 (
                     await session.execute(
-                        select(IntentoAcceso).where(
-                            IntentoAcceso.tenant_id == tenant_id,
-                            IntentoAcceso.gestor_id == gestor_id,
+                        select(AccessEvent.tipo).where(
+                            AccessEvent.tenant_id == tenant_id,
+                            AccessEvent.admin_id == admin_id,
+                            AccessEvent.tipo != "legado_pack",
                         )
                     )
                 )
                 .scalars()
                 .all()
             )
-    return [(r.resultado, r.motivo) for r in rows]
+    return list(rows)
+
+
+async def _equipo_core(
+    tenant_id: uuid.UUID, gestor_id: uuid.UUID, device_id: str | None, estado: str
+) -> uuid.UUID:
+    """Fila de `account_devices` de la cuenta del gestor (lo que ve el panel tras la migración)."""
+    from pack_cobranza.models import Gestor
+    from sqlalchemy import select
+
+    from core.db.models import AccountDevice
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            admin_id = (
+                await session.execute(select(Gestor.admin_id).where(Gestor.id == gestor_id))
+            ).scalar_one()
+            fila = AccountDevice(
+                tenant_id=tenant_id,
+                admin_id=admin_id,
+                device_id=device_id,
+                estado=estado,
+                origen="alta_manual",
+                legacy=device_id is None,
+            )
+            session.add(fila)
+            await session.flush()
+            return fila.id
 
 
 def _h(token: str, tenant_id: uuid.UUID) -> dict[str, str]:
@@ -149,7 +184,7 @@ async def test_dispositivo_no_autorizado_es_403_y_queda_registrado(app_client) -
     )
 
     assert r.status_code == 403, r.text
-    assert ("denegado", "dispositivo no autorizado") in await _intentos(tid, gid)
+    assert "dispositivo_pendiente" in await _eventos(tid, gid)  # queda registrado el equipo desconocido
 
 
 async def test_dispositivo_activo_entra(app_client) -> None:
@@ -177,7 +212,8 @@ async def test_dispositivo_bloqueado_unico_no_abre_el_acceso(app_client) -> None
     )
 
     assert r.status_code == 403, r.text
-    assert ("denegado", "dispositivo bloqueado") in await _intentos(tid, gid)
+    assert r.json()["code"] == "dispositivo_bloqueado"
+    assert "dispositivo_bloqueado_usado" in await _eventos(tid, gid)
 
 
 async def test_bloqueado_no_se_levanta_por_tener_otro_activo(app_client) -> None:
@@ -225,12 +261,13 @@ async def test_vincular_exige_imei_y_whatsapp(app_client) -> None:
     assert r.status_code == 400
 
 
-async def test_mismo_equipo_en_dos_gestores_es_409_no_500(app_client) -> None:
-    """Regresión: la búsqueda era por (gestor, imei) pero el único es (tenant, imei)."""
+async def test_mismo_equipo_en_dos_cuentas_se_registra_sin_500(app_client) -> None:
+    """Regresión del 500: el vínculo ahora es por cuenta, así que un equipo compartido entre dos gestores
+    del negocio se permite (ADR-0174): la segunda cuenta queda pendiente y queda el aviso de compartido."""
     tid, gid, _ = await _montar(app_client, "dv-dup")
-    await _device(tid, gid, "IMEI-COMPARTIDO", "activo")
+    await _equipo_core(tid, gid, "IMEI-COMPARTIDO", "activo")  # ya migrado del pack al core
     otro_email = f"{uniq('dv-dup2')}@test.local"
-    await _gestor(otro_email, tid, nombre="Segundo")
+    otro_gid = await _gestor(otro_email, tid, nombre="Segundo")
     otro_token = await _login_admin(app_client, otro_email)
     sesion = await app_client.post(EXCHANGE, json={}, headers=_h(otro_token, tid))
     assert sesion.status_code == 200, sesion.text
@@ -240,7 +277,9 @@ async def test_mismo_equipo_en_dos_gestores_es_409_no_500(app_client) -> None:
         CAMPO, json={"imei": "IMEI-COMPARTIDO", "whatsapp": "3001112222"}, headers=campo
     )
 
-    assert r.status_code == 409, r.text
+    assert r.status_code == 201, r.text
+    assert r.json()["estado"] == "pendiente"
+    assert "dispositivo_compartido" in await _eventos(tid, otro_gid)
 
 
 async def test_estado_sin_token_de_gestor_es_403(app_client) -> None:
@@ -263,12 +302,13 @@ async def test_admin_lista_aprueba_y_bloquea(app_client) -> None:
     owner_email = f"{slug}-owner@test.local"
     tid = await _tenant(owner_email, slug)
     gid = await _gestor(f"{slug}-gestor@test.local", tid)
-    pendiente = await _device(tid, gid, "IMEI-PEND", "pendiente")
+    pendiente = await _equipo_core(tid, gid, "IMEI-PEND", "pendiente")
     owner = await _login_admin(app_client, owner_email)
 
     lista = await app_client.get(f"{ADMIN}/devices", headers=_h(owner, tid))
     assert lista.status_code == 200, lista.text
     assert any(d["id"] == str(pendiente) for d in lista.json()["dispositivos"])
+    assert lista.headers["Sunset"] and lista.headers["Deprecation"] == "true"
 
     ok = await app_client.post(
         f"{ADMIN}/devices/{pendiente}/status", json={"estado": "activo"}, headers=_h(owner, tid)
@@ -314,7 +354,7 @@ async def test_dispositivos_de_otro_negocio_no_se_ven(app_client) -> None:
     tid_a = await _tenant(owner_a, slug_a)
     tid_b = await _tenant(f"{slug_b}@test.local", slug_b)
     gid_b = await _gestor(f"{slug_b}-g@test.local", tid_b)
-    ajeno = await _device(tid_b, gid_b, "IMEI-DE-B", "activo")
+    ajeno = await _equipo_core(tid_b, gid_b, "IMEI-DE-B", "activo")
     token_a = await _login_admin(app_client, owner_a)
 
     r = await app_client.get(f"{ADMIN}/devices", headers=_h(token_a, tid_a))

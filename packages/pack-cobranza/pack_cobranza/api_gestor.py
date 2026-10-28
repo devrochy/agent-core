@@ -20,7 +20,6 @@ el login no traía identificador de tenant.
 from __future__ import annotations
 
 import base64
-import secrets
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -30,12 +29,14 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
-from core.admin.auth import hash_password, verify_password
+from core.access.devices import AccesoError, evaluar
+from core.admin.auth import verify_password
 from core.admin.roles import cuenta_habilitada
-from core.db.models import Admin, Tenant, TenantUser
+from core.db.models import AccountDevice, Admin, Tenant, TenantUser
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
+from pack_cobranza import acceso
 from pack_cobranza.auth import acceso_de_campo, issue_token, pack_secret, token_tenant, verify_token
 from pack_cobranza.estadisticas import conteos_cartera
 from pack_cobranza.evidencias import EvidenciaError, guardar_archivo, guardar_evidencia
@@ -53,12 +54,10 @@ from pack_cobranza.models import (
     Cliente,
     ClienteEvidencia,
     Cuota,
-    Device,
     Gasto,
     GastoEvidencia,
     Gestor,
     GestorPermiso,
-    IntentoAcceso,
     Liquidacion,
     Pago,
     PosicionGestor,
@@ -78,10 +77,20 @@ _ACCESS_TTL_H = 12
 _REFRESH_TTL_H = 720  # 30 días
 
 
-def _par_tokens(secret: str, tenant_id: uuid.UUID, admin_id: uuid.UUID, *, rol: str, gestor_id: uuid.UUID | None = None) -> dict[str, str]:
+def _par_tokens(
+    secret: str,
+    tenant_id: uuid.UUID,
+    admin_id: uuid.UUID,
+    *,
+    rol: str,
+    gestor_id: uuid.UUID | None = None,
+    did: uuid.UUID | None = None,
+) -> dict[str, str]:
     base = {"tenant_id": str(tenant_id), "admin_id": str(admin_id), "rol": rol}
     if gestor_id is not None:
         base["gestor_id"] = str(gestor_id)
+    if did is not None:  # equipo con el que entró (fila de account_devices): se revalida en cada petición
+        base["did"] = str(did)
     return {
         "accessToken": issue_token({**base, "typ": "access"}, secret, ttl_hours=_ACCESS_TTL_H),
         "refreshToken": issue_token({**base, "typ": "refresh"}, secret, ttl_hours=_REFRESH_TTL_H),
@@ -92,13 +101,15 @@ def _usuario_de(admin: Admin) -> str:
     return admin.username or admin.email
 
 
-async def _auth(authorization: str | None) -> tuple[uuid.UUID, dict[str, Any]] | None:
+async def _auth(
+    authorization: str | None, *, sin_equipo_ok: bool = False
+) -> tuple[uuid.UUID, dict[str, Any]] | None:
     """Token de acceso de campo válido, de una cuenta habilitada, vinculada y de un negocio
     activo: lo decide `acceso_de_campo` (ADR-0134, ADR-0136), el mismo validador de `api.py`.
 
     Un token de dispositivo (sin `admin_id`, ADR-0057) no trae `rol`: aquí cuenta como
     `gestor` (solo sus carteras y sus permisos), nunca como acceso total."""
-    auth = await acceso_de_campo(authorization)
+    auth = await acceso_de_campo(authorization, sin_equipo_ok=sin_equipo_ok)
     if auth is None:
         return None
     tenant_id, payload = auth
@@ -265,49 +276,65 @@ async def _membresias_de_campo(admin: Admin, *, solo: uuid.UUID | None = None) -
     return out
 
 
+async def _otro_equipo_activo(session, tenant_id: uuid.UUID, admin_id: uuid.UUID, device_id: str | None) -> bool:
+    """¿La cuenta ya tiene un equipo ACTIVO con id distinto de este? (contrato anterior: ese gestor ya
+    estaba vinculado a otro teléfono, así que un equipo nuevo se rechaza en vez de pedir vinculación)."""
+    consulta = select(AccountDevice.id).where(
+        AccountDevice.tenant_id == tenant_id,
+        AccountDevice.admin_id == admin_id,
+        AccountDevice.estado == "activo",
+        AccountDevice.device_id.is_not(None),
+        AccountDevice.deleted_at.is_(None),
+    )
+    if device_id:
+        consulta = consulta.where(AccountDevice.device_id != device_id)
+    return (await session.execute(consulta.limit(1))).first() is not None
+
+
 async def _enforcement_dispositivo(
     request: Request, session, tenant_id: uuid.UUID, gestor: Gestor, imei: str, whatsapp: str
-) -> tuple[bool, str] | JSONResponse:
-    """Vinculación de dispositivo (ADR-0068): (vinculado, estado) o 403."""
-    dispositivos = (
-        await session.execute(
-            select(Device).where(
-                Device.tenant_id == tenant_id,
-                Device.gestor_id == gestor.id,
-                Device.deleted_at.is_(None),
-            )
-        )
-    ).scalars().all()
-    activos_imei = [d for d in dispositivos if d.estado == "activo" and d.imei]
-    legacy_activo = any(d.estado == "activo" and not d.imei for d in dispositivos)
+) -> tuple[bool, str, uuid.UUID | None] | JSONResponse:
+    """Vinculación de dispositivo (ADR-0068, ADR-0174): `(vinculado, estado, did)` o 403.
 
-    def _denegar(motivo: str) -> JSONResponse:
-        session.add(
-            IntentoAcceso(
-                tenant_id=tenant_id,
-                gestor_id=gestor.id,
-                imei=imei or None,
-                whatsapp_number=whatsapp or None,
-                resultado="denegado",
-                motivo=motivo,
-                ip=request.client.host if request.client else None,
-            )
+    La decisión la toma el core (`evaluar`, por cuenta y con la política del negocio). Aquí solo se
+    traduce a lo que entiende cada versión de la app: con `X-Device-Id` (app nueva) el 403 lleva `code`;
+    sin él (app vieja, solo `imei` en el cuerpo) se conserva el contrato anterior: un equipo por
+    vincular recibe los tokens con `requiereVinculacion` en vez de un 403."""
+    device_id, via_header = acceso.equipo_de(request, imei)
+    if gestor.admin_id is None:  # no ocurre en una membresía de gestor; sin cuenta no hay a quién atar el equipo
+        return True, "activo", None
+    await acceso.adoptar_legado(session, tenant_id, gestor)
+    if not via_header:
+        log.info("access_legacy_param", tenant_id=str(tenant_id), tiene_imei=bool(device_id))
+    try:
+        decision = await evaluar(
+            session,
+            tenant_id=tenant_id,
+            admin_id=gestor.admin_id,
+            rol="gestor",
+            device_id=device_id,
+            canal="campo" if via_header else "campo_v1",
+            ip=request.client.host if request.client else None,
+            detalle_alta={"contacto": whatsapp[: acceso.MAX_CONTACTO]} if whatsapp else None,
         )
-        return JSONResponse({"error": "dispositivo no autorizado"}, status_code=403)
+    except AccesoError as exc:
+        return JSONResponse({"error": exc.message, "code": exc.code}, status_code=exc.status)
+    if decision.permitido:
+        return True, "activo", decision.device_row_id
 
-    # Un equipo bloqueado se deniega siempre, haya o no otro dispositivo activo: antes,
-    # si era el único registro, `activos_imei` quedaba vacío y el bloqueo abría el acceso.
-    if imei and any(d.estado == "bloqueado" and d.imei == imei for d in dispositivos):
-        return _denegar("dispositivo bloqueado")
-    if activos_imei:
-        if imei and any(d.imei == imei for d in activos_imei):
-            return True, "activo"
-        return _denegar("dispositivo no autorizado")
-    if legacy_activo:
-        return True, "activo"
-    if any(d.estado == "pendiente" for d in dispositivos):
-        return False, "pendiente"
-    return False, "none"
+    def _denegar(code: str) -> JSONResponse:
+        return acceso.respuesta_403(code, decision.estado)
+
+    code = decision.code or "dispositivo_no_autorizado"
+    if via_header or code == "dispositivo_bloqueado":
+        return _denegar(code)
+    # Contrato anterior (sin header). Un gestor que ya tiene un equipo activo con id no entra por
+    # «por vincular»: ni con otro equipo ni sin identificar el suyo (los tokens abren toda la API).
+    if await _otro_equipo_activo(session, tenant_id, gestor.admin_id, device_id):
+        return _denegar("dispositivo_no_autorizado")
+    if code == "dispositivo_pendiente":
+        return False, "pendiente", None
+    return False, "none", None
 
 
 async def _sesion_de_membresia(
@@ -321,7 +348,7 @@ async def _sesion_de_membresia(
         secret = await pack_secret()
         if not secret:
             return JSONResponse({"error": "pack sin secreto de firma"}, status_code=503)
-        vinculado, estado_dispositivo, telefono = False, "none", ""
+        vinculado, estado_dispositivo, telefono, did = False, "none", "", None
         async with get_session() as session:
             if rol == "gestor" and gestor_id is not None:
                 gestor = await get_owned(session, Gestor, gestor_id)
@@ -330,7 +357,7 @@ async def _sesion_de_membresia(
                 res = await _enforcement_dispositivo(request, session, tenant_id, gestor, imei, whatsapp)
                 if isinstance(res, JSONResponse):
                     return res
-                vinculado, estado_dispositivo = res
+                vinculado, estado_dispositivo, did = res
                 telefono = gestor.telefono or ""
                 perfil = {
                     "id": str(gestor.id),
@@ -340,7 +367,7 @@ async def _sesion_de_membresia(
                 }
             else:
                 perfil = _perfil_admin(admin)
-            tokens = _par_tokens(secret, tenant_id, admin.id, rol=rol, gestor_id=gestor_id)
+            tokens = _par_tokens(secret, tenant_id, admin.id, rol=rol, gestor_id=gestor_id, did=did)
             permisos = await _permisos_de(
                 session, tenant_id, {"rol": rol, "gestor_id": str(gestor_id) if gestor_id else None}
             )
@@ -584,7 +611,18 @@ async def refresh(request: Request) -> JSONResponse:
         return JSONResponse({"error": "sin acceso a ese negocio"}, status_code=401)
     membresia = membresias[0]
     gestor_id = uuid.UUID(str(membresia["gestorId"])) if membresia.get("gestorId") else None
-    tokens = _par_tokens(secret, tenant_id, admin.id, rol=str(membresia["rol"]), gestor_id=gestor_id)
+    did: uuid.UUID | None = None
+    if membresia["rol"] == "gestor" and gestor_id is not None:
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                gestor = await get_owned(session, Gestor, gestor_id)
+                if gestor is None or gestor.estatus != "activo":
+                    return JSONResponse({"error": "no es gestor de esta cartera"}, status_code=403)
+                res = await acceso.equipo_del_refresh(request, session, tenant_id, gestor, payload.get("did"))
+                if isinstance(res, JSONResponse):
+                    return res
+                did = res
+    tokens = _par_tokens(secret, tenant_id, admin.id, rol=str(membresia["rol"]), gestor_id=gestor_id, did=did)
     return JSONResponse(tokens)
 
 
@@ -623,8 +661,9 @@ async def actualizar_perfil(request: Request, authorization: str | None = Header
 # --------------------------------------------------------------- dispositivo (HU-39/43)
 @router.post("/gestor/dispositivo")
 async def vincular_dispositivo(request: Request, authorization: str | None = Header(default=None)) -> JSONResponse:
-    """Vincula este equipo al gestor del token; queda **pendiente** de aprobación."""
-    auth = await _auth(authorization)
+    """Pide vincular este equipo a la cuenta del gestor; según la política del negocio queda
+    **pendiente** de aprobación (o activo si es abierta). Idempotente por (cuenta, equipo)."""
+    auth = await _auth(authorization, sin_equipo_ok=True)
     if auth is None:
         return JSONResponse({"error": "no autorizado"}, status_code=401)
     tenant_id, payload = auth
@@ -632,49 +671,84 @@ async def vincular_dispositivo(request: Request, authorization: str | None = Hea
     if not gestor_id:
         return JSONResponse({"error": "token sin gestor"}, status_code=403)
     body = await request.json()
-    imei = str(body.get("imei") or "").strip()
+    device_id, via_header = acceso.equipo_de(request, str(body.get("imei") or ""))
     whatsapp = str(body.get("whatsapp") or "").strip()
-    public_key = str(body.get("publicKey") or "").strip() or None
-    if not imei or not whatsapp:
+    # La app vieja exige el contacto; la nueva identifica el equipo por header y el contacto es opcional.
+    if not device_id or (not via_header and not whatsapp):
         return JSONResponse({"error": "imei y whatsapp son obligatorios"}, status_code=400)
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             gestor = await get_owned(session, Gestor, uuid.UUID(str(gestor_id)))
-            if gestor is None:
+            if gestor is None or gestor.admin_id is None:
                 return JSONResponse({"error": "gestor no encontrado"}, status_code=404)
-            # El único es (tenant_id, imei): se busca por el equipo, no por el gestor. Si ya es
-            # de otro gestor del negocio se responde 409 (antes: IntegrityError → 500).
-            existente = (await session.execute(select(Device).where(Device.tenant_id == tenant_id, Device.imei == imei, Device.deleted_at.is_(None)))).scalar_one_or_none()
-            if existente is not None and existente.gestor_id != gestor.id:
-                return JSONResponse({"error": "este equipo ya está vinculado a otra cuenta del negocio"}, status_code=409)
-            if existente is not None:
-                if public_key and not existente.public_key:
-                    existente.public_key = public_key
-                return JSONResponse({"estado": existente.estado, "imei": existente.imei, "whatsapp": existente.whatsapp_number})
-            device = Device(tenant_id=tenant_id, codigo=str(uuid.uuid4()), api_key_hash=hash_password(secrets.token_urlsafe(24)), gestor_id=gestor.id, imei=imei, whatsapp_number=whatsapp, public_key=public_key, estado="pendiente")
-            session.add(device)
-            await session.flush()
-            session.add(IntentoAcceso(tenant_id=tenant_id, gestor_id=gestor.id, device_id=device.id, imei=imei, whatsapp_number=whatsapp, resultado="ok", motivo="solicitud de vinculación", ip=request.client.host if request.client else None))
-    return JSONResponse({"estado": "pendiente", "imei": imei, "whatsapp": whatsapp}, status_code=201)
+            await acceso.adoptar_legado(session, tenant_id, gestor)
+            existia = (
+                await session.execute(
+                    select(AccountDevice.id).where(
+                        AccountDevice.tenant_id == tenant_id,
+                        AccountDevice.admin_id == gestor.admin_id,
+                        AccountDevice.device_id == device_id,
+                        AccountDevice.deleted_at.is_(None),
+                    )
+                )
+            ).first() is not None
+            try:
+                decision = await evaluar(
+                    session,
+                    tenant_id=tenant_id,
+                    admin_id=gestor.admin_id,
+                    rol="gestor",
+                    device_id=device_id,
+                    canal="campo" if via_header else "campo_v1",
+                    ip=request.client.host if request.client else None,
+                    detalle_alta={"contacto": whatsapp[: acceso.MAX_CONTACTO]} if whatsapp else None,
+                )
+            except AccesoError as exc:
+                return JSONResponse({"error": exc.message, "code": exc.code}, status_code=exc.status)
+    return JSONResponse(
+        {"estado": decision.estado, "imei": device_id, "whatsapp": whatsapp or None},
+        status_code=200 if existia else 201,
+    )
 
 
 @router.get("/gestor/dispositivo")
-async def estado_dispositivo(authorization: str | None = Header(default=None)) -> JSONResponse:
-    """Estado de vinculación del equipo del gestor (la app espera la aprobación)."""
-    auth = await _auth(authorization)
+async def estado_dispositivo(request: Request, authorization: str | None = Header(default=None)) -> JSONResponse:
+    """Estado de vinculación del equipo del gestor (la app espera la aprobación). Con `X-Device-Id`, el de
+    ESE equipo; sin él, el mejor estado entre los de la cuenta (contrato anterior)."""
+    auth = await _auth(authorization, sin_equipo_ok=True)
     if auth is None:
         return JSONResponse({"error": "no autorizado"}, status_code=401)
     tenant_id, payload = auth
     gestor_id = payload.get("gestor_id")
     if not gestor_id:
         return JSONResponse({"error": "token sin gestor"}, status_code=403)
+    device_id, _ = acceso.equipo_de(request)
     async with tenant_scope(tenant_id):
         async with get_session() as session:
-            devices = (await session.execute(select(Device).where(Device.tenant_id == tenant_id, Device.gestor_id == uuid.UUID(str(gestor_id)), Device.deleted_at.is_(None)).order_by(Device.created_at.desc()))).scalars().all()
+            gestor = await get_owned(session, Gestor, uuid.UUID(str(gestor_id)))
+            if gestor is None or gestor.admin_id is None:
+                return JSONResponse({"error": "gestor no encontrado"}, status_code=404)
+            await acceso.adoptar_legado(session, tenant_id, gestor)
+            consulta = select(AccountDevice).where(
+                AccountDevice.tenant_id == tenant_id,
+                AccountDevice.admin_id == gestor.admin_id,
+                AccountDevice.deleted_at.is_(None),
+            )
+            if device_id:
+                consulta = consulta.where(AccountDevice.device_id == device_id)
+            devices = (await session.execute(consulta.order_by(AccountDevice.created_at.desc()))).scalars().all()
     activo = next((d for d in devices if d.estado == "activo"), None)
     pendiente = next((d for d in devices if d.estado == "pendiente"), None)
-    dev = activo or pendiente
-    return JSONResponse({"vinculado": activo is not None, "estado": dev.estado if dev else "none", "imei": dev.imei if dev else None, "whatsapp": dev.whatsapp_number if dev else None})
+    bloqueado = next((d for d in devices if d.estado == "bloqueado"), None) if device_id else None
+    dev = activo or pendiente or bloqueado
+    return JSONResponse(
+        {
+            "vinculado": activo is not None,
+            "estado": dev.estado if dev else "none",
+            "imei": dev.device_id if dev else None,
+            "whatsapp": None,
+        }
+    )
 
 
 # --------------------------------------------------------------- lecturas (F2)

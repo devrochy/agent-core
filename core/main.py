@@ -18,6 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from core.access.devices import AccesoError
 from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, NegocioSuspendido, current_admin
 from core.admin.permissions import effective_access, pack_prefixes, required_section
 from core.admin.views import router as admin_router
@@ -83,6 +84,15 @@ app = FastAPI(
 )
 app.add_exception_handler(ApiError, api_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
+
+
+async def acceso_error_handler(_request: Request, exc: AccesoError) -> JSONResponse:
+    """403 del control de equipos fuera de `/api/v1` (app de campo del pack): `{error, code}`, el mismo
+    cuerpo que da el login (ADR-0174 §3). Las rutas `/api/v1/access/*` lo traducen ellas a `ApiError`."""
+    return JSONResponse({"error": exc.message, "code": exc.code}, status_code=exc.status)
+
+
+app.add_exception_handler(AccesoError, acceso_error_handler)
 
 app.include_router(webhooks_router)
 app.include_router(admin_router)

@@ -148,7 +148,9 @@ async def _vinculado(session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID) ->
     return global_ is not None
 
 
-async def acceso_de_campo(authorization: str | None) -> tuple[uuid.UUID, dict[str, Any]] | None:
+async def acceso_de_campo(
+    authorization: str | None, *, sin_equipo_ok: bool = False
+) -> tuple[uuid.UUID, dict[str, Any]] | None:
     """Único validador de los tokens de acceso de la app de campo (`api.py` y `api_gestor.py`).
 
     Firma y vencimiento (`token_tenant`), y además, en CADA pedido (ADR-0134, ADR-0136):
@@ -156,7 +158,10 @@ async def acceso_de_campo(authorization: str | None) -> tuple[uuid.UUID, dict[st
     - el negocio sigue activo (suspenderlo corta la app en el siguiente pedido);
     - si el token es de una cuenta (`admin_id`): la cuenta sigue habilitada (desactivarla o
       apagar el rol tester corta la app) y sigue vinculada al negocio por `tenant_user`
-      (desvincularla también); el master y el tester habilitado no necesitan vínculo.
+      (desvincularla también); el master y el tester habilitado no necesitan vínculo;
+    - si es de un gestor: el equipo con el que entró (`did`) sigue activo (ADR-0174): bloquearlo corta la
+      sesión abierta con 403 `code` (`AccesoError`) en menos de 60 s. `sin_equipo_ok` deja pasar un token
+      sin `did` en las rutas por las que un equipo pide vincularse.
     Los tokens de dispositivo (sin `admin_id`, `/auth/dispositivo`) solo dependen del negocio.
     """
     if not authorization or not authorization.lower().startswith("bearer "):
@@ -181,4 +186,13 @@ async def acceso_de_campo(authorization: str | None) -> tuple[uuid.UUID, dict[st
                 return None
             if not actua_como_master(admin) and not await _vinculado(session, tenant_id, admin_uuid):
                 return None
+        if payload.get("rol") == "gestor" and not actua_como_master(admin):
+            from core.access.sesion import exigir_equipo_vigente
+            from core.shared.tenant import tenant_scope
+
+            async with tenant_scope(tenant_id):
+                async with get_session() as session:
+                    await exigir_equipo_vigente(
+                        session, tenant_id, admin_uuid, payload.get("did"), sin_equipo_ok=sin_equipo_ok
+                    )
     return auth

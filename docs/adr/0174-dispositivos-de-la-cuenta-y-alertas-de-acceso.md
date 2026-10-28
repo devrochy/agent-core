@@ -170,3 +170,12 @@ Tabla de negocio nueva, **append-only** (solo se permite la baja lógica por ret
 - **Métricas y logs:** `access_device_decisions_total`, `access_events_total`, `access_enforcement_seconds`, `access_legacy_param_total`; structlog por decisión con `tenant_id`, `admin_id`, `decision` y `request_id`, sin el `device_id` completo.
 - **Panel y APK:** HU-ACC-04 y HU-ACC-05; `openapi.json` → `schema.d.ts` en cada cliente.
 - **Pruebas:** integración con Postgres y Redis (política por rol, bloqueado en ambas, revocación en menos de 60 s, refresh bloqueado, concurrencia sin 500, equipo compartido, PUT que deja al owner sin equipo) y la prueba de la migración (ver HU-ACC-02).
+
+## Adenda — implementación de HU-ACC-02 (2026-10-27)
+
+- **Claim `did`** = id de la fila de `account_devices` (no el id del equipo): opaco, buscable por clave primaria y sirve de clave de caché. Va en el token de acceso y en el de refresh.
+- **Vigencia por petición**: `acceso_de_campo` (el único validador de la app de campo) llama a `core.access.sesion.exigir_equipo_vigente` para tokens de gestor. Caché Redis de 60 s por equipo (`acceso:equipo:{tenant}:{fila}`) y por cuenta (`acceso:cuenta:{tenant}:{admin}`); toda transición del servicio invalida las claves afectadas (un bloqueo «de equipo» invalida las de todas las cuentas con ese `device_id`). Redis caído → lectura de la base. La revocación llega en menos de 60 s aunque falle la invalidación.
+- **Token sin `did`**: vale si la política del gestor es abierta o si la cuenta ya tiene un equipo activo con id (sesiones anteriores al cambio); en el resto solo llega a las rutas de vinculación (`GET/POST /gestor/dispositivo`).
+- **Refresh**: header → decisión nueva sobre ese equipo; sin header → el `did` del token; sin ninguno → se hereda el equipo activo más reciente si la política lo permite.
+- **Equipo compartido entre cuentas**: permitido (la segunda cuenta queda pendiente y se registra `dispositivo_compartido`); deja de ser el 409 de la red de seguridad previa.
+- **Contrato**: con `X-Device-Id`, 403 `{error, code, estado}`; sin él, contrato anterior (tokens + `requiereVinculacion`), salvo que la cuenta ya tenga un equipo activo con id (403: los tokens abren toda la API).
