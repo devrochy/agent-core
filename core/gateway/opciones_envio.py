@@ -236,7 +236,7 @@ async def _enviar(traza: _Traza, datos: dict[str, Any] | None, clave_idempotenci
         )
         return ev.ResultadoEnvio(False, ev.SIN_PLANTILLA, send_id=send_id, motivo=decision.motivo)
 
-    if decision.via in (ev.INTERACTIVO, ev.PLANTILLA) and await _pausada_por_uso(tenant_id, credenciales):
+    if proveedor == "meta" and decision.via in (ev.INTERACTIVO, ev.PLANTILLA) and await _pausada_por_uso(tenant_id, credenciales):
         # Pausa por uso de la API de Meta (>= 90 %): el sender no encolaría. Se evita el alta de un envío huérfano.
         return ev.ResultadoEnvio(False, ev.PAUSADA, send_id=send_id, motivo="uso_api_meta")
 

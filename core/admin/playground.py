@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import or_, select
 
-from core.db.models import Conversation, Customer, utcnow
+from core.db.models import Conversation, Customer, Message, utcnow
 from core.db.session import get_session
 from core.gateway.conexion_pruebas import asegurar_conexion_de_pruebas, validar_conexion_para_probar
 from core.shared.logger import get_logger
@@ -159,11 +159,68 @@ async def run_test_turn(tenant_id: uuid.UUID, text: str, connection_id: uuid.UUI
     return TestTurn(text=result.text, image_url=result.image_url, escalated=result.escalated)
 
 
+async def _salientes(tenant_id: uuid.UUID, conversation_id: uuid.UUID) -> list[Message]:
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(Message)
+                .where(
+                    Message.tenant_id == tenant_id,
+                    Message.conversation_id == conversation_id,
+                    Message.direction == "outbound",
+                )
+                .order_by(Message.created_at, Message.id)
+            )
+        ).scalars().all()
+        session.expunge_all()
+        return list(rows)
+
+
+async def enviar_opciones(
+    tenant_id: uuid.UUID, actor: str, clave: str, connection_id: uuid.UUID | None = None
+) -> tuple[dict, list[Message]]:
+    """Envía la plantilla con opciones `clave` a la conversación de prueba (SPEC-40, ADR-0172, pista B1) y devuelve
+    el resultado del envío y los mensajes que quedaron guardados, listos para pintar. Los errores de negocio son los
+    de `plantillas_opciones_service.enviar_prueba` (`ErrorPlantillaOpciones`). Corre bajo el `tenant_scope` del admin."""
+    from core.admin import plantillas_opciones_service as svc
+    from core.gateway.opciones_envio import PREFIJO_ID
+
+    conversation = await get_or_create_test_conversation(tenant_id, connection_id)
+    # Cada envío del playground es nuevo: la clave de idempotencia solo existe para que `enviar_prueba` la exija.
+    r = await svc.enviar_prueba(tenant_id, actor, clave, conversation.id, uuid.uuid4().hex)
+    ids = {f"{PREFIJO_ID}:{r['send_id']}", f"{PREFIJO_ID}:{r['send_id']}:0"}
+    return r, [m for m in await _salientes(tenant_id, conversation.id) if m.client_message_id in ids]
+
+
+async def tocar_opcion(
+    tenant_id: uuid.UUID, payload: str, connection_id: uuid.UUID | None = None
+) -> tuple[str, list[Message]]:
+    """Simula el toque de un botón de la conversación de prueba con el MISMO resolver que atiende WhatsApp
+    (`opciones_toque.atender`: firma por negocio y conversación, vigencia, una sola ejecución; sin LLM). Devuelve el
+    `outcome` y los mensajes salientes que el toque produjo. **Ejecuta la tool de verdad.** Quien llama ya comprobó
+    la bandera y que el payload es de opciones (`es_de_opciones`)."""
+    from core.orchestrator import opciones_toque
+
+    conv = await get_or_create_test_conversation(tenant_id, connection_id)
+    async with get_session() as session:
+        conversation = await session.get(Conversation, conv.id)
+        customer = await session.get(Customer, conversation.customer_id) if conversation else None
+        session.expunge_all()
+    if (
+        conversation is None
+        or customer is None
+        or conversation.tenant_id != tenant_id
+        or customer.tenant_id != tenant_id
+    ):
+        raise PlaygroundError("No existe la conversación de prueba.")
+    antes = {m.id for m in await _salientes(tenant_id, conversation.id)}
+    outcome = await opciones_toque.atender(conversation, customer, {"interactive_id": payload})
+    return outcome, [m for m in await _salientes(tenant_id, conversation.id) if m.id not in antes]
+
+
 async def _guardar_mensaje(tenant_id: uuid.UUID, conversation_id: uuid.UUID, direccion: str, texto: str) -> None:
     """Como `consumer._persist_inbound` (entrante) y el envío (saliente, ya entregado: el
     playground responde en el navegador)."""
-    from core.db.models import Message
-
     async with get_session() as session:
         session.add(
             Message(

@@ -38,6 +38,7 @@ from core.llm.types import LLMToolCall
 from core.shared import release_vigente
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import TEST_CHANNEL
 
 log = get_logger(__name__)
 
@@ -115,9 +116,10 @@ async def atender(conversation: Any, customer: Any, fields: dict[str, str]) -> s
         return await send_to_conversation(conversation_id, cuerpo)
 
     async def enviar_confirmacion(interactivo: dict[str, Any]) -> bool:
-        # Un botón solo existe en WhatsApp y dentro de los topes de Meta: si no se puede mostrar, la
-        # confirmación no se pide (un texto no confirma nada) y el resolver avisa que no se hizo nada.
-        if conversation.channel != "whatsapp" or not interactivo_valido(interactivo):
+        # Un botón solo existe en WhatsApp (y en el playground, que los pinta él) dentro de los topes de Meta: si
+        # no se puede mostrar, la confirmación no se pide (un texto no confirma nada) y el resolver avisa que no
+        # se hizo nada.
+        if conversation.channel not in ("whatsapp", TEST_CHANNEL) or not interactivo_valido(interactivo):
             return False
         return await send_interactive_to_conversation(
             conversation_id, interactivo, fallback_text=texto("confirmacion_no_disponible"), sin_degradar=True
