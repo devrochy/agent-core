@@ -125,3 +125,19 @@ async def test_cancelar_una_ficha_lenta_a_mitad_de_consulta_no_envenena_el_pool(
             assert await relacion.para_prompt(uuid.uuid4(), {"pack_lento"}) == ""
         async with get_session() as s:
             assert (await s.execute(text("select 1"))).scalar() == 1
+
+
+async def test_la_tool_de_historial_nace_apagada_y_se_ofrece_al_encender_las_herramientas(app_client) -> None:
+    from _api_helpers import api_headers
+
+    from core.memory.historial_tool import _hay_modulos
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    h = await api_headers(app_client, tid)
+    async with tenant_scope(tid):
+        assert await _hay_modulos(set()) is False
+    r = await app_client.put("/api/v1/admin/datos-cliente/politica", headers=h, json={"herramientas_del_agente": True})
+    assert r.status_code == 200, r.text
+    async with tenant_scope(tid):
+        assert await _hay_modulos(set()) is True

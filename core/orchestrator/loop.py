@@ -31,6 +31,7 @@ from core.agents.spec import enabled_packs, load_active_spec
 from core.agents.spec_de_release import spec_del_turno
 from core.config import get_settings
 from core.config_limites import leer_entero
+from core.datos_cliente.ajustes import herramientas_de as datos_del_cliente_activos
 from core.db.models import AppSettings, AuditLog, Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
 from core.kernel import horario_de_servicio
@@ -408,7 +409,12 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # no ve el `quote_id` que devolvió una tool en un turno anterior.
     referencias = await cargar_referencias(enabled, disabled_for_tenant, conversation_id, customer.id)
     # Ficha de lo que cada módulo habilitado ya sabe del cliente (HU-CRM-14): acotada y tolerante a fallos.
-    relacion = await relacion_con_modulos.para_prompt(customer.id, enabled)
+    # Apagada por defecto: solo la trae el negocio que encendió las herramientas de datos del cliente.
+    relacion = (
+        await relacion_con_modulos.para_prompt(customer.id, enabled)
+        if datos_del_cliente_activos(app_settings.behavior_config if app_settings else None)
+        else ""
+    )
     # Motor de procedimientos (HU-AOS-05): None salvo con `aos_procedures` (activo) o con
     # `aos_runtime = v3` y procedimientos registrados (sombra, no cambia nada de lo que ve el modelo).
     # Activo trae la tarjeta de estado (ADR-0114) y, con tarea en foco, las acciones de su etapa.

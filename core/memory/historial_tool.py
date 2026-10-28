@@ -12,8 +12,10 @@ from dataclasses import replace
 from typing import Any, ClassVar
 
 from core.admin.lead_registry import LeadProvider, lead_registry
+from core.datos_cliente.ajustes import herramientas_activas
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
@@ -37,6 +39,13 @@ async def _proveedores() -> list[LeadProvider]:
 
 
 async def _hay_modulos(_connection_types: set[str]) -> bool:
+    """Solo con las herramientas de datos del cliente encendidas por el negocio (apagado por defecto:
+    una tool nueva cambia lo que ve el modelo en todos los turnos)."""
+    try:
+        if not await herramientas_activas(get_current_tenant_id()):
+            return False
+    except Exception:
+        return False
     return bool(await _proveedores())
 
 
