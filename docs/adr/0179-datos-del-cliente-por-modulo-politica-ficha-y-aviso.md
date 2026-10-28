@@ -68,9 +68,12 @@ por agente. Este ADR no lo revierte: segmenta por módulo como **vista**, no com
 4. **`LeadRelacion` en el `lead_registry`.** Campo opcional del `LeadProvider` con tres funciones:
    `con_datos(ids)` (SQL que define «tiene datos reales»), `ficha(ids)` (líneas cortas para el prompt) y
    `detalle(cid, limite)` (para la tool de historial). Definiciones de `con_datos`: commerce = tiene
-   `Order`, `Quote` o `Lead`; calendar = `Appointment` vigente; suscripciones = `Subscription`;
-   cobranza = `Cliente` con `customer_id`. Si un provider no la implementa, se conserva la heurística
-   actual.
+   `Order`, `Quote` o un `Lead` **con contenido** (nombre, teléfono, correo o interés); calendar =
+   `Appointment` vigente; suscripciones = `Subscription`; cobranza = `Cliente` con `customer_id`. El
+   borrador que crea `auto_create_lead` en cada conversación nace vacío y no cuenta, pero uno ya
+   completado sí: se mira el contenido, no el prefijo `auto:` de la clave. `auto_create_lead` y
+   `completar_lead` no cambian (los recorridos guiados necesitan un lead existente que completar).
+   Si un provider no la implementa, se conserva la heurística actual.
 5. **Iconos y listas por módulo.** La columna Agentes muestra solo agentes con datos; el General se ve
    siempre (ADR-0153 §4). `GET /admin/leads` y su CSV aceptan `agente=<key>` (aditivo; una clave
    desconocida es 400 `filtro_invalido`). Los agentes publicados sin proveedor de datos dejan de
