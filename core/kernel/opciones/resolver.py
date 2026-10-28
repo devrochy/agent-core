@@ -604,7 +604,7 @@ async def _decir(bordes: Bordes, cuerpo: str) -> None:
 
 
 async def _emitir(t: _Traza, segundos: float) -> None:
-    metricas.toque(t.outcome, segundos)
+    metricas.toque(t.outcome, segundos, t.toque.via)
     envio = t.envio
     log.info(
         "option_tap",

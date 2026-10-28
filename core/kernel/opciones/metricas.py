@@ -1,5 +1,5 @@
-"""Métricas del toque (SPEC-40, ADR-0172 §Observabilidad): `option_taps_total{outcome}`,
-`option_tap_latency_seconds` y `option_tool_errors_total{tool}`; y las del envío, `option_sends_total{canal,via}` y
+"""Métricas del toque (SPEC-40, ADR-0172 §Observabilidad): `option_taps_total{outcome,via}`,
+`option_tap_latency_seconds{outcome,via}` y `option_tool_errors_total{tool}`; y las del envío, `option_sends_total{canal,via}` y
 `option_send_failures_total{canal,outcome}` (HU-OPC-02).
 
 Usan la API de OpenTelemetry (`opentelemetry.metrics`), que sin un `MeterProvider` configurado es un no-op
@@ -43,9 +43,11 @@ def envio(canal: str, via: str) -> None:
     _envios.add(1, {"canal": canal[:20], "via": via})
 
 
-def toque(outcome: str, segundos: float) -> None:
-    _toques.add(1, {"outcome": outcome})
-    _latencia.record(max(0.0, segundos), {"outcome": outcome})
+def toque(outcome: str, segundos: float, via: str = "button") -> None:
+    """`via` es `button` (payload firmado de un botón) o `text` (respuesta a un menú numerado, C2): conjunto cerrado
+    del resolver. Separa lo que viene del botón de lo que viene de un número escrito por el cliente."""
+    _toques.add(1, {"outcome": outcome, "via": via})
+    _latencia.record(max(0.0, segundos), {"outcome": outcome, "via": via})
 
 
 def error_de_tool(tool: str) -> None:
