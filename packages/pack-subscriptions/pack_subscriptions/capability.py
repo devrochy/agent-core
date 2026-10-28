@@ -443,7 +443,7 @@ def evaluar_cambio(sub: Subscription, *, variant_id: str, plan: PlanSnapshot, ah
 
     nuevo = Decimal(str(plan.get("precio") or 0))
     if (sub.variante_id is not None and str(sub.variante_id) == str(variant_id)) or (
-        sub.plan_id is not None and str(sub.plan_id) == str(variant_id)
+        getattr(sub, "plan_id", None) is not None and str(sub.plan_id) == str(variant_id)
     ):
         raise SubscriptionError("El cliente ya tiene ese plan.", code="mismo_plan")
     # Auditoría HU-SUB-07: sin cambios desde una pausada o vencida (el período no
