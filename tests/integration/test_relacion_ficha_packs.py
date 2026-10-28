@@ -25,6 +25,14 @@ import pack_commerce.providers  # noqa: E402, F401
 PACKS = {"pack_commerce", "pack_cobranza", "pack_calendar"}
 
 
+@pytest.fixture(autouse=True)
+def _tiempo_holgado(monkeypatch) -> None:
+    """Estos tests miran el contenido, no el tiempo: el primer acceso a una base fría puede tardar."""
+    from core.memory import relacion
+
+    monkeypatch.setattr(relacion, "TIMEOUT_POR_MODULO_S", 10.0)
+
+
 async def test_la_ficha_resume_cada_modulo_sin_montos_ni_datos_personales() -> None:
     from core.memory import relacion
     from core.shared.tenant import tenant_scope
@@ -86,3 +94,34 @@ async def test_la_tool_trae_el_detalle_solo_del_cliente_de_la_conversacion() -> 
     assert tipos == {"prestamo", "promesa"}
     assert "error" in inexistente
     assert ajeno["registros"] == []
+
+
+async def test_cancelar_una_ficha_lenta_a_mitad_de_consulta_no_envenena_el_pool(monkeypatch) -> None:
+    """El timeout cancela la ficha con la consulta en vuelo: la siguiente consulta sigue andando."""
+    from sqlalchemy import text
+
+    from core.admin.lead_registry import LeadProvider, LeadRegistry, LeadRelacion
+    from core.db.session import get_session
+    from core.memory import relacion
+    from core.shared.tenant import tenant_scope
+
+    async def lenta(ids):
+        async with get_session() as s:
+            await s.execute(text("select pg_sleep(2)"))
+        return {ids[0]: "no llega"}
+
+    async def _vacio(ids):
+        return None
+
+    reg = LeadRegistry()
+    reg._providers["pack_lento"] = LeadProvider(
+        plugin_id="pack_lento", agent_name="Lento", relacion=LeadRelacion(con_datos=_vacio, ficha=lenta)
+    )
+    monkeypatch.setattr(relacion, "lead_registry", reg)
+    monkeypatch.setattr(relacion, "TIMEOUT_POR_MODULO_S", 0.3)
+    tid = await _negocio()
+    async with tenant_scope(tid):
+        for _ in range(3):  # varias veces: si cada cancelación dejara una conexión rota, el pool se agotaría
+            assert await relacion.para_prompt(uuid.uuid4(), {"pack_lento"}) == ""
+        async with get_session() as s:
+            assert (await s.execute(text("select 1"))).scalar() == 1

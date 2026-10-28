@@ -25,7 +25,7 @@ PLAYBOOK = "relacion-con-el-negocio"
 MAX_MODULOS = 4
 MAX_LINEA_CHARS = 240  # ≈ 60 tokens
 MAX_BLOQUE_CHARS = 1600  # ≈ 400 tokens
-TIMEOUT_POR_MODULO_S = 0.3
+TIMEOUT_POR_MODULO_S = 0.5
 CLAVES = {"encabezado": (), "aviso": (), "modulo": ("modulo", "resumen")}
 _SECCION = re.compile(r"^## ([a-z_]+)$")
 
