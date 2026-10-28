@@ -145,9 +145,9 @@ def test_el_duenio_no_ve_las_waweb_y_el_master_si() -> None:
     dueno = catalogo_para(es_master=False, guardrails_disponibles=[])
     master = catalogo_para(es_master=True, guardrails_disponibles=[])
     assert not [o for o in dueno.opciones if o.clave.startswith("waweb_")]
-    # Identidad: 27 del dueño y 32 del master (HU-AOS-58 sumó el modo del horario). Coordinador: 16 del dueño y 19 del master. Banderas: 6 (3 del Agent OS y 3 de la colaboración, HU-AOS-20).
-    assert len(dueno.opciones) == 27 + 16
-    assert len(master.opciones) == 32 + 19 + 6
+    # El conteo sale del registro: un literal (27 + 16, 32 + 19 + 6) se rompía con cada opción nueva.
+    assert len(dueno.opciones) == len([o for o in OPCIONES if o.editable_por == "dueno"])
+    assert len(master.opciones) == len(OPCIONES)
     assert {o.clave for o in master.opciones if o.clave.startswith("waweb_")} == {
         o.clave for o in OPCIONES if o.grupo == "whatsapp_web"
     }
