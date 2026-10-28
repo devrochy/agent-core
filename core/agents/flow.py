@@ -203,11 +203,22 @@ def read_tenant_flow_raw(slug: str) -> Any | None:
         raise ValueError("el flow.json del negocio no es JSON válido") from exc
 
 
-def _read_flow_file(path: Path) -> list[FlowSection] | None:
-    """Lee y parsea un `flow.json`. None si no existe, está roto o es muy grande."""
+class ErrorDeLecturaDeFlujo(Exception):
+    """Un `flow.json` que existe y no se pudo leer: no es determinista, no se cachea (HU-AOS-35)."""
+
+
+def _read_flow_file(path: Path, *, estricto: bool = False) -> list[FlowSection] | None:
+    """Lee y parsea un `flow.json`. None si no existe, está roto o es muy grande.
+
+    `estricto`: un error de IO de un archivo que existe lanza `ErrorDeLecturaDeFlujo` (lo usa
+    el compilador de la release, que no debe cachear un flujo con secciones de menos)."""
     try:
         raw = path.read_bytes()
-    except OSError:
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        if estricto:
+            raise ErrorDeLecturaDeFlujo(str(path.name)) from exc
         return None
     if len(raw) > MAX_FLOW_BYTES:
         log.warning("flow_too_large", path=str(path))
@@ -225,13 +236,13 @@ def load_tenant_flow(slug: str) -> list[FlowSection] | None:
     return _read_flow_file(tenant_flow_path(slug))
 
 
-def load_core_flow() -> list[FlowSection]:
+def load_core_flow(*, estricto: bool = False) -> list[FlowSection]:
     """Secciones del core (`core/flow.json`), con dueño `core`."""
     path = REPO_ROOT / "core" / FLOW_FILENAME
-    return [replace(s, pack=CORE) for s in (_read_flow_file(path) or [])]
+    return [replace(s, pack=CORE) for s in (_read_flow_file(path, estricto=estricto) or [])]
 
 
-def load_pack_flows(pack_ids: Iterable[str]) -> list[FlowSection]:
+def load_pack_flows(pack_ids: Iterable[str], *, estricto: bool = False) -> list[FlowSection]:
     """Secciones default de los packs indicados, en el orden de `pack_ids`.
 
     El dueño de una sección es el pack de cuyo `flow.json` sale (no lo que diga el
@@ -245,7 +256,7 @@ def load_pack_flows(pack_ids: Iterable[str]) -> list[FlowSection]:
         path = pack_flow_path(pack_id)
         if path is None:
             continue
-        for section in _read_flow_file(path) or []:
+        for section in _read_flow_file(path, estricto=estricto) or []:
             if section.pack == CORE or section.id in CORE_SECTION_IDS:
                 log.info("flow_seccion_del_core_en_pack", pack=pack_id, section_id=section.id)
                 continue
@@ -335,6 +346,9 @@ def compose_flow(
 
 
 # ------------------------------------------------------------------ resolución
+# Centinela de `resolve_flow(flow_tenant=...)`: leer la ranura del turno o el disco (conducta de siempre).
+_DE_LA_RANURA: Any = object()
+
 async def _resolve_slug() -> str | None:
     """Slug del negocio del `tenant_scope`, nunca de `spec.tenantId` (fuga entre tenants)."""
     try:
@@ -351,32 +365,40 @@ async def resolve_flow(
     *,
     slug: str | None = None,
     available: set[str] | None = None,
+    flow_tenant: Any = _DE_LA_RANURA,
+    estricto: bool = False,
 ) -> ResolvedFlow | None:
     """Resuelve el flujo del tenant. None si no hay flujo declarado.
+
+    `flow_tenant` (compilador de HU-AOS-35): las secciones crudas del negocio congeladas en una
+    release, pasadas por parámetro (None = sin secciones propias). Con él no se lee la ranura del
+    turno ni el disco del negocio. `estricto`: un `flow.json` del core o de un pack que existe y
+    no se puede leer lanza en vez de omitirse.
 
     `available`: si se pasa, filtra las tools a las realmente disponibles para el
     tenant (packs habilitados + declarativas) y registra el resto en
     `unknown_tools`. Con `available=None` no filtra (para validación/CLI).
     """
     from core.agents.spec import enabled_business_packs
-
-    if slug is None:
-        slug = await _resolve_slug()
-
     from core.shared import release_vigente
 
-    congelada = release_vigente.vigente()
-    if congelada is not None:
+    if flow_tenant is not _DE_LA_RANURA:
+        tenant_sections = parse_sections(flow_tenant) if flow_tenant is not None else []
+    elif (congelada := release_vigente.vigente()) is not None:
         # Con `aos_runtime = 'v3'`, las secciones del negocio congeladas en la release del turno
         # (ADR-0117 §2), no las del disco.
         tenant_sections = parse_sections(congelada.flow_tenant) if congelada.flow_tenant is not None else []
     else:
+        if slug is None:
+            slug = await _resolve_slug()
         tenant_sections = (load_tenant_flow(slug) if slug else None) or []
+    # `estricto` solo se pasa si se pide: la firma de siempre queda intacta para quien la sustituya.
+    extra = {"estricto": True} if estricto else {}
     sections = compose_flow(
-        load_core_flow(),
-        load_pack_flows(sorted(enabled_business_packs(spec))),
+        load_core_flow(**extra),
+        load_pack_flows(sorted(enabled_business_packs(spec)), **extra),
         tenant_sections,
-        all_defaults=load_pack_flows(all_pack_ids()),
+        all_defaults=load_pack_flows(all_pack_ids(), **extra),
     )
     # `source` informa si el negocio aporta algo propio (secciones u overrides).
     source = "tenant" if tenant_sections else "pack"

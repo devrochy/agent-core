@@ -12,7 +12,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, select
 
 from core.admin.meta_costs_service import (
     list_credit_connections,
@@ -22,7 +22,7 @@ from core.admin.meta_costs_service import (
 )
 from core.api.deps import Principal, require
 from core.billing.tipos_de_uso import EVAL, NO_ES_ACTIVIDAD, NO_SON_TURNOS
-from core.db.models import UsageLedger
+from core.db.models import AgentInstanceRecord, AgentRecord, UsageLedger
 from core.db.session import get_session
 
 router = APIRouter(prefix="/admin/costs", tags=["admin · costos"])
@@ -71,6 +71,20 @@ class MetaPricing(BaseModel):
     service_allowance_hypothesis: bool = False
 
 
+class AgentCost(BaseModel):
+    """Consumo de un agente en 30 días (HU-AOS-35). `agent_id` null = filas sin agente (legacy o
+    anteriores a las versiones). `cached_pct` = leído de la caché / entrada, solo sobre filas
+    desde la migración 0114; null si no hay ninguna medible."""
+
+    agent_id: str | None
+    agent_name: str | None
+    turns: int
+    tokens_in: int
+    cached_tokens: int
+    cached_pct: float | None
+    cost: float
+
+
 class CostsResponse(BaseModel):
     meta: MetaPricing | None = None
     today: float
@@ -78,6 +92,7 @@ class CostsResponse(BaseModel):
     total_turns: int
     by_model: list[ModelCost]
     by_conversation: list[ConversationCost]
+    by_agent: list[AgentCost] = []
 
 
 @router.get("", response_model=CostsResponse)
@@ -139,6 +154,42 @@ async def get_costs(
             )
         ).all()
 
+        # Por agente (HU-AOS-35): mismas condiciones que `data_por_agente.consumo` (sin
+        # `NO_ES_ACTIVIDAD`). La instancia y el agente se unen también por negocio.
+        medible = UsageLedger.cache_write_tokens.is_not(None)
+        by_agent_rows = (
+            await session.execute(
+                select(
+                    AgentRecord.id,
+                    AgentRecord.name,
+                    func.count(UsageLedger.id),
+                    func.coalesce(func.sum(UsageLedger.input_tokens), 0),
+                    func.coalesce(func.sum(case((medible, UsageLedger.cached_tokens), else_=0)), 0),
+                    func.coalesce(func.sum(case((medible, UsageLedger.input_tokens), else_=0)), 0),
+                    func.coalesce(func.sum(UsageLedger.cost_usd), 0),
+                )
+                .select_from(UsageLedger)
+                .outerjoin(
+                    AgentInstanceRecord,
+                    and_(
+                        AgentInstanceRecord.tenant_id == UsageLedger.tenant_id,
+                        AgentInstanceRecord.id == UsageLedger.agent_instance_id,
+                    ),
+                )
+                .outerjoin(
+                    AgentRecord,
+                    and_(
+                        AgentRecord.tenant_id == AgentInstanceRecord.tenant_id,
+                        AgentRecord.id == AgentInstanceRecord.agent_id,
+                    ),
+                )
+                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind.not_in(NO_ES_ACTIVIDAD))
+                .group_by(AgentRecord.id, AgentRecord.name)
+                .order_by(func.sum(UsageLedger.cost_usd).desc())
+                .limit(50)
+            )
+        ).all()
+
     meta_ctx = (
         await meta_costs_context(principal.tenant_id, month_ago)
         if principal.tenant_id is not None
@@ -176,6 +227,18 @@ async def get_costs(
                 last=last,
             )
             for conversation_id, turns, cost, last in by_conversation_rows
+        ],
+        by_agent=[
+            AgentCost(
+                agent_id=str(agent_id) if agent_id is not None else None,
+                agent_name=name,
+                turns=int(turns),
+                tokens_in=int(tokens_in or 0),
+                cached_tokens=int(cached or 0),
+                cached_pct=round(100 * int(cached) / int(medible_in), 1) if medible_in else None,
+                cost=float(cost or 0),
+            )
+            for agent_id, name, turns, tokens_in, cached, medible_in, cost in by_agent_rows
         ],
     )
 

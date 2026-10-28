@@ -16,6 +16,7 @@ se ensambla:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -67,6 +68,7 @@ class PromptContext:
     state_card: str = ""              # tarjeta de estado (ADR-0114); "" con aos_procedures apagada
     team_notes: str = ""              # notas del equipo sobre el cliente (ADR-0147); "" sin notas
     service_hours: str = ""           # horario del equipo humano (HU-AOS-58); "" si no es informativo
+    no_disponible: str = ""           # etapas del flujo sin herramientas en este turno (HU-AOS-35); "" si no hay
     timezone: str = DEFAULT_TIMEZONE  # zona del negocio (ADR-0091)
     now: datetime | None = None       # None = ahora; inyectable en tests
 
@@ -132,12 +134,17 @@ def _next_days_line(today: date, lang: str) -> str:
 
 
 async def _render_playbook(
-    spec: AgentSpec, ref_name: str, vars_: dict[str, str], tenant_slug: str | None
+    spec: AgentSpec,
+    ref_name: str,
+    vars_: dict[str, str],
+    tenant_slug: str | None,
+    overrides: Mapping[str, str] | None = None,
+    estricto: bool = False,
 ) -> str | None:
     """Carga el playbook y sustituye placeholders. None si no está en el índice."""
     from core.agents.playbooks import load_playbook
 
-    content = await load_playbook(spec, ref_name, tenant_slug=tenant_slug)
+    content = await load_playbook(spec, ref_name, tenant_slug=tenant_slug, overrides=overrides, estricto=estricto)
     if content is None:
         return None
     try:
@@ -173,6 +180,10 @@ def bloque_dinamico(ctx: PromptContext) -> str:
     if ctx.service_hours:
         # Armada por `core/kernel/horario_de_servicio.py` desde su playbook; solo con horario informativo.
         dynamic_parts.append(ctx.service_hours)
+    if ctx.no_disponible:
+        # Armado por `core/agents/compiler.py` desde su playbook del kernel: el flujo fijo es el de la
+        # release completa y lo que falta en este turno se dice aquí (adenda HU-AOS-35 de ADR-0117).
+        dynamic_parts.append(ctx.no_disponible)
     # Siempre la última parte: cambia cada minuto y no debe tocar el prefijo cacheado.
     dynamic_parts.append(_current_datetime_part(ctx))
     return "\n\n".join(dynamic_parts)
@@ -180,8 +191,6 @@ def bloque_dinamico(ctx: PromptContext) -> str:
 
 async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
     """Ensambla los bloques del system prompt desde el spec + playbooks + turno."""
-    blocks: list[str] = []
-
     # Override por tenant (ADR-0026): se resuelve UNA VEZ acá, no dentro de
     # cada llamada a load_playbook -- este loop puede pedir 4-6 playbooks por
     # turno, y una query de slug por cada uno sería un N+1 real.
@@ -204,9 +213,28 @@ async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
         # query si la resolución de arriba falló (ej. BD caída).
         tenant_slug = ""
 
+    blocks = await bloques_fijos(spec, ctx, tenant_slug=tenant_slug)
+    # 3. Contexto dinámico del turno (va al final; no invalida el cache estable)
+    blocks.append(bloque_dinamico(ctx))
+    return blocks
+
+
+async def bloques_fijos(
+    spec: AgentSpec,
+    ctx: PromptContext,
+    *,
+    tenant_slug: str | None,
+    overrides: Mapping[str, str] | None = None,
+    estricto: bool = False,
+) -> list[str]:
+    """Los bloques estables del prompt (todo menos el dinámico): los arma igual la ruta de
+    siempre (`build_system_blocks`) y el compilador de la release (HU-AOS-35), que pasa los
+    overrides congelados por parámetro y `estricto` para no cachear un bloque de menos."""
+    blocks: list[str] = []
+
     # 1. Playbooks del tenant, en el orden del índice (identidad, tono, reglas...)
     for ref in spec.playbooks:
-        rendered = await _render_playbook(spec, ref.name, ctx.template_vars, tenant_slug)
+        rendered = await _render_playbook(spec, ref.name, ctx.template_vars, tenant_slug, overrides, estricto)
         if rendered:
             blocks.append(rendered)
 
@@ -223,7 +251,4 @@ async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
             "Cada etapa lista las herramientas que corresponden a ese momento:\n"
             f"{ctx.flow_summary}"
         )
-
-    # 3. Contexto dinámico del turno (va al final; no invalida el cache estable)
-    blocks.append(bloque_dinamico(ctx))
     return blocks

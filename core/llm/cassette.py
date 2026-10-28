@@ -382,6 +382,8 @@ def _respuesta_a_dict(respuesta: LLMResponse, norm: _Normalizador) -> dict[str, 
             "output_tokens": uso.output_tokens,
             "cache_read_tokens": getattr(uso, "cache_read_tokens", 0),
             "cache_write_tokens": getattr(uso, "cache_write_tokens", 0),
+            # Solo si es False (Anthropic): las grabaciones existentes no cambian.
+            **({} if getattr(uso, "input_includes_cache", True) else {"input_includes_cache": False}),
         },
         "model": respuesta.model,
         # Solo si lo hay (DeepSeek con thinking): las grabaciones existentes no cambian.
@@ -413,7 +415,10 @@ def _respuesta_de_dict(dato: dict[str, Any], norm: _Normalizador) -> LLMResponse
         content=dato.get("content", ""),
         stop_reason=stop,
         tool_calls=llamadas,
-        usage=LLMUsageInfo(**{c: int(uso.get(c, 0) or 0) for c in _CAMPOS_USO}),
+        usage=LLMUsageInfo(
+            **{c: int(uso.get(c, 0) or 0) for c in _CAMPOS_USO},
+            input_includes_cache=uso.get("input_includes_cache") is not False,
+        ),
         model=str(dato.get("model", "")),
         latency_ms=0,
         reasoning_content=razonamiento if isinstance(razonamiento := dato.get("reasoning_content", ""), str) else "",
