@@ -11,6 +11,8 @@ import os
 import pytest
 from _api_helpers import api_headers, uniq
 
+from core.config_registro.opciones import OPCIONES
+
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
     pytest.mark.skipif(
@@ -53,12 +55,13 @@ def _claves(cuerpo: dict) -> list[str]:
     return [o["clave"] for o in cuerpo["opciones"]]
 
 
-async def test_el_master_recibe_las_57_opciones_con_su_forma(app_client) -> None:
+async def test_el_master_recibe_todas_las_opciones_con_su_forma(app_client) -> None:
     tid = await _negocio()
     r = await app_client.get(URL, headers=await api_headers(app_client, tid))
     assert r.status_code == 200, r.text
     cuerpo = r.json()
-    assert len(cuerpo["opciones"]) == 57
+    # Todas las del registro: el conteo sale de él, no de un literal que se rompe con cada opción nueva.
+    assert len(cuerpo["opciones"]) == len(OPCIONES)
     assert cuerpo["version"]
     velocidad = next(o for o in cuerpo["opciones"] if o["clave"] == "debounce_mode")
     assert velocidad["etiqueta"] == "Velocidad de respuesta"
@@ -75,7 +78,8 @@ async def test_un_colaborador_con_configuracion_no_ve_la_politica_de_whatsapp_we
     r = await app_client.get(URL, headers=await api_headers(app_client, tid, email=email, password=PASSWORD))
     assert r.status_code == 200, r.text
     claves = _claves(r.json())
-    assert len(claves) == 43
+    # Las que no son exclusivas del master (las `waweb_*` lo son, y se comprueba aparte).
+    assert len(claves) == len([o for o in OPCIONES if o.editable_por != "master"])
     assert not [c for c in claves if c.startswith("waweb_")]
 
 
