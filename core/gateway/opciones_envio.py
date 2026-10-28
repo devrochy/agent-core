@@ -276,7 +276,9 @@ async def _enviar(traza: _Traza, datos: dict[str, Any] | None, clave_idempotenci
         # La fila queda sin mensaje: ver el docstring del módulo (inerte, de solo INSERT).
         return ev.ResultadoEnvio(False, ev.NO_ENCOLADO, via=decision.via, send_id=send_id, motivo="cola_rechazo")
     return ev.ResultadoEnvio(
-        True, ev.ENVIADO, via=decision.via, send_id=send_id, motivo=decision.motivo, degradado=decision.via == ev.TEXTO
+        True, ev.ENVIADO, via=decision.via, send_id=send_id, motivo=decision.motivo, degradado=decision.via == ev.TEXTO,
+        # Un menú de texto solo se ejecuta si el canal interpreta la respuesta (pista C2); un texto degradado de Meta no.
+        por_respuesta=decision.via == ev.TEXTO and capacidades_de(conversation.channel, proveedor).respuesta_numerica,
     )
 
 

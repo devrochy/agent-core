@@ -75,8 +75,10 @@ PLANTILLA_DISTINTA = "plantilla_distinta_de_la_version"
 @dataclass(frozen=True)
 class ResultadoEnvio:
     """Lo que devuelve `send_options_to_conversation`. `via` y `send_id` solo si salió (o se encoló) algo.
-    `degradado`: salió el texto de respaldo en vez del interactivo; `ejecucion_directa`: el cliente puede tocar
-    una opción (interactivo o plantilla). `motivo` es un código, nunca un dato del cliente."""
+    `degradado`: salió el texto de respaldo en vez del interactivo; `ejecucion_directa`: el cliente puede elegir
+    una opción y ejecutarla (tocar el botón del interactivo o de la plantilla, o —pista C2— contestar «1»/el título
+    de un menú de texto en un canal con `respuesta_numerica`). `por_respuesta`: el menú de texto se contesta así.
+    `motivo` es un código, nunca un dato del cliente."""
 
     enviado: bool
     outcome: str
@@ -84,10 +86,11 @@ class ResultadoEnvio:
     send_id: uuid.UUID | None = None
     motivo: str = ""
     degradado: bool = False
+    por_respuesta: bool = False
 
     @property
     def ejecucion_directa(self) -> bool:
-        return self.enviado and self.via in (INTERACTIVO, PLANTILLA)
+        return self.enviado and (self.via in (INTERACTIVO, PLANTILLA) or (self.via == TEXTO and self.por_respuesta))
 
 
 @dataclass(frozen=True)

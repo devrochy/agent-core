@@ -47,7 +47,7 @@ Todas llevan `id`, `tenant_id`, RLS con `FORCE`, índices que empiezan por `tena
 - 3 opciones o menos: mensaje interactivo `button`. De 4 a 10: `list`.
 - Plantilla de Meta: BODY con parámetros NAMED (`{cliente.nombre}` → `{{cliente_nombre}}`), FOOTER y botones QUICK_REPLY, con `event_notices.render_body`/`build_components` y `validate_template_components`. Dos rutas que dan el mismo nombre de parámetro (`a.b_c`, `a_b.c`) se rechazan en el lint.
 - Cada versión publicada en Meta crea una plantilla nueva `<clave>_v<n>` (por el límite de ediciones de Meta); nunca se edita una aprobada.
-- Sin botones en el canal (chat web, Instagram, correo): texto con la lista de opciones y **sin ejecución directa**.
+- Sin botones en el canal (chat web, Instagram, correo): texto con la lista de opciones y **sin ejecución directa** del envío; en los canales con `respuesta_numerica` el cliente puede contestar «1» o el título y se ejecuta (adenda C2, 2026-10-28).
 
 ### 3. Payload firmado
 
@@ -101,7 +101,7 @@ Mismo patrón HMAC de `motor._firma` y `payload_boton_confirmar`:
 
 **Negativas:** cuatro tablas, una migración, una bandera y una superficie nueva por probar; cada versión pasa por la aprobación de Meta; los quick replies sin prefijo `opt` llegarán como texto al LLM en vez de descartarse (changelog del PR 1); un procedimiento publicado después puede volver obsoleta una opción; fuera del loop no hay release ni spec de turno (con v3 los bindings son por agente en foco: las fichas de tools del lint salen de UN AgentSpec, el del agente que envía); sin binding `_tool_denial` deja correr la tool, para opciones se exige binding explícito.
 
-**Modos de falla:** firma inválida o conversación ajena → se descarta con log y métrica `bad_signature`; envío vencido o versión retirada → texto fijo; doble toque o reintento de Meta → una sola ejecución; tool denegada o argumentos fuera de schema → `respuesta_error` y log `option_args_drift`; worker muerto en `running` → no reejecuta; plantilla rechazada o pausada → degrada a texto; canal sin botones → texto sin ejecución directa.
+**Modos de falla:** firma inválida o conversación ajena → se descarta con log y métrica `bad_signature`; envío vencido o versión retirada → texto fijo; doble toque o reintento de Meta → una sola ejecución; tool denegada o argumentos fuera de schema → `respuesta_error` y log `option_args_drift`; worker muerto en `running` → no reejecuta; plantilla rechazada o pausada → degrada a texto; canal sin botones → texto sin ejecución directa (salvo «1»/título en los canales con `respuesta_numerica`, adenda C2).
 
 **Observabilidad:** un log por toque (`tenant_id`, `send_id`, `option_id`, `tool`, `outcome`, `latency_ms`); métricas `option_taps_total{outcome}`, `option_tap_latency_seconds` y `option_tool_errors_total{tool}`; alerta si crece `bad_signature`.
 
@@ -305,3 +305,69 @@ Los botones reales solo existen en WhatsApp Cloud y la sesión QR de test no sie
   o excluir `test` antes de alertar sobre ellas; cada `POST /options` crea un `option_sends` nuevo (solo INSERT) sin
   tope por negocio; con la conexión de la conversación de prueba pausada, `/options` responde 409 `pausada` aunque el
   envío de prueba ignore la pausa.
+
+## Adenda (2026-10-28) · C2: en canales de texto, escribir la opción equivale a tocar el botón
+
+> **Estado:** propuesta, igual que el resto del ADR (no se acepta aquí). La aprobó el dueño el 2026-10-28 como parte de la «fase 2» de SPEC-40 (pista C2). Implementación: HU-OPC-07 (solvershub-docs, SPEC-40). **Enmienda D-SPEC-40-6 (SPEC-40 en solvershub-docs):** el default A («texto con la lista, sin ejecución directa») se reemplaza por B (opciones numeradas ejecutables) con las guardas de abajo, solo para los canales con la capacidad `respuesta_numerica`.
+
+**Qué cambia.** En un canal sin botones el envío ya sale como texto numerado («1. título», `mapeo.texto_de_respaldo`, `via='text'`). La respuesta del cliente (el número o el título de la opción) se resuelve **antes del LLM** y ejecuta la opción como si hubiera tocado el botón: mismo resolver, misma firma, misma autorización fail-closed, misma respuesta fija. Lo que decide qué tool corre sigue siendo la **definición del dueño**: el texto del cliente solo elige **una de las opciones que el servidor ya le ofreció**; los argumentos salen de la definición y del contexto del envío, nunca del texto (la objeción de D-SPEC-40-6 B no aplica).
+
+**Dónde.** `core/orchestrator/consumer.py::_toque_de_opcion`, en el mismo punto del toque (después de persistir el mensaje y de las políticas de entrada, antes de `entrada_sin_llm`). El mapa número → opción **no se guarda**: se deriva del `option_sends` y del orden de las opciones de su versión (el mismo orden del texto enviado). Sin migración ni tabla nueva.
+
+**Canales (tabla de capacidades `CAPACIDADES_POR_TIPO`, campo `respuesta_numerica`).**
+
+| Canal / proveedor | `respuesta_numerica` | Por qué |
+|---|---|---|
+| WhatsApp por QR (waweb) | sí | solo texto; ver QR abajo |
+| Chat web, Messenger, Instagram | sí | solo texto |
+| WhatsApp Meta | no | tiene botones: el cliente los toca. Un menú de texto de Meta (interactivo degradado por los topes) **no** se interpreta; sigue al agente |
+| Correo (SMTP) | no | el cuerpo trae citado y firma; la coincidencia exacta casi nunca se daría y un fallo sería confuso |
+| Playground | no | pinta los botones (B1/B2) |
+
+**Guardas (todas deben cumplirse; si falla una, el mensaje sigue al agente exactamente como hoy):**
+
+1. La bandera `opciones_directas.habilitada` del negocio está encendida (apagada por defecto).
+2. El canal y el proveedor **de la entrada** declaran `respuesta_numerica` (el proveedor lo pone el ingreso del canal, no el cliente).
+3. El mensaje es un texto de a lo más 100 caracteres, sin botón (`interactive_id` vacío) ni adjunto (una nota de voz no es una elección).
+4. El **último mensaje saliente** de la conversación es (una burbuja de) un envío de opciones de vía `text` de **esta** conversación, y no falló. Cualquier mensaje posterior —del agente, de una persona o la respuesta fija de un toque— lo cierra. Se deriva del `client_message_id` `opt_send:<send_id>:<n>`.
+5. El envío **no venció**. **TTL:** `expires_at` del envío, que es `ttl_horas` de la definición (24 h por defecto, tope 30 días); no se inventa otro. Un menú vencido no se interpreta (el «1» va al agente; no se responde «venció», porque a destiempo casi nunca era del menú).
+6. **Coincidencia exacta:** un entero de 1 a N solo («1», «1.», «1)», « 1 »; sin ceros a la izquierda ni más texto) o el **título exacto** de una opción (se normalizan espacios y mayúsculas, no acentos ni signos). «1 por favor», «quiero la 1», un número fuera de rango, un título parcial o dos opciones con el mismo título normalizado **no** cuentan. Un texto con forma de número nunca se toma como título.
+
+**Firma.** El servidor construye internamente el `opt:` de la opción elegida con la misma firma HMAC del flujo normal (negocio, conversación, envío, opción) y se lo entrega al resolver, que lo verifica todo otra vez. El cliente solo manda texto: ningún payload suyo se acepta por este camino (un `opt:` escrito a mano como mensaje es texto, y un `interactive_id` forjado sigue descartándose con `bad_signature`).
+
+**v1: solo acciones no sensibles.** Una opción que pide confirmación (tool `sensible`, binding con `requiresConfirmation` u opción con `confirmar`) **no se ejecuta por texto**: el cliente recibe un texto fijo (`sensible_por_texto`: «no se puede hacer respondiendo con un número, no hice ningún cambio; cuéntame qué necesitas»), la tool no se llama y **no se crea activación** (el menú sigue disponible para otra opción). La confirmación numerada («responde 1 para confirmar») queda fuera de v1.
+
+**Una sola ejecución.** Rige `option_activations UNIQUE (tenant_id, dedupe_key)` como con el botón: dos entregas simultáneas del mismo «1» (o «1» y «2» en un envío exclusivo) ejecutan una sola. Tras la respuesta fija el menú deja de ser el último saliente, así que un segundo «1» llega al agente, no vuelve a ejecutar.
+
+**Auditoría y observabilidad.** Igual que el toque: log `option_tap` y `audit_log` `option_tap`, con un campo nuevo `via` (`button` | `text`); la métrica `option_taps_total{outcome}` suma el outcome `sensitive_via_text`. Nunca el texto del cliente.
+
+**QR (ADR-0103).** La respuesta fija sale por `send_to_conversation` y la cola normal, así que rigen el delay humano, el tope de 50 mensajes por día y `reply_only` de waweb (`core/waweb/policy.py`); este camino no los salta. Si el tope bloquea la respuesta, la tool ya corrió (solo hay tools no sensibles; la única apta hoy solo lee) y el cliente no recibe respuesta: queda el log y la auditoría. El QR sigue siendo un canal no oficial con riesgo de suspensión: no usarlo con números importantes.
+
+**Propiedades asumidas (revisión de arquitectura).**
+- **Un menú se contesta una vez.** La respuesta fija (o `sensible_por_texto`, o `respuesta_error`) es un saliente nuevo, así que el menú deja de ser el último. Un mensaje posterior del agente o de una persona también lo cierra. Es una limitación consciente: el segundo «1» va al agente.
+- **Limitación del camino del agente.** La tool `enviar_plantilla_opciones` corre DENTRO de un turno del LLM, y el texto final del agente se entrega después del menú: el último saliente deja de ser el menú y el «1» va al agente (comportamiento de hoy). C2 funciona de forma fiable con envíos fuera de turno (avisos por evento, segmentos, `enviar-prueba` de la API). Para el camino del agente hace falta un turno que termine en el menú (tool terminal o supresión del texto posterior), fuera de C2; **no se relaja la guarda del último saliente** porque es lo que protege del «1» ajeno. El journey de C2 prueba el envío directo, no la tool dentro de un turno.
+- **Contrato `ejecucion_directa`.** Sale de la capacidad del canal al enviar (`ResultadoEnvio.por_respuesta`, de `capacidades_de(canal, proveedor).respuesta_numerica`), no de `via`: es `true` para un menú de texto en QR, web, Messenger e Instagram y `false` para el texto degradado de WhatsApp Meta. El campo del API y de la tool no cambia de forma (sí de valor en esos canales); el OpenAPI no cambia.
+- **Meta degradada por topes.** Un interactivo que no cabe en los topes de Meta sale como texto numerado y NO se interpreta (Meta tiene botones y `respuesta_numerica = false`): el «1» llega al agente. Es poco frecuente (≤ 10 opciones y payload corto) y se acepta; no se añaden excepciones por canal a la tabla de capacidades.
+- **TTL.** El mismo `ttl_horas` para las tres vías, sin TTL aparte para texto. Asimetría deliberada: un botón vencido responde el texto fijo «venció»; un «1» vencido va al agente en silencio.
+- **`apta_para_opcion` implica seguridad ante un titular no verificado.** En el chat web la identidad es un `visitor_id`; toda tool apta debe acotarse al cliente y a la conversación de la que se ejecuta (`list_client_appointments` lo hace). La bandera es por negocio: no hay interruptor por canal ni se construye ahora (quitar `respuesta_numerica` de un canal es una línea de la tabla).
+- **Gate de encendido.** La prueba real de Meta (runbook §1) no cubre los canales de texto: para ellos el gate es la prueba del runbook §4.
+- **Una opción con `confirmar` en un negocio solo de texto siempre contesta «no se puede».** Un aviso de lint sería razonable cuando haya un caso real.
+- **Seguimientos:** etiqueta `via` en `option_taps_total` (antes de alertar sobre `bad_signature`), cachear la lectura de la bandera en el consumer (hoy una consulta por texto corto en los canales con la capacidad), mover `opcion_elegida_por_texto` a `core/kernel/opciones/`, y registrar la dependencia kernel→gateway de C1 (`envio.py` importa `connection_types`).
+
+**Riesgos y supuestos.**
+- **Supuesto de v1:** las tools aptas no sensibles son seguras de alcanzar por texto. Hoy la única es `list_client_appointments` (lee las citas del cliente de la conversación). Una tool mal marcada `apta_para_opcion` pasa a ser alcanzable por texto: la marca la sigue controlando el autor de la tool y el lint (hay un seguimiento conocido: un colaborador con escritura en Configuración puede marcar `option_safe` en tools declarativas).
+- **Chat web:** el cliente es un visitante **anónimo** (cookie de sesión del widget). Ejecutar por texto en la web reutiliza el mismo cliente de la conversación que ya usa el agente, pero sin el LLM ni sus guardrails entre medias. Es la parte del alcance de C2 más expuesta; si se quiere más cautela, basta quitar `respuesta_numerica` de `webchat` (una línea en la tabla). Los botones reales en la web (C3) siguen **fuera** de alcance y requieren Origin y Turnstile.
+- **Identidad en el chat web:** la identidad del cliente es el `visitor_id` que manda el navegador (`web:<visitor_id>`). Quien conozca el de otro visitante del mismo negocio ya podía leer su conversación; con C2 también podría contestar «1» a su menú y ejecutar una acción no sensible en su nombre. Se acepta en v1 (el `visitor_id` es un identificador aleatorio que no se expone y las acciones son no sensibles); revisar si se amplía la lista de tools aptas.
+- Un menú aún `queued` (no entregado) cuenta como vigente; solo uno `failed` no.
+- Un «1» que no se refiere al menú: lo mitigan el último saliente, el vencimiento y la coincidencia exacta.
+
+**Modos de falla (C2).**
+
+| Falla | Respuesta |
+|---|---|
+| Bandera apagada, canal sin la capacidad, menú vencido, no último saliente, texto que no es una elección exacta, vía distinta de `text`, adjunto | El mensaje sigue al agente como hoy |
+| Opción sensible | Texto fijo `sensible_por_texto`, sin tool ni activación |
+| Doble entrega o segundo «1» antes de la respuesta | Una sola ejecución (`dedupe_key`) |
+| Fallo al buscar el menú | Se registra `opciones_respuesta_texto_fallo` y el mensaje sigue al agente |
+
+**Qué haría que revisáramos esto.** `bad_signature` o un ejecutado inesperado desde el chat web; una tool apta no sensible que cambie estado; el QR suspendido por el volumen de respuestas; que los dueños pidan confirmación numerada (v2).

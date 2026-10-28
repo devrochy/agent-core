@@ -433,7 +433,7 @@ async def test_una_opcion_que_pide_confirmacion_no_se_ejecuta_por_texto(  # type
         assert recorded == [], "tampoco llega al agente: se responde un texto fijo"
         assert herramienta.llamadas == [], "la tool NO se llamó"
         assert (await _salientes(tid, conv))[antes:] == [texto("sensible_por_texto")]
-        assert await _activaciones(tid, r.send_id) == [], "sin activación: el menú sigue disponible para otra opción"
+        assert await _activaciones(tid, r.send_id) == [], "sin activación"
         [(entrada, salida)] = await _auditoria(tid, conv)
         assert entrada["via"] == "text" and salida["outcome"] == "sensitive_via_text" and salida["codigo"] == "sensible_por_texto"
     finally:

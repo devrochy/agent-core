@@ -256,7 +256,8 @@ async def _tocar(
             return await _responder_error(bordes, t, opcion, envio, plan)
         if plan.confirmar and toque.via == VIA_TEXTO:
             # v1: una acción que pide confirmación NO se ejecuta contestando con un número (no hay botón «Confirmar»
-            # firmado ni resumen que el cliente toque). Sin activación: el menú sigue disponible para otra opción.
+            # firmado ni resumen que el cliente toque). Sin activación ni tool. El texto fijo es un saliente nuevo:
+            # el menú deja de ser el último y ya no se contesta por texto (un menú se contesta una vez).
             t.codigo = "sensible_por_texto"
             return await _responder_sistema(bordes, SENSIBLE_POR_TEXTO, "sensible_por_texto")
         activation_id = uuid.uuid4()
