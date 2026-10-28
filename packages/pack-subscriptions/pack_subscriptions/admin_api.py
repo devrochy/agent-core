@@ -42,9 +42,17 @@ router = APIRouter(prefix="/api/v1/pack/pack_subscriptions", tags=["pack · susc
 
 
 class CrearSuscripcionBody(BaseModel):
+    """Con `plan_codigo` se inscribe al cliente en un plan del catálogo (SPEC-43). Los campos de plan
+    libre (`nombre`, `precio`, ...) son el camino anterior, que se retira con commerce sin planes (PR-4)."""
+
     customer_id: uuid.UUID = Field(..., description="Customer del core (pivote multi-pack).")
-    variant_id: uuid.UUID | None = Field(default=None, description="Variante de commerce (si aplica).")
-    nombre: str = Field(..., description="Nombre del plan.")
+    plan_codigo: str | None = Field(default=None, max_length=40, description="Código del plan del catálogo.")
+    datos_alta: dict[str, str] | None = Field(
+        default=None, description="Datos del cliente para el alta (nombre, email, teléfono, negocio, vertical)."
+    )
+    metodo_pago: Literal["pago_en_linea", "transferencia"] = Field(default="pago_en_linea")
+    variant_id: uuid.UUID | None = Field(default=None, description="Camino anterior: variante de commerce.")
+    nombre: str | None = Field(default=None, description="Camino anterior: nombre del plan.")
     precio: float = Field(default=0, ge=0, le=999_999_999_999, allow_inf_nan=False, description="Valor del período.")
     moneda: str = Field(default="COP")
     periodicidad: str = Field(default="mensual")
@@ -56,16 +64,54 @@ class SuscripcionOut(BaseModel):
     suscripcion_id: uuid.UUID
     plan: str
     estado: str
+    numero_publico: str | None = None
+    inscripcion: str | None = Field(default=None, description="nueva | repetida | cambio_de_plan")
+    monto: float | None = Field(default=None, description="Valor del cobro de inscripción, si lo hay.")
+    link_pago: str | None = None
+    instrucciones_transferencia: str | None = None
+
+
+_CODIGOS_404 = {"plan_no_encontrado", "suscripcion_no_encontrada", "cliente_no_encontrado", "plan_no_existe"}
+_CODIGOS_422 = {
+    "faltan_datos",
+    "dato_invalido",
+    "origen_invalido",
+    "metodo_pago_invalido",
+    "referencia_invalida",
+    "codigo_no_valido",
+}
+
+
+def _api_error(exc: Exception) -> ApiError:
+    """Traduce el rechazo de negocio (`SubscriptionError`/`PlanError`) a un error de API con su código."""
+    code = str(getattr(exc, "code", "") or "error_suscripcion")
+    status = 404 if code in _CODIGOS_404 else 422 if code in _CODIGOS_422 else 409
+    campo = getattr(exc, "campo", None)
+    return ApiError(
+        status,
+        code,
+        str(getattr(exc, "message", None) or exc),
+        fields={campo: str(exc)} if campo else None,
+        details=getattr(exc, "data", None) or None,
+    )
 
 
 @router.post("/suscripciones", response_model=SuscripcionOut)
 async def crear_suscripcion_manual(
     body: CrearSuscripcionBody,
-    # Escritura (HU-SH-04): activar una suscripción con un precio libre es una acción de
-    # dinero; un colaborador de solo lectura no puede hacerlo.
+    # Escritura (HU-SH-04): inscribir o activar una suscripción es una acción de dinero; un
+    # colaborador de solo lectura no puede hacerlo.
     principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones", write=True))],
 ) -> SuscripcionOut:
-    """Crea (o reutiliza) la suscripción de un `Customer` a un plan."""
+    """Inscribe a un `Customer` en un plan del catálogo (o, camino anterior, crea la suscripción de un plan libre).
+
+    Con `plan_codigo`: un plan de $0 nace activa (o en prueba); uno de pago nace `pendiente_pago` con su
+    cobro y su link (o las instrucciones de transferencia). Repetir la petición devuelve la misma inscripción.
+    """
+    if body.plan_codigo:
+        return await _inscribir_desde_panel(body, principal)
+    if not body.nombre:
+        raise ApiError(422, "plan_requerido", "Indica el plan (`plan_codigo`) en el que se inscribe el cliente.")
     from pack_subscriptions.module import (
         crear_suscripcion_para,  # import perezoso: evita ciclo module↔admin_api
     )
@@ -94,6 +140,211 @@ async def crear_suscripcion_manual(
         plan=sub.concepto,
         estado=sub.estado,
     )
+
+
+async def _inscribir_desde_panel(body: CrearSuscripcionBody, principal: Principal) -> SuscripcionOut:
+    from sqlalchemy import select
+
+    from core.db.models import Customer
+    from core.db.session import get_session
+    from core.subscriptions import SubscriptionError
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl
+
+    tid = _tenant(principal)
+    async with get_session() as session:
+        existe = (
+            await session.execute(
+                select(Customer.id).where(
+                    Customer.tenant_id == tid, Customer.id == body.customer_id, Customer.deleted_at.is_(None)
+                )
+            )
+        ).scalar_one_or_none()
+    if existe is None:
+        raise ApiError.not_found("Cliente no encontrado.")
+    try:
+        vista = await SubscriptionCapabilityImpl().inscribir(
+            customer_id=body.customer_id,
+            plan_code=body.plan_codigo or "",
+            datos_alta=dict(body.datos_alta or {}),
+            origen="panel",
+            metodo_pago=body.metodo_pago,
+        )
+    except SubscriptionError as exc:
+        raise _api_error(exc) from exc
+    cargo = vista.get("cargo_inscripcion") or {}
+    return SuscripcionOut(
+        creada=vista["estado"] in ("trialing", "activa"),
+        suscripcion_id=uuid.UUID(str(vista["subscription_id"])),
+        plan=str(vista.get("plan") or ""),
+        estado=vista["estado"],
+        numero_publico=vista.get("numero_publico"),
+        inscripcion=vista.get("inscripcion"),
+        monto=cargo.get("monto"),
+        link_pago=cargo.get("link"),
+        instrucciones_transferencia=cargo.get("instrucciones_transferencia"),
+    )
+
+
+class ConfirmarPagoBody(BaseModel):
+    referencia: str = Field(min_length=3, max_length=120, description="Número del comprobante o referencia del pago.")
+
+
+class PagoConfirmadoOut(BaseModel):
+    estado: Literal["confirmado", "ya_confirmado"]
+    suscripcion_id: uuid.UUID
+    cargo_id: uuid.UUID
+    suscripcion_estado: str
+    numero_publico: str | None = None
+
+
+@router.post("/suscripciones/{subscription_id}/confirmar-pago", response_model=PagoConfirmadoOut)
+async def confirmar_pago_de_inscripcion(
+    subscription_id: uuid.UUID,
+    body: ConfirmarPagoBody,
+    principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones", write=True))],
+) -> PagoConfirmadoOut:
+    """Confirma a mano el pago por transferencia de una inscripción `pendiente_pago` (o de un cambio de plan).
+
+    Activa por el mismo camino que el webhook del pago en línea; repetir con la misma referencia responde
+    `ya_confirmado`. Queda auditado con el usuario."""
+    from core.subscriptions import SubscriptionError
+    from pack_subscriptions import inscripcion
+
+    await _suscripcion_del_negocio(subscription_id, principal)
+    try:
+        r = await inscripcion.confirmar_pago(subscription_id, referencia=body.referencia, actor=_actor(principal))
+    except SubscriptionError as exc:
+        raise _api_error(exc) from exc
+    return PagoConfirmadoOut(
+        estado=r["estado"],
+        suscripcion_id=uuid.UUID(r["subscription_id"]),
+        cargo_id=uuid.UUID(r["charge_id"]),
+        suscripcion_estado=r["suscripcion_estado"],
+        numero_publico=r.get("numero_publico"),
+    )
+
+
+# ----------------------------------------------------------------------------- catálogo de planes (SPEC-43)
+class PlanBody(BaseModel):
+    codigo: str = Field(min_length=1, max_length=40, description="SKU del plan, único por negocio.")
+    nombre: str = Field(min_length=1, max_length=120)
+    descripcion: str = Field(default="", max_length=2000)
+    precio: float = Field(ge=0, le=999_999_999_999, allow_inf_nan=False)
+    moneda: str = Field(default="COP", min_length=3, max_length=3)
+    periodicidad: Literal["mensual", "trimestral", "anual"] = "mensual"
+    trial_dias: int = Field(default=0, ge=0, le=365, description="Solo un plan de $0 tiene prueba (D-16).")
+    entitlements: dict[str, object] = Field(default_factory=dict, description="Lo que incluye el plan (objeto).")
+    plan_plataforma: str | None = Field(default=None, max_length=40, description="Plan de la plataforma que vende.")
+    activo: bool = True
+    orden: int = Field(default=0, ge=-10_000, le=10_000)
+
+
+class PlanOut(PlanBody):
+    id: uuid.UUID
+    creado: datetime | None = None
+    actualizado: datetime | None = None
+
+
+def _plan_out(plan) -> PlanOut:  # type: ignore[no-untyped-def]
+    return PlanOut(
+        id=plan.id,
+        codigo=plan.codigo,
+        nombre=plan.nombre,
+        descripcion=plan.descripcion or "",
+        precio=float(plan.precio or 0),
+        moneda=plan.moneda,
+        periodicidad=plan.periodicidad,
+        trial_dias=int(plan.trial_dias or 0),
+        entitlements=dict(plan.entitlements or {}),
+        plan_plataforma=plan.plan_plataforma,
+        activo=bool(plan.activo),
+        orden=int(plan.orden or 0),
+        creado=plan.created_at,
+        actualizado=plan.updated_at,
+    )
+
+
+def _datos_de_plan(body: PlanBody):  # type: ignore[no-untyped-def]
+    from decimal import Decimal
+
+    from pack_subscriptions.planes import DatosDePlan
+
+    return DatosDePlan(
+        codigo=body.codigo,
+        nombre=body.nombre,
+        descripcion=body.descripcion,
+        precio=Decimal(str(body.precio)),
+        moneda=body.moneda,
+        periodicidad=body.periodicidad,
+        trial_dias=body.trial_dias,
+        entitlements=dict(body.entitlements),
+        plan_plataforma=body.plan_plataforma,
+        activo=body.activo,
+        orden=body.orden,
+    )
+
+
+@router.get("/planes", response_model=list[PlanOut])
+async def listar_planes(
+    principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones"))],
+    incluir_inactivos: Annotated[bool, Query(description="Incluye los planes apagados.")] = True,
+) -> list[PlanOut]:
+    """Catálogo de planes del negocio (sin los borrados), en el orden en que se ofrecen."""
+    from pack_subscriptions import planes
+
+    _tenant(principal)
+    return [_plan_out(p) for p in await planes.listar(incluir_inactivos=incluir_inactivos)]
+
+
+@router.post("/planes", response_model=PlanOut, status_code=201)
+async def crear_plan(
+    body: PlanBody,
+    principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones", write=True))],
+) -> PlanOut:
+    """Crea un plan. Código repetido → 409 `codigo_duplicado`; prueba en un plan de pago → 422."""
+    from pack_subscriptions import planes
+
+    _tenant(principal)
+    try:
+        return _plan_out(await planes.crear(_datos_de_plan(body), actor=_actor(principal)))
+    except planes.PlanError as exc:
+        raise _api_error_plan(exc) from exc
+
+
+@router.put("/planes/{plan_id}", response_model=PlanOut)
+async def editar_plan(
+    plan_id: uuid.UUID,
+    body: PlanBody,
+    principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones", write=True))],
+) -> PlanOut:
+    """Reemplaza un plan. Las suscripciones ya inscritas conservan su snapshot (precio y nombre de cuando entraron)."""
+    from pack_subscriptions import planes
+
+    _tenant(principal)
+    try:
+        return _plan_out(await planes.actualizar(plan_id, _datos_de_plan(body), actor=_actor(principal)))
+    except planes.PlanError as exc:
+        raise _api_error_plan(exc) from exc
+
+
+@router.delete("/planes/{plan_id}", status_code=204)
+async def borrar_plan(
+    plan_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones", write=True))],
+) -> None:
+    """Borra el plan (lógico): deja de ofrecerse; las suscripciones vivas siguen cobrándose."""
+    from pack_subscriptions import planes
+
+    _tenant(principal)
+    try:
+        await planes.borrar(plan_id, actor=_actor(principal))
+    except planes.PlanError as exc:
+        raise _api_error_plan(exc) from exc
+
+
+def _api_error_plan(exc) -> ApiError:  # type: ignore[no-untyped-def]
+    status = 404 if exc.code == "plan_no_encontrado" else 409 if exc.code == "codigo_duplicado" else 422
+    return ApiError(status, exc.code, exc.message, fields={exc.campo: exc.message} if exc.campo else None)
 
 
 class AvisoOut(BaseModel):
@@ -183,9 +434,9 @@ async def avisos_del_cargo(
 
 # ----------------------------------------------------------------------------- lectura (SPEC-35)
 SECCION = "pack_subscriptions:suscripciones"
-EstadoSub = Literal["trialing", "activa", "pausada", "vencida", "cancelada"]
+EstadoSub = Literal["pendiente_pago", "trialing", "activa", "pausada", "vencida", "cancelada"]
 EstadoCargo = Literal["pendiente", "pagado", "anulado"]
-TipoCargo = Literal["periodo", "cambio_plan"]
+TipoCargo = Literal["periodo", "cambio_plan", "inscripcion"]
 Periodicidad = Literal["mensual", "trimestral", "anual"]
 
 
