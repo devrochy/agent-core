@@ -20,6 +20,12 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env", override=True)
 
+# Bajo pytest-xdist (`-n N`): cada worker usa su propia base (clonada de la migrada), su Redis y su
+# TENANTS_ROOT. Va DESPUÉS de cargar el .env (que pisa el entorno) y ANTES de importar `core.config`.
+from _aislamiento_xdist import aislar_worker  # noqa: E402
+
+aislar_worker()
+
 from core.config import get_settings  # noqa: E402
 
 get_settings.cache_clear()

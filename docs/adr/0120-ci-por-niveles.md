@@ -116,3 +116,28 @@ apagado desde el 2026-10-09.
   los datos del artifact; este ADR no la acepta todavía.
 - **Qué haría que revisáramos esto:** la mediana de pared de una PR a develop (cola + ejecución) sigue sobre 8 min con
   dos runners en línea, o la CPU del host se satura al correr dos jobs de integración a la vez.
+
+## Adenda (2026-10-28, 2): integración en paralelo con pytest-xdist
+
+Con el junit del primer push a develop (1915 tests, 251 archivos, 1365 s de tiempo de tests por 1382 s de job), el
+tiempo no se concentra: el archivo más pesado es el 5 % y los 20 tests más lentos suman 222 s. Un reparto por archivo da
+casi el ideal (3 workers: 455 s; 4 workers: 341 s), así que se reabre la opción que ADR-0120 descartó.
+
+- **Aislamiento por worker** (`tests/integration/_aislamiento_xdist.py`, llamado desde el conftest de integración
+  después de cargar el `.env` y antes de importar `core.config`): cada worker `gwK` clona la base migrada y sembrada
+  con `CREATE DATABASE agent_core_gwK TEMPLATE agent_core` (serializado con un advisory lock), usa la base de Redis `K+1` y
+  su propio `TENANTS_ROOT` temporal, y borra su base al salir. Sin xdist, o sin `AGENT_CORE_INTEGRATION=1`, no hace nada: la
+  corrida serial no cambia.
+- **Reparto `--dist loadfile`:** un archivo entero va a un solo worker, porque los fixtures `tenant_setup`, `app_client` y
+  `moto_setup` son de scope `module`.
+- **Por qué no se reescriben los fixtures:** los tenants de prueba fijos, los contactos fijos y la limpieza global de Redis
+  siguen valiendo, porque cada worker tiene su propia base y su propio Redis.
+- **Roles de Postgres:** son del cluster y no de la base. Solo `test_tenant_lifecycle.py` crea roles con nombre fijo, y al ser
+  un único archivo corre en un único worker; el resto usa nombres generados.
+- **Tiempos medidos** (1915 tests, host con carga 12–18 sobre 8 núcleos, es decir pesimista): serie en el CI 23 min;
+  3 workers 8 y 10 min; 4 workers 5 min 35 s. Se arranca con 3 por la CPU compartida con el segundo runner.
+- **Validación:** tres corridas completas (3, 3 y 4 workers) con el mismo conjunto de pasados y fallados; el conjunto de tests que pasan en paralelo coincide con el de la corrida serial del CI (1893 de 1893
+  comparables; la única diferencia son 21 tests de `pack_knowledge` que fallan también en serie en el venv local por un
+  módulo faltante).
+- **Qué haría que revisáramos esto:** un test inestable que solo falle en paralelo (se aísla con `xdist_group`, no se
+  reintenta), o la CPU del host saturada al correr dos jobs de integración a la vez (se baja a `-n 2`).
