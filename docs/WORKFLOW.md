@@ -124,6 +124,8 @@ Antes del merge, en este orden:
 | push → develop (post-merge) | completo | lo anterior, más la integración completa, el gate de evals y journeys y gitleaks sobre toda la historia |
 | PR → main / push → main | completo | lo del push a develop, más el drift de `docs/openapi.json` |
 
+- **Jobs en paralelo.** `nivel` (segundos) decide el nivel; `rapido`, `integracion` y `evals-replay` corren a la vez. Con un solo runner igual hacen cola; por eso conviene tener `solvershub-ci-2` en línea (ver abajo). Los unitarios corren con `pytest -n 4`: un `parametrize` con ids aleatorios (`uuid4()`) rompe la colección en xdist; usa `uuid5` o ids fijos.
+- **Duraciones de la integración.** Cada corrida sube el artifact `integracion-junit` y imprime los 40 tests más lentos (`--durations=40`).
 - **Despliegue a test.** Una PR verde en develop **no** garantiza que pase la integración completa. No se despliega a test hasta que el CI del push a develop esté en verde.
 - **Tests nuevos de aislamiento.** Un test de integración nuevo que proteja el aislamiento entre tenants (RLS, `tenant_id` explícito, IDOR, webhooks multi-tenant) lleva `pytest.mark.aislamiento`.
 - **Postgres del CI.** Es la imagen de producción (`docker/postgres/Dockerfile`), publicada en GHCR por `ci-postgres-image.yml`. Si cambia el Dockerfile, ese workflow la republica; para refrescar la imagen base, "Run workflow" en Actions. **Arranque:** `workflow_dispatch` solo existe cuando el workflow ya está en `main`, así que la primera imagen se publica a mano desde el host del runner (la etiqueta `source` vincula el paquete al repo para que el `GITHUB_TOKEN` del CI pueda bajarla):

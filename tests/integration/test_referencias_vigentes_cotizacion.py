@@ -236,7 +236,7 @@ async def test_un_pedido_cerrado_es_anterior_aunque_no_haya_cotizacion(status: s
     ]
 
 
-@pytest.mark.parametrize("quote_id", ["PLAN-PREMIUM", "OC-0001", "Q-0001", str(uuid.uuid4())])
+@pytest.mark.parametrize("quote_id", ["PLAN-PREMIUM", "OC-0001", "Q-0001", str(uuid.uuid5(uuid.NAMESPACE_DNS, "cotizacion-inexistente"))])
 async def test_un_id_que_no_existe_devuelve_la_vigente_sin_usarla(quote_id: str) -> None:
     from pack_commerce.models import Quote
     from pack_commerce.skills import OrderSkill

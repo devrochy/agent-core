@@ -13,9 +13,11 @@ import pytest
 
 from core.tenants import _es_del_tenant
 
-T = str(uuid.uuid4())
-OTRO = str(uuid.uuid4())
-CONV = str(uuid.uuid4())
+# Ids fijos (uuid5), no uuid4: los ids de `parametrize` deben ser iguales en cada proceso o
+# pytest-xdist rechaza la colección ("Different tests were collected").
+T = str(uuid.uuid5(uuid.NAMESPACE_DNS, "tenant"))
+OTRO = str(uuid.uuid5(uuid.NAMESPACE_DNS, "otro-tenant"))
+CONV = str(uuid.uuid5(uuid.NAMESPACE_DNS, "conversacion"))
 
 
 @pytest.mark.parametrize(
