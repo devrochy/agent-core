@@ -12,8 +12,8 @@
 y falla si ya hay datos generados desde un módulo sin agente; en ese caso se limpian primero esos
 lotes desde la app.
 
-Revision ID: 0114
-Revises: 0113
+Revision ID: 0115
+Revises: 0114
 Create Date: 2026-10-28
 """
 
@@ -21,8 +21,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0114"
-down_revision = "0113"
+revision = "0115"
+down_revision = "0114"
 branch_labels = None
 depends_on = None
 
