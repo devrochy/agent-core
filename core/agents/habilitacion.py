@@ -13,7 +13,12 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
-from core.agents.spec import count_tenant_packs, load_active_spec, save_spec_version
+from core.agents.spec import (
+    count_tenant_packs,
+    leer_spec_activo,
+    load_active_spec,
+    save_spec_version,
+)
 from core.billing.enforcement import QuotaExceeded, quota_decision
 from core.db.models import PluginConfig
 from core.db.session import get_session
@@ -242,12 +247,18 @@ async def asegurar_habilidades(
             config_pendiente[pack] = error
     habilitados: list[str] = []
     for intento in range(2):  # un reintento si otra edición del spec ganó la carrera
-        actual = await load_active_spec()
+        # Fila e id en UNA lectura, y se guarda solo si esa fila sigue activa: sin eso, dos plantillas a la
+        # vez leían el mismo spec, ambas confirmaban y la segunda borraba la habilidad de la primera.
+        leido = await leer_spec_activo(tenant_id)
+        if leido is None:
+            await load_active_spec()  # negocio sin spec: se siembra el default y se relee
+            continue
+        base_id, actual = leido
         habilitados = [p for p in nuevos if p not in actual.packs]
         if not habilitados:
             break
         version = await save_spec_version(
-            actual.model_copy(update={"packs": sorted({*actual.packs, *habilitados})}), tenant_id
+            actual.model_copy(update={"packs": sorted({*actual.packs, *habilitados})}), tenant_id, base_id=base_id
         )
         if version is not None:
             for pack in habilitados:
