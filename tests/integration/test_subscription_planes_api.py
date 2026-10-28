@@ -403,3 +403,41 @@ async def test_el_seed_generico_del_core_encuentra_planes_json(tmp_path, monkeyp
     assert "planes.json importado" in pasos
     async with tenant_scope(tid):
         assert [p.codigo for p in await planes.listar(incluir_inactivos=True)] == ["FREE", "BASIC"]
+
+
+# ============================================================================= consumer: alta y cambio con la misma referencia
+async def test_el_consumer_trata_cambio_de_plan_aunque_la_referencia_sea_la_misma(monkeypatch) -> None:
+    """El `numero_publico` es el mismo en el alta y en el cambio: solo la bandera `cambio_de_plan` los distingue."""
+    from core.db.models import ProvisioningRequest
+    from core.db.session import get_session
+    from core.provisioning import consumer
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    sub_id, cliente, plan_id = uuid.uuid4(), uuid.uuid4(), str(uuid.uuid4())
+    llamadas: list[tuple] = []
+
+    async def procesar(vendedor, registro):
+        return registro
+
+    async def sincronizar(vendedor, registro, payload, referencia, variant_id):
+        llamadas.append((referencia, variant_id, payload.get("plan_id")))
+        return {}
+
+    monkeypatch.setattr(consumer, "_procesar", procesar)
+    monkeypatch.setattr(consumer, "sincronizar_cambio_de_plan", sincronizar)
+    base = {
+        "subscription_id": str(sub_id), "customer_id": str(cliente), "referencia": "SUB-0042",
+        "plan_id": plan_id, "variant_id": None, "estado": "activa",
+    }
+    async with tenant_scope(tid):
+        async with get_session() as session:  # `subscription_id` no tiene FK: basta la fila del alta
+            from sqlalchemy import select
+
+            assert (await session.execute(select(ProvisioningRequest).where(ProvisioningRequest.tenant_id == tid))).first() is None
+        await consumer.aprovisionar(tid, {**base, "cambio_de_plan": False})
+        assert llamadas == []  # el alta no es un cambio
+        await consumer.aprovisionar(tid, {**base, "cambio_de_plan": False})  # reentrega del outbox
+        assert llamadas == []
+        await consumer.aprovisionar(tid, {**base, "cambio_de_plan": True})
+    assert llamadas == [("SUB-0042:cambio", None, plan_id)]

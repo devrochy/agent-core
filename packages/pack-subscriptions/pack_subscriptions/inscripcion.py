@@ -270,6 +270,7 @@ async def inscribir(
             code="monto_distinto",
         )
     datos, documento = validar_datos(list(config.campos_de_inscripcion), datos_alta, origen=origen)
+    await _cliente_del_negocio(customer_id)
     if (
         origen == "agente"
         and precio > 0
@@ -335,6 +336,25 @@ async def inscribir(
                 "referencia": vista["cargo_inscripcion"]["referencia"],
             }
     return vista
+
+
+async def _cliente_del_negocio(customer_id: uuid.UUID) -> None:
+    """El cliente tiene que ser del negocio (`Subscription.customer_id` no tiene FK): quien llame a
+    `inscribir` no puede inscribir un UUID de otro negocio, ni por una tool ni por la API."""
+    from core.db.models import Customer
+
+    async with get_session() as session:
+        existe = (
+            await session.execute(
+                select(Customer.id).where(
+                    Customer.tenant_id == get_current_tenant_id(),
+                    Customer.id == customer_id,
+                    Customer.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+    if existe is None:
+        raise SubscriptionError("El cliente no existe.", code="cliente_no_encontrado")
 
 
 async def _antiabuso(

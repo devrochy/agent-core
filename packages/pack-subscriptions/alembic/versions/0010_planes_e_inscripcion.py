@@ -120,6 +120,21 @@ def upgrade() -> None:
     )
     op.create_index("ix_pack_subscriptions_plans_tenant_activo", PLANS, ["tenant_id", "activo", "orden"])
     _rls(PLANS)
+    # Mínimo privilegio: el runtime no borra planes (el borrado es lógico) ni el contador (solo upsert).
+    op.execute(
+        f"""
+        DO $do$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_runtime') THEN
+                REVOKE ALL ON {PLANS}, {COUNTERS} FROM app_runtime;
+                GRANT SELECT, INSERT, UPDATE ON {PLANS} TO app_runtime;
+                GRANT SELECT, INSERT, UPDATE ON {COUNTERS} TO app_runtime;
+                REVOKE ALL ON FUNCTION pack_subscriptions_next_seq(uuid) FROM PUBLIC;
+                GRANT EXECUTE ON FUNCTION pack_subscriptions_next_seq(uuid) TO app_runtime;
+            END IF;
+        END $do$;
+        """
+    )
 
     # ---------------------------------------------------------------- borra los datos de prueba
     # FORCE RLS alcanza también al dueño de la tabla: sin `app.tenant_id` un DELETE no vería filas.
@@ -128,16 +143,37 @@ def upgrade() -> None:
         op.execute(f"alter table {tabla} disable row level security")
     op.execute(f"delete from {CHARGES}")
     op.execute(f"delete from {SUBS}")
-    for tabla in (SUBS, CHARGES):
-        op.execute(f"alter table {tabla} enable row level security")
-        op.execute(f"alter table {tabla} force row level security")
-    # Si la política quedó fuera por algún motivo, que la migración falle ruidosamente.
+    # Con RLS apagada se ve todo: aquí sí se puede comprobar que no quedó nada.
     op.execute(
         f"""
         do $$ begin
             if exists (select 1 from {SUBS}) or exists (select 1 from {CHARGES}) then
                 raise exception 'pack_subscriptions_0010: quedaron filas tras el borrado';
             end if;
+        end $$;
+        """
+    )
+    for tabla in (SUBS, CHARGES):
+        op.execute(f"alter table {tabla} enable row level security")
+        op.execute(f"alter table {tabla} force row level security")
+    # Tras restaurar, la migración falla ruidosamente si alguna tabla del pack quedó sin RLS habilitada y
+    # forzada o sin su policy de aislamiento (sin `app.tenant_id` un `select` no sirve para comprobarlo).
+    op.execute(
+        f"""
+        do $$
+        declare t text;
+        begin
+            foreach t in array array['{SUBS}', '{CHARGES}', '{PLANS}', '{COUNTERS}'] loop
+                if not exists (
+                    select 1 from pg_class
+                    where relname = t and relkind = 'r' and relrowsecurity and relforcerowsecurity
+                ) then
+                    raise exception 'pack_subscriptions_0010: % sin RLS habilitada y forzada', t;
+                end if;
+                if not exists (select 1 from pg_policies where tablename = t and policyname = 'tenant_isolation') then
+                    raise exception 'pack_subscriptions_0010: % sin policy tenant_isolation', t;
+                end if;
+            end loop;
         end $$;
         """
     )

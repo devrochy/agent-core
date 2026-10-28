@@ -278,8 +278,9 @@ async def borrar(plan_id: uuid.UUID, *, actor: str = "") -> None:
 
 
 async def _auditar(session, tenant: uuid.UUID, actor: str, accion: str, antes: dict | None, plan: Plan) -> None:  # type: ignore[no-untyped-def]
-    """`audit_log` en la MISMA transacción que la mutación (quién y cuándo). Sin `actor` (siembra, cron)
-    no se audita acá: la siembra audita por su lado."""
+    """`audit_log` en la MISMA transacción que la mutación (quién y cuándo). Sin `actor` (la siembra, el
+    cron de precios) no se audita: esos caminos dejan su propio log (`subs_planes_sembrados`,
+    `precio_de_plan_actualizado`)."""
     if not actor:
         return
     from core.db.models import AuditLog

@@ -309,12 +309,13 @@ async def test_plan_free_nace_activo_sin_cargo_y_emite_activated_una_vez() -> No
 async def test_free_que_contrata_un_plan_de_pago_es_un_cambio_sobre_la_misma_suscripcion() -> None:
     """D-SPEC-43-3: no nace una segunda suscripción (ni un segundo negocio en el alta automática)."""
     tid = await _negocio()
-    await _plan(tid, "FREE", "0", trial_dias=30)
-    await _plan(tid, "BASIC", "99000")
+    plan_free = await _plan(tid, "FREE", "0", trial_dias=30)
+    plan_basic = await _plan(tid, "BASIC", "99000")
     cliente = await _cliente(tid)
     free = await _inscribir(tid, cliente, "FREE")
 
     cambio = await _inscribir(tid, cliente, "BASIC")
+    assert cambio["plan_id"] == str(plan_free.id)  # hasta que pague sigue en Free
 
     assert cambio["inscripcion"] == "cambio_de_plan"
     assert cambio["subscription_id"] == free["subscription_id"]
@@ -327,9 +328,12 @@ async def test_free_que_contrata_un_plan_de_pago_es_un_cambio_sobre_la_misma_sus
 
     sub = await _sub(tid, sub.id)
     assert sub.estado == "activa" and sub.concepto == "Basic" and Decimal(sub.valor_periodo) == Decimal("99000")
+    assert sub.plan_id == plan_basic.id  # al pagar apunta al plan destino, no al Free
     eventos = await _eventos(tid, "subscription.activated", sub.id)
     assert len(eventos) == 2
     cambio_evt = next(e for e in eventos if e.payload["cambio_de_plan"])
+    assert cambio_evt.payload["plan_id"] == str(plan_basic.id)  # el alta automática resuelve el plan por aquí
+    assert next(e for e in eventos if not e.payload["cambio_de_plan"]).payload["plan_id"] == str(plan_free.id)
     assert cambio_evt.dedupe_key == f"sub_activated:{sub.id}:cambio:{cargo.id}"
     assert cambio_evt.payload["referencia"] == sub.numero_publico
 
@@ -565,3 +569,33 @@ async def test_el_check_de_la_base_rechaza_una_pendiente_con_periodo() -> None:
                 await session.execute(
                     text("update pack_subscriptions_subscriptions set proximo_cargo = now() where id = :i"), {"i": sub.id}
                 )
+
+
+async def test_inscribir_rechaza_un_cliente_de_otro_negocio() -> None:
+    from core.subscriptions import SubscriptionError
+
+    a, b = await _negocio(), await _negocio()
+    await _plan(a)
+    cliente_b = await _cliente(b)
+    with pytest.raises(SubscriptionError) as exc:
+        await _inscribir(a, cliente_b, "BASIC")
+    assert exc.value.code == "cliente_no_encontrado"
+    with pytest.raises(SubscriptionError):
+        await _inscribir(a, uuid.uuid4(), "BASIC")
+
+
+async def test_el_contador_no_cruza_negocios_y_el_runtime_no_borra_planes_ni_contador() -> None:
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    a, b = await _negocio(), await _negocio()
+    await _plan(a)
+    async with tenant_scope(a):
+        async with get_session() as session:
+            with pytest.raises((IntegrityError, DBAPIError)):
+                await session.execute(text("select pack_subscriptions_next_seq(:t)"), {"t": b})
+    for tabla in ("pack_subscriptions_plans", "pack_subscriptions_counters"):
+        with pytest.raises((IntegrityError, DBAPIError)):
+            async with tenant_scope(a):
+                async with get_session() as session:
+                    await session.execute(text(f"delete from {tabla}"))

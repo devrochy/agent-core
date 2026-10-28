@@ -20,10 +20,13 @@ from typing import Any
 from sqlalchemy import select
 
 from core.db.session import get_session
+from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from pack_subscriptions.models import Plan
 from pack_subscriptions.planes import DatosDePlan, PlanError, _aplicar, validar
 from pack_subscriptions.precios_de_plan import precio_de_plataforma
+
+log = get_logger(__name__)
 
 
 class SiembraInvalida(ValueError):
@@ -94,4 +97,5 @@ async def seed_planes(tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
                     _aplicar(existente, datos)
                     pasos.append(f"plan {datos.codigo} actualizado")
             await session.flush()
+    log.info("subs_planes_sembrados", tenant_id=str(tenant_id), pasos=pasos)
     return pasos

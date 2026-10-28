@@ -9,7 +9,7 @@ sesión. Producción nunca desde este plan.**
 `pack_subscriptions_0010` borra **todas las filas de `pack_subscriptions_subscriptions` y de
 `pack_subscriptions_charges`** (de todos los negocios) porque hoy son datos de test descartables
 (D-55). Lo hace con la RLS deshabilitada solo durante el borrado y la vuelve a habilitar y forzar al final
-(la migración verifica el estado). El `downgrade` revierte el esquema, **no restituye las filas**.
+(la migración verifica que no queden filas y que las cuatro tablas del pack terminen con RLS habilitada, forzada y con su policy). El `downgrade` revierte el esquema, **no restituye las filas**.
 
 - **Nunca** la corras contra una base que no sea de test o la efímera local.
 - Antes de desplegar en cualquier base, haz el precheck de conteo de abajo y compáralo con lo que el dueño
@@ -42,7 +42,7 @@ El entrypoint corre `agent-core db migrate` (cabeza de `pack_subscriptions`: `pa
 la base efímera local:
 
 ```bash
-python -m alembic -c packages/pack-subscriptions/alembic.ini upgrade head
+cd packages/pack-subscriptions && python -m alembic upgrade head   # el alembic.ini del pack usa rutas relativas
 ```
 
 ## 3. Verificar
@@ -50,7 +50,7 @@ python -m alembic -c packages/pack-subscriptions/alembic.ini upgrade head
 ```sql
 select version_num from alembic_version_pack_subscriptions;                 -- pack_subscriptions_0010
 select relname, relrowsecurity, relforcerowsecurity from pg_class
- where relname in ('pack_subscriptions_plans','pack_subscriptions_counters'); -- t | t
+ where relname like 'pack_subscriptions_%' and relkind = 'r';                 -- t | t en todas
 select count(*) from pack_subscriptions_subscriptions;                       -- 0 tras la migración
 ```
 
@@ -60,7 +60,7 @@ Siembra de los planes (idempotente, todo o nada): `agent-core tenant seed <slug>
 
 ## 4. Revertir
 
-`python -m alembic -c packages/pack-subscriptions/alembic.ini downgrade pack_subscriptions_0009` quita las
+`cd packages/pack-subscriptions && python -m alembic downgrade pack_subscriptions_0009` quita las
 columnas, la tabla de planes y el contador. Las filas borradas no vuelven: restáuralas del `pg_dump` si
 las necesitas.
 
