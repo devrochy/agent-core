@@ -51,12 +51,22 @@ class FormaDeDatos:
 
 
 @dataclass(frozen=True)
+class PlanParaPrueba:
+    """Un plan vendible que sembró Comercio para el lote de datos de prueba."""
+
+    variant_id: uuid.UUID
+    plan: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class ContextoDeNegocio:
     """Lo que el pack necesita del negocio para sembrar (moneda de la cartera, zona de las citas)."""
 
     moneda: str
     zona_horaria: str
     sufijo: str  # corto y único por lote: SKUs y nombres que no chocan con los del negocio
+    # Planes que sembró Comercio para el mismo lote (los usa Suscripciones para sus clientes).
+    planes: tuple[PlanParaPrueba, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -65,6 +75,9 @@ class RegistroSembrado:
 
     kind: str
     ref: uuid.UUID
+    # Datos que el pack necesita devolver al core para encadenar otra siembra (p. ej. el snapshot
+    # del plan creado en Comercio para que Suscripciones arme sus clientes).
+    metadata: Mapping[str, Any] | None = None
 
 
 class EscenarioNoDisponible(Exception):
@@ -122,6 +135,7 @@ __all__ = [
     "EscenarioNoDisponible",
     "FormaDeDatos",
     "PlanDeEscenario",
+    "PlanParaPrueba",
     "RegistroSembrado",
     "ResumenDeEscenario",
 ]

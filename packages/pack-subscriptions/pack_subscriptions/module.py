@@ -17,11 +17,13 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from pydantic import BaseModel
 from sqlalchemy import select
 
 import pack_subscriptions.jobs  # noqa: F401  # registra el @register_cron (ADR-0083/#156)
 from core.db.session import get_session
 from core.mcp.types import BaseModule, GuardrailResult
+from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
 from core.subscriptions import subscription_registry
@@ -117,6 +119,26 @@ class SubscriptionsModule(BaseModule):
         if escenario != "suscripciones":
             raise EscenarioNoDisponible(f"Suscripciones no tiene el escenario {escenario}.")
         return await sembrar(tenant_id, entrada)
+
+    def formas_de_datos_de_prueba(self) -> list[FormaDeDatos]:
+        """Clientes y suscripciones de ejemplo (HU-QA-10, modo `suscripciones`)."""
+        from pack_subscriptions.datos_de_prueba import formas
+
+        return formas()
+
+    async def sembrar_datos_de_prueba(
+        self, tenant_id: uuid.UUID, modo: str, datos: BaseModel, contexto: ContextoDeNegocio
+    ) -> list[RegistroSembrado]:
+        from pack_subscriptions.datos_de_prueba import sembrar
+
+        return await sembrar(tenant_id, modo, datos, contexto)
+
+    async def retirar_datos_de_prueba(
+        self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]
+    ) -> int:
+        from pack_subscriptions.datos_de_prueba import retirar
+
+        return await retirar(tenant_id, registros)
 
     def admin_api_routes(self) -> list[Any]:
         """API admin de suscripciones (ADR-0079), montada en `/api/v1`."""

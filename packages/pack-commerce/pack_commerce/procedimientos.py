@@ -108,6 +108,7 @@ async def variante_de_plan(valor: Any, ctx: ToolContext, datos: dict[str, Any]) 
                 .where(
                     ProductVariant.tenant_id == get_current_tenant_id(),
                     Product.tenant_id == get_current_tenant_id(),
+                    Product.deleted_at.is_(None),
                     ProductVariant.active.is_(True),
                     ProductVariant.billing_period.isnot(None),
                 )

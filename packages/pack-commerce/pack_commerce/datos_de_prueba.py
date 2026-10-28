@@ -10,8 +10,8 @@ Los esquemas validan lo que genera el LLM (dato no confiable): topes de cantidad
 SKU propio (los pone el pack con el sufijo del lote, así nunca chocan con los del negocio) y sin
 campos fuera del formato. El respaldo es el fragmento `qa` (catálogo) o `suscripciones` (planes).
 
-Retirar es desactivar las variantes y borrar lógicamente las categorías creadas (invariante 8):
-los productos no tienen `deleted_at`, y un producto sin variantes activas no se vende.
+Retirar es desactivar las variantes y borrar lógicamente productos y categorías creadas
+(invariante 8): así el lote desaparece del panel y de las herramientas del agente.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import exists, update
+from sqlalchemy import select, update
 
 from core.db.models import utcnow
 from core.db.session import get_session
@@ -135,6 +135,36 @@ def _a_seed(modo: str, datos: BaseModel, sufijo: str) -> dict[str, Any]:
     return {"category_paths": rutas, "products": productos}
 
 
+async def _snapshots_de_variantes(tenant_id: uuid.UUID, ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any]]:
+    """Snapshot de los planes creados, para que Suscripciones no tenga que leer Comercio."""
+    if not ids:
+        return {}
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            filas = (
+                await session.execute(
+                    select(ProductVariant, Product)
+                    .join(Product, Product.id == ProductVariant.product_id)
+                    .where(
+                        ProductVariant.tenant_id == tenant_id,
+                        ProductVariant.id.in_(ids),
+                        Product.tenant_id == tenant_id,
+                    )
+                )
+            ).all()
+    return {
+        variante.id: {
+            "nombre": producto.name,
+            "precio": float(variante.price or 0),
+            "moneda": None,
+            "periodicidad": variante.billing_period or "mensual",
+            "trial_dias": int(variante.trial_days or 0),
+            "sku": variante.sku,
+        }
+        for variante, producto in filas
+    }
+
+
 async def sembrar(
     tenant_id: uuid.UUID, modo: str, datos: BaseModel, contexto: ContextoDeNegocio
 ) -> list[RegistroSembrado]:
@@ -142,7 +172,24 @@ async def sembrar(
 
     creados: list[tuple[str, uuid.UUID]] = []
     await seed_catalog(tenant_id, _a_seed(modo, datos, contexto.sufijo), creados=creados)
-    return [RegistroSembrado(kind=k, ref=r) for k, r in creados]
+    if modo != "planes":
+        return [RegistroSembrado(kind=k, ref=r) for k, r in creados]
+    snapshots = await _snapshots_de_variantes(
+        tenant_id, [r for k, r in creados if k == "variante"]
+    )
+    registros: list[RegistroSembrado] = []
+    for kind, ref in creados:
+        plan = snapshots.get(ref)
+        if plan is not None:
+            plan["moneda"] = contexto.moneda
+        registros.append(
+            RegistroSembrado(
+                kind=kind,
+                ref=ref,
+                metadata={"plan": plan} if plan is not None else None,
+            )
+        )
+    return registros
 
 
 async def retirar(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> int:
@@ -159,6 +206,17 @@ async def retirar(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> in
                     .values(active=False)
                 )
                 total += res.rowcount or 0  # type: ignore[attr-defined]
+            if productos:
+                res = await session.execute(
+                    update(Product)
+                    .where(
+                        Product.tenant_id == tenant_id,
+                        Product.id.in_(productos),
+                        Product.deleted_at.is_(None),
+                    )
+                    .values(deleted_at=utcnow())
+                )
+                total += res.rowcount or 0  # type: ignore[attr-defined]
             if categorias:
                 res = await session.execute(
                     update(Category)
@@ -166,13 +224,16 @@ async def retirar(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> in
                         Category.tenant_id == tenant_id,
                         Category.id.in_(categorias),
                         Category.deleted_at.is_(None),
-                        # Una categoría del lote que ya tiene productos de otros (p. ej. «Planes»
-                        # reutilizada por otro lote o por el negocio) se queda: no deja huérfanos.
-                        ~exists().where(
+                        # Una categoría del lote que ya tiene productos vivos de otros (p. ej.
+                        # «Planes» reutilizada por el negocio) se queda: no deja huérfanos.
+                        ~select(Product.id)
+                        .where(
                             Product.tenant_id == tenant_id,
                             Product.category_id == Category.id,
+                            Product.deleted_at.is_(None),
                             Product.id.not_in(productos or [uuid.uuid4()]),
-                        ),
+                        )
+                        .exists(),
                     )
                     .values(deleted_at=utcnow(), active=False)
                 )
