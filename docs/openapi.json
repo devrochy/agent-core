@@ -41208,6 +41208,14 @@
             },
             "type": "array",
             "title": "By Conversation"
+          },
+          "by_agent": {
+            "items": {
+              "$ref": "#/components/schemas/AgentCost"
+            },
+            "type": "array",
+            "title": "By Agent",
+            "default": []
           }
         },
         "type": "object",
@@ -67536,6 +67544,71 @@
         },
         "type": "object",
         "title": "AccessPolicyUpdate"
+      },
+      "AgentCost": {
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "tokens_in": {
+            "type": "integer",
+            "title": "Tokens In"
+          },
+          "cached_tokens": {
+            "type": "integer",
+            "title": "Cached Tokens"
+          },
+          "cached_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Pct"
+          },
+          "cost": {
+            "type": "number",
+            "title": "Cost"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "agent_name",
+          "turns",
+          "tokens_in",
+          "cached_tokens",
+          "cached_pct",
+          "cost"
+        ],
+        "title": "AgentCost",
+        "description": "Consumo de un agente en 30 días (HU-AOS-35). `agent_id` null = filas sin agente (legacy o\nanteriores a las versiones). `cached_pct` = leído de la caché / entrada, solo sobre filas\ndesde la migración 0114; null si no hay ninguna medible."
       }
     }
   }

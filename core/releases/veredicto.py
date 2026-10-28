@@ -122,6 +122,7 @@ def _fila_de_gasto(
         model=modelo,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        cache_write_tokens=0,  # significado de la 0114 (HU-AOS-35); `kind = eval` no entra al porcentaje
         cost_usd=costo_usd,
         result={"proposito": proposito, **({"run_id": str(run_id)} if run_id else {})},
         # A cargo de la plataforma (decisión del dueño, 2026-10-25): sin créditos del negocio.

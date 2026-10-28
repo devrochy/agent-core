@@ -113,6 +113,9 @@ class ArtefactosDeRelease:
     # HU-AOS-19: el grafo de permisos A2A congelado en el manifiesto (datos planos, adenda HU-AOS-18
     # de ADR-0116), o None: sin grafo no se ofrece ningún comando entre agentes.
     a2a_graph: Mapping[str, Any] | None = None
+    # HU-AOS-35: `ReleaseCongelada.compilado` (async, recibe el foco): lo compilado del agente por
+    # versión, o None si no se pudo. None aquí = sin compilador (tests o una ranura armada a mano).
+    compilar: Any = None
 
 
 @dataclass(frozen=True)

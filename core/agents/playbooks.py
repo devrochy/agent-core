@@ -19,6 +19,7 @@ from __future__ import annotations
 import functools
 import re
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 
 from agentcore_contracts import AgentSpec
@@ -61,13 +62,25 @@ def _strip_frontmatter(content: str) -> str:
     return content
 
 
+class ErrorDeLectura(Exception):
+    """Un archivo que existe y no se pudo leer (IO o encoding): no es determinista, no se cachea."""
+
+
 async def load_playbook(
     spec_or_tenant: AgentSpec | uuid.UUID | str | None,
     name: str,
     *,
     tenant_slug: str | None = None,
+    overrides: Mapping[str, str] | None = None,
+    estricto: bool = False,
 ) -> str | None:
     """Carga el contenido del playbook `name` si está en la allowlist del spec.
+
+    `overrides` (compilador de HU-AOS-35): los overrides congelados de una release, pasados por
+    parámetro. Con ellos no se lee la ranura del turno ni el disco del negocio: un nombre sin
+    override usa el default del pack o del core. `estricto`: un error de lectura del default
+    lanza `ErrorDeLectura` en vez de devolver None (lo compilado no se cachea con un bloque de
+    menos; un nombre que no existe sigue siendo None, que es determinista).
 
     Acepta un `AgentSpec` (evals/tests) o un tenant (resuelve su spec activo).
     `tenant_slug`: si el caller ya lo resolvió (ej. `build_system_blocks`,
@@ -105,9 +118,12 @@ async def load_playbook(
     # disco: un nombre sin override congelado usa el default del pack/core.
     from core.shared import release_vigente
 
-    congelada = release_vigente.vigente()
-    if congelada is not None:
-        texto = congelada.playbooks.get(name)
+    congelados = overrides
+    if congelados is None:
+        congelada = release_vigente.vigente()
+        congelados = congelada.playbooks if congelada is not None else None
+    if congelados is not None:
+        texto = congelados.get(name)
         if texto is not None:
             return _strip_frontmatter(texto)
         tenant_slug = ""
@@ -152,8 +168,10 @@ async def load_playbook(
             # (auditor-multitenant, ítem 4 de la fila 170 del ROADMAP).
             try:
                 content = candidate.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
                 log.warning("playbook_read_failed", playbook=name, exc_info=True)
+                if estricto:
+                    raise ErrorDeLectura(name) from exc
                 return None
             if len(content.encode("utf-8")) > MAX_SIZE_BYTES:
                 log.warning("playbook_too_large", playbook=name)

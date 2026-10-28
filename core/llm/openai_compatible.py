@@ -77,6 +77,15 @@ def resolve_thinking_for_model(model: str, thinking: bool) -> bool:
     return thinking
 
 
+def _tokens_cacheados(usage: dict[str, Any]) -> int:
+    """Tokens de entrada leídos de la caché del proveedor: DeepSeek los da en
+    `prompt_cache_hit_tokens` y OpenAI en `prompt_tokens_details.cached_tokens`."""
+    if usage.get("prompt_cache_hit_tokens") is not None:
+        return int(usage.get("prompt_cache_hit_tokens") or 0)
+    detalle = usage.get("prompt_tokens_details")
+    return int(detalle.get("cached_tokens") or 0) if isinstance(detalle, dict) else 0
+
+
 class _NoReintentar(LLMProviderError):
     """Un 4xx (salvo 429) con `reintentar_4xx = False`: el request está mal y repetirlo no lo
     arregla. Lo usa la política de riesgo alto (HU-AOS-09) para degradar rápido."""
@@ -215,7 +224,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             usage=LLMUsageInfo(
                 input_tokens=usage.get("prompt_tokens", 0),
                 output_tokens=usage.get("completion_tokens", 0),
-                cache_read_tokens=usage.get("prompt_cache_hit_tokens", 0),
+                cache_read_tokens=_tokens_cacheados(usage),
                 reasoning_tokens=int((usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0),
             ),
             model=self.model,

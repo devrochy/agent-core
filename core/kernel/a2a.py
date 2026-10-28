@@ -580,8 +580,10 @@ async def liquidar(
             await session.execute(
                 text(
                     "INSERT INTO usage_ledger (id, tenant_id, conversation_id, model, input_tokens, output_tokens, "
-                    "latency_ms, cost_usd, turn_id, connection_id, agent_instance_id, release_id, kind, a2a_call_id) "
-                    "VALUES (:id, :t, :conv, :m, :tin, :tout, :ms, :usd, :turn, :c, :inst, :rel, 'agent_run', :call)"
+                    "latency_ms, cost_usd, turn_id, connection_id, agent_instance_id, release_id, kind, a2a_call_id, "
+                    "cache_write_tokens) "
+                    # `cache_write_tokens = 0`: significado de la 0114 (HU-AOS-35), sin caché en el gasto A2A.
+                    "VALUES (:id, :t, :conv, :m, :tin, :tout, :ms, :usd, :turn, :c, :inst, :rel, 'agent_run', :call, 0)"
                 ),
                 {
                     "id": uuid.uuid4(),
