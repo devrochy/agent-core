@@ -61,6 +61,7 @@ pytestmark = [
 QR = ("whatsapp", "waweb")
 WEB = ("web", "web")
 MESSENGER = ("messenger", "meta")
+INSTAGRAM = ("instagram", "meta")
 META = ("whatsapp", "meta")
 
 
@@ -173,7 +174,7 @@ def cada_tenant_con_la_bandera_encendida(legacy, monkeypatch):  # type: ignore[n
 
 
 # ---------------------------------------------------------------- journeys: QR y chat web
-@pytest.mark.parametrize("canal", [QR, WEB, MESSENGER], ids=["qr", "web", "messenger"])
+@pytest.mark.parametrize("canal", [QR, WEB, MESSENGER, INSTAGRAM], ids=["qr", "web", "messenger", "instagram"])
 async def test_journey_menu_numerado_respuesta_1_ejecuta_una_vez_con_respuesta_fija_y_el_llm_en_cero(  # type: ignore[no-untyped-def]
     cada_tenant_con_la_bandera_encendida, herramienta, cola, monkeypatch, recorded, canal  # noqa: F811
 ) -> None:
