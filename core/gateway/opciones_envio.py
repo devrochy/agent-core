@@ -53,6 +53,7 @@ from core.db.models import (
     utcnow,
 )
 from core.db.session import get_session
+from core.gateway.connection_types import capacidades_de
 from core.kernel.opciones import bandera, contexto, mapeo, metricas, payload
 from core.kernel.opciones import envio as ev
 from core.kernel.opciones.definicion import Definicion
@@ -208,12 +209,14 @@ async def _enviar(traza: _Traza, datos: dict[str, Any] | None, clave_idempotenci
     ahora = utcnow()
     proveedor, credenciales = "", {}
     if conversation.channel == "whatsapp":
+        # Solo WhatsApp tiene varios proveedores con capacidades distintas: ahí hace falta resolverlo (una consulta);
+        # en los demás canales `capacidades_de(canal, "")` ya es unívoca.
         proveedor, credenciales = await resolve_credentials(
             conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=conversation.tenant_id
         )
     abierta = ev.ventana_abierta(conversation.service_window_expires_at, ahora)
     contraparte, motivo_plantilla = None, ""
-    if conversation.channel == "whatsapp" and proveedor == "meta" and not abierta:
+    if capacidades_de(conversation.channel, proveedor).plantilla_aprobada and not abierta:
         contraparte, motivo_plantilla = await _contraparte(conversation, version, definicion)
     decision = ev.decidir_via(
         canal=conversation.channel,

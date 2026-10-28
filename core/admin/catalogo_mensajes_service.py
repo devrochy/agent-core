@@ -45,6 +45,7 @@ from core.db.models import (
     WabaAccount,
 )
 from core.db.session import get_session
+from core.gateway.connection_types import canales_con
 from core.gateway.event_notices import EVENTOS, load_templates_map, template_placeholders
 from core.kernel.opciones import bandera
 from core.kernel.opciones.definicion import Definicion
@@ -75,24 +76,27 @@ _LLAVES = re.compile(r"\{([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*)\}")
 
 
 # ---------------------------------------------------------------- capacidades por canal
-# ÚNICO PUNTO que decide en qué canales sale cada tipo de mensaje. Hoy es una constante: todo sale por WhatsApp (los
-# avisos por evento solo buscan conversaciones `whatsapp`, las plantillas son de Meta y las opciones ejecutan su
-# acción solo con botones de Meta; los textos de packs traen su canal en la marca de cada campo). La pista C1 (tabla de
-# capacidades por canal en `connection_types.py`) la sustituye sin tocar a quien la llama.
-_CANALES_POR_TIPO: dict[TipoMensaje, tuple[str, ...]] = {
-    "meta": ("whatsapp",),
-    "evento": ("whatsapp",),
-    "opciones": ("whatsapp",),
-    "texto_pack": ("whatsapp",),
+# ÚNICO PUNTO que decide en qué canales sale cada tipo de mensaje; sale de la tabla de capacidades por canal
+# (`connection_types.CAPACIDADES_POR_TIPO`, pista C1). Capacidad que exige cada tipo:
+# - `meta`: plantilla aprobada por el proveedor (WhatsApp Cloud).
+# - `evento`: los avisos por evento se mandan con plantilla aprobada y solo buscan conversaciones de ese canal
+#   (`core_handlers`); D2 los llevará a los canales de texto.
+# - `opciones`: botones (la ejecución directa); en los canales de texto hoy solo sale el texto numerado sin acción.
+# - `texto_pack`: un texto de pack sale por WhatsApp salvo que la marca de su campo diga otro canal.
+_CAPACIDAD_POR_TIPO: dict[TipoMensaje, str] = {
+    "meta": "plantilla_aprobada",
+    "evento": "plantilla_aprobada",
+    "opciones": "botones",
+    "texto_pack": "plantilla_aprobada",
 }
 
 
 def canales_de(tipo: TipoMensaje, marca: str | None = None) -> list[str]:
     """Canales en los que este tipo de mensaje se entrega hoy. Un texto de pack trae su canal en la marca del campo
-    (hay textos de correo); si la marca no es un canal conocido, vale la constante del tipo."""
+    (hay textos de correo); si la marca no es un canal conocido, vale el del tipo."""
     if marca in CANALES_DE_MARCA:
         return [str(marca)]
-    return list(_CANALES_POR_TIPO[tipo])
+    return canales_con(_CAPACIDAD_POR_TIPO[tipo])
 
 
 # ---------------------------------------------------------------- forma de salida
