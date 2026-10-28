@@ -27,6 +27,8 @@ from test_pack_cobranza_dispositivos_enforcement import (
     _h,
     _login_admin,
     _montar,
+    _politica_del_gestor,
+    _sesion_sin_equipo,
     _tenant,
 )
 
@@ -74,16 +76,6 @@ async def _filas(tenant_id: uuid.UUID, gestor_id: uuid.UUID) -> list:
                 .scalars()
                 .all()
             )
-
-
-async def _politica_del_gestor(tenant_id: uuid.UUID, valor: str) -> None:
-    from core.access import policy
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(tenant_id):
-        async with get_session() as session:
-            await policy.escribir(session, tenant_id, {"gestor": valor})
 
 
 # ------------------------------------------------------------------ contrato nuevo (header)
@@ -179,13 +171,23 @@ async def test_app_vieja_con_equipo_por_vincular_recibe_tokens_y_requiere_vincul
     assert (fila.device_id, fila.estado) == ("IMEI-VIEJA", "pendiente")
 
 
-async def test_app_vieja_sin_equipo_ni_imei_conserva_el_contrato(app_client) -> None:
+async def test_sin_header_ni_imei_en_restringido_es_403_requerido(app_client) -> None:
     tid, _, token = await _montar(app_client, "ac2-vieja-sin")
 
     r = await app_client.post(EXCHANGE, json={}, headers=_h(token, tid))
 
+    assert r.status_code == 403, r.text
+    assert r.json()["code"] == "dispositivo_requerido" and "accessToken" not in r.json()
+
+
+async def test_sin_equipo_en_abierto_entra_con_el_aviso(app_client) -> None:
+    tid, gid, token = await _montar(app_client, "ac2-sin-abierto")
+    await _politica_del_gestor(tid, "abierto")
+
+    r = await app_client.post(EXCHANGE, json={}, headers=_h(token, tid))
+
     assert r.status_code == 200, r.text
-    assert (r.json()["dispositivoVinculado"], r.json()["estadoDispositivo"]) == (False, "none")
+    assert "dispositivo_sin_id" in await _eventos(tid, gid)
 
 
 # ------------------------------------------------------------------ lo que viene del pack
@@ -228,11 +230,7 @@ async def test_fila_heredada_sin_equipo_se_completa_con_el_primer_login(app_clie
 # ------------------------------------------------------------------ POST/GET /gestor/dispositivo
 async def test_vincular_concurrente_no_da_500_y_deja_una_fila(app_client) -> None:
     tid, gid, token = await _montar(app_client, "ac2-conc")
-    sesion = await app_client.post(EXCHANGE, json={}, headers=_h(token, tid))
-    campo = {
-        "Authorization": f"Bearer {sesion.json()['accessToken']}",
-        "X-Device-Id": "EQUIPO-CONC",
-    }
+    campo = {**await _sesion_sin_equipo(app_client, tid, token), "X-Device-Id": "EQUIPO-CONC"}
 
     respuestas = await asyncio.gather(
         *(app_client.post(CAMPO, json={}, headers=campo) for _ in range(4))

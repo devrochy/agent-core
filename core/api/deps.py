@@ -73,11 +73,41 @@ async def _resolve_admin(request: Request) -> Admin:
     return admin
 
 
+# Rutas que un equipo pendiente o bloqueado sí puede llamar, por método y ruta exacta: registrar/consultar su
+# estado, ver quién es y cerrar sesión. `…/gestor-token` es el intercambio a sesión de campo: evalúa el equipo
+# él mismo (adopta lo del pack, crea el pendiente, responde con el `code`), así que el principal no puede
+# decidir antes que él. Nada de sufijos: una ruta futura con un parámetro final no puede quedar exenta.
+_EXENTAS_DE_EQUIPO = frozenset(
+    {
+        ("POST", "/api/v1/access/device-session"),
+        ("GET", "/api/v1/admin/me"),
+        ("POST", "/api/v1/pack/cobranza/gestor-token"),
+    }
+)
+
+
+def _exenta_de_equipo(method: str, path: str) -> bool:
+    return (method, path) in _EXENTAS_DE_EQUIPO or path.startswith("/api/v1/auth/")
+
+
+async def _exigir_equipo(admin_id: uuid.UUID, tenant_id: uuid.UUID, device_id: str) -> None:
+    """403 `{code}` si el equipo no puede operar en este negocio (decisión de solo lectura, con caché)."""
+    from core.access.sesion import MENSAJES, evaluar_rapido
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        code = await evaluar_rapido(session, tenant_id, admin_id, device_id)
+    if code is not None:
+        raise ApiError(403, code, MENSAJES.get(code, MENSAJES["dispositivo_no_autorizado"]))
+
+
 async def get_principal(
     request: Request,
     x_tenant_id: Annotated[str | None, Header(alias="X-Tenant-Id")] = None,
+    x_device_id: Annotated[str | None, Header(alias="X-Device-Id")] = None,
 ) -> AsyncIterator[Principal]:
     """Resuelve identidad, tenant activo y permisos, y abre el scope de tenant."""
+    equipo = (x_device_id or "").strip()[:128]
     token = session_token(request)
     admin = await _resolve_admin(request)
     # Negocios suspendidos fuera, salvo para quien actúa como master (ADR-0136): la sesión de
@@ -102,6 +132,9 @@ async def get_principal(
         target = next(t[0] for t in tenants if str(t[0]) == chosen)
 
     async with tenant_scope(target):
+        # Equipo (ADR-0174): solo si la app manda `X-Device-Id`. El panel web no lo manda y no cambia nada.
+        if target is not None and equipo and not _exenta_de_equipo(request.method, request.url.path):
+            await _exigir_equipo(admin.id, target, equipo)
         # Sub-secciones de los packs (ADR-0063) más el id de cada pack: así `/me` expone
         # también el acceso «al pack completo» (p. ej. `pack_cobranza`, ADR-0136).
         secciones = pack_section_keys(plugin_manager.list_modules()) | set(plugin_manager.active_ids())

@@ -77,7 +77,9 @@ async def _admin_master(email: str, password: str) -> None:
 
 
 async def _login(app_client, usuario: str, password: str = PW, tenant: str | None = None):
-    body = {"usuario": usuario, "password": password}
+    # Con el `imei` del equipo (contrato anterior): sin equipo identificable, un gestor en política
+    # restringida recibe 403 `dispositivo_requerido` (ADR-0174). Estos tests son del flujo de login.
+    body = {"usuario": usuario, "password": password, "imei": "IMEI-LOGIN"}
     if tenant is not None:
         body["tenant"] = tenant
     return await app_client.post(f"{PACK_AUTH}/login", json=body)
@@ -197,6 +199,12 @@ async def test_acceso_total_owner_y_gestor(app_client) -> None:
     assert r.status_code == 200, r.text
     assert [c["nombre"] for c in r.json()] == ["Cartera 1"]
 
+    # Este test es del alcance de cada rol, no de dispositivos: el gestor entra sin aprobación de equipo.
+    from core.access import policy
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            await policy.escribir(session, tid, {"gestor": "abierto"})
     gestor_sesion = (await _login(app_client, g_email, tenant=slug)).json()
     r2 = await app_client.get(
         mis_carteras, headers={"Authorization": f"Bearer {gestor_sesion['accessToken']}"}

@@ -159,7 +159,7 @@ async def acceso_de_campo(
     - si el token es de una cuenta (`admin_id`): la cuenta sigue habilitada (desactivarla o
       apagar el rol tester corta la app) y sigue vinculada al negocio por `tenant_user`
       (desvincularla también); el master y el tester habilitado no necesitan vínculo;
-    - si es de un gestor: el equipo con el que entró (`did`) sigue activo (ADR-0174): bloquearlo corta la
+    - si es de un gestor o del propietario: el equipo con el que entró (`did`) sigue activo (ADR-0174): bloquearlo corta la
       sesión abierta con 403 `code` (`AccesoError`) en menos de 60 s. `sin_equipo_ok` deja pasar un token
       sin `did` en las rutas por las que un equipo pide vincularse.
     Los tokens de dispositivo (sin `admin_id`, `/auth/dispositivo`) solo dependen del negocio.
@@ -186,13 +186,19 @@ async def acceso_de_campo(
                 return None
             if not actua_como_master(admin) and not await _vinculado(session, tenant_id, admin_uuid):
                 return None
-        if payload.get("rol") == "gestor" and not actua_como_master(admin):
+        rol_politica = {"gestor": "gestor", "propietario": "owner"}.get(str(payload.get("rol")))
+        if rol_politica and not actua_como_master(admin):
             from core.access.sesion import exigir_equipo_vigente
             from core.shared.tenant import tenant_scope
 
             async with tenant_scope(tenant_id):
                 async with get_session() as session:
                     await exigir_equipo_vigente(
-                        session, tenant_id, admin_uuid, payload.get("did"), sin_equipo_ok=sin_equipo_ok
+                        session,
+                        tenant_id,
+                        admin_uuid,
+                        payload.get("did"),
+                        sin_equipo_ok=sin_equipo_ok,
+                        rol=rol_politica,
                     )
     return auth

@@ -18,13 +18,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Header, Query, Response
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, or_, select
 
 from core.access import devices as svc
 from core.access import policy as pol
 from core.access.events import registrar_evento, sufijo
+from core.access.roles import rol_de_acceso
 from core.admin.permissions import effective_access
 from core.api.deps import (
     Principal,
@@ -151,6 +152,23 @@ class AccessPolicyUpdate(BaseModel):
     confirmar: bool = False
 
 
+class DeviceSessionIn(BaseModel):
+    """Check-in del equipo de la APK (camelCase: es el contrato de la app, HU-ACC-03)."""
+
+    deviceId: str = Field(min_length=1, max_length=128)
+    label: str | None = Field(default=None, max_length=120)
+    plataforma: Literal["android", "ios"] = "android"
+    appVersion: str | None = Field(default=None, max_length=40)
+
+
+class DeviceSessionOut(BaseModel):
+    estado: Literal["activo", "pendiente", "bloqueado", "none"]
+    politica: Literal["abierto", "restringido", "plataforma"]
+    permitido: bool
+    dispositivoId: uuid.UUID | None = None
+    requiereVinculacion: bool
+
+
 # ------------------------------------------------------------------ utilidades
 def _tenant(principal: Principal) -> uuid.UUID:
     if principal.tenant_id is None:
@@ -259,6 +277,45 @@ async def _device_id_visible(
 
 def _actor(principal: Principal) -> str:
     return f"admin:{principal.admin.email}"
+
+
+@router.post("/device-session", response_model=DeviceSessionOut)
+async def device_session(
+    payload: DeviceSessionIn,
+    principal: Annotated[Principal, Depends(get_principal)],
+    request: Request,
+) -> DeviceSessionOut:
+    """Registra (o consulta) el equipo de la APK para la cuenta que llama y dice si puede operar.
+
+    Sirve a cualquier rol del negocio, pero solo para SU propio `admin_id` (el del token): nadie registra un
+    equipo en nombre de otro. El equipo pendiente o bloqueado también puede llamarla (ruta exenta de la
+    dependencia del principal): así consulta su estado y puede cerrar sesión. Con la política abierta el
+    alta es automática; con la restringida queda `pendiente` hasta que un admin lo apruebe."""
+    tenant_id = _tenant(principal)
+    async with _sesion() as session:
+        rol = await rol_de_acceso(session, tenant_id, principal.admin.id)
+        if rol is None:
+            raise ApiError(403, "fuera_del_negocio", "Tu cuenta no pertenece a este negocio.")
+        decision = await svc.evaluar(
+            session,
+            tenant_id=tenant_id,
+            admin_id=principal.admin.id,
+            rol="owner" if rol == "master" else rol,  # el master no tiene política: ver es_master_plataforma
+            device_id=payload.deviceId,
+            label=payload.label,
+            plataforma=payload.plataforma,
+            canal="panel_apk",
+            ip=request.client.host if request.client else None,
+            es_master_plataforma=rol == "master",
+            detalle_alta={"appVersion": payload.appVersion} if payload.appVersion else None,
+        )
+    return DeviceSessionOut(
+        estado=decision.estado,  # type: ignore[arg-type]
+        politica=decision.politica,  # type: ignore[arg-type]
+        permitido=decision.permitido,
+        dispositivoId=decision.device_row_id,
+        requiereVinculacion=not decision.permitido and decision.estado == "pendiente",
+    )
 
 
 # ------------------------------------------------------------------ dispositivos

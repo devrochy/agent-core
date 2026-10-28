@@ -579,6 +579,15 @@ class BaseModule(ABC):
         """
         return None
 
+    async def rol_de_acceso(self, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> str | None:
+        """Hook opcional (ADR-0174): el rol de ACCESO con el que esta cuenta cae bajo la política de
+        equipos del negocio cuando el pack la trata distinto de un colaborador cualquiera (p. ej.
+        `"gestor"`, el perfil de campo de cobranza). El core lo llama bajo el `tenant_scope` del
+        negocio con un timeout corto; el pack filtra por `tenant_id` y no escribe nada.
+        Default: None (sin rol propio: la cuenta es `colaborador`).
+        """
+        return None
+
     async def seed_data(self, tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
         """Hook opcional de seed (ADR-0083, issue #154): importa `data` a la BD
         del tenant de forma idempotente. El CLI/onboarding lo invoca para CADA
