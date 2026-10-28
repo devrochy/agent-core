@@ -389,6 +389,28 @@ async def cargar(session: Any, tenant_id: uuid.UUID, device_row_id: uuid.UUID) -
     return fila
 
 
+async def _invalidar_sesiones(session: Any, fila: AccountDevice, *, bloqueo_de_equipo: bool) -> None:
+    """Saca de la caché de vigencia (core.access.sesion) los equipos cuyo estado acaba de cambiar, para que
+    el corte llegue a las sesiones abiertas en menos de 60 s. Un bloqueo «de equipo» alcanza a las demás
+    cuentas que usan el mismo `device_id`."""
+    from core.access.sesion import invalidar
+
+    afectadas = [(fila.admin_id, fila.id)]
+    if bloqueo_de_equipo and fila.device_id:
+        otras = (
+            await session.execute(
+                select(AccountDevice.admin_id, AccountDevice.id).where(
+                    AccountDevice.tenant_id == fila.tenant_id,
+                    AccountDevice.device_id == fila.device_id,
+                    AccountDevice.deleted_at.is_(None),
+                )
+            )
+        ).all()
+        afectadas += [(a, i) for a, i in otras]
+    for admin_id, row_id in dict.fromkeys(afectadas):
+        await invalidar(fila.tenant_id, admin_id, row_id)
+
+
 async def _transicion(
     session: Any,
     fila: AccountDevice,
@@ -418,6 +440,7 @@ async def _transicion(
             {"estado_actual": fila.estado},
         )
     await session.refresh(fila)
+    await _invalidar_sesiones(session, fila, bloqueo_de_equipo=bool(valores.get("bloqueo_equipo")))
 
 
 # ------------------------------------------------------------------ transiciones

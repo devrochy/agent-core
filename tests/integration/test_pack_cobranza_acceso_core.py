@@ -423,3 +423,177 @@ async def test_alertas_y_estado_solo_alcanzan_cuentas_de_gestor(app_client) -> N
     assert (
         cambio.status_code == 404
     )  # la ruta vieja no toca equipos de cuentas que no son de gestor
+
+
+# ------------------------------------------------------------------ did: token, revalidación y refresh
+PACK = "/api/pack/pack_cobranza"
+DATOS = f"{PACK}/gestor/mis-carteras"
+REFRESH = f"{PACK}/auth/refresh"
+
+
+def _claims(token: str) -> dict:
+    import base64
+    import json
+
+    cuerpo = token.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(cuerpo + "=" * (-len(cuerpo) % 4)))
+
+
+def _bearer(token: str, equipo: str | None = None) -> dict[str, str]:
+    h = {"Authorization": f"Bearer {token}"}
+    if equipo:
+        h["X-Device-Id"] = equipo
+    return h
+
+
+async def _sesion_activa(app_client, prefijo: str, equipo: str = "EQUIPO-SESION"):
+    """Negocio con dueño y gestor, equipo activo y sesión de campo abierta con ese equipo."""
+    slug = uniq(prefijo)
+    owner_email = f"{slug}-owner@test.local"
+    tid = await _tenant(owner_email, slug)
+    gestor_email = f"{slug}-g@test.local"
+    gid = await _gestor(gestor_email, tid)
+    await _device(tid, gid, equipo, "activo")
+    token = await _login_admin(app_client, gestor_email)
+    r = await app_client.post(EXCHANGE, json={}, headers=_con_equipo(token, tid, equipo))
+    assert r.status_code == 200, r.text
+    return tid, gid, owner_email, r.json()
+
+
+async def test_el_token_lleva_el_equipo_y_las_peticiones_pasan(app_client) -> None:
+    tid, gid, _, sesion = await _sesion_activa(app_client, "ac2-did")
+
+    (fila,) = await _filas(tid, gid)
+    assert _claims(sesion["accessToken"])["did"] == str(fila.id)
+    assert _claims(sesion["refreshToken"])["did"] == str(fila.id)
+    assert (await app_client.get(DATOS, headers=_bearer(sesion["accessToken"]))).status_code == 200
+
+
+async def test_bloquear_corta_la_sesion_abierta_y_el_refresh(app_client) -> None:
+    tid, gid, owner_email, sesion = await _sesion_activa(app_client, "ac2-corte")
+    (fila,) = await _filas(tid, gid)
+    acceso = _bearer(sesion["accessToken"])
+    assert (await app_client.get(DATOS, headers=acceso)).status_code == 200  # deja la caché poblada
+    owner = await _login_admin(app_client, owner_email)
+
+    bloqueo = await app_client.post(
+        f"{ADMIN}/devices/{fila.id}/status", json={"estado": "bloqueado"}, headers=_h(owner, tid)
+    )
+    peticion = await app_client.get(DATOS, headers=acceso)
+    renovar = await app_client.post(REFRESH, json={"refreshToken": sesion["refreshToken"]})
+
+    assert bloqueo.status_code == 204
+    assert peticion.status_code == 403 and peticion.json()["code"] == "dispositivo_bloqueado"
+    assert renovar.status_code == 403 and renovar.json()["code"] == "dispositivo_bloqueado"
+
+
+async def test_reactivar_devuelve_el_acceso_sin_esperar_la_cache(app_client) -> None:
+    tid, gid, owner_email, sesion = await _sesion_activa(app_client, "ac2-react")
+    (fila,) = await _filas(tid, gid)
+    owner = await _login_admin(app_client, owner_email)
+    estado = lambda e: app_client.post(  # noqa: E731
+        f"{ADMIN}/devices/{fila.id}/status", json={"estado": e}, headers=_h(owner, tid)
+    )
+    await estado("bloqueado")
+    assert (await app_client.get(DATOS, headers=_bearer(sesion["accessToken"]))).status_code == 403
+
+    await estado("activo")
+
+    assert (await app_client.get(DATOS, headers=_bearer(sesion["accessToken"]))).status_code == 200
+
+
+async def test_redis_caido_no_abre_el_acceso(app_client, monkeypatch) -> None:
+    from core.access import sesion as mod
+    from core.db.models import AccountDevice
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid, gid, _, sesion = await _sesion_activa(app_client, "ac2-redis")
+    (fila,) = await _filas(tid, gid)
+    acceso = _bearer(sesion["accessToken"])
+    assert (await app_client.get(DATOS, headers=acceso)).status_code == 200
+
+    def sin_redis():
+        raise ConnectionError("redis caído")
+
+    monkeypatch.setattr(mod, "_redis", sin_redis)
+    # Cambio directo en la base (sin pasar por el servicio): solo la lectura de la base puede verlo.
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            (await session.get(AccountDevice, fila.id)).estado = "bloqueado"
+
+    r = await app_client.get(DATOS, headers=acceso)
+
+    assert r.status_code == 403 and r.json()["code"] == "dispositivo_bloqueado"
+
+
+async def test_token_sin_equipo_solo_llega_a_vincular_cuando_la_politica_es_restringida(
+    app_client,
+) -> None:
+    tid, _, token = await _montar(app_client, "ac2-sindid")
+    pendiente = await app_client.post(
+        EXCHANGE, json={"imei": "IMEI-PEND", "whatsapp": "3001112222"}, headers=_h(token, tid)
+    )
+    assert pendiente.status_code == 200 and "did" not in _claims(pendiente.json()["accessToken"])
+    acceso = _bearer(pendiente.json()["accessToken"])
+
+    datos = await app_client.get(DATOS, headers=acceso)
+    estado = await app_client.get(CAMPO, headers=acceso)
+
+    assert datos.status_code == 403 and datos.json()["code"] == "dispositivo_requerido"
+    assert estado.status_code == 200 and estado.json()["vinculado"] is False
+
+
+async def test_refresh_renueva_con_el_mismo_equipo_o_con_el_del_header(app_client) -> None:
+    tid, gid, _, sesion = await _sesion_activa(app_client, "ac2-ref")
+    (fila,) = await _filas(tid, gid)
+
+    igual = await app_client.post(REFRESH, json={"refreshToken": sesion["refreshToken"]})
+    con_header = await app_client.post(
+        REFRESH,
+        json={"refreshToken": sesion["refreshToken"]},
+        headers={"X-Device-Id": "EQUIPO-SESION"},
+    )
+    otro_equipo = await app_client.post(
+        REFRESH,
+        json={"refreshToken": sesion["refreshToken"]},
+        headers={"X-Device-Id": "EQUIPO-DISTINTO"},
+    )
+
+    assert igual.status_code == 200 and _claims(igual.json()["accessToken"])["did"] == str(fila.id)
+    assert con_header.status_code == 200 and _claims(con_header.json()["accessToken"])[
+        "did"
+    ] == str(fila.id)
+    assert otro_equipo.status_code == 403 and otro_equipo.json()["code"] == "dispositivo_pendiente"
+
+
+async def test_sesion_anterior_al_cambio_sin_did_hereda_el_equipo_activo(app_client) -> None:
+    """Los tokens emitidos antes de este cambio no traen `did`: no se desloguea a nadie al desplegar."""
+    from pack_cobranza.api_gestor import _par_tokens
+    from pack_cobranza.auth import pack_secret
+
+    from core.db.models import TenantUser
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid, gid, _, _ = await _sesion_activa(app_client, "ac2-vieja-sesion")
+    (fila,) = await _filas(tid, gid)
+    async with tenant_scope(tid):
+        secret = await pack_secret()
+        async with get_session() as session:
+            admin_id = (
+                await session.execute(
+                    select(TenantUser.admin_id).where(
+                        TenantUser.tenant_id == tid, TenantUser.role == "colaborador"
+                    )
+                )
+            ).scalar_one()
+    viejos = _par_tokens(secret, tid, admin_id, rol="gestor", gestor_id=gid)  # sin did
+
+    datos = await app_client.get(DATOS, headers=_bearer(viejos["accessToken"]))
+    renovado = await app_client.post(REFRESH, json={"refreshToken": viejos["refreshToken"]})
+
+    assert datos.status_code == 200, datos.text
+    assert renovado.status_code == 200 and _claims(renovado.json()["accessToken"])["did"] == str(
+        fila.id
+    )

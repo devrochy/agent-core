@@ -12,10 +12,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import exists, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from core.access.devices import evaluar
 from core.access.events import registrar_evento
+from core.access.sesion import cuenta_entra_sin_equipo, motivo_de_denegacion
 from core.db.models import AccountDevice
 from core.shared.logger import get_logger
 from pack_cobranza.models import Device, Gestor
@@ -119,3 +122,61 @@ async def adoptar_legado(session: Any, tenant_id: uuid.UUID, gestor: Gestor) -> 
             n=adoptados,
         )
     return adoptados
+
+
+def respuesta_403(code: str, estado: str | None = None) -> JSONResponse:
+    cuerpo = {"error": MENSAJES.get(code, MENSAJES["dispositivo_no_autorizado"]), "code": code}
+    if estado:
+        cuerpo["estado"] = estado
+    return JSONResponse(cuerpo, status_code=403)
+
+
+async def equipo_del_refresh(
+    request: Request, session: Any, tenant_id: uuid.UUID, gestor: Gestor, did_token: str | None
+) -> uuid.UUID | JSONResponse | None:
+    """Equipo con el que se renueva la sesión del gestor (ADR-0174): el `did` nuevo, `None` si la política
+    es abierta y no hay equipo, o el 403 con `code`. Revalida: bloquear el equipo corta también el refresh.
+
+    - Con `X-Device-Id` se vuelve a decidir sobre ese equipo (puede ser otro que el del token).
+    - Sin header, manda el `did` del token (caché de 60 s, invalidada al escribir).
+    - Sin ninguno de los dos (token anterior a este cambio o app vieja sin equipo) se hereda el equipo
+      activo más reciente de la cuenta si la política lo permite; si no, 403 `dispositivo_requerido`."""
+    admin_id = gestor.admin_id
+    if admin_id is None:
+        return None
+    device_id, via_header = equipo_de(request)
+    if via_header:
+        decision = await evaluar(
+            session,
+            tenant_id=tenant_id,
+            admin_id=admin_id,
+            rol="gestor",
+            device_id=device_id,
+            ip=request.client.host if request.client else None,
+        )
+        if not decision.permitido:
+            return respuesta_403(decision.code or "dispositivo_no_autorizado", decision.estado)
+        return decision.device_row_id
+    if did_token:
+        try:
+            row_id = uuid.UUID(str(did_token))
+        except ValueError:
+            return respuesta_403("dispositivo_no_autorizado")
+        code = await motivo_de_denegacion(session, tenant_id, admin_id, row_id)
+        return respuesta_403(code) if code else row_id
+    if not await cuenta_entra_sin_equipo(session, tenant_id, admin_id):
+        return respuesta_403("dispositivo_requerido")
+    return (
+        await session.execute(
+            select(AccountDevice.id)
+            .where(
+                AccountDevice.tenant_id == tenant_id,
+                AccountDevice.admin_id == admin_id,
+                AccountDevice.estado == "activo",
+                AccountDevice.device_id.is_not(None),
+                AccountDevice.deleted_at.is_(None),
+            )
+            .order_by(AccountDevice.ultimo_uso_at.desc().nulls_last())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
