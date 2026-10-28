@@ -7,6 +7,9 @@ los dueños del vendedor con dos títulos:
 - **"Alta automática en revisión"**: no se creó el negocio, o se creó pero no se pudo invitar al dueño.
 - **"Alta sin acceso enviado"**: el negocio está creado, pero el correo con el acceso no salió (sin SMTP).
 
+Este runbook trata el alta automática. El negocio creado **a mano** desde Plataforma tiene su propio
+correo de acceso y sus estados: ver § 10.
+
 Los comandos se corren en el contenedor de la app o del worker (mismo entorno), con el **UUID** del
 vendedor. Lo mismo se puede hacer desde el panel, en **Plataforma → Alta automática** (solo el master):
 la cola de altas en revisión con aprobar y descartar, el interruptor y los documentos legales (HU-SH-07,
@@ -109,7 +112,8 @@ El enlace de la invitación ya no hace falta.
 Si el alta queda en revisión con "el correo del pedido no es el de la cuenta que esta alta ya había
 preparado", es que el correo se corrigió después de que el alta creó la cuenta del correo anterior. El
 enlace no se manda al correo nuevo. Hay que decidir a mano: volver al correo original y **reintentar**,
-o **descartar** el alta y crear el negocio desde Plataforma con el correo correcto.
+o **descartar** el alta y crear el negocio desde Plataforma con el correo correcto (el dueño recibe allí
+su propio enlace: § 10).
 
 ## 6. "Alta sin acceso enviado"
 
@@ -119,6 +123,9 @@ o **descartar** el alta y crear el negocio desde Plataforma con el correo correc
 3. Después acepta la invitación en la app.
 
 El enlace del alta deja de servir en cuanto la cuenta tiene contraseña.
+
+Esto vale para el alta automática. Si el negocio lo creó una persona desde el panel y el correo no salió,
+no hace falta la recuperación de contraseña: se usa **Reenviar acceso** (§ 10).
 
 ## 7. Interruptor: pausar el alta automática ante un ataque
 
@@ -153,4 +160,43 @@ base lo impide): si tiene un error, se publica otra.
   defecto lo pide) y conviene que pida `phone`: "un Free por persona" usa esos datos además del número de
   WhatsApp.
 - Un Free descartado sigue contando 12 meses para esa persona. Si alguien legítimo queda bloqueado
-  (`free_no_disponible` en el chat), crear el negocio a mano desde Plataforma.
+  (`free_no_disponible` en el chat), crear el negocio a mano desde Plataforma (§ 10).
+
+## 10. Negocio creado a mano desde Plataforma (ADR-0175)
+
+Al crear un negocio con **Plataforma → Negocios → Nuevo negocio** (solo master y tester), el panel ya no
+pide contraseña: pide el **Email del dueño** y a ese correo llega un **enlace de un solo uso** para
+definir su contraseña y entrar. Es el mismo mecanismo de § 5 (vence a los 7 días; el enlace va en el
+fragmento `#`, no en el servidor). El negocio se crea siempre; lo que cambia es el resultado del envío,
+que el diálogo muestra al terminar:
+
+| Estado | Qué significa | Qué hacer |
+|---|---|---|
+| `enviado` | El correo salió | Nada. Si el dueño no lo ve, que revise spam y, si hace falta, **Reenviar acceso** |
+| `sin_smtp` | No hay `SYSTEM_SMTP_*` en este entorno | Configurarlo (`docs/despliegue-coolify.md`) y usar **Reenviar acceso** |
+| `fallido` | El SMTP falló o tardó más de 10 s | **Reenviar acceso**. El correo pudo haber salido: el reenvío manda el mismo enlace |
+| `ya_emitida` | Ya había un acceso pendiente (doble envío del formulario); no se mandó otro correo | Si el dueño no recibió nada, **Reenviar acceso** |
+| `ya_es_miembro` | Esa cuenta ya es del negocio | Nada |
+
+- **Reenviar acceso:** en **Acciones** del negocio, sección «Acceso del dueño» (negocio activo). Es
+  `POST /admin/platform/tenants/{id}/owner-invitation/resend`. Reusa el enlace vigente; si venció, lo
+  renueva. Solo actúa sobre la invitación `owner` pendiente de ese negocio y escribe al correo de esa
+  invitación (no se puede cambiar el destinatario). Un correo que no salió se muestra como error, no
+  como éxito.
+- **Si el correo ya tenía cuenta** (con contraseña o con acceso a otro negocio), no se manda enlace: el
+  correo lo invita a **aceptar la invitación en el panel**, y no queda vinculado hasta que acepte
+  (antes el master la dejaba vinculada al instante).
+- **Errores al crear:** 409 `owner_email_rejected` (el correo es de un master, de un tester, de una cuenta
+  con permisos globales o de una cuenta desactivada: no se crea nada; usar otro correo, y para sí mismo
+  invitarse desde Colaboradores), 400 `invalid_owner_email`, 409 `slug_en_uso` (otro negocio tomó el slug
+  a la vez), 400 `admin_password_no_soportado` (un panel viejo que aún manda contraseña: desplegar
+  backend y panel juntos). Al reenviar: 404 `tenant_no_encontrado`, 409 `tenant_inactivo` y 409
+  `sin_invitacion_pendiente` (el dueño ya entró o no hay acceso emitido).
+- **Si el enlace ya no sirve** (409 `account_exists` al canjear): § 5, "olvidé mi contraseña" y aceptar
+  en la app.
+- **Producción:** `PANEL_BASE_URL` tiene que apuntar al panel. Si falta, el enlace sale con el host de
+  la API y no abre.
+- **Límite conocido:** un tester puede reenviar el acceso de cualquier negocio, y no hay enfriamiento
+  entre reenvíos (ADR-0175, «Consecuencias»). No lo reenvíes en ráfaga.
+- **Auditoría y logs:** acción `tenant.owner_access` en `audit_log` del negocio y eventos
+  `tenant_owner_access_*` con el correo enmascarado; ninguno lleva el enlace ni el token.
