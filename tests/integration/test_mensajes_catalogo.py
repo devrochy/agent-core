@@ -198,7 +198,7 @@ async def test_cada_tipo_exige_la_seccion_de_su_fuente(app_client, negocios) -> 
 
     estado, vistos, omitidas = await tipos({**todo_ninguno, "settings": "read"})
     assert (estado, vistos) == (200, {"evento"})
-    assert {(o["tipo"], o["motivo"]) for o in omitidas} == {(t, "sin_permiso") for t in ("meta", "opciones", "texto_pack")}
+    assert {(o["tipo"], o["motivo"]) for o in omitidas} == {(t, "sin_permiso") for t in ("meta", "opciones", "texto_pack", "guardado")}
 
     estado, vistos, _ = await tipos({**todo_ninguno, "connections": "read"})
     assert (estado, vistos) == (200, {"meta", "opciones"})

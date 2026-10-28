@@ -2739,3 +2739,36 @@ class OptionActivation(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+# ---------------------------------------------------------------- mensajes guardados (ADR-0178 D4, migración 0116)
+class MensajeGuardado(Base):
+    """Respuesta rápida del operador, reutilizable entre canales (ADR-0178, pista D4). Texto libre con variables del
+    dialecto común (`{cliente.nombre}`). `canales` son `ConnectionType.id`; vacío = todos. Estados: `borrador`,
+    `activo`, `archivado`. Borrado lógico (`deleted_at`) que libera la clave. Tabla de NEGOCIO: tenant_id + RLS
+    forzada (invariante 1)."""
+
+    __tablename__ = "mensajes_guardados"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_mensajes_guardados_tenant_id_id"),
+        Index("uq_mensajes_guardados_tenant_clave", "tenant_id", "clave", unique=True, postgresql_where=text("deleted_at IS NULL")),
+        CheckConstraint("estado in ('borrador','activo','archivado')", name="ck_mensajes_guardados_estado"),
+        CheckConstraint("clave ~ '^[a-z0-9_]{1,40}$'", name="ck_mensajes_guardados_clave"),
+        CheckConstraint("char_length(titulo) between 1 and 120 and titulo !~ '^\\s*$'", name="ck_mensajes_guardados_titulo"),
+        CheckConstraint("char_length(texto) between 1 and 4096 and texto !~ '^\\s*$'", name="ck_mensajes_guardados_texto"),
+        CheckConstraint("cardinality(canales) <= 20 and (array_ndims(canales) is null or array_ndims(canales) = 1) "
+            "and array_position(canales, null) is null and array_position(canales, '') is null", name="ck_mensajes_guardados_canales"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    clave: Mapped[str] = mapped_column(Text, nullable=False)
+    titulo: Mapped[str] = mapped_column(Text, nullable=False)
+    texto: Mapped[str] = mapped_column(Text, nullable=False)
+    canales: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    estado: Mapped[str] = mapped_column(Text, nullable=False, default="borrador")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
