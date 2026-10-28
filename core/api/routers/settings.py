@@ -44,6 +44,7 @@ from core.config_registro import Catalogo, catalogo_para
 from core.config_registro.validar import validar_valor
 from core.db.models import AppSettings, AuditLog
 from core.db.session import get_session
+from core.gateway import avisos_opciones
 from core.gateway.message_splitter import CAPS
 from core.kernel.fuera_de_horario import texto_por_defecto
 from core.kernel.horario_de_servicio import modo_del_horario
@@ -1148,6 +1149,11 @@ class EventTemplateEntry(BaseModel):
     # `instagram_meta`), con `{ruta}` del evento. Solo se usa con la bandera `avisos_por_canal` del negocio (master);
     # sin la bandera se guarda pero no se envía. Al guardar, omitir el campo conserva lo que ya hay; `{}` lo borra.
     fallback_text_by_channel: dict[str, str] = {}
+    # ADR-0178 D3: clave de una plantilla con opciones PUBLICADA del negocio (`/plantillas-opciones`). Con las banderas
+    # `avisos_por_canal` y `opciones_directas` del negocio (master) el aviso sale con sus botones, su lista o su menú
+    # numerado según el canal; si no puede salir, cae al texto/plantilla de siempre. No admite los eventos de cobranza.
+    # Al guardar, omitir el campo conserva lo que ya hay; "" lo borra.
+    option_template: str = ""
 
 
 class EventCatalogItem(BaseModel):
@@ -1292,14 +1298,21 @@ async def save_message_templates(
 
     errores: dict[str, str] = {}
     limpio: dict[str, Any] = {}
-    previo: dict[str, Any] | None = None  # se lee solo si un evento omite `fallback_text_by_channel`
+    previo: dict[str, Any] | None = None  # se lee solo si un evento omite `fallback_text_by_channel` u `option_template`
 
-    async def _textos_guardados(evento: str) -> dict[str, str]:
+    async def _guardado(evento: str) -> dict[str, Any]:
         nonlocal previo
         if previo is None:
             guardado = await _load_app_settings(principal.tenant_id)
             previo = dict((guardado.message_templates_map if guardado else None) or {})
-        return dict((previo.get(evento) or {}).get("fallback_text_by_channel") or {})
+        return dict(previo.get(evento) or {})
+
+    async def _textos_guardados(evento: str) -> dict[str, str]:
+        return dict((await _guardado(evento)).get("fallback_text_by_channel") or {})
+
+    async def _opcion_guardada(evento: str) -> str:
+        valor = (await _guardado(evento)).get("option_template")
+        return valor if isinstance(valor, str) else ""
 
     for evento, entrada in payload.mapping.items():
         if evento not in EVENTOS:
@@ -1317,12 +1330,23 @@ async def save_message_templates(
             if error_canal:
                 errores[evento] = error_canal
                 continue
+        # ADR-0178 D3: plantilla con opciones del evento. Mismo criterio: omitido = conservar; presente (aun vacío) = reemplazar.
+        # `opcion` None = omitido: se lee lo guardado solo al armar `limpio`, después de validar (el mapa se valida
+        # antes de tocar la base).
+        opcion: str | None = None
+        if "option_template" in entrada.model_fields_set:
+            opcion = entrada.option_template.strip()
+            if opcion and (error_opcion := await avisos_opciones.error_de_mapeo(principal.tenant_id, evento, opcion)):
+                errores[evento] = error_opcion
+                continue
         if not nombre:
             por_canal = por_canal if pedido else await _textos_guardados(evento)
-            if fallback or por_canal:
+            opcion = await _opcion_guardada(evento) if opcion is None else opcion
+            if fallback or por_canal or opcion:
                 limpio[evento] = {
                     "template": "", "language": idioma, "variables": [], "fallback_text": fallback,
                     **({"fallback_text_by_channel": por_canal} if por_canal else {}),
+                    **({"option_template": opcion} if opcion else {}),
                 }
             continue
         rutas = list(entrada.variables.values()) if isinstance(entrada.variables, dict) else list(entrada.variables)
@@ -1354,12 +1378,14 @@ async def save_message_templates(
             errores[evento] = f"La plantilla tiene {len(placeholders)} variables y mapeaste {len(rutas)}."
             continue
         por_canal = por_canal if pedido else await _textos_guardados(evento)
+        opcion = await _opcion_guardada(evento) if opcion is None else opcion
         limpio[evento] = {
             "template": nombre,
             "language": idioma,
             "variables": entrada.variables,
             "fallback_text": fallback,
             **({"fallback_text_by_channel": por_canal} if por_canal else {}),
+            **({"option_template": opcion} if opcion else {}),
         }
     if errores:
         detalle = " ".join(f"{EVENTO_LABEL.get(k, k)}: {v}" for k, v in errores.items())
@@ -1368,15 +1394,18 @@ async def save_message_templates(
         )
 
     # Un panel anterior no manda los eventos que no tienen plantilla ni texto general; si uno de ellos tiene textos por
-    # canal guardados (ADR-0178 D2), no se pierden: se conservan solos. Para borrarlos, se manda el evento con `{}`.
+    # canal (ADR-0178 D2) o una plantilla con opciones (D3) guardados, no se pierden: se conservan solos. Para
+    # borrarlos, se manda el evento con `{}` (textos) o `option_template: ""`.
     for evento in EVENTOS:
         if evento in payload.mapping:
             continue
         guardados = await _textos_guardados(evento)
-        if guardados:
+        opcion_guardada = await _opcion_guardada(evento)
+        if guardados or opcion_guardada:
             limpio[evento] = {
                 "template": "", "language": "es", "variables": [], "fallback_text": "",
-                "fallback_text_by_channel": guardados,
+                **({"fallback_text_by_channel": guardados} if guardados else {}),
+                **({"option_template": opcion_guardada} if opcion_guardada else {}),
             }
 
     async with get_session() as session:

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -97,24 +98,41 @@ async def enviar_opciones(
     datos: dict[str, Any] | None = None,
     clave_idempotencia: str | None = None,
     actor: str = "agent",
+    sin_mensaje_de_fallo: bool = False,
+    antes_de_enviar: Callable[[], Awaitable[str]] | None = None,
 ) -> ev.ResultadoEnvio:
     """Envía la plantilla con opciones `clave` (versión vigente publicada) a la conversación. Corre dentro del
     `tenant_scope` del negocio. Nunca lanza: devuelve un `ResultadoEnvio` con el `outcome` cerrado.
 
     - `datos`: rutas extra (`cita.fecha`) que arma el código del SERVIDOR que dispara el envío; ver `contexto`.
     - `clave_idempotencia`: repetir la misma llamada (mismo negocio, conversación y clave) no duplica el envío.
-    - `actor`: quién lo pide, para la auditoría (`agent`, un usuario, un evento)."""
+    - `actor`: quién lo pide, para la auditoría (`agent`, un usuario, un evento).
+    - `sin_mensaje_de_fallo`: con la ventana de WhatsApp cerrada y sin plantilla de Meta utilizable, NO deja el mensaje
+      `failed` con `sin_plantilla` (el resultado y la auditoría sí). Lo pide quien tiene un camino de respaldo (el
+      aviso por evento, ADR-0178 D3): si cae a él, un `failed` de más sería una alerta falsa en el panel.
+    - `antes_de_enviar`: guarda del llamante, corre DESPUÉS de la idempotencia (un envío ya hecho sigue siendo
+      `DUPLICADO` aunque la guarda ya no lo permitiría hoy) y ANTES de armar y encolar. Devuelve un motivo para no
+      enviar (resultado `GUARDA`) o "" para seguir. Si lanza, el resultado es `ERROR_INTERNO` (ambiguo)."""
     traza = _Traza(get_current_tenant_id(), conversation_id, clave, actor)
     try:
-        resultado = await _enviar(traza, datos, clave_idempotencia)
+        resultado = await _enviar(traza, datos, clave_idempotencia, sin_mensaje_de_fallo, antes_de_enviar)
     except Exception as exc:
         log.error("option_send_internal_error", tenant_id=str(traza.tenant_id), error=type(exc).__name__)
         resultado = ev.ResultadoEnvio(False, ev.ERROR_INTERNO, send_id=traza.send_id, motivo=type(exc).__name__)
-    await _rastro(traza, resultado)
+    try:
+        await _rastro(traza, resultado)
+    except Exception:  # la auditoría no cambia lo que ya pasó: un `enviado` no puede volverse un error del llamante
+        log.error("option_send_rastro_error", tenant_id=str(traza.tenant_id), exc_info=True)
     return resultado
 
 
-async def _enviar(traza: _Traza, datos: dict[str, Any] | None, clave_idempotencia: str | None) -> ev.ResultadoEnvio:
+async def _enviar(
+    traza: _Traza,
+    datos: dict[str, Any] | None,
+    clave_idempotencia: str | None,
+    sin_mensaje_de_fallo: bool = False,
+    antes_de_enviar: Callable[[], Awaitable[str]] | None = None,
+) -> ev.ResultadoEnvio:
     from core.gateway.sender import (
         _registrar_si_pausada,
         interactivo_valido,
@@ -184,6 +202,8 @@ async def _enviar(traza: _Traza, datos: dict[str, Any] | None, clave_idempotenci
     id_mensaje = f"{PREFIJO_ID}:{send_id}"
     if clave_idempotencia and await _ya_enviado(tenant_id, id_mensaje):
         return ev.ResultadoEnvio(False, ev.DUPLICADO, send_id=send_id)
+    if antes_de_enviar is not None and (motivo_guarda := await antes_de_enviar()):
+        return ev.ResultadoEnvio(False, ev.GUARDA, send_id=send_id, motivo=motivo_guarda)
 
     try:
         contexto_ = contexto.armar(definicion, {"cliente.nombre": customer.name, "negocio.nombre": negocio}, datos)
@@ -230,14 +250,15 @@ async def _enviar(traza: _Traza, datos: dict[str, Any] | None, clave_idempotenci
     if decision.via is None:
         # WhatsApp con la ventana cerrada y sin plantilla utilizable: un texto libre lo rechaza Meta (131047).
         # Queda un mensaje `failed` visible en el panel (como los avisos por evento) y ninguna opción sale.
-        from core.gateway.event_notices import _registrar_sin_plantilla
+        if not sin_mensaje_de_fallo:
+            from core.gateway.event_notices import _registrar_sin_plantilla
 
-        # Id propio por intento: el estable `opt_send:<send_id>` es del mensaje que SÍ sale, y el reintento (con la
-        # plantilla ya aprobada) tiene que poder usarlo.
-        await _registrar_sin_plantilla(
-            conversation.id, f"{id_mensaje}:f{uuid.uuid4().hex[:8]}", f"opciones:{traza.clave}",
-            _DETALLE.get(decision.motivo, decision.motivo),
-        )
+            # Id propio por intento: el estable `opt_send:<send_id>` es del mensaje que SÍ sale, y el reintento (con
+            # la plantilla ya aprobada) tiene que poder usarlo.
+            await _registrar_sin_plantilla(
+                conversation.id, f"{id_mensaje}:f{uuid.uuid4().hex[:8]}", f"opciones:{traza.clave}",
+                _DETALLE.get(decision.motivo, decision.motivo),
+            )
         return ev.ResultadoEnvio(False, ev.SIN_PLANTILLA, send_id=send_id, motivo=decision.motivo)
 
     if proveedor == "meta" and decision.via in (ev.INTERACTIVO, ev.PLANTILLA) and await _pausada_por_uso(tenant_id, credenciales):

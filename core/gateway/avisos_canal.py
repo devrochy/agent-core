@@ -42,6 +42,9 @@ from sqlalchemy import select
 from core.db.models import ChannelConnection, Conversation
 from core.db.session import get_session
 from core.gateway.connection_types import capacidades_de, tipo_de_conexion
+from core.kernel.mensajes import (
+    COBRANZA,  # el conjunto vive en el kernel desde ADR-0178 D3; este módulo lo reexporta
+)
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 
@@ -57,9 +60,6 @@ TIPOS_DE_TEXTO: tuple[str, ...] = (QR, WEB, MESSENGER, INSTAGRAM)
 # Canales de Meta con ventana de 24 h para el asistente aunque no tengan plantillas (la tabla de C1 no lo dice:
 # `ventana_24h` allí significa «ventana + plantilla»; `sender.validate_service_window` es lo que rige).
 CON_VENTANA = frozenset({MESSENGER, INSTAGRAM})
-# Eventos de cobranza (Ley 2300, HU-SUB-18): sin garantía de horario en la entrega por QR (ver el docstring).
-COBRANZA = frozenset({"subscription.charge_created", "subscription.charge_reminder", "subscription.paused"})
-
 # Vías de la decisión.
 LEGACY = "legacy"  # lo de siempre (WhatsApp Meta, o un canal sin texto definido que ya tenía su camino)
 TEXTO = "texto"
@@ -103,11 +103,24 @@ def decidir_via_aviso(
         # QR ya tenía su camino (hoy deja un `sin_plantilla` visible en el panel): se conserva. El resto no tenía
         # ni conversación que encontrar, así que no hay nada que conservar.
         return DecisionAviso(LEGACY if canal == "whatsapp" else OMITIDO, tipo, SIN_RESPALDO)
-    if tipo == QR and evento in COBRANZA:
-        return DecisionAviso(LEGACY, tipo, COBRANZA_SIN_HORARIO)
-    if tipo in CON_VENTANA and not ventana_abierta:
-        return DecisionAviso(OMITIDO, tipo, VENTANA_CERRADA)
+    motivo = bloqueo_de_canal(tipo, evento, ventana_abierta)
+    if motivo == COBRANZA_SIN_HORARIO:
+        return DecisionAviso(LEGACY, tipo, motivo)
+    if motivo:
+        return DecisionAviso(OMITIDO, tipo, motivo)
     return DecisionAviso(TEXTO, tipo)
+
+
+def bloqueo_de_canal(tipo: str | None, evento: str, ventana_abierta: bool) -> str:
+    """Motivo por el que un aviso por evento NO puede salir ahora por un canal de texto, o "" si puede. Pura. Es la
+    regla de D2 (cobranza fuera de QR, ventana de 24 h en Messenger e Instagram) en un solo lugar, para que el texto
+    de respaldo (`decidir_via_aviso`) y el puente a plantillas con opciones (`avisos_opciones`, D3) no diverjan. No
+    mira lo dinámico del QR (modo, tope, pausa): eso es `waweb_bloqueo`, que consulta la base y Redis."""
+    if tipo == QR and evento in COBRANZA:
+        return COBRANZA_SIN_HORARIO
+    if tipo in CON_VENTANA and not ventana_abierta:
+        return VENTANA_CERRADA
+    return ""
 
 
 def texto_del_canal(entrada: dict[str, Any], tipo: str | None) -> str:
@@ -189,7 +202,18 @@ async def conversacion_de_texto_para(customer_id: uuid.UUID, evento: str) -> Con
     if not filas:
         return None
     entrada = (await load_templates_map(tenant_id)).get(evento) or {}
+    # D3: una plantilla con opciones mapeada al evento también es contenido para el canal (su menú es el aviso).
+    # Solo si la bandera `opciones_directas` está encendida: apagada, la elección es exactamente la de D2.
+    from core.gateway.avisos_opciones import _opciones_habilitadas
+
+    con_opciones = _hay_puente(evento, entrada) and await _opciones_habilitadas(tenant_id)
     for fila in filas:
-        if texto_del_canal(entrada, tipo_de_conexion(fila.channel, "")):
+        if con_opciones or texto_del_canal(entrada, tipo_de_conexion(fila.channel, "")):
             return fila
     return filas[0]
+
+
+def _hay_puente(evento: str, entrada: dict[str, Any]) -> bool:
+    from core.gateway.avisos_opciones import clave_de_opciones
+
+    return clave_de_opciones(evento, entrada) is not None
