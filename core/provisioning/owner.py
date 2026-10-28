@@ -19,12 +19,12 @@ from __future__ import annotations
 import smtplib
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from core.alta_acceso import VIGENCIA_ENLACE, InvitacionOwner, asunto_y_cuerpo
 from core.db.models import Admin, Conversation, ProvisioningRequest
 from core.db.session import get_owned, get_session
 from core.gateway.event_notices import clean_param
@@ -35,7 +35,6 @@ from core.shared.texto_seguro import enmascarar_correo
 
 log = get_logger(__name__)
 
-VIGENCIA_ENLACE = timedelta(days=7)
 EVENTO_INVITACION = "provisioning.invitation"
 
 # Aviso por WhatsApp (dentro de la ventana de 24 h). El negocio vendedor lo puede
@@ -52,20 +51,6 @@ TEXTO_WHATSAPP = (
 class CuentaDelOwner:
     admin_id: uuid.UUID
     creada_en_esta_alta: bool
-
-
-@dataclass(frozen=True)
-class InvitacionOwner:
-    invitation_id: uuid.UUID
-    admin_id: uuid.UUID
-    email: str
-    con_enlace: bool
-    enlace: str
-    vence: datetime | None
-
-    @property
-    def vence_texto(self) -> str:
-        return self.vence.strftime("%d/%m/%Y") if self.vence else ""
 
 
 # ------------------------------------------------------------------ cuenta e invitación
@@ -193,30 +178,6 @@ async def preparar_invitacion(
 
 
 # ------------------------------------------------------------------ entrega
-def asunto_y_cuerpo(inv: InvitacionOwner, *, negocio: str, nombre: str | None) -> tuple[str, str]:
-    """El asunto no lleva el nombre del negocio (lo escribe el comprador: sirve para
-    phishing); el cuerpo sí, ya validado sin enlaces."""
-    saludo = f"Hola {nombre}," if nombre else "Hola,"
-    if inv.con_enlace:
-        asunto = "Tu acceso a SolversHub"
-        cuerpo = (
-            f"{saludo}\n\n"
-            f"Tu negocio «{negocio}» ya está creado en SolversHub.\n\n"
-            "Para entrar, define tu contraseña con este enlace "
-            f"(es de un solo uso y vence el {inv.vence_texto}):\n{inv.enlace}\n\n"
-            "Si no fuiste tú, ignora este correo: sin este enlace nadie puede entrar con tu correo."
-        )
-    else:
-        asunto = "Te invitaron a un negocio en SolversHub"
-        cuerpo = (
-            f"{saludo}\n\n"
-            f"Te invitaron como dueño del negocio «{negocio}» en SolversHub.\n"
-            f"Entra con tu cuenta ({inv.email}) y acepta la invitación:\n{inv.enlace}\n\n"
-            "Si no reconoces esta compra, no la aceptes."
-        )
-    return asunto, cuerpo
-
-
 async def entregar_por_correo(inv: InvitacionOwner, *, negocio: str, nombre: str | None) -> str:
     """`enviado` | `sin_smtp` (correo de sistema sin configurar, ADR-0098). Un fallo del
     SMTP es transitorio: el outbox reintenta y este canal se vuelve a intentar."""

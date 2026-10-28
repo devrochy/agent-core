@@ -10437,7 +10437,7 @@
           "admin · plataforma"
         ],
         "summary": "Create Tenant",
-        "description": "Alta de un negocio (master): tenant + asistente + cuenta admin opcional.",
+        "description": "Alta de un negocio (master): tenant + asistente + acceso del dueño por correo.\n\nCon `admin_email` la cuenta del dueño nace sin contraseña y le llega un enlace de un solo\nuso para definirla (ADR-0175). Si el correo no sale, el negocio se crea igual y la\nrespuesta lo dice (`invitation.estado`); se reenvía con `owner-invitation/resend`.",
         "operationId": "create_tenant_api_v1_admin_platform_tenants_post",
         "parameters": [
           {
@@ -10474,6 +10474,67 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TenantCreated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/tenants/{tenant_id}/owner-invitation/resend": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Reenvía el acceso al dueño del negocio",
+        "description": "Reenvía el correo de acceso a la cuenta de la invitación `owner` pendiente del negocio\n(ADR-0175). El destinatario no se recibe: es el de la invitación. Reusa el enlace mientras\nvigente y lo renueva si venció.",
+        "operationId": "resend_owner_invitation_api_v1_admin_platform_tenants__tenant_id__owner_invitation_resend_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantOwnerInvitation"
                 }
               }
             }
@@ -44854,7 +44915,8 @@
           "admin_password": {
             "type": "string",
             "title": "Admin Password",
-            "default": ""
+            "default": "",
+            "deprecated": true
           }
         },
         "type": "object",
@@ -44880,6 +44942,16 @@
             },
             "type": "array",
             "title": "Steps"
+          },
+          "invitation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TenantOwnerInvitation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -44942,6 +45014,48 @@
         ],
         "title": "TenantOption",
         "description": "Tenant al que el admin tiene acceso (selector de negocio)."
+      },
+      "TenantOwnerInvitation": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "enum": [
+              "enviado",
+              "sin_smtp",
+              "fallido",
+              "ya_emitida",
+              "ya_es_miembro"
+            ],
+            "title": "Estado"
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "enlace",
+              "app"
+            ],
+            "title": "Tipo"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado",
+          "tipo"
+        ],
+        "title": "TenantOwnerInvitation",
+        "description": "Qué pasó con el acceso del dueño (ADR-0175). Nunca lleva el enlace ni el token."
       },
       "TenantPlanUpdate": {
         "properties": {
