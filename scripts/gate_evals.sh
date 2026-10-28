@@ -6,7 +6,7 @@
 #   bash scripts/gate_evals.sh record   # regrabar el gate: LLM real (~9 llamadas, ~0,01 USD), con OK del dueño
 #   bash scripts/gate_evals.sh off      # en vivo, como el push a develop
 #
-# Requiere una base RECIÉN migrada y sembrada, igual que el job `evals-replay` de `ci.yml`
+# Requiere una base RECIÉN migrada y sembrada, igual que el paso de replay de `integracion` en `ci.yml`
 # (`agent-core db migrate` + `ADMIN_PASSWORD=admin123 python scripts/init_db.py`). Con una base ya
 # usada el prompt cambia (por ejemplo, las tools `sub_*` en el flujo) y el replay no coincide.
 set -euo pipefail

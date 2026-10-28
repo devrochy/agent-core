@@ -5,8 +5,9 @@ name: CI
 #     capas, unitarios y gitleaks sobre los commits de la PR; si la PR toca rutas
 #     que cubre la integración, además el subconjunto crítico `-m aislamiento`
 #     (RLS forzada, aislamiento entre tenants, webhooks, IDOR). Además, el gate de
-#     evals y journeys en REPLAY (job `evals-replay`): desde las grabaciones de
-#     `evals/cassettes/`, sin red ni LLM_API_KEY (adenda 2026-10-10 de ADR-0120).
+#     evals y journeys en REPLAY (último paso del job `integracion`): desde las
+#     grabaciones de `evals/cassettes/`, sin red ni LLM_API_KEY (adenda 2026-10-10 de
+#     ADR-0120; fundido en `integracion` por la adenda 2026-10-28).
 #   - push → develop (post-merge), PR → main y push → main: nivel COMPLETO.
 #     Integración completa, gitleaks sobre toda la historia y, hacia main, drift de
 #     docs/openapi.json. El gate de evals y journeys con el LLM REAL corre SOLO en la
@@ -124,79 +125,6 @@ jobs:
             "$BIN" detect --source . --redact -v
           fi
 
-  evals-replay:
-    # Gate de evals y journeys en replay (adenda 2026-10-10 de ADR-0120, adenda de ADR-0119):
-    # las respuestas del LLM salen de `evals/cassettes/`, sin red ni LLM_API_KEY, así que corre
-    # en TODAS las PRs a develop (también las de Dependabot). Si la PR cambia un prompt, una tool
-    # o el flujo sin regrabar, falla con exit 3, el diff y el comando para regrabar
-    # (`bash scripts/gate_evals.sh record`, con OK del dueño). También corre en el push a
-    # develop (sin costo). No mide el modelo: eso lo hace el gate en vivo de la PR → main.
-    # Sin `needs`: el nivel rápido es «PR a una rama que no es main», que se lee del evento; no hace falta un job
-    # aparte (cada uno hacía una cola de runner propia de 2–4 min con el host cargado).
-    if: ${{ (github.event_name == 'pull_request' && github.base_ref != 'main' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/develop') }}
-    runs-on: [self-hosted, linux, x64]
-    permissions:
-      contents: read
-      # Para bajar la imagen de Postgres del CI desde GHCR.
-      packages: read
-    services:
-      postgres:
-        image: ghcr.io/${{ github.repository_owner }}/solvershub-postgres:pg17-postgis
-        credentials:
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          POSTGRES_USER: agent_core
-          POSTGRES_PASSWORD: agent_core
-          POSTGRES_DB: agent_core
-        ports: ["5432"]
-        # Datos en memoria: en el runner self-hosted cada job dejaba un volumen anónimo de
-        # Postgres (~70 MB) que nadie borraba; en octubre llenaron 69 GB del disco.
-        options: >-
-          --tmpfs /var/lib/postgresql/data
-          --health-cmd "pg_isready -U agent_core"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-      redis:
-        image: redis:7-alpine
-        ports: ["6379"]
-        options: >-
-          --tmpfs /data
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-retries 12
-    env:
-      # Sin clave a propósito: replay nunca llama al LLM real.
-      LLM_API_KEY: ""
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: URLs del stack (puertos dinámicos)
-        run: |
-          PG=${{ job.services.postgres.ports['5432'] }}
-          RD=${{ job.services.redis.ports['6379'] }}
-          {
-            echo "DATABASE_URL=postgresql+asyncpg://app_runtime:app_runtime@localhost:${PG}/agent_core"
-            echo "MIGRATIONS_DATABASE_URL=postgresql+asyncpg://agent_core:agent_core@localhost:${PG}/agent_core"
-            echo "REDIS_URL=redis://localhost:${RD}/0"
-          } >> "$GITHUB_ENV"
-
-      - uses: ./.github/actions/preparar-entorno
-
-      - name: Migrar y sembrar (base nueva, igual que al grabar)
-        env:
-          ADMIN_PASSWORD: admin123
-        run: |
-          agent-core db migrate
-          python scripts/init_db.py
-
-      - name: Gate de evals y journeys (replay, sin LLM)
-        # Mismos argumentos que el gate en vivo del push a develop (scripts/gate_evals.sh).
-        run: bash scripts/gate_evals.sh replay
-
   integracion:
     # Seguridad: no ejecutar workflows de PRs de forks en el runner self-hosted.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
@@ -247,8 +175,12 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
         run: |
+          # `replay`: gate de evals y journeys sin LLM (PR a una rama que no es main, o push a develop).
+          # No depende de `relevante`: una PR que solo toca `evals/` o `scripts/gate_evals.sh` no está
+          # en RUTAS_INTEGRACION y el replay es lo único que la verifica.
           if [ "${{ github.event_name }}" = "pull_request" ] && [ "$BASE" != "main" ]; then
             echo "nivel=rapido" >> "$GITHUB_OUTPUT"
+            echo "replay=true" >> "$GITHUB_OUTPUT"
             # Si el diff falla, el paso falla (`-e`): nunca se salta la integración a ciegas.
             # `--no-renames`: mover un archivo fuera de `core/` también cuenta como tocarlo.
             CAMBIOS="$(git diff --no-renames --name-only "origin/${BASE}...HEAD")"
@@ -261,11 +193,16 @@ jobs:
           else
             echo "nivel=completo" >> "$GITHUB_OUTPUT"
             echo "relevante=true" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/develop" ]; then
+              echo "replay=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "replay=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
-      # Si la PR no toca rutas que cubre la integración, los servicios ya están arriba pero no se corre nada.
+      # Si la PR no toca rutas que cubre la integración ni corre el replay, los servicios ya están arriba pero no se corre nada.
       - name: URLs del stack (puertos dinámicos)
-        if: steps.nivel.outputs.relevante == 'true'
+        if: steps.nivel.outputs.relevante == 'true' || steps.nivel.outputs.replay == 'true'
         # El contexto `job` no está disponible en el `env` del job: se exportan aquí.
         run: |
           PG=${{ job.services.postgres.ports['5432'] }}
@@ -277,10 +214,11 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - uses: ./.github/actions/preparar-entorno
-        if: steps.nivel.outputs.relevante == 'true'
+        if: steps.nivel.outputs.relevante == 'true' || steps.nivel.outputs.replay == 'true'
 
       - name: Migrar y sembrar
-        if: steps.nivel.outputs.relevante == 'true'
+        id: migrar
+        if: steps.nivel.outputs.relevante == 'true' || steps.nivel.outputs.replay == 'true'
         env:
           # Password determinística solo para que los tests de integración puedan
           # loguearse (default de init_db.py es aleatoria, correcto en producción).
@@ -316,9 +254,20 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+      # Gate de evals y journeys en replay (adenda 2026-10-10 de ADR-0120, adenda de ADR-0119): las respuestas del
+      # LLM salen de `evals/cassettes/`, sin red ni LLM_API_KEY (el script la fuerza vacía). Si la PR cambia un
+      # prompt, una tool o el flujo sin regrabar, falla con exit 3, el diff y el comando para regrabar
+      # (`bash scripts/gate_evals.sh record`, con OK del dueño). No mide el modelo: eso lo hace el gate en vivo de la PR → main.
+      # Corre DESPUÉS de los tests y contra `agent_core` sin clonar: los workers de xdist trabajan en `agent_core_gwN`,
+      # así que `agent_core` sigue recién migrada y sembrada, que es lo que exige el replay. Redis `/0`; los workers usan `/1..N`.
+      # Se ejecuta aunque los tests hayan fallado, para ver los dos resultados (hasta antes de fundirlo eran jobs separados).
+      - name: Gate de evals y journeys (replay, sin LLM)
+        if: ${{ !cancelled() && steps.nivel.outputs.replay == 'true' && steps.migrar.outcome == 'success' }}
+        run: bash scripts/gate_evals.sh replay
+
       - name: Gate de evals (subconjunto crítico, LLM real)
         # Solo en la PR → main (la release): el único punto del CI que gasta LLM. En el
-        # push a develop el gate corre en replay (job `evals-replay`), sin costo.
+        # push a develop el gate corre en replay (último paso de `integracion`), sin costo.
         if: steps.nivel.outputs.nivel == 'completo' && github.event_name == 'pull_request' && github.base_ref == 'main' && github.actor != 'dependabot[bot]'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
