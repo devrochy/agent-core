@@ -23,6 +23,7 @@ from core.kernel.oferta import sin_motor_activo, solo_con_motor_activo
 from core.mcp.types import BaseSkill, MCPTool, RegistroCreado, ToolContext
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from pack_cobranza.enlazar import cliente_por_telefono
 from pack_cobranza.models import (
     Abono,
     Cartera,
@@ -55,7 +56,7 @@ def _money(v: Decimal | float | None, moneda: str = "COP") -> str:
 
 
 async def _cliente_de_customer(session, customer_id: uuid.UUID) -> Cliente | None:
-    return (
+    cliente = (
         await session.execute(
             select(Cliente).where(
                 Cliente.tenant_id == get_current_tenant_id(),
@@ -64,6 +65,10 @@ async def _cliente_de_customer(session, customer_id: uuid.UUID) -> Cliente | Non
             )
         )
     ).scalar_one_or_none()
+    if cliente is not None:
+        return cliente
+    # Un deudor cargado a mano no trae `customer_id`: se enlaza por teléfono (HU-CRM-15).
+    return await cliente_por_telefono(session, customer_id)
 
 
 async def _prestamo_activo(session, cliente_id: uuid.UUID) -> Prestamo | None:
