@@ -88,6 +88,7 @@ def test_nadie_fuera_del_modulo_ni_de_la_ruta_master_toca_la_bandera() -> None:
         "core/tools/core_skill.py",
         "core/api/routers/plantillas_opciones.py",
         "core/admin/catalogo_mensajes_service.py",  # catálogo de mensajes (solo lectura): omite `opciones` si está apagada
+        "core/gateway/avisos_opciones.py",  # puente evento→opciones (ADR-0178 D3): solo lee la bandera antes de enviar
     }
     # La ruta master-only de plataforma es la ÚNICA que llama a `fijar` (y a `leer` para el GET).
     escritor = "core/api/routers/platform.py"

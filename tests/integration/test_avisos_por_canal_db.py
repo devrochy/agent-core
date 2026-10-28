@@ -409,14 +409,14 @@ async def test_los_textos_por_canal_se_validan_y_sobreviven_a_guardar_otra_cosa(
     assert r.status_code == 200, r.text
     assert r.json()["mapping"][EVENTO] == {
         "template": "", "language": "es", "variables": [], "fallback_text": "Texto de WhatsApp",
-        "fallback_text_by_channel": {"webchat": TEXTO},
+        "fallback_text_by_channel": {"webchat": TEXTO}, "option_template": "",  # D3: campo nuevo, vacío por defecto
     }
     # Un panel anterior que no manda el evento (sin plantilla ni texto general) tampoco los pierde.
     r = await app_client.put(MAP, headers=h, json={"mapping": {}})
     assert r.status_code == 200, r.text
     assert r.json()["mapping"][EVENTO] == {
         "template": "", "language": "es", "variables": [], "fallback_text": "",
-        "fallback_text_by_channel": {"webchat": TEXTO},
+        "fallback_text_by_channel": {"webchat": TEXTO}, "option_template": "",  # D3: campo nuevo, vacío por defecto
     }
     # Mandarlo vacío lo borra; un evento sin nada deja de guardarse.
     todos = {evento: {"fallback_text_by_channel": {}} for evento in r.json()["mapping"]}  # otros tests dejan los suyos

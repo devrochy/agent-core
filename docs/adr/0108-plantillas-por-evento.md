@@ -139,3 +139,48 @@ el aviso también sale como texto por esos canales. **Con la bandera apagada nad
 - **Qué conversación.** Se busca la de WhatsApp como siempre; solo con la bandera, si el cliente no tiene, la más reciente de
   web/Messenger/Instagram (prefiriendo una con texto definido para ese evento).
 - **Pendiente (D3).** Que el mapa de eventos apunte a una plantilla con opciones; estos textos no llevan botones.
+
+## Adenda (2026-10-28) — un evento puede apuntar a una plantilla con opciones (ADR-0178, pista D3)
+
+Une los avisos por evento con las plantillas con opciones de ADR-0172. Clave opcional y compatible hacia atrás
+`option_template` en `message_templates_map[<evento>]`: la clave de una plantilla con opciones PUBLICADA del negocio.
+Funciona solo con las DOS banderas del negocio encendidas (`avisos_por_canal` de D2 y `opciones_directas` de ADR-0172, las
+dos del master y apagadas por defecto); con cualquiera apagada el aviso es EXACTAMENTE el de siempre (prueba de regresión de
+los 8 eventos). Código: `core/gateway/avisos_opciones.py`, llamado desde `send_event_notice`.
+
+- **Qué sale.** El aviso es la plantilla con opciones (su menú es el aviso: no se manda además el texto de respaldo), por la
+  cascada de `enviar_opciones` (C1/C2): interactivo con la ventana de 24 h abierta, plantilla de Meta aprobada `<clave>_v<n>`
+  con la ventana cerrada, menú numerado de texto en QR, chat web, Messenger e Instagram. WhatsApp por Twilio/Plivo, correo y
+  el playground no entran.
+- **Contexto del servidor.** Las variables y los argumentos de las acciones salen del contexto que arma el handler del evento,
+  restringido a las rutas de ese evento que están en `kernel/opciones/contexto.RUTAS_DE_DATOS` (las rutas de `EVENTOS` de los
+  eventos que no son de cobranza, menos la base). Nunca del texto del cliente ni del LLM. Ninguna ruta es un id, así que no hay
+  un id ajeno que pueda llegar a un argumento de tool. `EVENTOS` y `COBRANZA` viven ahora en `core/kernel/mensajes/eventos.py`
+  (y se reexportan).
+- **Invitación del comprador excluida** (`provisioning.invitation`). El negocio en scope es el del vendedor y `negocio.nombre`/`cliente.nombre`
+  (la base) los resuelve el envío desde la conversación, no del evento: una plantilla que los citara diría el dato equivocado. Por eso
+  `SIN_OPCIONES = COBRANZA + provisioning.invitation` (kernel) no admite plantilla con opciones; su `invitacion.correo` no está en `RUTAS_DE_DATOS`.
+- **Cuándo cae al camino de siempre** (D2 o legacy, sin dejar un `failed` de más): plantilla sin publicar, retirada, borrada
+  o de otro negocio; contexto incompleto (la plantilla pide un dato que el evento no trajo); sin plantilla de Meta aprobada;
+  cola que rechaza; QR con la política antibaneo en contra; Messenger/Instagram sin ventana; **conversación con actividad en los
+  últimos 15 minutos en un canal de texto (la guarda corre dentro del envío, después de la idempotencia: el menú de un envío
+  previo del mismo aviso también cuenta como actividad y un reintento no puede caer al texto)** (un menú fuera de turno se vuelve el último saliente y se comería el «1» que el
+  cliente dirigía al agente, adenda C2). Queda `event_notice_opciones_fallback` (log) y `event_notice_options_fallback_total`
+  (métrica) con el motivo, nunca valores. Un envío ya hecho (reintento del outbox) vuelve como `duplicado`; un resultado
+  ambiguo (`internal_error`, que pudo ocurrir tras encolar) NO cae al texto: se reintenta (el `send_id` es determinista).
+- **Cobranza excluida.** `charge_created`, `charge_reminder` y `paused` no pueden apuntar a una plantilla con opciones, en
+  ningún canal (el PUT lo rechaza y el envío lo ignora si el mapa se guardó a mano). Precaución propia de D3, más estricta que
+  D2: aquí el aviso suma caminos de entrega (cola diferida de QR, reintentos del outbox, menús que el cliente contesta días
+  después) cuyo horario legal (Ley 2300, HU-SUB-18) no se puede garantizar. Reabrirlo exige una garantía de horario en la
+  entrega.
+- **`PUT /settings/message-templates`** valida `option_template` (forma, existe en el negocio, publicada con versión vigente
+  no retirada, no borrada y que los datos que cita los tenga el evento); omitirlo conserva lo guardado y `""` lo borra.
+- **Límites conocidos.** (1) Si `opciones_directas` se apaga entre el primer envío y un reintento, el reintento cae al texto
+  y el cliente recibe dos avisos (ventana de segundos). (2) La validación del PUT envejece: si después se retira la plantilla
+  o se publica una versión que cita otros datos, el aviso cae al texto (visible en la métrica, aún no en el panel). (3) La
+  única tool apta hoy, `list_client_appointments`, no recibe argumentos: de D3 solo se aprovechan hoy las variables del cuerpo y
+  las citas `{ctx.x}`; las rutas de evento como `args_contexto` quedan listas para la primera tool que las pida (los valores
+  pasan por `clean_param` y por el schema de la tool; revisar si alguno proviene de texto libre del cliente antes de marcar
+  una tool apta). (4) `enviar-prueba` y la tool del agente no pasan `datos`: una plantilla que cita datos de un evento no se
+  puede probar desde el editor (siempre `context_incomplete`); falta una vista previa con valores de muestra.
+- **Sin migración.** OpenAPI: campo `option_template` en `EventTemplateEntry`.

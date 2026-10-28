@@ -43717,6 +43717,11 @@
             "type": "object",
             "title": "Fallback Text By Channel",
             "default": {}
+          },
+          "option_template": {
+            "type": "string",
+            "title": "Option Template",
+            "default": ""
           }
         },
         "type": "object",
