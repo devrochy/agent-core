@@ -1,12 +1,13 @@
 """Catálogo unificado de mensajes del negocio, de SOLO LECTURA (pista D0, ADR-0178).
 
-Un negocio tiene sus mensajes repartidos en cuatro inventarios, con editores y dialectos de variables distintos:
+Un negocio tiene sus mensajes repartidos en cinco inventarios, con editores y dialectos de variables distintos:
 
 - `meta`: plantillas de WhatsApp (`message_templates`, espejo de lo que dice Meta);
 - `evento`: avisos por evento (ADR-0108): cada clave de `event_notices.EVENTOS` con su mapeo en
   `app_settings.message_templates_map`;
 - `opciones`: plantillas con opciones (SPEC-40, ADR-0172): `option_templates` y su versión vigente;
-- `texto_pack`: los textos configurables de los packs habilitados (`plugin_configs`, cifrado con Fernet).
+- `texto_pack`: los textos configurables de los packs habilitados (`plugin_configs`, cifrado con Fernet);
+- `guardado`: los mensajes guardados del negocio (`mensajes_guardados`, ADR-0178 D4): respuestas rápidas del operador.
 
 Este módulo los lista juntos, con una forma común, y apunta a cada editor. NO migra, NO escribe y NO cambia el
 comportamiento de ninguno: cada fuente sigue siendo la de siempre. Tampoco toca la red: a diferencia de
@@ -39,14 +40,16 @@ from sqlalchemy import select
 
 from core.agents.spec import CORE_PACK_ID, enabled_packs, leer_spec_activo
 from core.db.models import (
+    MensajeGuardado,
     MessageTemplate,
     OptionTemplate,
     OptionTemplateVersion,
     WabaAccount,
 )
 from core.db.session import get_session
-from core.gateway.connection_types import canales_con
+from core.gateway.connection_types import canales_con, connection_types
 from core.gateway.event_notices import EVENTOS, load_templates_map, template_placeholders
+from core.kernel.mensajes import variables_de
 from core.kernel.opciones import bandera
 from core.kernel.opciones.definicion import Definicion
 from core.plugin_manager import plugin_manager
@@ -56,8 +59,8 @@ from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
-TipoMensaje = Literal["meta", "evento", "opciones", "texto_pack"]
-TIPOS: tuple[TipoMensaje, ...] = ("meta", "evento", "opciones", "texto_pack")
+TipoMensaje = Literal["meta", "evento", "opciones", "texto_pack", "guardado"]
+TIPOS: tuple[TipoMensaje, ...] = ("meta", "evento", "opciones", "texto_pack", "guardado")
 
 # Tope de entradas por tipo: Meta permite 250 plantillas por WABA y un negocio tiene pocas conexiones, así que en
 # la práctica no se alcanza; si pasara, la respuesta lo dice (`truncado`) en vez de crecer sin límite.
@@ -83,6 +86,7 @@ _LLAVES = re.compile(r"\{([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*)\}")
 #   (`core_handlers`); D2 los llevará a los canales de texto.
 # - `opciones`: botones (la ejecución directa); en los canales de texto hoy solo sale el texto numerado sin acción.
 # - `texto_pack`: un texto de pack sale por WhatsApp salvo que la marca de su campo diga otro canal.
+# - `guardado`: texto libre, no exige capacidad: sus canales son los que el mensaje declara (`canales_de_guardado`).
 _CAPACIDAD_POR_TIPO: dict[TipoMensaje, str] = {
     "meta": "plantilla_aprobada",
     "evento": "plantilla_aprobada",
@@ -91,11 +95,24 @@ _CAPACIDAD_POR_TIPO: dict[TipoMensaje, str] = {
 }
 
 
+def canales_de_guardado(tipos_de_conexion: list[str]) -> list[str]:
+    """Canales de un mensaje guardado: los de los tipos de conexión que declara, sin repetir y en el orden del
+    catálogo; vacío = todos los que atienden conversaciones de clientes (no el playground)."""
+    elegidos = set(tipos_de_conexion)
+    canales: list[str] = []
+    for t in connection_types():
+        if t.produces_conversations and t.channel and (not elegidos or t.id in elegidos) and t.channel not in canales:
+            canales.append(t.channel)
+    return canales
+
+
 def canales_de(tipo: TipoMensaje, marca: str | None = None) -> list[str]:
     """Canales en los que este tipo de mensaje se entrega hoy. Un texto de pack trae su canal en la marca del campo
     (hay textos de correo); si la marca no es un canal conocido, vale el del tipo."""
     if marca in CANALES_DE_MARCA:
         return [str(marca)]
+    if tipo == "guardado":
+        return canales_de_guardado([])
     return canales_con(_CAPACIDAD_POR_TIPO[tipo])
 
 
@@ -411,6 +428,43 @@ async def _entradas_de_packs(tenant_id: uuid.UUID) -> list[Entrada]:
     return salida[:MAX_POR_TIPO]
 
 
+# ---------------------------------------------------------------- guardado
+async def _entradas_de_guardados(tenant_id: uuid.UUID) -> tuple[list[Entrada], bool]:
+    """Los mensajes guardados vivos del negocio, archivados incluidos (el estado lo dice)."""
+    async with get_session() as session:
+        filas = (
+            (
+                await session.execute(
+                    select(MensajeGuardado)
+                    .where(MensajeGuardado.tenant_id == tenant_id, MensajeGuardado.deleted_at.is_(None))
+                    .order_by(MensajeGuardado.clave)
+                    .limit(MAX_POR_TIPO + 1)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    salida = [
+        Entrada(
+            id=f"guardado:{m.clave}",
+            tipo="guardado",
+            clave=m.clave,
+            nombre=m.titulo,
+            idioma=None,
+            estado=m.estado,
+            estado_detalle=None,
+            canales_soportados=canales_de_guardado(list(m.canales or [])),
+            variables=variables_de(m.texto),
+            dialecto_variables="llaves_con_ruta",
+            resumen=_resumen(m.texto),
+            actualizado_en=m.updated_at,
+            fuente=Fuente(editor="guardado", clave=m.clave),
+        )
+        for m in filas[:MAX_POR_TIPO]
+    ]
+    return salida, len(filas) > MAX_POR_TIPO
+
+
 # ---------------------------------------------------------------- servicio
 async def catalogo_de_mensajes(tenant_id: uuid.UUID, tipos: Iterable[TipoMensaje] = TIPOS) -> Catalogo:
     """El catálogo del negocio. `tipos` son los que quien llama puede leer (el router los decide por permiso); los
@@ -438,6 +492,11 @@ async def catalogo_de_mensajes(tenant_id: uuid.UUID, tipos: Iterable[TipoMensaje
             catalogo.omitidas.append(Omitida("opciones", "bandera_apagada"))
     if "texto_pack" in permitidos:
         catalogo.entradas += await _entradas_de_packs(tenant_id)
+    if "guardado" in permitidos:
+        entradas, truncado = await _entradas_de_guardados(tenant_id)
+        catalogo.entradas += entradas
+        if truncado:
+            catalogo.truncado.append("guardado")
 
     for tipo in TIPOS:
         if tipo not in permitidos:
