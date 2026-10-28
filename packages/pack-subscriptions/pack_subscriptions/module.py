@@ -100,6 +100,15 @@ class SubscriptionsModule(BaseModule):
 
         fuentes_de_alta.unregister(PLUGIN_ID)
 
+    # `TENANTS_ROOT/<slug>/planes.json` (HU-SUB-32): el seed genérico lo busca además de `<pack>.json`.
+    archivos_de_seed: tuple[str, ...] = ("planes.json",)
+
+    async def seed_data(self, tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
+        """Catálogo de planes del negocio, idempotente y todo o nada (SPEC-43, HU-SUB-32)."""
+        from pack_subscriptions.seed import seed_planes
+
+        return await seed_planes(tenant_id, data)
+
     async def sembrar_escenario(self, tenant_id: uuid.UUID, escenario: str, entrada: Any) -> Any:
         """Suscripciones activa, por vencer y vencida con cargos y pagos (HU-QA-13)."""
         from core.qa.contrato_datos import EscenarioNoDisponible

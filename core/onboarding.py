@@ -239,16 +239,18 @@ async def sembrar_packs(tenant_id: uuid.UUID, slug: str) -> list[str]:
     for module in plugin_manager.list_modules():
         if module.id == "pack_commerce":
             continue
-        path = tenant_dir(slug) / f"{module.id}.json"
-        if not path.exists():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            log.warning("seed_pack_json_invalido", pack=module.id, slug=slug)
-            continue
-        pasos.extend(await module.seed_data(tenant_id, data))
-        pasos.append(f"{module.id}.json importado")
+        # `<pack>.json`, más los nombres propios que el pack declare (`archivos_de_seed`, p. ej. `planes.json`).
+        for nombre in (f"{module.id}.json", *getattr(module, "archivos_de_seed", ())):
+            path = tenant_dir(slug) / nombre
+            if not path.exists():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                log.warning("seed_pack_json_invalido", pack=module.id, slug=slug, archivo=nombre)
+                continue
+            pasos.extend(await module.seed_data(tenant_id, data))
+            pasos.append(f"{nombre} importado")
     return pasos
 
 
