@@ -109,8 +109,10 @@ el aviso también sale como texto por esos canales. **Con la bandera apagada nad
 - **Cascada** (`core/gateway/avisos_canal.py`, con la tabla de capacidades de C1): WhatsApp Meta → como siempre (plantilla
   aprobada fuera de la ventana, texto dentro). Canal sin plantillas y con texto definido → ese texto. Sin texto definido →
   no se envía, y queda `event_notice_omitido_por_canal` en el log y la métrica `event_notice_omitted_total{evento,canal,motivo}`
-  (antes, silencio). No se escribe un `failed`/`sin_plantilla` para estos casos: esa alerta del panel remedia con plantillas de Meta,
-  que estos canales no tienen.
+  (antes, silencio). Para chat web, Messenger e Instagram no se escribe un `failed`/`sin_plantilla`: esa alerta del panel remedia
+  con plantillas de Meta, que esos canales no tienen. **Excepción conocida:** por QR sin texto definido, o con un evento de
+  cobranza, se conserva el camino de antes, que sí deja un `failed`/`sin_plantilla` visible (el panel dirá «falta plantilla» en un
+  canal sin plantillas; queda para cuando se decida el destino de ese camino).
 - **Políticas de cada canal, intactas.** *QR (ADR-0074/0103):* un aviso es un envío no solicitado y el modo por defecto es «solo
   respuesta», así que solo sale con `waweb_mode = allow_outbound`, con cupo del día y sin pausa (se mira antes de encolar: el
   conector difiere un mensaje bloqueado hasta ~24 h, 00:02 UTC); el delay humano y el contador los sigue poniendo el conector.
@@ -118,8 +120,22 @@ el aviso también sale como texto por esos canales. **Con la bandera apagada nad
   cerrada, como con WhatsApp. *Chat web:* sin ventana ni plantillas.
 - **Cobranza.** Quien decide CUÁNDO se emite un aviso de cobro sigue siendo `pack_subscriptions` (HU-SUB-18: cron, diferido
   del cargo nuevo y reenvío del panel miran el horario legal); este camino no lo cambia. Los eventos `subscription.charge_created`,
-  `charge_reminder` y `paused` **no salen por QR**: el diferimiento del conector podría entregarlos fuera del horario y no se
-  puede garantizar. Sí salen por web, Messenger e Instagram, que entregan al instante.
+  `charge_reminder` y `paused` **no salen por QR** (la API rechaza guardarles texto de QR): el diferimiento del conector podría
+  entregarlos fuera del horario y no se puede garantizar. Costo: un negocio solo-QR no recibe recordatorios de pago por ahí. Lo
+  destraba una enmienda a ADR-0103 para que `outbound_send` falle rápido, en vez de diferir, los mensajes de cobranza. Sí salen por
+  web, Messenger e Instagram, que entregan al instante.
+- **Riesgos aceptados (QR).** `limits.allow_send` lee el contador sin reservar: una ráfaga puede pasar el chequeo y el conector
+  diferir los últimos (hasta ~24 h). Y los avisos comparten el tope de 50/día con las respuestas del bot: una tanda grande puede
+  dejarlas sin cupo. Por eso `waweb_mode = allow_outbound` es una decisión explícita del negocio.
+- **Criterio de retiro de la bandera.** Es un guard de despliegue: cuando los avisos por canal se prueben en test y estén en uso,
+  se retira (el opt-in queda en el texto por canal y, en QR, en `allow_outbound`). Mientras tanto un texto guardado sin bandera se
+  guarda pero no se envía; el master la enciende por negocio.
+- **Ventana.** Para estos avisos una ventana desconocida cuenta como cerrada (como en ADR-0108), mientras que
+  `sender.validate_service_window` la trata como abierta: para avisos lo estricto es lo correcto. Messenger e Instagram figuran con
+  `ventana_24h=False` en la tabla de C1 (allí significa «ventana + plantilla»), por eso `avisos_canal.CON_VENTANA` los declara.
+- **Fuera de alcance de D2.** El reenvío manual del panel (`pack_subscriptions`, `admin_api`) sigue buscando solo WhatsApp:
+  responde `sin_conversacion_whatsapp` aunque el cliente tenga chat web. No hay evidencia de un negocio que pida avisos por
+  Messenger, Instagram o web; QR es el caso real. Los textos por canal son hasta 4 por evento.
 - **Qué conversación.** Se busca la de WhatsApp como siempre; solo con la bandera, si el cliente no tiene, la más reciente de
   web/Messenger/Instagram (prefiriendo una con texto definido para ese evento).
 - **Pendiente (D3).** Que el mapa de eventos apunte a una plantilla con opciones; estos textos no llevan botones.

@@ -279,7 +279,7 @@ async def test_chat_web_con_texto_sale_como_texto_con_variables_del_evento(entor
     r = await _enviar(entorno, _conversacion("web"))
     assert (r.modo, r.detalle) == ("texto", ac.WEB)
     [(texto, kw)] = entorno["textos"]
-    assert texto == ESPERADO and kw == {"client_message_id_prefix": "k:1"}
+    assert texto == ESPERADO and kw == {"client_message_id_prefix": "k:1", "raise_on_window_expired": True}
     assert entorno["plantillas"] == [] and entorno["omitidos"] == []
 
 
@@ -331,12 +331,13 @@ async def test_messenger_e_instagram_respetan_la_ventana(entorno, canal: str) ->
 async def test_si_la_ventana_vence_en_la_carrera_se_omite_y_no_se_reintenta(entorno, monkeypatch) -> None:
     from core.shared.exceptions import OutboundWindowExpiredError
 
-    async def _vencida(*_a, **_k):
+    async def _vencida_si_se_pide(*_a, raise_on_window_expired=False, **_k):
+        assert raise_on_window_expired is True  # el sender real solo lanza si se lo piden; si no, guarda `failed` y da False
         raise OutboundWindowExpiredError("vencida")
 
-    monkeypatch.setattr(sender_mod, "send_to_conversation", _vencida)
+    monkeypatch.setattr(sender_mod, "send_to_conversation", _vencida_si_se_pide)
     r = await _enviar(entorno, _conversacion("messenger", ventana_horas=1))
-    assert (r.modo, r.detalle) == ("omitido_canal", ac.VENTANA_CERRADA)  # nada de NoticeNotSentError → sin 5 reintentos
+    assert (r.modo, r.detalle) == ("omitido_canal", ac.VENTANA_CERRADA)  # sin NoticeNotSentError (el outbox no reintenta)
 
 
 @pytest.mark.asyncio
@@ -440,6 +441,16 @@ async def test_regresion_bandera_apagada_los_8_eventos_se_comportan_como_antes(e
 
 
 # ---------------------------------------------------------------- el guardado de los textos por canal
+def test_la_cobranza_no_acepta_texto_para_qr() -> None:
+    from core.api.routers.settings import _textos_por_canal
+
+    for evento in sorted(ac.COBRANZA):
+        vacio, error = _textos_por_canal(evento, {ac.QR: "Debes {cargo.monto}"})
+        assert vacio == {} and "QR" in error, evento
+        ok, error = _textos_por_canal(evento, {ac.WEB: "Debes {cargo.monto}"})
+        assert ok and not error, evento
+
+
 def test_los_textos_por_canal_se_validan_al_guardar() -> None:
     from core.api.routers.settings import _textos_por_canal
 

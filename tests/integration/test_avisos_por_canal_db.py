@@ -293,12 +293,18 @@ async def test_qr_exige_modo_envio_habilitado_cupo_y_no_envia_cobranza(app_clien
     from core.waweb import limits
 
     a, _ = negocios
+    await _textos(app_client, a, {"whatsapp_waweb": TEXTO})
     h = await api_headers(app_client, a)
-    r = await app_client.put(MAP, headers=h, json={"mapping": {  # el PUT reemplaza todo el mapa: los dos eventos juntos
-        EVENTO: {"fallback_text_by_channel": {"whatsapp_waweb": TEXTO}},
-        "subscription.charge_reminder": {"fallback_text_by_channel": {"whatsapp_waweb": "Debes {cargo.monto}"}},
-    }})
-    assert r.status_code == 200, r.text
+    r = await app_client.put(  # la API rechaza texto de QR para la cobranza...
+        MAP, headers=h, json={"mapping": {"subscription.charge_reminder": {"fallback_text_by_channel": {"whatsapp_waweb": "x"}}}}
+    )
+    assert r.status_code == 400 and "QR" in r.text
+    await _textos(app_client, a, {"whatsapp_waweb": TEXTO})
+    await _sql(  # ...pero un mapa guardado a mano o antes de la regla tampoco la hace salir
+        a, "update app_settings set message_templates_map = message_templates_map || cast(:m as jsonb) where tenant_id = :t",
+        t=a, m='{"subscription.charge_reminder": {"template": "", "language": "es", "variables": [], "fallback_text": "",'
+               ' "fallback_text_by_channel": {"whatsapp_waweb": "Debes {cargo.monto}"}}}',
+    )
     await _bandera(a, True)
     redis = get_redis()
     try:

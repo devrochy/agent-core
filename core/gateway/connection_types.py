@@ -301,7 +301,9 @@ class CapacidadesCanal:
     lista: bool = False
     # Plantilla aprobada por el proveedor: sirve para escribir fuera de la ventana de atención.
     plantilla_aprobada: bool = False
-    # El canal tiene ventana de 24 h para texto libre/interactivos (Meta). Sin ella, siempre se puede escribir.
+    # El canal tiene ventana de 24 h para texto libre/interactivos Y plantilla para salir de ella (WhatsApp Meta).
+    # Messenger e Instagram tienen su ventana de 24 h SIN plantillas y aquí figuran en False: la regla vigente para
+    # ellos es `sender.validate_service_window` (y `avisos_canal.CON_VENTANA` en los avisos por evento).
     ventana_24h: bool = False
     # El canal interpreta la respuesta «1» / el título de una opción como un toque (menú numerado, pista C2):
     # el consumer la resuelve ANTES del LLM (`kernel/opciones/respuesta_texto.py`, ADR-0172 adenda C2). Solo los

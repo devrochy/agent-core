@@ -1175,7 +1175,7 @@ class MessageTemplatesSettings(BaseModel):
 def _textos_por_canal(evento: str, textos: dict[str, str]) -> tuple[dict[str, str], str]:
     """Valida y limpia `fallback_text_by_channel` de un evento: claves de `TIPOS_DE_TEXTO`, texto de hasta 1000
     caracteres y solo `{ruta}` permitidas para el evento. Devuelve (limpio, error); un texto vacío se descarta."""
-    from core.gateway.avisos_canal import TIPOS_DE_TEXTO
+    from core.gateway.avisos_canal import COBRANZA, QR, TIPOS_DE_TEXTO
     from core.gateway.event_notices import EVENTOS
     from core.kernel.mensajes import variables_de
 
@@ -1183,6 +1183,8 @@ def _textos_por_canal(evento: str, textos: dict[str, str]) -> tuple[dict[str, st
     for tipo, texto in textos.items():
         if tipo not in TIPOS_DE_TEXTO:
             return {}, f"Canal sin texto de respaldo: {tipo} (válidos: {', '.join(TIPOS_DE_TEXTO)})."
+        if tipo == QR and evento in COBRANZA:
+            return {}, "Los avisos de cobranza no salen por QR (no se puede garantizar el horario legal de entrega)."
         texto = texto.strip()
         if not texto:
             continue

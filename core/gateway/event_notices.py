@@ -446,7 +446,9 @@ async def _aviso_por_canal(
         ac.aviso_omitido(event_key, conversation.channel, ac.VARIABLES_SIN_RESOLVER, conversation_id=conversation.id)
         return NoticeResult("omitido_canal", ac.VARIABLES_SIN_RESOLVER)
     try:
-        enviado = await send_to_conversation(conversation.id, renderizado, client_message_id_prefix=notice_key)
+        enviado = await send_to_conversation(
+            conversation.id, renderizado, client_message_id_prefix=notice_key, raise_on_window_expired=True
+        )
     except OutboundWindowExpiredError:
         ac.aviso_omitido(event_key, conversation.channel, ac.VENTANA_CERRADA, conversation_id=conversation.id)
         return NoticeResult("omitido_canal", ac.VENTANA_CERRADA)
