@@ -1,11 +1,12 @@
-"""SubscriptionsModule: suscripciones de cliente final (ADR-0083, planes como productos).
+"""SubscriptionsModule: suscripciones de cliente final (ADR-0083; planes e inscripción: ADR-0177).
 
-El plan es un producto de commerce (variante con `billing_period`). Cuando un
-pedido con ese producto se paga, commerce entrega un snapshot del plan y este
-pack crea/activa la `Subscription` del `Customer` (idempotente por cliente) a
-través del registry del core — sin importar commerce (invariante nº5). También
-escucha `payment.confirmed` para marcar los cargos pagados y expone una API
-admin para crear suscripciones manualmente (mismo snapshot).
+SPEC-43: el pack es dueño del catálogo de planes y de la inscripción (`planes.py`,
+`inscripcion.py`): un plan de pago nace `pendiente_pago` y se activa con `payment.confirmed` de su
+cargo (`sub-<cargo>`) o con la confirmación manual del panel. Camino viejo (hasta HU-COM-17):
+cuando un pedido de commerce con un plan se paga, commerce entrega un snapshot y este pack
+crea/activa la `Subscription` a través del registry del core (`activate`) — sin importar commerce
+(invariante nº5). También escucha `payment.confirmed` para marcar los cargos pagados y expone la API
+admin de planes e inscripción.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from pack_subscriptions.capability import (
     reactivar_por_pago,
 )
 from pack_subscriptions.config import SubscriptionConfig
+from pack_subscriptions.inscripcion import _activar_por_pago
 from pack_subscriptions.models import Subscription, SubscriptionCharge
 from pack_subscriptions.periodos import sumar_periodo
 
@@ -80,6 +82,11 @@ class SubscriptionsModule(BaseModule):
             explicacion="Evita que el asistente diga que cambió, pausó o canceló una suscripción si la acción no se hizo.",
         )
         subscription_registry.register(PLUGIN_ID, SubscriptionCapabilityImpl())
+        # Datos de la inscripción para el alta automática de negocios (SPEC-43, HU-SUB-30).
+        from core.provisioning.fuentes import fuentes_de_alta
+        from pack_subscriptions.altas import DatosDeAltaDeLaInscripcion
+
+        fuentes_de_alta.register(PLUGIN_ID, DatosDeAltaDeLaInscripcion())
         host.subscribe("payment.confirmed", self._on_payment_confirmed)
         # HU-AOS-08: procedimiento `cambiar_plan` y su resolver (solo los usa el motor, detrás de
         # `tenants.aos_procedures`).
@@ -89,6 +96,9 @@ class SubscriptionsModule(BaseModule):
 
     def on_deactivate(self) -> None:
         subscription_registry.unregister(PLUGIN_ID)
+        from core.provisioning.fuentes import fuentes_de_alta
+
+        fuentes_de_alta.unregister(PLUGIN_ID)
 
     async def sembrar_escenario(self, tenant_id: uuid.UUID, escenario: str, entrada: Any) -> Any:
         """Suscripciones activa, por vencer y vencida con cargos y pagos (HU-QA-13)."""
@@ -127,6 +137,26 @@ class SubscriptionsModule(BaseModule):
             return
         async with tenant_scope(tenant_id):
             async with get_session() as session:
+                # Orden de locks del pack (design.md): suscripción → cargo. Se lee el cargo SIN lock para
+                # saber su suscripción, se bloquea la suscripción y se vuelve a leer el cargo con
+                # FOR UPDATE; así no forma deadlock con `change_plan`/`cancel`/la expiración, que bloquean
+                # la suscripción y luego tocan sus cargos.
+                previo = (
+                    await session.execute(
+                        select(SubscriptionCharge.subscription_id).where(
+                            SubscriptionCharge.tenant_id == tenant_id, SubscriptionCharge.id == charge_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                if previo is None:
+                    return
+                sub = (
+                    await session.execute(
+                        select(Subscription)
+                        .where(Subscription.tenant_id == tenant_id, Subscription.id == previo)
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
                 cargo = (
                     await session.execute(
                         select(SubscriptionCharge)
@@ -135,6 +165,7 @@ class SubscriptionsModule(BaseModule):
                             SubscriptionCharge.id == charge_id,
                         )
                         .with_for_update()  # dos entregas a la vez no aplican dos veces
+                        .execution_options(populate_existing=True)
                     )
                 ).scalar_one_or_none()
                 if cargo is None:
@@ -142,17 +173,8 @@ class SubscriptionsModule(BaseModule):
                 if cargo.estado == "pagado":
                     if cargo.pago_externo and cargo.tipo == "periodo":
                         # Lo pagó otro canal y además se pagó el link del pack: pago doble.
-                        sub_pagada = (
-                            await session.execute(
-                                select(Subscription).where(
-                                    Subscription.tenant_id == tenant_id, Subscription.id == cargo.subscription_id
-                                )
-                            )
-                        ).scalar_one_or_none()
-                        if sub_pagada is not None:
-                            await _emitir_cargo_pagado(
-                                session, cargo, sub_pagada, provider_reference, duplicado=True
-                            )
+                        if sub is not None:
+                            await _emitir_cargo_pagado(session, cargo, sub, provider_reference, duplicado=True)
                         await _alertar_pago_sin_aplicar(
                             tenant_id,
                             cargo,
@@ -160,8 +182,8 @@ class SubscriptionsModule(BaseModule):
                         )
                     return
                 if cargo.estado != "pendiente":
-                    # Pago de un cargo anulado (p. ej. un cambio de plan reemplazado): no se
-                    # aplica nada y se avisa al negocio (auditoría HU-SUB-07).
+                    # Pago de un cargo anulado (p. ej. un cambio de plan reemplazado o una inscripción
+                    # expirada): no se aplica nada y se avisa al negocio (auditoría HU-SUB-07).
                     await _alertar_pago_sin_aplicar(tenant_id, cargo, f"el cargo estaba {cargo.estado}")
                     return
                 if abs(Decimal(str(amount)) - Decimal(cargo.monto or 0)) > Decimal("0.01"):
@@ -173,28 +195,13 @@ class SubscriptionsModule(BaseModule):
                     )
                     await _alertar_monto_distinto(tenant_id, cargo, amount, provider_reference)
                     return
-                cargo.estado = "pagado"
-                sub = (
-                    await session.execute(
-                        select(Subscription).where(
-                            Subscription.tenant_id == tenant_id, Subscription.id == cargo.subscription_id
-                        )
-                    )
-                ).scalar_one_or_none()
-                if cargo.tipo == "cambio_plan" and sub is not None and cargo.cambio_plan:
-                    motivo = _cambio_no_aplicable(sub, cargo.cambio_plan)
+                if sub is not None and cargo.tipo in ("inscripcion", "cambio_plan"):
+                    # Activa por el único camino (el mismo de la confirmación manual del panel).
+                    motivo = await _activar_por_pago(session, sub, cargo)
                     if motivo:
                         await _alertar_pago_sin_aplicar(tenant_id, cargo, motivo)
-                        return
-                    # Upgrade pagado (HU-SUB-07, ADR-0111): el plan cambia en el acto.
-                    from pack_subscriptions.capability import _emitir_activada, aplicar_plan
-
-                    aplicar_plan(sub, cargo.cambio_plan, datetime.now(UTC))
-                    await session.flush()
-                    # Un cargo de cambio de plan no es un pedido: referencia nula (ADR-0121).
-                    await _emitir_activada(session, sub, None, cambio=True)
-                    log.info("subs_cambio_de_plan_pagado", reference=reference, plan=sub.concepto)
                     return
+                cargo.estado = "pagado"
                 if sub is not None:
                     reactivar_por_pago(sub, cargo)
                     if cargo.tipo == "periodo":
@@ -253,24 +260,11 @@ async def _emitir_cargo_pagado(
             "monto": str(cargo.monto),
             "moneda": sub.moneda,
             "variant_id": str(sub.variante_id) if sub.variante_id else None,
+            "plan_id": str(sub.plan_id) if sub.plan_id else None,
             "provider_reference": provider_reference,
             "pago_duplicado": duplicado,
         },
     )
-
-
-def _cambio_no_aplicable(sub: Subscription, cambio: dict[str, Any]) -> str | None:
-    """Motivo para NO aplicar un cambio de plan pagado (auditoría HU-SUB-07): la suscripción
-    ya no está activa, o el período del cálculo ya pasó (la diferencia era de otro período)."""
-    if sub.estado not in ("activa", "trialing"):
-        return f"la suscripción está {sub.estado}"
-    if cambio.get("desde_cero"):
-        return None
-    calculado = cambio.get("proximo_cargo")
-    vigente = sub.proximo_cargo.isoformat() if sub.proximo_cargo else None
-    if calculado != vigente:
-        return "la diferencia era de un período que ya cerró"
-    return None
 
 
 async def _alertar_pago_sin_aplicar(tenant_id: uuid.UUID, cargo: SubscriptionCharge, motivo: str) -> None:

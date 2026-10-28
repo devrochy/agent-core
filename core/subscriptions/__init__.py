@@ -28,8 +28,18 @@ class SubscriptionError(BusinessError):
     """Rechazo de NEGOCIO de una capacidad (HU-ARCH-18): resultado controlado,
     el proveedor SIGUE habilitado. `code` es estable para el golden set."""
 
-    def __init__(self, message: str, *, code: str = "error_suscripcion") -> None:
-        super().__init__(message, code=code)
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "error_suscripcion",
+        data: dict[str, Any] | None = None,
+        escalate: bool = False,
+    ) -> None:
+        super().__init__(message, code=code, escalate=escalate)
+        # SPEC-43: datos que el llamador necesita para armar su respuesta (campos que faltan, los
+        # documentos y el token de los términos, las opciones de vertical…). Nunca secretos.
+        self.data = dict(data or {})
 
 
 class SubscriptionProviderAmbiguity(SubscriptionError):
@@ -53,7 +63,11 @@ class PlanSnapshot(TypedDict, total=False):
     moneda: str
     periodicidad: str  # mensual | trimestral | anual
     trial_dias: int    # solo Free tiene prueba (D-16)
-    entitlements: list[str]
+    # SPEC-43 (ADR-0177): es un objeto ({"clientes": 500}), no una lista; el tipo anterior estaba muerto
+    # (nadie lo rellenaba ni lo consumía).
+    entitlements: dict[str, Any]
+    plan_id: str       # id del plan del catálogo de suscripciones (SPEC-43)
+    descripcion: str
 
 
 class SubscriptionView(TypedDict, total=False):
@@ -73,6 +87,11 @@ class SubscriptionView(TypedDict, total=False):
     cambio_programado: dict[str, Any] | None  # downgrade al próximo período
     cambio: str  # resultado de change_plan: inmediato | pendiente_pago | programado
     cargo_cambio: dict[str, Any] | None  # cargo de la diferencia (monto, link, referencia)
+    # SPEC-43 (ADR-0177): inscripción
+    numero_publico: str | None  # `SUB-0001`
+    plan_id: str | None
+    cargo_inscripcion: dict[str, Any] | None  # {monto, link, referencia}: primer cobro de un plan de pago
+    inscripcion: str  # resultado de `inscribir`: nueva | repetida | cambio_de_plan
 
 
 class ChargeLink(TypedDict, total=False):
@@ -120,6 +139,37 @@ class SubscriptionCapability(Protocol):
     ) -> SubscriptionView: ...
 
     async def charge_link(self, subscription_id: uuid.UUID, *, period: str = "") -> ChargeLink: ...
+
+
+@runtime_checkable
+class InscripcionCapability(Protocol):
+    """Operaciones de PLANES e INSCRIPCIÓN del contrato v2 (SPEC-43, ADR-0177).
+
+    En PR-2 son operaciones opcionales (como `permite_varias`): `activate` y el registry de
+    catálogo conviven hasta que commerce deje de vender planes (HU-COM-17); entonces estas
+    cuatro pasan al Protocol principal y `activate` desaparece. Quien las llama pregunta con
+    `isinstance(cap, InscripcionCapability)`."""
+
+    async def listar_planes(self, *, solo_activos: bool = True) -> list[PlanSnapshot]: ...
+
+    async def plan_por_codigo(self, codigo: str) -> PlanSnapshot | None: ...
+
+    async def cotizar_inscripcion(
+        self, plan_code: str, codigo_promocion: str | None = None
+    ) -> dict[str, Any]: ...
+
+    async def inscribir(
+        self,
+        *,
+        customer_id: uuid.UUID,
+        plan_code: str,
+        datos_alta: dict[str, Any] | None = None,
+        origen: str = "agente",
+        metodo_pago: str = "pago_en_linea",
+        terminos: dict[str, Any] | None = None,
+        codigo_promocion: str | None = None,
+        monto_esperado: Any = None,
+    ) -> SubscriptionView: ...
 
 
 @dataclass

@@ -1,17 +1,23 @@
-"""Configuración de pack-subscriptions (ADR-0083).
+"""Configuración de pack-subscriptions (ADR-0083, SPEC-43).
 
-Define cómo se cobra el período y los defaults del plan. La pasarela NO vive acá:
-se consume vía `core/payments` (registry) si `pack_payments` está habilitado.
+Define cómo se cobra el período y cómo se inscribe un cliente. Los planes viven en el catálogo
+del pack (`pack_subscriptions_plans`), no acá. La pasarela NO vive acá: se consume vía
+`core/payments` (registry) si `pack_payments` está habilitado.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import Field, field_validator
 
 from core.mcp.types import BasePluginConfig
 from pack_subscriptions.horario_legal import VENTANA_LEGAL_CO, dentro_de_lo_legal
+
+_PREFIJO = re.compile(r"^[A-Z0-9]{1,8}$")
+# Datos del cliente que puede pedir la inscripción (llaves de `datos_alta`).
+CAMPOS_DE_INSCRIPCION = ("nombre", "email", "telefono", "documento", "negocio", "vertical")
 
 
 class SubscriptionConfig(BasePluginConfig):
@@ -20,15 +26,53 @@ class SubscriptionConfig(BasePluginConfig):
         description="Cómo se cobra el período: 'link' (link de pago si hay pasarela) o 'manual'.",
     )
     moneda: str = Field(default="COP", description="Moneda por defecto de los planes.")
+    # Obsoleto (SPEC-43): periodicidad y prueba viven en cada plan del catálogo. Se conservan solo
+    # para el camino viejo de commerce (`activate`) y se retiran con HU-COM-17.
     periodicidad: Literal["mensual", "trimestral", "anual"] = Field(
         default="mensual",
-        description="Periodicidad por defecto si el plan no la trae (mensual, trimestral o anual).",
+        description="Obsoleto: la periodicidad ahora es de cada plan del catálogo.",
     )
     trial_dias: int = Field(
         default=30,
         ge=0,
         le=365,
-        description="Días de prueba por defecto del plan Free. Solo un plan de $0 tiene prueba (D-16).",
+        description="Obsoleto: los días de prueba ahora son de cada plan del catálogo (solo $0, D-16).",
+    )
+    # ---------------------------------------------------------------- inscripción (SPEC-43)
+    campos_de_inscripcion: list[str] = Field(
+        default_factory=lambda: ["nombre", "email", "telefono"],
+        description=(
+            "Datos que se piden al cliente al inscribirse desde el chat (válidos: "
+            + ", ".join(CAMPOS_DE_INSCRIPCION)
+            + "). Una inscripción creada desde el panel no los exige."
+        ),
+    )
+    monto_alto_inscripcion: float | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Precio de lista de un plan por encima del cual la inscripción desde el chat pide "
+            "aprobación humana. Vacío = sin tope. Se evalúa sobre el precio de lista, no sobre el total "
+            "con descuento."
+        ),
+    )
+    dias_pago_inscripcion: int = Field(
+        default=7,
+        ge=1,
+        le=60,
+        description="Días que una inscripción espera el pago antes de expirar (`pago_no_recibido`).",
+    )
+    instrucciones_transferencia: str = Field(
+        default="",
+        max_length=1000,
+        description=(
+            "Texto con los datos para pagar la inscripción por transferencia (banco, cuenta, a nombre "
+            "de quién). El asistente lo envía tal cual; no lo escribe el modelo."
+        ),
+    )
+    prefijo_numero: str = Field(
+        default="SUB",
+        description="Prefijo del número público de la inscripción (1 a 8 letras o números), p. ej. SUB-0001.",
     )
     dias_gracia: int = Field(
         default=5,
@@ -147,6 +191,21 @@ class SubscriptionConfig(BasePluginConfig):
         default="CO",
         description="País cuyos festivos bloquean los avisos de cobro.",
     )
+
+    @field_validator("prefijo_numero", mode="before")
+    @classmethod
+    def _normalizar_prefijo(cls, valor: object) -> str:
+        texto = str(valor or "").strip().upper()
+        return texto if _PREFIJO.match(texto) else "SUB"
+
+    @field_validator("campos_de_inscripcion")
+    @classmethod
+    def _campos_conocidos(cls, valor: list[str]) -> list[str]:
+        campos = list(dict.fromkeys(str(c).strip() for c in valor or []))
+        if any(c not in CAMPOS_DE_INSCRIPCION for c in campos):
+            # Mensaje fijo (sin el valor recibido): termina en `error.fields` de la respuesta.
+            raise ValueError("campos_de_inscripcion tiene campos desconocidos; los válidos son: " + ", ".join(CAMPOS_DE_INSCRIPCION))
+        return campos
 
     @field_validator("ventana_cobro")
     @classmethod
