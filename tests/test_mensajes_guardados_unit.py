@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from core.admin import mensajes_guardados_service as svc
-from core.admin.catalogo_mensajes_service import canales_de, canales_de_guardado
+from core.admin.catalogo_mensajes_service import canales_de_guardado
 from core.gateway.connection_types import connection_types
 from core.kernel.opciones.contexto import VARIABLES_BASE
 
@@ -139,7 +139,6 @@ def test_vista_previa_rechaza_lo_mismo_que_guardar() -> None:
 def test_canales_del_catalogo_vacio_son_todos_los_de_clientes_sin_repetir() -> None:
     todos = canales_de_guardado([])
     assert len(todos) == len(set(todos)) and "whatsapp" in todos and "web" in todos
-    assert canales_de("guardado") == todos
 
 
 def test_canales_del_catalogo_siguen_los_tipos_elegidos() -> None:

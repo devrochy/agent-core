@@ -66,7 +66,10 @@ class MensajeDelCatalogo(BaseModel):
         description="`meta`: categoría; `evento`: plantilla mapeada; `opciones`: estado de su plantilla en Meta si se publicó allí; "
         "`texto_pack`: nombre del pack."
     )
-    canales_soportados: list[str] = Field(description="Canales por los que sale hoy (constante por tipo hasta la pista C1).")
+    canales_soportados: list[str] = Field(
+        description="Canales por los que sale hoy (de la tabla de capacidades por canal, pista C1). `guardado`: los canales de los tipos de "
+        "conexión que el mensaje declara (todos si no declara ninguno); no promete envío: nada lo envía todavía."
+    )
     variables: list[str] = Field(
         description="Tal como las usa la fuente, sin normalizar: marcadores de Meta, rutas permitidas del evento, variables de la "
         "definición o llaves del texto."

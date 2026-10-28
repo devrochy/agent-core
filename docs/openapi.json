@@ -59682,7 +59682,7 @@
             },
             "type": "array",
             "title": "Canales Soportados",
-            "description": "Canales por los que sale hoy (constante por tipo hasta la pista C1)."
+            "description": "Canales por los que sale hoy (de la tabla de capacidades por canal, pista C1). `guardado`: los canales de los tipos de conexión que el mensaje declara (todos si no declara ninguno); no promete envío: nada lo envía todavía."
           },
           "variables": {
             "items": {

@@ -22,7 +22,6 @@ from pydantic import BaseModel, Field
 from core.admin import mensajes_guardados_service as svc
 from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
-from core.kernel.opciones.contexto import VARIABLES_BASE
 
 router = APIRouter(prefix="/mensajes/guardados", tags=["mensajes"])
 
@@ -136,7 +135,7 @@ async def catalogo_opciones(principal: Annotated[Principal, Depends(lectura)]) -
     del principal
     return {
         "canales": svc.canales_permitidos(),
-        "variables": [{"ruta": r, "descripcion": d} for r, d in VARIABLES_BASE.items()],
+        "variables": [{"ruta": r, "descripcion": d} for r, d in svc.descripciones_de_variables().items()],
         "max_texto": svc.MAX_TEXTO,
         "max_titulo": svc.MAX_TITULO,
     }

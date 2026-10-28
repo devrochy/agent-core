@@ -86,7 +86,8 @@ _LLAVES = re.compile(r"\{([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*)\}")
 #   (`core_handlers`); D2 los llevará a los canales de texto.
 # - `opciones`: botones (la ejecución directa); en los canales de texto hoy solo sale el texto numerado sin acción.
 # - `texto_pack`: un texto de pack sale por WhatsApp salvo que la marca de su campo diga otro canal.
-# - `guardado`: texto libre, no exige capacidad: sus canales son los que el mensaje declara (`canales_de_guardado`).
+# - `guardado` NO está aquí: es texto libre sin capacidad; sus canales los declara el propio mensaje
+#   (`canales_de_guardado`) y `canales_de` no se usa para él.
 _CAPACIDAD_POR_TIPO: dict[TipoMensaje, str] = {
     "meta": "plantilla_aprobada",
     "evento": "plantilla_aprobada",
@@ -111,8 +112,6 @@ def canales_de(tipo: TipoMensaje, marca: str | None = None) -> list[str]:
     (hay textos de correo); si la marca no es un canal conocido, vale el del tipo."""
     if marca in CANALES_DE_MARCA:
         return [str(marca)]
-    if tipo == "guardado":
-        return canales_de_guardado([])
     return canales_con(_CAPACIDAD_POR_TIPO[tipo])
 
 

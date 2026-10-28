@@ -90,6 +90,11 @@ def variables_permitidas() -> list[str]:
     return list(VARIABLES_BASE)
 
 
+def descripciones_de_variables() -> dict[str, str]:
+    """`ruta → descripción` de las variables permitidas, para el formulario."""
+    return dict(VARIABLES_BASE)
+
+
 def normalizar_titulo(titulo: str) -> str:
     limpio = re.sub(r"\s+", " ", _CONTROL.sub("", titulo or "")).strip()
     if not limpio:
