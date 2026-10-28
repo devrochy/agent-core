@@ -37267,6 +37267,230 @@
           }
         }
       }
+    },
+    "/api/v1/admin/datos-de-prueba/{modulo}": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · datos de prueba"
+        ],
+        "summary": "Estado Modulo",
+        "description": "Estado de los datos de prueba del módulo (Ventas, Agenda, Cobranza o Suscripciones).",
+        "operationId": "estado_modulo_api_v1_admin_datos_de_prueba__modulo__get",
+        "parameters": [
+          {
+            "name": "modulo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Modulo"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstadoDatosDePruebaModulo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · datos de prueba"
+        ],
+        "summary": "Generar Modulo",
+        "description": "Genera los datos del módulo según la descripción del negocio y reemplaza el lote anterior.",
+        "operationId": "generar_modulo_api_v1_admin_datos_de_prueba__modulo__post",
+        "parameters": [
+          {
+            "name": "modulo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Modulo"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoteGenerado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "api",
+          "admin · datos de prueba"
+        ],
+        "summary": "Borrar Modulo",
+        "description": "Retira todos los datos de prueba del módulo; lo creado a mano no se toca.",
+        "operationId": "borrar_modulo_api_v1_admin_datos_de_prueba__modulo__delete",
+        "parameters": [
+          {
+            "name": "modulo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Modulo"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatosRetirados"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -68320,6 +68544,58 @@
           "id"
         ],
         "title": "PlanOut"
+      },
+      "EstadoDatosDePruebaModulo": {
+        "properties": {
+          "modulo": {
+            "type": "string",
+            "title": "Modulo"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "disponible": {
+            "type": "boolean",
+            "title": "Disponible"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo",
+            "description": "Por qué el módulo no tiene datos que generar."
+          },
+          "falta_descripcion": {
+            "type": "boolean",
+            "title": "Falta Descripcion",
+            "description": "El negocio no tiene descripción propia: hay que escribirla antes."
+          },
+          "lote": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoteDePrueba"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "modulo",
+          "titulo",
+          "disponible",
+          "falta_descripcion",
+          "lote"
+        ],
+        "title": "EstadoDatosDePruebaModulo"
       }
     }
   }
