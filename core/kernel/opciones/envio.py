@@ -37,9 +37,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from core.gateway.connection_types import capacidades_de
 from core.kernel.opciones.definicion import MAX_TTL_HORAS, Definicion
 from core.kernel.opciones.mapeo import nombre_de_parametro, variables_del_cuerpo
-from core.shared.test_mode import TEST_CHANNEL
 
 # Vías (valores del CHECK `ck_option_sends_via`) y su etiqueta en logs y métricas.
 INTERACTIVO = "interactive"
@@ -106,15 +106,15 @@ def decidir_via(
     plantilla_utilizable: bool,
     motivo_plantilla: str = "",
 ) -> Decision:
-    """La vía de un envío. Ver la cascada en el docstring del módulo."""
-    if canal == TEST_CHANNEL:
-        # Playground: el navegador pinta los botones, no hay proveedor ni ventana de 24 h ni plantilla.
-        return Decision(INTERACTIVO) if interactivo_valido else Decision(TEXTO, FUERA_DE_TOPES)
-    if canal != "whatsapp" or proveedor != "meta":
+    """La vía de un envío. Ver la cascada en el docstring del módulo. Lo que cada canal admite sale de
+    `connection_types.capacidades_de` (pista C1), no de comparar el nombre del canal."""
+    cap = capacidades_de(canal, proveedor)
+    if not cap.botones:
         return Decision(TEXTO, CANAL_SIN_BOTONES)
-    if ventana_abierta:
+    if ventana_abierta or not cap.ventana_24h:
+        # Sin ventana de 24 h (playground: el navegador pinta los botones) siempre se puede escribir.
         return Decision(INTERACTIVO) if interactivo_valido else Decision(TEXTO, FUERA_DE_TOPES)
-    if plantilla_utilizable:
+    if cap.plantilla_aprobada and plantilla_utilizable:
         return Decision(PLANTILLA)
     return Decision(None, motivo_plantilla or SIN_VERSION_EN_META)
 

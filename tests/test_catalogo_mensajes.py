@@ -59,6 +59,9 @@ def test_canales_de_usa_la_marca_o_la_constante_del_tipo() -> None:
     assert svc.canales_de("meta") == ["whatsapp"]
     assert svc.canales_de("texto_pack", "email") == ["email"]
     assert svc.canales_de("texto_pack", "algo_raro") == ["whatsapp"]
+    # Salen de la tabla de capacidades por canal (C1): hoy solo WhatsApp, y el playground no cuenta.
+    for tipo in ("meta", "evento", "opciones", "texto_pack"):
+        assert svc.canales_de(tipo) == ["whatsapp"]
 
 
 def test_llaves_y_resumen() -> None:

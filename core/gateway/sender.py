@@ -33,7 +33,11 @@ from core.db.models import (
     utcnow,
 )
 from core.db.session import get_session
-from core.gateway.connection_types import CATEGORY_COMMUNICATION
+from core.gateway.connection_types import (
+    CATEGORY_COMMUNICATION,
+    capacidades_de,
+    capacidades_del_canal,
+)
 from core.gateway.message_splitter import split_for_bubbles
 from core.shared.crypto import get_secret_box
 from core.shared.events import ON_MESSAGE_SENT, event_bus
@@ -745,27 +749,28 @@ async def send_interactive_to_conversation(
         log.error("envio_interactivo_tenant_distinto", conversation_id=str(conversation_id))
         return False
 
+    # Qué admite el canal sale de `connection_types.CAPACIDADES_POR_TIPO`. Antes de conocer el proveedor se usa lo
+    # máximo que admite alguno de los del canal; con el proveedor resuelto, la decisión final.
+    capacidad = capacidades_del_canal(conversation.channel)
+    if capacidad.ventana_24h:
+        expira = conversation.service_window_expires_at
+        ventana_abierta = expira is None or expira >= utcnow()
+    else:
+        ventana_abierta = True  # sin ventana de 24 h (playground) siempre se puede escribir
+    if not capacidad.admite(interactive.get("type")) or not ventana_abierta or not interactivo_valido(interactive):
+        if sin_degradar:
+            return False
+        return await send_to_conversation(conversation_id, fallback_text, sender_type=sender_type)
     if is_test_channel(conversation.channel):
-        # Playground: sin ventana ni proveedor. El interactivo queda guardado como entregado y lo pinta el navegador.
-        if interactivo_valido(interactive):
-            return await _guardar_saliente_de_prueba(
-                conversation, str(interactive["body"]), sender_type,
-                interactive=interactive, client_message_id=client_message_id,
-            )
-        if sin_degradar:
-            return False
-        return await send_to_conversation(conversation_id, fallback_text, sender_type=sender_type)
-
-    expira = conversation.service_window_expires_at
-    ventana_abierta = expira is None or expira >= utcnow()
-    if conversation.channel != "whatsapp" or not ventana_abierta or not interactivo_valido(interactive):
-        if sin_degradar:
-            return False
-        return await send_to_conversation(conversation_id, fallback_text, sender_type=sender_type)
+        # Playground: sin proveedor. El interactivo queda guardado como entregado y lo pinta el navegador.
+        return await _guardar_saliente_de_prueba(
+            conversation, str(interactive["body"]), sender_type,
+            interactive=interactive, client_message_id=client_message_id,
+        )
     provider, credentials = await resolve_credentials(
         conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=conversation.tenant_id
     )
-    if provider != "meta":
+    if not capacidades_de(conversation.channel, provider).admite(interactive.get("type")):
         if sin_degradar:
             return False
         return await send_to_conversation(conversation_id, fallback_text, sender_type=sender_type)

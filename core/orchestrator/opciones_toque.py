@@ -30,6 +30,7 @@ from typing import Any
 
 from core.agents.spec import enabled_packs, load_active_spec
 from core.agents.spec_de_release import spec_del_turno
+from core.gateway.connection_types import capacidades_del_canal
 from core.kernel.opciones import resolver
 from core.kernel.opciones.lint import FichaTool, acciones_de_procedimientos, fichas_de_tools
 from core.kernel.opciones.textos import texto
@@ -38,7 +39,6 @@ from core.llm.types import LLMToolCall
 from core.shared import release_vigente
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
-from core.shared.test_mode import TEST_CHANNEL
 
 log = get_logger(__name__)
 
@@ -116,10 +116,10 @@ async def atender(conversation: Any, customer: Any, fields: dict[str, str]) -> s
         return await send_to_conversation(conversation_id, cuerpo)
 
     async def enviar_confirmacion(interactivo: dict[str, Any]) -> bool:
-        # Un botón solo existe en WhatsApp (y en el playground, que los pinta él) dentro de los topes de Meta: si
-        # no se puede mostrar, la confirmación no se pide (un texto no confirma nada) y el resolver avisa que no
-        # se hizo nada.
-        if conversation.channel not in ("whatsapp", TEST_CHANNEL) or not interactivo_valido(interactivo):
+        # Un botón solo existe en los canales con botones (WhatsApp Cloud y el playground, que los pinta él) dentro
+        # de los topes de Meta: si no se puede mostrar, la confirmación no se pide (un texto no confirma nada) y
+        # el resolver avisa que no se hizo nada. Qué canal admite botones: `connection_types.CAPACIDADES_POR_TIPO`.
+        if not capacidades_del_canal(conversation.channel).botones or not interactivo_valido(interactivo):
             return False
         return await send_interactive_to_conversation(
             conversation_id, interactivo, fallback_text=texto("confirmacion_no_disponible"), sin_degradar=True

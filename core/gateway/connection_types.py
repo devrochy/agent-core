@@ -286,6 +286,100 @@ WEBCHAT = "webchat"
 PLAYGROUND = "playground"
 
 
+# --------------------------------------------------------------------------- capacidades por canal
+# SPEC-40 / pista C1: UNA tabla de lo que cada tipo de conexión admite al enviar un mensaje con opciones. Antes las
+# reglas vivían en tres `if channel == ...` (`kernel/opciones/envio.py`, `gateway/sender.py`,
+# `orchestrator/opciones_toque.py`); ahora esos sitios (y el catálogo de mensajes) preguntan aquí. C1 NO cambia
+# comportamiento: la tabla reproduce lo que esos `if` ya hacían.
+@dataclass(frozen=True)
+class CapacidadesCanal:
+    """Qué admite un canal/proveedor. Todo en False = solo texto."""
+
+    # Botones de respuesta rápida (`interactive.type == "button"`).
+    botones: bool = False
+    # Lista de opciones (`interactive.type == "list"`).
+    lista: bool = False
+    # Plantilla aprobada por el proveedor: sirve para escribir fuera de la ventana de atención.
+    plantilla_aprobada: bool = False
+    # El canal tiene ventana de 24 h para texto libre/interactivos (Meta). Sin ella, siempre se puede escribir.
+    ventana_24h: bool = False
+    # El canal interpreta la respuesta «1» / el título de una opción como un toque (menú numerado, pista C2).
+    # Hoy NINGÚN canal lo hace: la respuesta numérica llega al LLM. C2 lo enciende en los canales de texto.
+    respuesta_numerica: bool = False
+
+    def admite(self, tipo_interactivo: object) -> bool:
+        """¿Admite este `interactive.type` (`button` | `list`)?"""
+        if tipo_interactivo == "button":
+            return self.botones
+        if tipo_interactivo == "list":
+            return self.lista
+        return False
+
+
+SOLO_TEXTO = CapacidadesCanal()
+
+# Por `ConnectionType.id`. Un tipo de conexión con canal que falte aquí hace fallar
+# `tests/test_capacidades_canal.py`: un canal nuevo declara sus capacidades a propósito, no por omisión.
+CAPACIDADES_POR_TIPO: dict[str, CapacidadesCanal] = {
+    # WhatsApp Cloud: botones y lista dentro de la ventana de 24 h; fuera, plantilla aprobada (QUICK_REPLY).
+    "whatsapp_meta": CapacidadesCanal(botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True),
+    # Por QR (neonize): solo texto entrante y saliente, sin plantillas ni ventana (ADR-0103).
+    "whatsapp_waweb": SOLO_TEXTO,
+    "whatsapp_twilio": SOLO_TEXTO,
+    "whatsapp_plivo": SOLO_TEXTO,
+    "instagram_meta": SOLO_TEXTO,
+    "messenger_meta": SOLO_TEXTO,
+    "webchat": SOLO_TEXTO,
+    "email_smtp": SOLO_TEXTO,
+    # Playground (canal `test`, SPEC-40 B1): el navegador pinta los botones; sin proveedor, ventana ni plantilla.
+    # `lista=True` porque hoy acepta lo mismo que Meta (`interactivo_valido`); el panel (B2) decide cómo lo pinta.
+    "playground": CapacidadesCanal(botones=True, lista=True),
+}
+
+
+def _tipos_del_canal(channel: str) -> list[ConnectionType]:
+    return [t for t in CONNECTION_TYPES if channel and t.channel == channel]
+
+
+def capacidades_de(channel: str, provider: str | None = "") -> CapacidadesCanal:
+    """Capacidades de un `(canal, proveedor)`: el tipo de conexión que los declara, o, si el proveedor no se
+    conoce o no está en el catálogo, las que comparten TODOS los tipos del canal (p. ej. `instagram` sin
+    proveedor, `test`). Si el canal tiene proveedores con capacidades distintas (`whatsapp`) y el proveedor no
+    es uno conocido, o el canal no existe, solo texto: lo seguro es no ofrecer lo que no se sabe que existe."""
+    tipos = _tipos_del_canal(channel)
+    for t in tipos:
+        if provider and t.provider == provider:
+            return CAPACIDADES_POR_TIPO[t.id]
+    distintas = {CAPACIDADES_POR_TIPO[t.id] for t in tipos}
+    return next(iter(distintas)) if len(distintas) == 1 else SOLO_TEXTO
+
+
+def capacidades_del_canal(channel: str) -> CapacidadesCanal:
+    """Lo MÁXIMO que admite el canal con cualquiera de sus proveedores (O lógico). Es el filtro previo a conocer
+    el proveedor (resolverlo cuesta una consulta); la decisión final es `capacidades_de(canal, proveedor)`. Un
+    canal desconocido es solo texto."""
+    tipos = _tipos_del_canal(channel)
+    return CapacidadesCanal(
+        **{
+            campo: any(getattr(CAPACIDADES_POR_TIPO[t.id], campo) for t in tipos)
+            for campo in CapacidadesCanal.__dataclass_fields__
+        }
+    )
+
+
+def canales_con(capacidad: str) -> list[str]:
+    """Canales de CLIENTES (conversaciones reales, no el playground) que tienen esta capacidad en algún
+    proveedor, en el orden del catálogo. Lo usa el catálogo de mensajes para `canales_soportados`."""
+    if capacidad not in CapacidadesCanal.__dataclass_fields__:
+        raise ValueError(f"capacidad desconocida: {capacidad}")
+    canales: list[str] = []
+    for t in connection_types():
+        if t.channel and t.produces_conversations and getattr(CAPACIDADES_POR_TIPO[t.id], capacidad):
+            if t.channel not in canales:
+                canales.append(t.channel)
+    return canales
+
+
 def get_connection_type(type_id: str) -> ConnectionType | None:
     return BY_ID.get(type_id)
 

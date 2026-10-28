@@ -1,0 +1,3 @@
+## Tabla de capacidades por canal (2026-10-28)
+
+- Pista C1 de SPEC-40: `core/gateway/connection_types.py` declara por tipo de conexión qué admite (`botones`, `lista`, `plantilla_aprobada`, `ventana_24h`, `respuesta_numerica`) y expone `capacidades_de(canal, proveedor)`. Sustituye los `if channel == ...` de `decidir_via`, `send_interactive_to_conversation`, `opciones_toque.enviar_confirmacion` y de la vía de plantilla en `opciones_envio`, y el catálogo de mensajes (`canales_soportados`) la consulta en vez de su constante. Sin cambio de comportamiento ni de contrato; sin migración. Un tipo de conexión con canal que no figure en la tabla hace fallar `tests/test_capacidades_canal.py`.
