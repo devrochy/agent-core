@@ -18,6 +18,8 @@ from typing import Any
 
 from sqlalchemy import or_, select, text
 
+from core.datos_cliente.legado import base_desde_lista, requeridos_efectivos
+from core.datos_cliente.servicio import evaluar_accion
 from core.db.session import get_owned, get_session
 from core.kernel.oferta import solo_con_motor_activo
 from core.mcp.types import BaseSkill, MCPTool, Referencia, RegistroCreado, ToolContext
@@ -34,6 +36,7 @@ from core.provisioning.antiabuso import (
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.shared.texto_seguro import contiene_url
+from pack_commerce.datos import A_LEGADO, ACCION_POR_ENTREGA
 from pack_commerce.fotos import url_foto
 from pack_commerce.models import (
     CategoryComplement,
@@ -591,6 +594,25 @@ def _campos_requeridos(config, es_plan: bool, delivery_method: str) -> list[str]
     if delivery_method in campos:
         return list(campos[delivery_method])
     return list(campos.get("domicilio", ["full_name", "id_document", "address", "municipality", "city"]))
+
+
+def _accion_de_datos(es_plan: bool, delivery_method: str) -> str:
+    """Acción de la política de datos que corresponde a este pedido (misma regla que `_campos_requeridos`)."""
+    if es_plan:
+        return ACCION_POR_ENTREGA["plan"]
+    return ACCION_POR_ENTREGA.get(delivery_method, ACCION_POR_ENTREGA["domicilio"])
+
+
+async def _sobre_faltan_datos(
+    accion: str, customer_data: dict[str, Any], requeridos_del_modulo: list[str]
+) -> dict[str, Any] | None:
+    """Sobre unificado `faltan_datos` (aditivo: no sustituye `missing_fields`). Nunca rompe la tool."""
+    try:
+        evaluacion = await evaluar_accion(accion, customer_data, base=base_desde_lista(requeridos_del_modulo))
+    except Exception:
+        log.warning("ventas_sobre_faltan_datos_fallo", exc_info=True)
+        return None
+    return evaluacion.como_sobre() if evaluacion is not None else None
 
 
 def _validar_checkout(campos_requeridos: list[str], data: dict[str, Any]) -> tuple[bool, list[str]]:
@@ -1954,6 +1976,14 @@ class OrderSkill(BaseSkill):
                 }
 
         requeridos = _campos_requeridos(config, es_plan, delivery_method)
+        # Política de datos del cliente (HU-CRM-13): el ajuste del dueño sube o baja campos de la
+        # lista de fábrica; sin ajustes la lista sale igual que entró.
+        accion_datos = _accion_de_datos(es_plan, delivery_method)
+        requeridos_del_modulo = list(requeridos)
+        try:
+            requeridos = await requeridos_efectivos(accion_datos, requeridos, A_LEGADO)
+        except Exception:
+            log.warning("ventas_politica_datos_no_aplicada", exc_info=True)
         complete, missing = _validar_checkout(requeridos, customer_data)
         if not complete:
             faltan: dict[str, Any] = {
@@ -1963,6 +1993,9 @@ class OrderSkill(BaseSkill):
                 "existing_data": {k: v for k, v in customer_data.items() if str(v or "").strip()},
                 "hint": "Pide los datos que faltan uno a uno, sin repetir los que ya tenés.",
             }
+            sobre = await _sobre_faltan_datos(accion_datos, customer_data, requeridos_del_modulo)
+            if sobre is not None:
+                faltan["faltan_datos"] = sobre
             if "vertical" in missing:
                 # El tipo de negocio va en customer_data.vertical como el id de una opción
                 # (ADR-0121): las opciones van en la respuesta, no en el schema de la tool.

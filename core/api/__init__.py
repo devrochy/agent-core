@@ -28,6 +28,7 @@ from core.api.routers import (
     costs,
     dashboard,
     dashboard_agents,
+    datos_cliente,
     datos_de_prueba,
     declarative_tools,
     dlq,
@@ -121,6 +122,7 @@ api_router.include_router(platform_meta_es.router)
 api_router.include_router(qa.router)
 api_router.include_router(declarative_tools.router)
 api_router.include_router(settings.router)
+api_router.include_router(datos_cliente.router)
 api_router.include_router(domain_events.router)
 api_router.include_router(web_chat.router)
 

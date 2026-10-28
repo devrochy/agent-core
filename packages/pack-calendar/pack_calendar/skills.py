@@ -34,6 +34,7 @@ from core.shared.tenant import get_current_tenant_id
 from pack_calendar import agendas, google_api
 from pack_calendar.agendas import Agenda
 from pack_calendar.config import CalendarConfig
+from pack_calendar.datos import sobre_faltan_datos
 from pack_calendar.oauth import get_access_token
 
 log = get_logger(__name__)
@@ -836,12 +837,14 @@ class CalendarSkill(BaseSkill):
                 "error": "Falta el email del cliente: pedíselo antes de agendar (es obligatorio).",
                 "status": "needs_data",
                 "missing": ["attendee_email"],
+                "faltan_datos": await sobre_faltan_datos({}),
             }
         if single_recipient(email) is None:
             return {
                 "error": "El email del cliente no es válido: pedíselo de nuevo.",
                 "status": "needs_data",
                 "missing": ["attendee_email"],
+                "faltan_datos": await sobre_faltan_datos({}),
             }
         if not await self._email_provided_by_client(email, context):
             # El modelo inventó el email (probado 2026-10-05): solo se acepta el

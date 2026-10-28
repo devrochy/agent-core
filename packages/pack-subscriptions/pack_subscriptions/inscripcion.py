@@ -29,6 +29,8 @@ from typing import Any
 
 from sqlalchemy import select, text
 
+from core.datos_cliente.legado import base_desde_lista, requeridos_efectivos
+from core.datos_cliente.servicio import evaluar_accion
 from core.db.session import get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -47,6 +49,7 @@ from pack_subscriptions.capability import (
     evaluar_cambio,
     mismo_monto,
 )
+from pack_subscriptions.datos import A_LEGADO, ACCION_INSCRIBIRSE
 from pack_subscriptions.models import (
     CARGO_INSCRIPCION,
     PENDIENTE_PAGO,
@@ -251,6 +254,20 @@ async def cotizar(
     return salida
 
 
+async def _evaluar_datos(
+    datos_alta: dict[str, Any] | None, requeridos_del_modulo: list[str]
+) -> dict[str, Any] | None:
+    """Sobre unificado `faltan_datos` (aditivo: no sustituye `faltan`). Nunca rompe la tool."""
+    try:
+        evaluacion = await evaluar_accion(
+            ACCION_INSCRIBIRSE, datos_alta, base=base_desde_lista(requeridos_del_modulo)
+        )
+    except Exception:
+        log.warning("subs_sobre_faltan_datos_fallo", exc_info=True)
+        return None
+    return evaluacion.como_sobre() if evaluacion is not None else None
+
+
 async def _plan_o_error(plan_code: str) -> Plan:
     plan = await planes.por_codigo(plan_code)
     if plan is None:
@@ -285,7 +302,19 @@ async def inscribir(
     config = await _config()
     plan = await _plan_o_error(plan_code)
     precio = Decimal(plan.precio or 0)
-    datos, documento = validar_datos(list(config.campos_de_inscripcion), datos_alta, origen=origen)
+    requeridos = list(config.campos_de_inscripcion)
+    try:  # política de datos del cliente (HU-CRM-13): sin ajustes del dueño la lista no cambia
+        requeridos = await requeridos_efectivos(ACCION_INSCRIBIRSE, requeridos, A_LEGADO)
+    except Exception:
+        log.warning("subs_politica_datos_no_aplicada", exc_info=True)
+    try:
+        datos, documento = validar_datos(requeridos, datos_alta, origen=origen)
+    except SubscriptionError as error:
+        if error.code == "faltan_datos":
+            evaluacion = await _evaluar_datos(datos_alta, list(config.campos_de_inscripcion))
+            if evaluacion is not None:
+                error.data["faltan_datos"] = evaluacion
+        raise
     telefono_canal = await _cliente_del_negocio(customer_id)
     if (
         origen == "agente"
