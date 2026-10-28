@@ -17,6 +17,9 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
+from core.kernel.mensajes import LLAVE as LLAVES
+from core.kernel.mensajes import RUTA_VARIABLE  # noqa: F401
+
 # ---- límites del producto (los aplica el lint)
 MAX_OPCIONES = 10          # lista interactiva de WhatsApp; la plantilla admite 10 botones
 MAX_BOTONES = 3            # hasta 3 opciones: botones de respuesta; de 4 a 10: lista
@@ -31,11 +34,9 @@ MAX_ARGS_FIJOS_BYTES = 2000
 
 ID_OPCION = re.compile(r"^[a-z0-9_]{1,12}$")
 NOMBRE_TOOL = re.compile(r"^[a-zA-Z0-9_]{1,80}$")
-# `cliente.nombre`, `pedido.numero`: segmentos en minúsculas separados por punto.
-RUTA_VARIABLE = re.compile(r"^[a-z][a-z0-9_]{0,29}(\.[a-z][a-z0-9_]{0,29}){0,3}$")
 CLAVE_RESULTADO = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
-# `{cliente.nombre}`, `{ctx.pedido.numero}`, `{result.estado}`.
-LLAVES = re.compile(r"\{([^{}]*)\}")
+# `RUTA_VARIABLE` (`cliente.nombre`, `pedido.numero`) y `LLAVES` (`{cliente.nombre}`, `{ctx.pedido.numero}`,
+# `{result.estado}`) viven en `core.kernel.mensajes`, el módulo común de variables (ADR-0178 D1).
 
 # Topes duros de la forma (anti-abuso de tamaño): el lint reporta los límites reales.
 _Texto = Annotated[str, StringConstraints(max_length=4096)]

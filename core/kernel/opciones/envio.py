@@ -39,6 +39,11 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from core.gateway.connection_types import capacidades_de
+from core.kernel.mensajes import (
+    componente,
+    placeholders_del_cuerpo,
+    tiene_variables_fuera_del_cuerpo,
+)
 from core.kernel.opciones.definicion import MAX_TTL_HORAS, Definicion
 from core.kernel.opciones.mapeo import nombre_de_parametro, variables_del_cuerpo
 
@@ -161,13 +166,6 @@ def componentes_de_plantilla(cuerpo: Sequence[dict[str, Any]], payloads: Sequenc
 
 
 # ------------------------------------------------------------------ compatibilidad con la contraparte de Meta
-def _componente(componentes: Any, tipo: str) -> dict[str, Any] | None:
-    for c in componentes or []:
-        if isinstance(c, dict) and str(c.get("type", "")).upper() == tipo:
-            return c
-    return None
-
-
 def compatibilidad_plantilla(componentes: Any, definicion: Definicion) -> str | None:
     """None si la plantilla de Meta aprobada puede enviar ESTA versión; si no, `PLANTILLA_DISTINTA`.
 
@@ -175,14 +173,12 @@ def compatibilidad_plantilla(componentes: Any, definicion: Definicion) -> str | 
     plantilla sean exactamente los de la definición, en el mismo orden, es lo que impide que un toque ejecute una
     acción distinta de la que el botón dice. Lo mismo con las variables del cuerpo: la plantilla pide exactamente
     las que la definición resuelve, y ninguna en cabecera, pie ni botones."""
-    from core.gateway.event_notices import template_has_non_body_variables, template_placeholders
-
-    if template_has_non_body_variables(componentes):
+    if tiene_variables_fuera_del_cuerpo(componentes):
         return PLANTILLA_DISTINTA
     esperadas = {nombre_de_parametro(r) for r in variables_del_cuerpo(definicion.body)}
-    if set(template_placeholders(componentes)) != esperadas:
+    if set(placeholders_del_cuerpo(componentes)) != esperadas:
         return PLANTILLA_DISTINTA
-    botones = (_componente(componentes, "BUTTONS") or {}).get("buttons") or []
+    botones = (componente(componentes, "BUTTONS") or {}).get("buttons") or []
     quick = [b for b in botones if isinstance(b, dict) and str(b.get("type", "")).upper() == "QUICK_REPLY"]
     if len(quick) != len(botones) or len(quick) != len(definicion.opciones):
         return PLANTILLA_DISTINTA
