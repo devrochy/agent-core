@@ -49457,6 +49457,11 @@
             },
             "type": "array",
             "title": "Acciones"
+          },
+          "herramientas_del_agente": {
+            "type": "boolean",
+            "title": "Herramientas Del Agente",
+            "default": false
           }
         },
         "type": "object",
@@ -49469,25 +49474,43 @@
       "PoliticaDatosUpdate": {
         "properties": {
           "politica": {
-            "additionalProperties": {
-              "additionalProperties": {
-                "type": "string",
-                "enum": [
-                  "requerido",
-                  "recomendado",
-                  "no_pedir"
-                ]
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "type": "string",
+                    "enum": [
+                      "requerido",
+                      "recomendado",
+                      "no_pedir"
+                    ]
+                  },
+                  "type": "object"
+                },
+                "type": "object",
+                "maxProperties": 50
               },
-              "type": "object"
-            },
-            "type": "object",
-            "maxProperties": 50,
+              {
+                "type": "null"
+              }
+            ],
             "title": "Politica"
+          },
+          "herramientas_del_agente": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Herramientas Del Agente"
           }
         },
         "type": "object",
         "title": "PoliticaDatosUpdate",
-        "description": "`{accion_id: {clave: nivel}}`. Lo que no viene para una acción vuelve al valor del módulo."
+        "description": "`{accion_id: {clave: nivel}}`. Lo que no viene para una acción vuelve al valor del módulo.\nSin `politica` (None) no se tocan los ajustes: sirve para cambiar solo la bandera."
       },
       "Portfolio": {
         "properties": {

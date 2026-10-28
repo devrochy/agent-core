@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, ClassVar
 
+from core.datos_cliente.ajustes import herramientas_activas
 from core.datos_cliente.evaluar import evaluar
 from core.datos_cliente.modelo import AccionDatos
 from core.datos_cliente.registro import registro_datos
@@ -17,6 +18,7 @@ from core.datos_cliente.servicio import ajustes_de, base_de
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
 from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
@@ -33,6 +35,13 @@ async def _habilitadas() -> list[AccionDatos]:
 
 
 async def _hay_acciones(_connection_types: set[str]) -> bool:
+    """La tool se ofrece solo si el negocio activó las herramientas de datos del cliente (apagado por
+    defecto: ofrecer una tool nueva cambia lo que ve el modelo en todos los turnos) y hay acciones."""
+    try:
+        if not await herramientas_activas(get_current_tenant_id()):
+            return False
+    except Exception:
+        return False
     return bool(await _habilitadas())
 
 
