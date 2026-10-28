@@ -340,9 +340,11 @@ async def handle_inbound(fields: dict[str, str]) -> str:
     async with tenant_scope(tenant_id):
         # Ciclo de vida + billing: mensajes de un tenant suspendido/eliminado o
         # con el plan vencido se descartan (ACK) sin procesar (ADR-0001/0045).
-        from core.billing.enforcement import is_tenant_operational
+        from core.billing.enforcement import tenant_operativo
+        from core.kernel.opciones.bandera import habilitada_desde
 
-        if not await is_tenant_operational(uuid.UUID(tenant_id)):
+        tenant = await tenant_operativo(uuid.UUID(tenant_id))
+        if tenant is None:
             log.warning(
                 "inbound_tenant_not_operational",
                 tenant_id=tenant_id,
@@ -359,7 +361,9 @@ async def handle_inbound(fields: dict[str, str]) -> str:
                 tenant_id=tenant_id,
             )
             return TURN_DUPLICATE
-        await _handle_inbound_scoped(fields)
+        # La fila del negocio ya se leyó para el gate de arriba: de ella sale la bandera de las opciones directas
+        # (sin otra consulta a `tenants` por mensaje; ver `_toque_de_opcion`).
+        await _handle_inbound_scoped(fields, opciones_habilitada=habilitada_desde(tenant.settings))
         await _mark_event_completed(uuid.UUID(tenant_id), fields.get("external_message_id", ""))
         return TURN_PROCESSED
 
@@ -431,7 +435,7 @@ async def _mark_event_completed(tenant_id: uuid.UUID, external_id: str) -> None:
 
 
 @en_turno  # decisión y resultado del turno (HU-AOS-10); el loop reusa este turno
-async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
+async def _handle_inbound_scoped(fields: dict[str, str], *, opciones_habilitada: bool | None = None) -> None:
     settings = get_settings()
     content = fields.get("content", "")
     media_context = fields.get("media_context", "")
@@ -532,7 +536,7 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
     # resolver y el turno termina aquí (ni debounce ni LLM); apagada, o con cualquier otro payload, el
     # mensaje sigue exactamente como siempre. En un canal de texto, el «1» (o el título exacto) que contesta
     # un menú numerado vigente equivale al toque (pista C2); cualquier otro texto sigue al agente.
-    if await _toque_de_opcion(conversation, customer, fields):
+    if await _toque_de_opcion(conversation, customer, fields, habilitada=opciones_habilitada):
         return
 
     # ---------------- datos sin LLM (HU-AOS-05): botón, fila de lista o contenido que llena un
@@ -735,12 +739,17 @@ async def _resolve_conversation(
 _SERVICE_WINDOW_HOURS = 24
 
 
-async def _toque_de_opcion(conversation: Conversation, customer: Customer, fields: dict[str, str]) -> bool:
+async def _toque_de_opcion(
+    conversation: Conversation, customer: Customer, fields: dict[str, str], *, habilitada: bool | None = None
+) -> bool:
     """¿Lo atendió el resolver de opciones directas? Dos entradas: el payload `opt:`/`optc:`/`optn:` de un botón, y
     (pista C2) el texto «1» o el título de una opción que contesta un menú numerado en un canal sin botones. Un
-    mensaje que no es ninguna de las dos (el caso común) no paga ni una consulta; la respuesta de texto paga la
-    bandera y, solo si la bandera está encendida, la búsqueda del menú. Una bandera que no se puede leer cuenta como
-    apagada (fail-closed: el mensaje sigue su camino de siempre)."""
+    mensaje que no es ninguna de las dos (el caso común) no paga ni una consulta.
+
+    `habilitada` es la bandera del negocio tal como la leyó el gate del mensaje (`handle_inbound`: la misma fila de
+    `tenants` que valida que el negocio esté operativo): con ella la bandera apagada cuesta CERO consultas, y la
+    encendida solo paga la búsqueda del menú. Sin ella (`None`: quien llama no pasó por el gate) se lee de la base.
+    Una bandera que no se puede leer cuenta como apagada (fail-closed: el mensaje sigue su camino de siempre)."""
     from core.kernel.opciones import bandera
     from core.kernel.opciones.payload import es_de_opciones
     from core.kernel.opciones.resolver import VIA_TEXTO
@@ -753,12 +762,14 @@ async def _toque_de_opcion(conversation: Conversation, customer: Customer, field
     por_texto = not (fields.get("interactive_id") or "").strip() and puede_ser_respuesta_de_menu(conversation, fields)
     if not por_texto and not es_de_opciones((fields.get("interactive_id") or "").strip()):
         return False
-    try:
-        async with get_session() as session:
-            encendida = await bandera.habilitada(session, conversation.tenant_id)
-    except Exception as exc:
-        log.warning("opciones_directas_bandera_ilegible", tenant_id=str(conversation.tenant_id), error=type(exc).__name__)
-        return False
+    encendida = habilitada
+    if encendida is None:
+        try:
+            async with get_session() as session:
+                encendida = await bandera.habilitada(session, conversation.tenant_id)
+        except Exception as exc:
+            log.warning("opciones_directas_bandera_ilegible", tenant_id=str(conversation.tenant_id), error=type(exc).__name__)
+            return False
     if not encendida:
         return False
     if por_texto:

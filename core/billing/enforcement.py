@@ -25,8 +25,9 @@ from typing import Any
 from core.billing.metrics import count_metric, get_metric
 from core.billing.plans import PACK_LIMIT_KEYS, get_plan
 from core.billing.service import get_active_subscription
+from core.db.models import Tenant
 from core.shared.logger import get_logger
-from core.tenants import is_tenant_active
+from core.tenants import cargar_tenant_activo
 
 log = get_logger(__name__)
 
@@ -62,22 +63,27 @@ def _deadline(sub) -> datetime | None:
     return sub.period_end
 
 
+async def tenant_operativo(tenant_id: uuid.UUID | None) -> Tenant | None:
+    """La fila del tenant si puede procesar mensajes (ciclo de vida + billing), si no `None`. Es la misma lectura
+    que `is_tenant_operational`; el consumer la usa para no volver a leer `tenants` en el mismo mensaje."""
+    tenant = await cargar_tenant_activo(tenant_id)
+    if tenant is None:
+        return None
+    sub = await get_active_subscription(tenant.id)
+    if sub is None:
+        log.debug("billing_no_subscription_grandfathered", tenant_id=str(tenant.id))
+        return tenant
+    if sub.status in BLOCKING_STATUSES:
+        return None
+    deadline = _deadline(sub)
+    if deadline is None or datetime.now(UTC) < deadline:
+        return tenant
+    return None
+
+
 async def is_tenant_operational(tenant_id: uuid.UUID | None) -> bool:
     """¿El tenant puede procesar mensajes (ciclo de vida + billing)?"""
-    if tenant_id is None:
-        return False
-    if not await is_tenant_active(tenant_id):
-        return False
-    sub = await get_active_subscription(tenant_id)
-    if sub is None:
-        log.debug("billing_no_subscription_grandfathered", tenant_id=str(tenant_id))
-        return True
-    if sub.status in BLOCKING_STATUSES:
-        return False
-    deadline = _deadline(sub)
-    if deadline is None:
-        return True
-    return datetime.now(UTC) < deadline
+    return await tenant_operativo(tenant_id) is not None
 
 
 async def quota_decision(tenant_id: uuid.UUID, key: str, *, session=None) -> QuotaDecision:
