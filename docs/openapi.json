@@ -29149,6 +29149,73 @@
         }
       }
     },
+    "/api/v1/mensajes/catalogo": {
+      "get": {
+        "tags": [
+          "api",
+          "mensajes"
+        ],
+        "summary": "Catalogo",
+        "description": "Los mensajes del negocio activo en una sola lista, de solo lectura. No sincroniza con Meta (muestra lo último\nguardado) y no descifra nada fuera de la lectura de configuración de los packs. 403 si no se puede leer\nninguna de las fuentes; 400 `no_tenant` si no hay un negocio seleccionado.",
+        "operationId": "catalogo_api_v1_mensajes_catalogo_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogoDeMensajesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/meta/wizard/resume": {
       "post": {
         "tags": [
@@ -39183,6 +39250,46 @@
           "opciones"
         ],
         "title": "Catalogo"
+      },
+      "CatalogoDeMensajesOut": {
+        "properties": {
+          "mensajes": {
+            "items": {
+              "$ref": "#/components/schemas/MensajeDelCatalogo"
+            },
+            "type": "array",
+            "title": "Mensajes"
+          },
+          "omitidas": {
+            "items": {
+              "$ref": "#/components/schemas/MensajeOmitido"
+            },
+            "type": "array",
+            "title": "Omitidas",
+            "description": "Tipos que no se listan y por qué."
+          },
+          "truncado": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "meta",
+                "evento",
+                "opciones",
+                "texto_pack"
+              ]
+            },
+            "type": "array",
+            "title": "Truncado",
+            "description": "Tipos que pasaron el tope por tipo: la lista está recortada."
+          }
+        },
+        "type": "object",
+        "required": [
+          "mensajes",
+          "omitidas",
+          "truncado"
+        ],
+        "title": "CatalogoDeMensajesOut"
       },
       "CategoryOut": {
         "properties": {
@@ -56924,6 +57031,160 @@
         "title": "MemoryUpdate",
         "description": "Entrada de `PUT /memory`: turnos de contexto 1–200, top-k 0–20 (0 = sin RAG) y\numbral 0–1 (los rangos de `save_memory`); fuera de rango responde 422."
       },
+      "MensajeDelCatalogo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "Estable y único en el catálogo (`<tipo>:<…>`)."
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "meta",
+              "evento",
+              "opciones",
+              "texto_pack"
+            ],
+            "title": "Tipo"
+          },
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "idioma": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idioma",
+            "description": "`meta`: idioma de la plantilla; `evento`: el del mapeo, si hay."
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado",
+            "description": "`meta`: el de Meta (`APPROVED`, `PENDING`…); `evento`: `sin_mapear`, `mapeado` o `plantilla_no_aprobada`; `opciones`: `draft`, `published` o `retired`; `texto_pack`: `por_defecto`, `personalizado` o `config_invalida`."
+          },
+          "estado_detalle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estado Detalle",
+            "description": "`meta`: categoría; `evento`: plantilla mapeada; `opciones`: estado de su plantilla en Meta si se publicó allí; `texto_pack`: nombre del pack."
+          },
+          "canales_soportados": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Canales Soportados",
+            "description": "Canales por los que sale hoy (constante por tipo hasta la pista C1)."
+          },
+          "variables": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Variables",
+            "description": "Tal como las usa la fuente, sin normalizar: marcadores de Meta, rutas permitidas del evento, variables de la definición o llaves del texto."
+          },
+          "dialecto_variables": {
+            "type": "string",
+            "enum": [
+              "meta_posicionales",
+              "meta_nombradas",
+              "llaves_con_ruta"
+            ],
+            "title": "Dialecto Variables"
+          },
+          "resumen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resumen",
+            "description": "Primeros ~160 caracteres del texto propio del negocio (nunca datos de un cliente)."
+          },
+          "actualizado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actualizado En",
+            "description": "`meta`: la última sincronización con Meta (el estado puede estar desfasado: no se sincroniza al listar); `opciones`: la última edición. Nulo en `evento` y `texto_pack`."
+          },
+          "fuente": {
+            "$ref": "#/components/schemas/FuenteDeMensaje"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tipo",
+          "clave",
+          "nombre",
+          "idioma",
+          "estado",
+          "estado_detalle",
+          "canales_soportados",
+          "variables",
+          "dialecto_variables",
+          "resumen",
+          "actualizado_en",
+          "fuente"
+        ],
+        "title": "MensajeDelCatalogo"
+      },
+      "MensajeOmitido": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "meta",
+              "evento",
+              "opciones",
+              "texto_pack"
+            ],
+            "title": "Tipo"
+          },
+          "motivo": {
+            "type": "string",
+            "enum": [
+              "sin_permiso",
+              "bandera_apagada"
+            ],
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "motivo"
+        ],
+        "title": "MensajeOmitido"
+      },
       "UnlinkRequest": {
         "properties": {
           "tenant": {
@@ -58808,6 +59069,100 @@
           "enabled_skills"
         ],
         "title": "FromTemplateOut"
+      },
+      "FuenteDeMensaje": {
+        "properties": {
+          "editor": {
+            "type": "string",
+            "enum": [
+              "meta",
+              "evento",
+              "opciones",
+              "texto_pack"
+            ],
+            "title": "Editor"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id",
+            "description": "`meta`: la conexión de la WABA que tiene la plantilla."
+          },
+          "message_template_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Template Id",
+            "description": "`meta`: la fila de `message_templates`."
+          },
+          "evento": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evento",
+            "description": "`evento`: clave del evento."
+          },
+          "clave": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clave",
+            "description": "`opciones`: clave de la plantilla con opciones."
+          },
+          "plugin_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plugin Id",
+            "description": "`texto_pack`: el pack dueño del texto."
+          },
+          "campo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campo",
+            "description": "`texto_pack`: el campo de la configuración del pack."
+          }
+        },
+        "type": "object",
+        "required": [
+          "editor"
+        ],
+        "title": "FuenteDeMensaje",
+        "description": "Dónde se edita: el panel arma el enlace con estos ids. Solo vienen los del tipo (el resto es nulo)."
       },
       "GateBandera": {
         "properties": {
