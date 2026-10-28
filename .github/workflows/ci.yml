@@ -40,43 +40,6 @@ env:
   RUTAS_INTEGRACION: '^(core/|packages/|plugins/|alembic/|cli/|tests/integration/|tests/conftest\.py$|alembic\.ini$|scripts/init_db\.py$|scripts/install_plugins\.sh$|pyproject\.toml$|uv\.lock$|\.github/|docker/postgres/)'
 
 jobs:
-  nivel:
-    # Decide el nivel y si la integración es relevante. Es un job aparte y corto (checkout + diff)
-    # para que `rapido`, `integracion` y `evals-replay` arranquen A LA VEZ en vez de en cadena.
-    runs-on: [self-hosted, linux, x64]
-    # Seguridad: no ejecutar workflows de PRs de forks en el runner self-hosted.
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    outputs:
-      nivel: ${{ steps.nivel.outputs.nivel }}
-      relevante: ${{ steps.nivel.outputs.relevante }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # El diff contra la rama base necesita la historia.
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Nivel del CI y rutas tocadas
-        id: nivel
-        env:
-          BASE: ${{ github.base_ref }}
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ "$BASE" != "main" ]; then
-            echo "nivel=rapido" >> "$GITHUB_OUTPUT"
-            # Si el diff falla, el paso falla (`-e`): nunca se salta la integración a ciegas.
-            # `--no-renames`: mover un archivo fuera de `core/` también cuenta como tocarlo.
-            CAMBIOS="$(git diff --no-renames --name-only "origin/${BASE}...HEAD")"
-            if grep -E "$RUTAS_INTEGRACION" <<< "$CAMBIOS" > /dev/null; then
-              echo "relevante=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "relevante=false" >> "$GITHUB_OUTPUT"
-              echo "::notice title=Integración omitida::La PR no toca rutas que cubre la integración."
-            fi
-          else
-            echo "nivel=completo" >> "$GITHUB_OUTPUT"
-            echo "relevante=true" >> "$GITHUB_OUTPUT"
-          fi
-
   rapido:
     # Sin `needs`: lint y unitarios arrancan en t=0 y el feedback rápido nunca queda detrás de nada.
     runs-on: [self-hosted, linux, x64]
@@ -154,7 +117,7 @@ jobs:
               | tar -xz -C "$RUNNER_TEMP" gitleaks
             mv -f "$RUNNER_TEMP/gitleaks" "$BIN.$$" && mv -f "$BIN.$$" "$BIN"
           fi
-          # Mismo criterio que el job `nivel` (PR a una rama que no es main = nivel rápido).
+          # Nivel rápido = PR a una rama que no es main (mismo criterio que el paso `nivel` de `integracion`).
           if [ "$EVENTO" = "pull_request" ] && [ "$BASE" != "main" ]; then
             "$BIN" detect --source . --redact -v --log-opts="origin/${BASE}..HEAD"
           else
@@ -168,8 +131,9 @@ jobs:
     # o el flujo sin regrabar, falla con exit 3, el diff y el comando para regrabar
     # (`bash scripts/gate_evals.sh record`, con OK del dueño). También corre en el push a
     # develop (sin costo). No mide el modelo: eso lo hace el gate en vivo de la PR → main.
-    needs: nivel
-    if: ${{ (needs.nivel.outputs.nivel == 'rapido' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/develop') }}
+    # Sin `needs`: el nivel rápido es «PR a una rama que no es main», que se lee del evento; no hace falta un job
+    # aparte (cada uno hacía una cola de runner propia de 2–4 min con el host cargado).
+    if: ${{ (github.event_name == 'pull_request' && github.base_ref != 'main' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/develop') }}
     runs-on: [self-hosted, linux, x64]
     permissions:
       contents: read
@@ -234,10 +198,8 @@ jobs:
         run: bash scripts/gate_evals.sh replay
 
   integracion:
-    needs: nivel
-    # El filtro de forks se repite: no depender solo de `needs` para no correr
-    # código de un fork en el runner self-hosted.
-    if: ${{ needs.nivel.outputs.relevante == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    # Seguridad: no ejecutar workflows de PRs de forks en el runner self-hosted.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: [self-hosted, linux, x64]
     permissions:
       contents: read
@@ -276,9 +238,34 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # El diff contra la rama base necesita la historia.
+          fetch-depth: 0
           persist-credentials: false
 
+      - name: Nivel del CI y rutas tocadas
+        id: nivel
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "$BASE" != "main" ]; then
+            echo "nivel=rapido" >> "$GITHUB_OUTPUT"
+            # Si el diff falla, el paso falla (`-e`): nunca se salta la integración a ciegas.
+            # `--no-renames`: mover un archivo fuera de `core/` también cuenta como tocarlo.
+            CAMBIOS="$(git diff --no-renames --name-only "origin/${BASE}...HEAD")"
+            if grep -E "$RUTAS_INTEGRACION" <<< "$CAMBIOS" > /dev/null; then
+              echo "relevante=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "relevante=false" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Integración omitida::La PR no toca rutas que cubre la integración."
+            fi
+          else
+            echo "nivel=completo" >> "$GITHUB_OUTPUT"
+            echo "relevante=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Si la PR no toca rutas que cubre la integración, los servicios ya están arriba pero no se corre nada.
       - name: URLs del stack (puertos dinámicos)
+        if: steps.nivel.outputs.relevante == 'true'
         # El contexto `job` no está disponible en el `env` del job: se exportan aquí.
         run: |
           PG=${{ job.services.postgres.ports['5432'] }}
@@ -290,8 +277,10 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - uses: ./.github/actions/preparar-entorno
+        if: steps.nivel.outputs.relevante == 'true'
 
       - name: Migrar y sembrar
+        if: steps.nivel.outputs.relevante == 'true'
         env:
           # Password determinística solo para que los tests de integración puedan
           # loguearse (default de init_db.py es aleatoria, correcto en producción).
@@ -305,7 +294,7 @@ jobs:
       # sembrada arriba (`agent_core_gwN`) y usa su propia base de Redis: ver tests/integration/_aislamiento_xdist.py.
       # Sin `-n auto`: el host comparte CPU con otros runners.
       - name: Integración — subconjunto crítico (nivel rápido)
-        if: needs.nivel.outputs.nivel == 'rapido'
+        if: steps.nivel.outputs.relevante == 'true' && steps.nivel.outputs.nivel == 'rapido'
         env:
           AGENT_CORE_INTEGRATION: "1"
         # `--durations` y el junit sirven para medir dónde se va el tiempo (HU de CI rápido,
@@ -313,13 +302,13 @@ jobs:
         run: pytest tests/integration -q -m aislamiento -n 3 --dist loadfile --durations=40 --junitxml="$RUNNER_TEMP/integracion-junit.xml"
 
       - name: Integración completa (aislamiento multi-tenant, RLS, webhooks)
-        if: needs.nivel.outputs.nivel == 'completo'
+        if: steps.nivel.outputs.relevante == 'true' && steps.nivel.outputs.nivel == 'completo'
         env:
           AGENT_CORE_INTEGRATION: "1"
         run: pytest tests/integration -q -n 3 --dist loadfile --durations=40 --junitxml="$RUNNER_TEMP/integracion-junit.xml"
 
       - name: Duraciones de la integración (junit)
-        if: always()
+        if: always() && steps.nivel.outputs.relevante == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: integracion-junit
@@ -330,7 +319,7 @@ jobs:
       - name: Gate de evals (subconjunto crítico, LLM real)
         # Solo en la PR → main (la release): el único punto del CI que gasta LLM. En el
         # push a develop el gate corre en replay (job `evals-replay`), sin costo.
-        if: needs.nivel.outputs.nivel == 'completo' && github.event_name == 'pull_request' && github.base_ref == 'main' && github.actor != 'dependabot[bot]'
+        if: steps.nivel.outputs.nivel == 'completo' && github.event_name == 'pull_request' && github.base_ref == 'main' && github.actor != 'dependabot[bot]'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         # Camino feliz + manipulación + escalamiento: las regresiones que importan.
@@ -340,11 +329,11 @@ jobs:
         # HU-SUB-12: conversación completa contra el loop real con pagos simulados (sin
         # red). 01 informa planes; 05 recorre cargo → recordatorio → vencida → pago →
         # reactivación con saltos de reloj. Solo en la PR → main, como el paso anterior.
-        if: needs.nivel.outputs.nivel == 'completo' && github.event_name == 'pull_request' && github.base_ref == 'main' && github.actor != 'dependabot[bot]'
+        if: steps.nivel.outputs.nivel == 'completo' && github.event_name == 'pull_request' && github.base_ref == 'main' && github.actor != 'dependabot[bot]'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: python evals/journeys.py "01,05" --umbral 1.0
 
       - name: Gate de evals no ejecutado (Dependabot)
-        if: needs.nivel.outputs.nivel == 'completo' && github.event_name == 'pull_request' && github.base_ref == 'main' && github.actor == 'dependabot[bot]'
+        if: steps.nivel.outputs.nivel == 'completo' && github.event_name == 'pull_request' && github.base_ref == 'main' && github.actor == 'dependabot[bot]'
         run: echo "::notice title=Evals no ejecutados::Dependabot no tiene LLM_API_KEY. El gate en vivo corre en la PR de release hacia main."
