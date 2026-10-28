@@ -14,7 +14,6 @@ la base (rutas permitidas por evento en `EVENTOS`). Nunca del texto del LLM.
 
 from __future__ import annotations
 
-import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -23,6 +22,18 @@ from sqlalchemy import select
 
 from core.db.models import AppSettings, Conversation, Message, MessageTemplate, WabaAccount
 from core.db.session import get_session
+from core.kernel.mensajes import (
+    MAX_PARAM,  # noqa: F401  (reexport: nombre público desde ADR-0108)
+    DatoFaltante,
+    RutaNoPermitida,
+    clean_param,
+    componente,
+    placeholders_del_cuerpo,
+    render_meta,
+    resolver_ruta,
+    tiene_variables_fuera_del_cuerpo,
+)
+from core.kernel.mensajes import render_fallback as _render_fallback
 from core.shared.exceptions import OutboundWindowExpiredError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -91,8 +102,6 @@ EVENTOS: dict[str, dict[str, str]] = {
     },
 }
 
-_PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
-
 
 class NoticeConfigError(ValueError):
     """La configuración de un evento no es válida (ruta, plantilla o variables)."""
@@ -103,18 +112,6 @@ class NoticeNotSentError(RuntimeError):
     lanza para que el outbox reintente el evento con backoff (ADR-0107)."""
 
 
-MAX_PARAM = 1024
-
-
-def clean_param(valor: str, limite: int = MAX_PARAM) -> str:
-    """Parámetro apto para Meta: sin saltos ni tabulaciones, sin más de un espacio
-    seguido y con largo acotado (Meta rechaza el parámetro, 132000/132018). Se
-    aplica a todo valor, venga del evento o de la persona del equipo."""
-    texto = re.sub(r"[\r\n\t]+", " ", str(valor))
-    texto = re.sub(r" {2,}", " ", texto).strip()
-    return texto[:limite].rstrip()
-
-
 @dataclass(frozen=True)
 class NoticeResult:
     modo: str  # "texto" | "plantilla" | "sin_plantilla" | "duplicado" | "no_enviado" | "conexion_pausada"
@@ -122,34 +119,14 @@ class NoticeResult:
 
 
 # ---------------------------------------------------------------- plantillas
-def _component(template_components: Any, tipo: str) -> dict[str, Any] | None:
-    for comp in template_components or []:
-        if isinstance(comp, dict) and str(comp.get("type", "")).upper() == tipo:
-            return comp
-    return None
-
-
 def template_placeholders(template_components: Any) -> list[str]:
     """Placeholders del cuerpo en orden de aparición, sin repetir ("1", "2" o nombres)."""
-    body = _component(template_components, "BODY")
-    vistos: list[str] = []
-    for nombre in _PLACEHOLDER.findall(str((body or {}).get("text", ""))):
-        if nombre not in vistos:
-            vistos.append(nombre)
-    return vistos
+    return placeholders_del_cuerpo(template_components)
 
 
 def template_has_non_body_variables(template_components: Any) -> bool:
     """v1 solo resuelve variables del cuerpo: cabecera o botones con variables no se mapean."""
-    for comp in template_components or []:
-        if not isinstance(comp, dict) or str(comp.get("type", "")).upper() == "BODY":
-            continue
-        if _PLACEHOLDER.search(str(comp.get("text", ""))):
-            return True
-        for boton in comp.get("buttons") or []:
-            if isinstance(boton, dict) and _PLACEHOLDER.search(str(boton.get("url", ""))):
-                return True
-    return False
+    return tiene_variables_fuera_del_cuerpo(template_components)
 
 
 def build_components(template: MessageTemplate, values: dict[str, str]) -> list[dict[str, Any]]:
@@ -168,24 +145,11 @@ def build_components(template: MessageTemplate, values: dict[str, str]) -> list[
 
 
 def render_body(template: MessageTemplate, values: dict[str, str]) -> str:
-    body = _component(template.components, "BODY")
-    texto = str((body or {}).get("text", ""))
-    return _PLACEHOLDER.sub(lambda m: values.get(m.group(1), m.group(0)), texto)
+    body = componente(template.components, "BODY")
+    return render_meta(str((body or {}).get("text", "")), values)
 
 
 # ---------------------------------------------------------------- variables
-def _lookup(context: dict[str, Any], ruta: str) -> str | None:
-    actual: Any = context
-    for parte in ruta.split("."):
-        if not isinstance(actual, dict) or parte not in actual:
-            return None
-        actual = actual[parte]
-    if actual is None or isinstance(actual, dict | list):
-        return None
-    texto = clean_param(str(actual))
-    return texto or None
-
-
 def resolve_values(
     event_key: str, variables: list[str] | dict[str, str], placeholders: list[str], context: dict[str, Any]
 ) -> dict[str, str]:
@@ -203,26 +167,18 @@ def resolve_values(
     valores: dict[str, str] = {}
     for nombre in placeholders:
         ruta = mapeo[nombre]
-        if ruta not in permitidas:
-            raise NoticeConfigError(f"La ruta «{ruta}» no está permitida para {event_key}.")
-        valor = _lookup(context, ruta)
-        if valor is None:
-            raise NoticeConfigError(f"Falta el dato «{ruta}» en el evento.")
-        valores[nombre] = valor
+        try:
+            valores[nombre] = resolver_ruta(context, ruta, permitidas)
+        except RutaNoPermitida:
+            raise NoticeConfigError(f"La ruta «{ruta}» no está permitida para {event_key}.") from None
+        except DatoFaltante:
+            raise NoticeConfigError(f"Falta el dato «{ruta}» en el evento.") from None
     return valores
 
 
 def render_fallback(texto: str, context: dict[str, Any], event_key: str) -> str:
     """Texto de respaldo con `{ruta}` reemplazadas por datos del evento (solo rutas permitidas)."""
-    permitidas = EVENTOS.get(event_key, {})
-
-    def _sub(m: re.Match[str]) -> str:
-        ruta = m.group(1)
-        if ruta not in permitidas:
-            return m.group(0)
-        return _lookup(context, ruta) or ""
-
-    return re.sub(r"\{([a-z_]+\.[a-z_]+)\}", _sub, texto)
+    return _render_fallback(texto, context, EVENTOS.get(event_key, {}))
 
 
 # ---------------------------------------------------------------- config

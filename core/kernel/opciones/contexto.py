@@ -31,7 +31,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from core.kernel.opciones.definicion import RUTA_VARIABLE, Definicion, llaves_de
+from core.kernel.mensajes import RUTA_VARIABLE, clean_param
+from core.kernel.opciones.definicion import Definicion, llaves_de
 
 # Rutas que el servidor resuelve de la conversación. El texto describe el dato para el panel (PR de la API).
 VARIABLES_BASE: dict[str, str] = {
@@ -76,8 +77,6 @@ def _texto(valor: Any, limite: int | None = None) -> str | None:
     """El valor como texto limpio; None si está vacío o no es un dato simple (un objeto, una lista, un booleano)."""
     if valor is None or isinstance(valor, bool) or not isinstance(valor, str | int | float):
         return None
-    from core.gateway.event_notices import clean_param
-
     limpio = clean_param(str(valor)) if limite is None else clean_param(str(valor), limite)
     return limpio or None
 

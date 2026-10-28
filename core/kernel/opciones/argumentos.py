@@ -20,6 +20,7 @@ import copy
 from collections.abc import Collection, Mapping
 from typing import Any
 
+from core.kernel.mensajes import clean_param
 from core.kernel.opciones import esquema
 from core.kernel.opciones.definicion import LLAVES, Accion
 
@@ -66,8 +67,6 @@ def _citable(valor: Any) -> str | None:
     if isinstance(valor, bool):
         return None
     if isinstance(valor, str | int | float):
-        from core.gateway.event_notices import clean_param
-
         texto = clean_param(str(valor))
         return texto or None
     return None
