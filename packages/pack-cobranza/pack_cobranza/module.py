@@ -113,6 +113,15 @@ class CobranzaModule(BaseModule):
 
         registrar(host, self.id)
 
+    async def rol_de_acceso(self, tenant_id: Any, admin_id: Any) -> str | None:
+        """`gestor` si la cuenta tiene un perfil de gestor activo en el negocio (ADR-0174): entra a
+        la política de equipos más estricta, la de campo."""
+        from core.db.session import get_session
+        from pack_cobranza.api_gestor import _gestor_de
+
+        async with get_session() as session:
+            return "gestor" if await _gestor_de(session, tenant_id, admin_id) is not None else None
+
     async def on_collaborator_role(self, tenant_id: Any, admin_id: Any, role_id: str) -> None:
         """Rol de pack asignado a un colaborador (ADR-0066): crea su perfil `Gestor`.
 

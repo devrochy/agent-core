@@ -132,7 +132,12 @@ def respuesta_403(code: str, estado: str | None = None) -> JSONResponse:
 
 
 async def equipo_del_refresh(
-    request: Request, session: Any, tenant_id: uuid.UUID, gestor: Gestor, did_token: str | None
+    request: Request,
+    session: Any,
+    tenant_id: uuid.UUID,
+    admin_id: uuid.UUID | None,
+    rol: str,
+    did_token: str | None,
 ) -> uuid.UUID | JSONResponse | None:
     """Equipo con el que se renueva la sesión del gestor (ADR-0174): el `did` nuevo, `None` si la política
     es abierta y no hay equipo, o el 403 con `code`. Revalida: bloquear el equipo corta también el refresh.
@@ -141,7 +146,6 @@ async def equipo_del_refresh(
     - Sin header, manda el `did` del token (caché de 60 s, invalidada al escribir).
     - Sin ninguno de los dos (token anterior a este cambio o app vieja sin equipo) se hereda el equipo
       activo más reciente de la cuenta si la política lo permite; si no, 403 `dispositivo_requerido`."""
-    admin_id = gestor.admin_id
     if admin_id is None:
         return None
     device_id, via_header = equipo_de(request)
@@ -150,7 +154,7 @@ async def equipo_del_refresh(
             session,
             tenant_id=tenant_id,
             admin_id=admin_id,
-            rol="gestor",
+            rol=rol,
             device_id=device_id,
             ip=request.client.host if request.client else None,
         )
@@ -164,7 +168,7 @@ async def equipo_del_refresh(
             return respuesta_403("dispositivo_no_autorizado")
         code = await motivo_de_denegacion(session, tenant_id, admin_id, row_id)
         return respuesta_403(code) if code else row_id
-    if not await cuenta_entra_sin_equipo(session, tenant_id, admin_id):
+    if not await cuenta_entra_sin_equipo(session, tenant_id, admin_id, rol):
         return respuesta_403("dispositivo_requerido")
     return (
         await session.execute(
