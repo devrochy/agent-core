@@ -121,6 +121,8 @@ async def crear_suscripcion_manual(
     """
     if body.plan_codigo:
         return await _inscribir_desde_panel(body, principal)
+    if body.codigo_promocion:
+        raise ApiError(422, "promo_requiere_plan", "El código de promoción solo aplica al inscribir en un plan (`plan_codigo`).")
     if not body.nombre:
         raise ApiError(422, "plan_requerido", "Indica el plan (`plan_codigo`) en el que se inscribe el cliente.")
     from pack_subscriptions.module import (
