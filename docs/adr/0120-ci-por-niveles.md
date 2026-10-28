@@ -80,7 +80,7 @@ El dueño la aprobó el 2026-10-10. Usa el modo grabar/reproducir de la adenda d
 
 Decisión del dueño: **develop no genera costos de LLM y producción los mínimos.**
 
-- **Push a `develop`:** el gate de evals y journeys corre en replay (job `evals-replay`, base nueva, sin
+- **Push a `develop`:** el gate de evals y journeys corre en replay (paso de `integracion` desde la adenda 2026-10-28, base nueva, sin
   `LLM_API_KEY`), igual que en las PRs a `develop`. Antes corría en vivo en cada merge.
 - **PR de release hacia `main`:** el único punto del CI que llama al LLM real: el mismo gate (golden
   `06,07,08,21,22,23,24,25,26` y journeys `01,05`, k = 1), una vez por release. El push a `main` ya no lo repite.
@@ -154,3 +154,23 @@ pura. Se elimina:
   y los pasos pesados llevan `if: steps.nivel.outputs.relevante == 'true'`. Una PR que no toca rutas de integración
   levanta Postgres y Redis sin correr nada; es el caso minoritario (≈10 %, ver la tabla de alternativas).
 - El filtro de forks queda en el `if:` de cada job.
+
+## Adenda (2026-10-28, 4): el replay de evals pasa a ser un paso de `integracion`
+
+Medido en el run 40647595544 (PR #619): `evals-replay` duró 192 s, de los cuales **el gate son 12 s**; los otros
+~180 s eran infraestructura duplicada (hueco de runner, contenedores de Postgres y Redis, entorno Python, migración y
+siembra) que `integracion` ya paga. Con 3 jobs para 2 runners, además, el tercero esperaba hasta los +216 s.
+
+- Se elimina el job `evals-replay`. `bash scripts/gate_evals.sh replay` es ahora el último paso de `integracion`, con
+  `if: !cancelled() && replay == 'true' && migrar == success`: corre aunque los tests hayan fallado, así se ven los
+  dos resultados, y cualquiera de los dos deja el job en rojo.
+- El paso `nivel` suma la salida `replay` (PR a una rama que no es `main`, o push a `develop`: la misma condición de
+  antes). **No depende de `relevante`:** una PR que solo toca `evals/` o `scripts/gate_evals.sh` no está en
+  `RUTAS_INTEGRACION` y hoy solo la verifica el replay. Por eso el entorno y la migración corren si
+  `relevante == 'true' || replay == 'true'`.
+- **Por qué comparten base:** el replay exige una base recién migrada y sembrada. Desde la adenda de xdist los workers
+  trabajan en clones (`agent_core_gwN`) y `agent_core` solo es la plantilla, o sea que sigue intacta cuando terminan
+  los tests. Redis `/0` para el replay; los workers usan `/1..N`. Por eso el replay va **después** de los tests: si
+  fuera antes dejaría filas en la plantilla y los clones las heredarían.
+- **Qué haría que revisáramos esto:** que el replay dé un resultado distinto al del job aparte (se vuelve al job
+  separado: es revertir un commit), o que alguien haga que un test escriba en `agent_core` sin clonar.

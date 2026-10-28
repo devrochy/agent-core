@@ -6,7 +6,7 @@
 #
 # Gasta saldo (~9 llamadas, ~0,01 USD): solo con OK del dueño. Pasos, cada uno en un stack
 # efímero NUEVO (Postgres pg17 + PostGIS y Redis en Docker, puertos 55571/56511), con las mismas
-# variables de prueba que `ci.yml` y la base migrada y sembrada como el job `evals-replay`:
+# variables de prueba que `ci.yml` y la base migrada y sembrada como el paso de replay de `integracion`:
 #   1. `scripts/gate_evals.sh record` → grabaciones en evals/cassettes/.
 #   2. Dos veces `scripts/gate_evals.sh replay` sin LLM_API_KEY, cada una en una base nueva.
 #   3. Revisa que ninguna grabación ni el log tengan la clave o las claves de prueba.
