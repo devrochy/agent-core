@@ -30,6 +30,7 @@ from core.shared.events import (
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from core.tasks.decorators import register_cron
+from pack_subscriptions import promociones
 from pack_subscriptions.avisos import recordatorio_de_hoy
 from pack_subscriptions.horario_legal import (
     en_horario_de_cobro,
@@ -196,6 +197,14 @@ async def _expirar_inscripciones(now: datetime) -> int:
                 for sub_id in ids:
                     if await expirar_una(sub_id, limite=limite):
                         total += 1
+                # HU-SUB-33: gauge `canjes_reservados_antiguos`. Un canje reservado pasado el plazo de pago es
+                # cupo retenido por un cobro que nadie anuló ni pagó (o un pago recibido sin aplicar).
+                async with get_session() as session:
+                    antiguos = await promociones.contar_reservados_antiguos(
+                        session, dias=config.dias_pago_inscripcion + 1
+                    )
+                if antiguos:
+                    log.warning("subs_canjes_reservados_antiguos", tenant_id=str(tenant_id), total=antiguos)
         except Exception:
             # Un negocio con problemas no frena a los demás: el próximo corte reintenta.
             log.exception("subs_inscripciones_expirar_fallo", tenant_id=str(tenant_id))

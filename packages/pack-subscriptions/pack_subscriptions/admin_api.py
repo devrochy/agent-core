@@ -51,6 +51,11 @@ class CrearSuscripcionBody(BaseModel):
         default=None, description="Datos del cliente para el alta (nombre, email, teléfono, negocio, vertical)."
     )
     metodo_pago: Literal["pago_en_linea", "transferencia"] = Field(default="pago_en_linea")
+    codigo_promocion: str | None = Field(
+        default=None,
+        max_length=40,
+        description="Código de una promoción de plan: el primer cobro sale con descuento (HU-SUB-33).",
+    )
     variant_id: uuid.UUID | None = Field(default=None, description="Camino anterior: variante de commerce.")
     nombre: str | None = Field(default=None, description="Camino anterior: nombre del plan.")
     precio: float = Field(default=0, ge=0, le=999_999_999_999, allow_inf_nan=False, description="Valor del período.")
@@ -66,7 +71,10 @@ class SuscripcionOut(BaseModel):
     estado: str
     numero_publico: str | None = None
     inscripcion: str | None = Field(default=None, description="nueva | repetida | cambio_de_plan")
-    monto: float | None = Field(default=None, description="Valor del cobro de inscripción, si lo hay.")
+    monto: float | None = Field(default=None, description="Valor del cobro de inscripción (neto), si lo hay.")
+    monto_bruto: float | None = Field(default=None, description="Precio de lista, si hay una promoción aplicada.")
+    descuento: float | None = Field(default=None, description="Descuento de la promoción en el primer cobro.")
+    promocion: str | None = Field(default=None, description="Etiqueta de la promoción aplicada.")
     link_pago: str | None = None
     instrucciones_transferencia: str | None = None
 
@@ -79,13 +87,16 @@ _CODIGOS_422 = {
     "metodo_pago_invalido",
     "referencia_invalida",
     "codigo_no_valido",
+    "promo_no_aplica_a_free",
+    "promo_no_aplica_a_cambio",
+    "descuento_excede_precio",
 }
 
 
 def _api_error(exc: Exception) -> ApiError:
     """Traduce el rechazo de negocio (`SubscriptionError`/`PlanError`) a un error de API con su código."""
     code = str(getattr(exc, "code", "") or "error_suscripcion")
-    status = 404 if code in _CODIGOS_404 else 422 if code in _CODIGOS_422 else 409
+    status = 404 if code in _CODIGOS_404 else 422 if code in _CODIGOS_422 else 429 if code == "demasiados_intentos" else 409
     campo = getattr(exc, "campo", None)
     return ApiError(
         status,
@@ -168,6 +179,7 @@ async def _inscribir_desde_panel(body: CrearSuscripcionBody, principal: Principa
             datos_alta=dict(body.datos_alta or {}),
             origen="panel",
             metodo_pago=body.metodo_pago,
+            codigo_promocion=body.codigo_promocion,
         )
     except SubscriptionError as exc:
         raise _api_error(exc) from exc
@@ -180,6 +192,9 @@ async def _inscribir_desde_panel(body: CrearSuscripcionBody, principal: Principa
         numero_publico=vista.get("numero_publico"),
         inscripcion=vista.get("inscripcion"),
         monto=cargo.get("monto"),
+        monto_bruto=cargo.get("monto_bruto"),
+        descuento=cargo.get("descuento"),
+        promocion=cargo.get("promocion"),
         link_pago=cargo.get("link"),
         instrucciones_transferencia=cargo.get("instrucciones_transferencia"),
     )
@@ -345,6 +360,179 @@ async def borrar_plan(
 def _api_error_plan(exc) -> ApiError:  # type: ignore[no-untyped-def]
     status = 404 if exc.code == "plan_no_encontrado" else 409 if exc.code == "codigo_duplicado" else 422
     return ApiError(status, exc.code, exc.message, fields={exc.campo: exc.message} if exc.campo else None)
+
+
+# ----------------------------------------------------------------------------- promociones de plan (SPEC-43, HU-SUB-33)
+class PromocionBody(BaseModel):
+    etiqueta: str = Field(min_length=1, max_length=80, description="Nombre que ve el dueño (p. ej. «Lanzamiento»).")
+    codigo: str | None = Field(
+        default=None,
+        max_length=40,
+        description="Código que escribe el cliente (3 a 40: letras, números, - o _). Se guarda en minúsculas.",
+    )
+    tipo_descuento: Literal["porcentaje", "monto"] = "porcentaje"
+    valor: float = Field(gt=0, le=999_999_999_999, allow_inf_nan=False, description="1 a 99 si es porcentaje.")
+    periodos: int = Field(default=1, ge=1, le=12, description="Cobros que descuenta. Hoy solo se acepta 1.")
+    plan_id: uuid.UUID | None = Field(default=None, description="Plan al que aplica; vacío = cualquier plan de pago.")
+    vigente_desde: datetime | None = None
+    vigente_hasta: datetime | None = None
+    max_canjes: int | None = Field(default=None, ge=1, le=1_000_000, description="Tope de canjes; vacío = sin tope.")
+    activa: bool = True
+
+
+class PromocionOut(PromocionBody):
+    id: uuid.UUID
+    canjes_usados: int
+    canjes_restantes: int | None = Field(default=None, description="Vacío si no tiene tope.")
+    creada: datetime | None = None
+    actualizada: datetime | None = None
+
+
+class CanjeOut(BaseModel):
+    id: uuid.UUID
+    estado: Literal["reservado", "confirmado", "agotado", "terminado", "liberado"]
+    cliente_id: uuid.UUID
+    suscripcion_id: uuid.UUID
+    cargo_id: uuid.UUID
+    monto_bruto: float | None = None
+    descuento: float | None = None
+    monto: float | None = Field(default=None, description="Neto cobrado.")
+    creado: datetime | None = None
+
+
+def _promocion_out(promo) -> PromocionOut:  # type: ignore[no-untyped-def]
+    restantes = None if promo.max_canjes is None else max(promo.max_canjes - promo.canjes_usados, 0)
+    return PromocionOut(
+        id=promo.id,
+        etiqueta=promo.etiqueta,
+        codigo=promo.codigo,
+        tipo_descuento=promo.tipo_descuento,
+        valor=float(promo.valor),
+        periodos=int(promo.periodos),
+        plan_id=promo.plan_id,
+        vigente_desde=promo.vigente_desde,
+        vigente_hasta=promo.vigente_hasta,
+        max_canjes=promo.max_canjes,
+        activa=bool(promo.activa),
+        canjes_usados=int(promo.canjes_usados),
+        canjes_restantes=restantes,
+        creada=promo.created_at,
+        actualizada=promo.updated_at,
+    )
+
+
+def _datos_de_promocion(body: PromocionBody):  # type: ignore[no-untyped-def]
+    from decimal import Decimal
+
+    from pack_subscriptions.promociones import DatosDePromocion
+
+    return DatosDePromocion(
+        etiqueta=body.etiqueta,
+        tipo_descuento=body.tipo_descuento,
+        valor=Decimal(str(body.valor)),
+        codigo=body.codigo,
+        periodos=body.periodos,
+        plan_id=body.plan_id,
+        vigente_desde=body.vigente_desde,
+        vigente_hasta=body.vigente_hasta,
+        max_canjes=body.max_canjes,
+        activa=body.activa,
+    )
+
+
+def _api_error_promocion(exc) -> ApiError:  # type: ignore[no-untyped-def]
+    status = 404 if exc.code in ("promocion_no_encontrada", "plan_no_encontrado") else 409 if exc.code == "codigo_duplicado" else 422
+    return ApiError(status, exc.code, exc.message, fields={exc.campo: exc.message} if exc.campo else None)
+
+
+@router.get("/promociones", response_model=list[PromocionOut])
+async def listar_promociones(
+    principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones"))],
+) -> list[PromocionOut]:
+    """Promociones de plan del negocio (sin las borradas), de la más reciente a la más antigua."""
+    from pack_subscriptions import promociones
+
+    _tenant(principal)
+    return [_promocion_out(p) for p in await promociones.listar()]
+
+
+@router.post("/promociones", response_model=PromocionOut, status_code=201)
+async def crear_promocion(
+    body: PromocionBody,
+    principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones", write=True))],
+) -> PromocionOut:
+    """Crea una promoción. Código repetido → 409 `codigo_duplicado`; porcentaje fuera de 1–99 o períodos > 1 → 422."""
+    from pack_subscriptions import promociones
+
+    _tenant(principal)
+    try:
+        return _promocion_out(await promociones.crear(_datos_de_promocion(body), actor=_actor(principal)))
+    except promociones.PromoError as exc:
+        raise _api_error_promocion(exc) from exc
+
+
+@router.put("/promociones/{promocion_id}", response_model=PromocionOut)
+async def editar_promocion(
+    promocion_id: uuid.UUID,
+    body: PromocionBody,
+    principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones", write=True))],
+) -> PromocionOut:
+    """Reemplaza una promoción. Los canjes ya hechos conservan lo que se descontó."""
+    from pack_subscriptions import promociones
+
+    _tenant(principal)
+    try:
+        return _promocion_out(await promociones.actualizar(promocion_id, _datos_de_promocion(body), actor=_actor(principal)))
+    except promociones.PromoError as exc:
+        raise _api_error_promocion(exc) from exc
+
+
+@router.delete("/promociones/{promocion_id}", status_code=204)
+async def borrar_promocion(
+    promocion_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones", write=True))],
+) -> None:
+    """Borra la promoción (lógico): su código deja de aplicar."""
+    from pack_subscriptions import promociones
+
+    _tenant(principal)
+    try:
+        await promociones.borrar(promocion_id, actor=_actor(principal))
+    except promociones.PromoError as exc:
+        raise _api_error_promocion(exc) from exc
+
+
+@router.get("/promociones/{promocion_id}/canjes", response_model=Page[CanjeOut])
+async def canjes_de_promocion(
+    promocion_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones"))],
+    params: Annotated[PageParams, Depends(page_params)],
+) -> Page[CanjeOut]:
+    """Quién canjeó la promoción, en qué estado está cada canje y cuánto se descontó."""
+    from pack_subscriptions import promociones
+
+    _tenant(principal)
+    try:
+        filas, total = await promociones.canjes_de(promocion_id, limit=params.page_size, offset=params.offset)
+    except promociones.PromoError as exc:
+        raise _api_error_promocion(exc) from exc
+    items = [
+        CanjeOut(
+            id=canje.id,
+            estado=canje.estado,
+            cliente_id=canje.customer_id,
+            suscripcion_id=canje.subscription_id,
+            cargo_id=canje.charge_id,
+            monto_bruto=float(cargo.monto_bruto) if cargo is not None and cargo.monto_bruto is not None else None,
+            descuento=(
+                float(cargo.monto_bruto - cargo.monto) if cargo is not None and cargo.monto_bruto is not None else None
+            ),
+            monto=float(cargo.monto) if cargo is not None else None,
+            creado=canje.created_at,
+        )
+        for canje, cargo in filas
+    ]
+    return build_page(items, total, params)
 
 
 class AvisoOut(BaseModel):

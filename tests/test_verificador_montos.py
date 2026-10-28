@@ -162,3 +162,20 @@ def test_extract_monetary_values_de_suscripciones_y_pagos():
     assert sorted(_extract_monetary_values(resultado)) == [200000.0, 400000.0]
     # `amount` lo ponía el LLM en `generar_link_pago` (retirada): no cuenta como verificado.
     assert _extract_monetary_values({"amount": 150000.0, "reference": "OC-1"}) == []
+
+
+def test_extract_monetary_values_de_la_cotizacion_de_un_plan_con_promocion():
+    """HU-SUB-33: precio de lista, descuento y total del primer cargo son montos del servidor; sin estas claves
+    el verificador bloquea una respuesta que menciona «$80.000» tras una promoción del 20 %."""
+    cotizacion = {
+        "plan": "Premium",
+        "precio_lista": 100000.0,
+        "descuento": 20000.0,
+        "total_primer_cargo": 80000.0,
+        "precio_periodo_siguiente": 100000.0,
+        "cargo_inscripcion": {"monto": 80000.0, "monto_bruto": 100000.0},
+        "trial_dias": 0,
+    }
+    assert sorted(_extract_monetary_values(cotizacion)) == sorted(
+        [100000.0, 20000.0, 80000.0, 100000.0, 80000.0, 100000.0]
+    )

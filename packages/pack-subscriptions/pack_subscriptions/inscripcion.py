@@ -11,6 +11,10 @@ dejan UNA suscripción y UN cargo. Orden de locks en todo el pack: advisory → 
 La inscripción, su primer cargo y el registro del alta se confirman en una transacción; el link de
 pago se crea DESPUÉS del commit y es reintentable (`charge_link`).
 
+Promociones (HU-SUB-33): con un `codigo_promocion` el primer cobro sale NETO (`monto`), con `monto_bruto` y la
+fotografía del descuento, y el canje se reserva en la misma transacción (`promociones.py`). `monto_alto_inscripcion`
+se evalúa sobre el precio de lista.
+
 Observabilidad: logs `subs_inscripcion_*` sin correo, teléfono, documento ni el texto de los códigos.
 """
 
@@ -30,7 +34,7 @@ from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.shared.texto_seguro import contiene_url
 from core.subscriptions import SubscriptionError, SubscriptionView
-from pack_subscriptions import planes
+from pack_subscriptions import planes, promociones
 from pack_subscriptions.capability import (
     _anular_cambios_pendientes,
     _config,
@@ -203,19 +207,38 @@ async def _advisory_lock(session, customer_id: uuid.UUID) -> None:  # type: igno
 
 
 # ----------------------------------------------------------------------------- cotizar
-async def cotizar(plan_code: str, codigo_promocion: str | None = None) -> dict[str, Any]:
-    """Lo que costaría inscribirse, sin efectos. Las promociones de plan llegan en SPEC-43 PR-2b:
-    hasta entonces un código se rechaza igual que uno inexistente."""
+async def cotizar(
+    plan_code: str, codigo_promocion: str | None = None, *, customer_id: uuid.UUID | None = None
+) -> dict[str, Any]:
+    """Lo que costaría inscribirse, sin efectos. Con un código evalúa la promoción (vigencia, plan, cupo) y
+    devuelve el descuento y el total del primer cargo; un código que no aplica responde `codigo_no_valido`.
+    `customer_id` (opcional) acota los intentos con códigos a ese cliente; sin él, el tope es del negocio."""
     plan = await _plan_o_error(plan_code)
-    _sin_promocion(codigo_promocion)
     config = await _config()
     precio = Decimal(plan.precio or 0)
-    return {
+    descuento = Decimal("0")
+    total = precio
+    etiqueta: str | None = None
+    codigo = promociones.normalizar_codigo(codigo_promocion)
+    if codigo is not None:
+        async with get_session() as session:
+            evaluacion = await promociones.evaluar(
+                session,
+                codigo=codigo,
+                plan_id=plan.id,
+                precio=precio,
+                moneda=plan.moneda,
+                customer_id=customer_id,
+                huella_=None,
+                ahora=datetime.now(UTC),
+            )
+        descuento, total, etiqueta = evaluacion.descuento, evaluacion.neto, evaluacion.etiqueta
+    salida: dict[str, Any] = {
         "plan_code": plan.codigo,
         "plan": plan.nombre,
         "precio_lista": float(precio),
-        "descuento": 0.0,
-        "total_primer_cargo": float(precio),
+        "descuento": float(descuento),
+        "total_primer_cargo": float(total),
         "precio_periodo_siguiente": float(precio),
         "moneda": plan.moneda,
         "periodicidad": plan.periodicidad,
@@ -223,6 +246,9 @@ async def cotizar(plan_code: str, codigo_promocion: str | None = None) -> dict[s
         "requiere_pago": precio > 0,
         "datos_requeridos": list(config.campos_de_inscripcion),
     }
+    if etiqueta is not None:
+        salida["promocion"] = etiqueta
+    return salida
 
 
 async def _plan_o_error(plan_code: str) -> Plan:
@@ -230,12 +256,6 @@ async def _plan_o_error(plan_code: str) -> Plan:
     if plan is None:
         raise SubscriptionError("Ese plan no existe o no está disponible.", code="plan_no_encontrado")
     return plan
-
-
-def _sin_promocion(codigo: str | None) -> None:
-    # El rechazo no distingue «no existe» de «no aplica» (anti-enumeración, ADR-0177).
-    if str(codigo or "").strip():
-        raise SubscriptionError("El código de promoción no es válido.", code="codigo_no_valido")
 
 
 # ----------------------------------------------------------------------------- inscribir
@@ -255,22 +275,18 @@ async def inscribir(
     `terminos` trae lo que el antiabuso del core necesita del turno: `{acepta_terminos, conversation_id,
     canal}` (el servidor lo arma desde `ToolContext`; el LLM solo manda el token). Solo se evalúa con
     `origen='agente'` y solo si el negocio es un vendedor de planes de la plataforma.
-    `monto_esperado` es lo que el cliente confirmó: si no coincide con el primer cobro, no se hace nada."""
+    `monto_esperado` es lo que el cliente confirmó: si no coincide con el primer cobro NETO (ya con la
+    promoción), no se hace nada."""
     if origen not in ORIGENES:
         raise SubscriptionError("Origen de inscripción no válido.", code="origen_invalido")
     if metodo_pago not in METODOS_DE_PAGO:
         raise SubscriptionError("Método de pago no válido.", code="metodo_pago_invalido")
-    _sin_promocion(codigo_promocion)
+    codigo = promociones.normalizar_codigo(codigo_promocion)
     config = await _config()
     plan = await _plan_o_error(plan_code)
     precio = Decimal(plan.precio or 0)
-    if monto_esperado is not None and not mismo_monto(precio, monto_esperado, plan.moneda):
-        raise SubscriptionError(
-            "El valor de la inscripción ya no es el que se cotizó: vuelve a cotizarlo y confírmalo de nuevo.",
-            code="monto_distinto",
-        )
     datos, documento = validar_datos(list(config.campos_de_inscripcion), datos_alta, origen=origen)
-    await _cliente_del_negocio(customer_id)
+    telefono_canal = await _cliente_del_negocio(customer_id)
     if (
         origen == "agente"
         and precio > 0
@@ -280,19 +296,31 @@ async def inscribir(
         raise SubscriptionError(
             "El valor del plan requiere aprobación humana.", code="monto_alto", escalate=True
         )
+    huella_ = (
+        promociones.huella_de(documento=documento, telefono_canal=telefono_canal, telefono_datos=datos.get("telefono"))
+        if codigo
+        else None
+    )
 
     # Replay y rechazos baratos ANTES del antiabuso: repetir una inscripción no gasta cupo de altas
     # ni pide los términos otra vez. La decisión autoritativa se repite bajo el lock.
+    repetida = None
     async with get_session() as session:
         previas = await _vivas_del_cliente(session, customer_id, bloquear=False)
         previa = decidir(previas, plan, varias=bool(config.varias_por_cliente))
-        repetida = (previa.sub, await cargo_de_inscripcion(session, previa.sub)) if previa.accion == "repetida" and previa.sub else None
+        if previa.accion == "repetida" and previa.sub is not None:
+            repetida = (previa.sub, await cargo_de_inscripcion(session, previa.sub))
+            await _validar_replay(session, repetida[1], plan, codigo, monto_esperado)
+        else:
+            evaluacion = await _evaluar_promocion(
+                session, codigo, plan, customer_id, huella_, previa, contar_intento=True
+            )
+            _comparar_monto(plan, evaluacion, monto_esperado)
     if repetida is not None:
         return await _salida_de_repetida(repetida[0], repetida[1], plan, metodo_pago, config)
 
     pedido = await _antiabuso(customer_id, terminos, datos, documento, precio, origen)
 
-    repetida = None
     resultado: dict[str, Any] = {}
     async with get_session() as session:
         await _advisory_lock(session, customer_id)
@@ -301,11 +329,20 @@ async def inscribir(
         if decision.accion == "repetida" and decision.sub is not None:
             # Otra inscripción del mismo cliente ganó el lock: es esa, no una segunda.
             repetida = (decision.sub, await cargo_de_inscripcion(session, decision.sub))
+            await _validar_replay(session, repetida[1], plan, codigo, monto_esperado)
         else:
+            # Evaluación AUTORITATIVA, ya con las suscripciones del cliente bloqueadas: el neto que se cobra y
+            # el que el cliente confirmó se comparan aquí, en la misma transacción que crea el cobro.
+            evaluacion = await _evaluar_promocion(
+                session, codigo, plan, customer_id, huella_, decision, contar_intento=False
+            )
+            _comparar_monto(plan, evaluacion, monto_esperado)
             if decision.accion == "cambio_de_plan" and decision.sub is not None:
-                resultado = await _cambio_desde_free(session, decision, plan)
+                resultado = await _cambio_desde_free(session, decision, plan, evaluacion, customer_id, huella_)
             else:
-                resultado = await _crear(session, decision, customer_id, plan, datos, origen, config, pedido)
+                resultado = await _crear(
+                    session, decision, customer_id, plan, datos, origen, config, pedido, evaluacion, huella_
+                )
             vista = _view(resultado["sub"], plan_codigo=plan.codigo)
             vista["inscripcion"] = resultado["inscripcion"]
     if repetida is not None:
@@ -325,6 +362,7 @@ async def inscribir(
         inscripcion=resultado["inscripcion"],
         origen=origen,
         con_cargo=cargo is not None,
+        con_promocion=cargo is not None and cargo.canje_id is not None,
     )
     if cargo is not None:
         vista["cargo_inscripcion"] = await _cargo_en_vista(cargo, sub, plan, metodo_pago, config)
@@ -338,23 +376,110 @@ async def inscribir(
     return vista
 
 
-async def _cliente_del_negocio(customer_id: uuid.UUID) -> None:
+async def _cargos_a_liberar(session, decision: Decision) -> list[uuid.UUID]:  # type: ignore[no-untyped-def]
+    """Cobros pendientes que esta decisión va a anular (las inscripciones que se reemplazan y el cambio de plan
+    pendiente de la Free): sus canjes se liberan, así que no cuentan como «ya canjeó» para evaluar el código."""
+    subs = [*decision.reemplazar, *([decision.sub] if decision.accion == "cambio_de_plan" and decision.sub else [])]
+    if not subs:
+        return []
+    filas = (
+        await session.execute(
+            select(SubscriptionCharge.id).where(
+                SubscriptionCharge.tenant_id == get_current_tenant_id(),
+                SubscriptionCharge.subscription_id.in_([s.id for s in subs]),
+                SubscriptionCharge.tipo.in_((CARGO_INSCRIPCION, "cambio_plan")),
+                SubscriptionCharge.estado == "pendiente",
+                SubscriptionCharge.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    return list(filas)
+
+
+async def _evaluar_promocion(
+    session,  # type: ignore[no-untyped-def]
+    codigo: str | None,
+    plan: Plan,
+    customer_id: uuid.UUID,
+    huella_: str | None,
+    decision: Decision,
+    *,
+    contar_intento: bool,
+) -> promociones.Evaluacion | None:
+    """Evalúa el código de la inscripción (None si no mandó código). Un plan de $0 no recibe promociones."""
+    if codigo is None:
+        return None
+    return await promociones.evaluar(
+        session,
+        codigo=codigo,
+        plan_id=plan.id,
+        precio=Decimal(plan.precio or 0),
+        moneda=plan.moneda,
+        customer_id=customer_id,
+        huella_=huella_,
+        ahora=datetime.now(UTC),
+        contar_intento=contar_intento,
+        excluir_cargos=await _cargos_a_liberar(session, decision),
+    )
+
+
+def _comparar_monto(plan: Plan, evaluacion: promociones.Evaluacion | None, monto_esperado: Any) -> None:
+    """`monto_esperado` es lo que el cliente confirmó: se compara con el primer cobro NETO, nunca se usa de monto."""
+    if monto_esperado is None:
+        return
+    neto = evaluacion.neto if evaluacion is not None else Decimal(plan.precio or 0)
+    if not mismo_monto(neto, monto_esperado, plan.moneda):
+        raise SubscriptionError(
+            "El valor de la inscripción ya no es el que se cotizó: vuelve a cotizarlo y confírmalo de nuevo.",
+            code="monto_distinto",
+        )
+
+
+async def _validar_replay(
+    session,  # type: ignore[no-untyped-def]
+    cargo: SubscriptionCharge | None,
+    plan: Plan,
+    codigo: str | None,
+    monto_esperado: Any,
+) -> None:
+    """Repetir una inscripción devuelve la MISMA (mismo cobro, mismo descuento): lo confirmado se compara con
+    ese cobro, y un código distinto del que ya tiene aplicado se rechaza en vez de ignorarse."""
+    if monto_esperado is not None and cargo is not None and not mismo_monto(cargo.monto, monto_esperado, plan.moneda):
+        raise SubscriptionError(
+            "El valor de la inscripción ya no es el que se cotizó: vuelve a cotizarlo y confírmalo de nuevo.",
+            code="monto_distinto",
+        )
+    if codigo is None or cargo is None:
+        return
+    # Un código inexistente y uno de otra promoción responden igual: no es un oráculo de códigos.
+    pedida = await promociones.id_por_codigo(session, codigo)
+    if pedida is None or promociones.promocion_del_cargo(cargo) != str(pedida):
+        raise SubscriptionError(
+            "Esta inscripción ya existe con otra promoción: cancélala para inscribirte con este código.",
+            code="promo_distinta",
+        )
+
+
+async def _cliente_del_negocio(customer_id: uuid.UUID) -> str | None:
     """El cliente tiene que ser del negocio (`Subscription.customer_id` no tiene FK): quien llame a
-    `inscribir` no puede inscribir un UUID de otro negocio, ni por una tool ni por la API."""
+    `inscribir` no puede inscribir un UUID de otro negocio, ni por una tool ni por la API. Devuelve el
+    teléfono del canal del cliente (para la huella del canje), si lo tiene."""
     from core.db.models import Customer
+    from core.provisioning.antiabuso import telefono_del_canal
 
     async with get_session() as session:
-        existe = (
+        cliente = (
             await session.execute(
-                select(Customer.id).where(
+                select(Customer).where(
                     Customer.tenant_id == get_current_tenant_id(),
                     Customer.id == customer_id,
                     Customer.deleted_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
-    if existe is None:
-        raise SubscriptionError("El cliente no existe.", code="cliente_no_encontrado")
+        if cliente is None:
+            raise SubscriptionError("El cliente no existe.", code="cliente_no_encontrado")
+        return telefono_del_canal(cliente)
 
 
 async def _antiabuso(
@@ -430,6 +555,8 @@ async def _crear(
     origen: str,
     config,  # type: ignore[no-untyped-def]
     pedido,  # type: ignore[no-untyped-def]
+    evaluacion: promociones.Evaluacion | None = None,
+    huella_: str | None = None,
 ) -> dict[str, Any]:
     ahora = datetime.now(UTC)
     for previa in decision.reemplazar:
@@ -475,8 +602,12 @@ async def _crear(
             tipo=CARGO_INSCRIPCION,
             fecha_vencimiento=ahora + timedelta(days=config.dias_pago_inscripcion),
         )
+        if evaluacion is not None:
+            promociones.aplicar_al_cargo(cargo, evaluacion)
         session.add(cargo)
         await session.flush()
+        if evaluacion is not None:
+            await promociones.reservar(session, evaluacion, sub=sub, cargo=cargo, customer_id=customer_id, huella_=huella_)
     if pedido is not None:
         from core.provisioning.antiabuso import registrar_pedido_de_alta
 
@@ -484,34 +615,56 @@ async def _crear(
     return {"sub": sub, "cargo": cargo, "inscripcion": "nueva"}
 
 
-async def _cambio_desde_free(session, decision: Decision, plan: Plan) -> dict[str, Any]:  # type: ignore[no-untyped-def]
+async def _cambio_desde_free(
+    session,  # type: ignore[no-untyped-def]
+    decision: Decision,
+    plan: Plan,
+    evaluacion: promociones.Evaluacion | None = None,
+    customer_id: uuid.UUID | None = None,
+    huella_: str | None = None,
+) -> dict[str, Any]:
     """Free (vigente o vencida) que contrata un plan de pago = cambio de plan `desde_cero`, sobre la
-    misma suscripción y el mismo negocio (D-SPEC-43-3). Reusa las reglas de ADR-0111."""
+    misma suscripción y el mismo negocio (D-SPEC-43-3). Reusa las reglas de ADR-0111. Con un código, el
+    cobro sale neto y cuenta como el período 1 del descuento."""
     ahora = datetime.now(UTC)
     free = decision.sub
     assert free is not None
     for previa in decision.reemplazar:
         await _reemplazar(session, previa)
     await session.refresh(free, with_for_update=True)
-    evaluacion = evaluar_cambio(free, variant_id=str(plan.id), plan=planes.snapshot(plan), ahora=ahora)
+    evaluado = evaluar_cambio(free, variant_id=str(plan.id), plan=planes.snapshot(plan), ahora=ahora)
     destino = {"variante_id": str(plan.id), "plan_id": str(plan.id), "plan": planes.snapshot(plan)}
-    cargo = await _anular_cambios_pendientes(session, free, salvo=(str(plan.id), evaluacion.monto))
+    monto = evaluacion.neto if evaluacion is not None else evaluado.monto
+    # Un cobro de cambio pendiente al MISMO plan, monto y promoción se reusa (reintento); otro se anula y libera.
+    cargo = await _anular_cambios_pendientes(
+        session,
+        free,
+        salvo=(str(plan.id), monto),
+        salvo_promocion=str(evaluacion.promocion_id) if evaluacion is not None else None,
+    )
     if cargo is None:
         cargo = SubscriptionCharge(
             tenant_id=get_current_tenant_id(),
             subscription_id=free.id,
             periodo=f"cambio-{ahora:%Y%m%d%H%M%S}",
-            monto=evaluacion.monto,
+            monto=evaluado.monto,
             estado="pendiente",
             fecha_vencimiento=ahora,
             tipo="cambio_plan",
             cambio_plan={
                 **destino,
-                "desde_cero": evaluacion.desde_cero,
+                "desde_cero": evaluado.desde_cero,
                 "proximo_cargo": free.proximo_cargo.isoformat() if free.proximo_cargo else None,
             },
         )
+        if evaluacion is not None:
+            promociones.aplicar_al_cargo(cargo, evaluacion)
         session.add(cargo)
+        await session.flush()
+        if evaluacion is not None and customer_id is not None:
+            await promociones.reservar(
+                session, evaluacion, sub=free, cargo=cargo, customer_id=customer_id, huella_=huella_
+            )
     await session.flush()
     return {"sub": free, "cargo": cargo, "inscripcion": "cambio_de_plan"}
 
@@ -543,6 +696,8 @@ async def anular_cargos_pendientes(session, sub: Subscription) -> list[Subscript
     ).scalars().all()
     for cargo in cargos:
         cargo.estado = "anulado"
+    # HU-SUB-33: un cobro anulado sin pagarse devuelve el cupo de su promoción.
+    await promociones.liberar_por_cargos(session, list(cargos))
     return list(cargos)
 
 
@@ -593,6 +748,10 @@ async def _cargo_en_vista(
         "metodo_pago": metodo_pago,
         "vence": cargo.fecha_vencimiento.isoformat() if cargo.fecha_vencimiento else None,
     }
+    if cargo.monto_bruto is not None:
+        salida["monto_bruto"] = float(cargo.monto_bruto)
+        salida["descuento"] = float(Decimal(cargo.monto_bruto) - Decimal(cargo.monto))
+        salida["promocion"] = (cargo.descuento or {}).get("etiqueta")
     if not link and config.instrucciones_transferencia:
         salida["instrucciones_transferencia"] = config.instrucciones_transferencia
     return salida
@@ -625,7 +784,9 @@ async def _activar_por_pago(
     cargo.estado = "pagado"
     motivo = motivo_no_aplicable(sub, cargo)
     if motivo:
+        # El dinero llegó pero no se aplicó: un canje `reservado` se queda así (lo resuelve una persona).
         return motivo
+    await promociones.confirmar_por_cargo(session, cargo)
     if cargo.tipo == CARGO_INSCRIPCION:
         sub.estado = "activa"
         sub.motivo_pausa = None
