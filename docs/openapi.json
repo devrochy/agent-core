@@ -17238,6 +17238,147 @@
         }
       }
     },
+    "/api/v1/admin/datos-cliente/politica": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · datos del cliente"
+        ],
+        "summary": "Get Politica",
+        "operationId": "get_politica_api_v1_admin_datos_cliente_politica_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoliticaDatosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · datos del cliente"
+        ],
+        "summary": "Save Politica",
+        "description": "Reemplaza los ajustes de las acciones habilitadas. Rechaza acciones o datos que el negocio\nno tiene y los pisos técnicos; guarda solo lo que difiere del valor del módulo.",
+        "operationId": "save_politica_api_v1_admin_datos_cliente_politica_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PoliticaDatosUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoliticaDatosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/domain-events": {
       "get": {
         "tags": [
@@ -38427,6 +38568,37 @@
         ],
         "title": "AccionDelCatalogoOut"
       },
+      "AccionPoliticaOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "modulo": {
+            "type": "string",
+            "title": "Modulo"
+          },
+          "etiqueta": {
+            "type": "string",
+            "title": "Etiqueta"
+          },
+          "campos": {
+            "items": {
+              "$ref": "#/components/schemas/CampoPoliticaOut"
+            },
+            "type": "array",
+            "title": "Campos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "modulo",
+          "etiqueta",
+          "campos"
+        ],
+        "title": "AccionPoliticaOut"
+      },
       "ActiveEscalation": {
         "properties": {
           "id": {
@@ -40301,6 +40473,54 @@
           "ended_at"
         ],
         "title": "Call"
+      },
+      "CampoPoliticaOut": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "etiqueta": {
+            "type": "string",
+            "title": "Etiqueta"
+          },
+          "nivel": {
+            "type": "string",
+            "enum": [
+              "requerido",
+              "recomendado",
+              "no_pedir"
+            ],
+            "title": "Nivel"
+          },
+          "por_defecto": {
+            "type": "string",
+            "enum": [
+              "requerido",
+              "recomendado",
+              "no_pedir"
+            ],
+            "title": "Por Defecto"
+          },
+          "ajustable": {
+            "type": "boolean",
+            "title": "Ajustable"
+          },
+          "ajustado": {
+            "type": "boolean",
+            "title": "Ajustado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "etiqueta",
+          "nivel",
+          "por_defecto",
+          "ajustable",
+          "ajustado"
+        ],
+        "title": "CampoPoliticaOut"
       },
       "CanaryIn": {
         "properties": {
@@ -49216,6 +49436,81 @@
           "tenant_health_error"
         ],
         "title": "PluginSummary"
+      },
+      "PoliticaDatosOut": {
+        "properties": {
+          "niveles": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "requerido",
+                "recomendado",
+                "no_pedir"
+              ]
+            },
+            "type": "array",
+            "title": "Niveles"
+          },
+          "acciones": {
+            "items": {
+              "$ref": "#/components/schemas/AccionPoliticaOut"
+            },
+            "type": "array",
+            "title": "Acciones"
+          },
+          "herramientas_del_agente": {
+            "type": "boolean",
+            "title": "Herramientas Del Agente",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "niveles",
+          "acciones"
+        ],
+        "title": "PoliticaDatosOut"
+      },
+      "PoliticaDatosUpdate": {
+        "properties": {
+          "politica": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "type": "string",
+                    "enum": [
+                      "requerido",
+                      "recomendado",
+                      "no_pedir"
+                    ]
+                  },
+                  "type": "object"
+                },
+                "type": "object",
+                "maxProperties": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Politica"
+          },
+          "herramientas_del_agente": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Herramientas Del Agente"
+          }
+        },
+        "type": "object",
+        "title": "PoliticaDatosUpdate",
+        "description": "`{accion_id: {clave: nivel}}`. Lo que no viene para una acción vuelve al valor del módulo.\nSin `politica` (None) no se tocan los ajustes: sirve para cambiar solo la bandera."
       },
       "Portfolio": {
         "properties": {

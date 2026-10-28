@@ -394,4 +394,5 @@ lead_registry.register(
 
 
 # Registra también los KPIs del módulo para el Resumen por agente (ADR-0171).
+from pack_commerce import datos as _datos  # noqa: E402, F401  (acciones de la política de datos)
 from pack_commerce import resumen as _resumen  # noqa: E402, F401

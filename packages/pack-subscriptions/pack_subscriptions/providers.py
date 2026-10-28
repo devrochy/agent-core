@@ -26,6 +26,7 @@ from core.admin.lead_registry import (
 from core.db.models import Customer
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
+from pack_subscriptions import datos as _datos  # noqa: F401  (acciones de la política de datos)
 from pack_subscriptions.models import Subscription, SubscriptionCharge
 
 PLUGIN_ID = "pack_subscriptions"

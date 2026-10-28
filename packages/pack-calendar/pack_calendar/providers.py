@@ -23,6 +23,7 @@ from core.admin.lead_registry import (
 )
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
+from pack_calendar import datos as _datos  # noqa: F401  (acciones de la política de datos)
 from pack_calendar.models import Appointment, AppointmentType
 
 PLUGIN_ID = "pack_calendar"

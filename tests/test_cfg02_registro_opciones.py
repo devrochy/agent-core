@@ -275,7 +275,7 @@ def _registradas() -> dict[str, set[str]]:
 # añadirse a `LECTORES` o aquí, a propósito.
 NO_LECTORES = {
     "core/admin/settings_service.py", "core/admin/views.py", "core/agents/spec.py", "core/alta_negocio.py",
-    "core/api/routers/settings.py", "core/db/models.py", "core/llm/difficulty_router.py", "core/mcp/host.py",
+    "core/api/routers/settings.py", "core/api/routers/datos_cliente.py", "core/datos_cliente/ajustes.py", "core/db/models.py", "core/llm/difficulty_router.py", "core/mcp/host.py",
     "core/orchestrator/guardrails.py", "core/orchestrator/verificador/verificador.py", "core/presets/apply.py",
 }  # fmt: skip
 
