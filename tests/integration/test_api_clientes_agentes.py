@@ -312,3 +312,57 @@ async def test_filtro_por_agente_invalido_es_400(app_client) -> None:
             r = await app_client.get(ruta, headers=headers, params={"agente": clave})
             assert r.status_code == 400, (ruta, clave, r.text)
             assert r.json()["error"]["code"] == "filtro_invalido"
+
+
+async def _cliente_con_lead(tid: uuid.UUID, nombre: str, **campos: str) -> uuid.UUID:
+    """Un cliente de WhatsApp con un lead de `auto_create_lead` (clave `auto:`); `campos` lo rellena."""
+    from pack_commerce.models import Lead
+
+    from core.db.models import Conversation, Customer
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            cliente = Customer(
+                tenant_id=tid, channel="whatsapp", external_id=f"whatsapp:{uniq('l')}", name=nombre
+            )
+            session.add(cliente)
+            await session.flush()
+            conv = Conversation(tenant_id=tid, customer_id=cliente.id)
+            session.add(conv)
+            await session.flush()
+            session.add(
+                Lead(
+                    tenant_id=tid,
+                    customer_id=cliente.id,
+                    conversation_id=conv.id,
+                    status="nuevo",
+                    idempotency_key=f"auto:{conv.id}",
+                    **campos,
+                )
+            )
+            await session.flush()
+            return cliente.id
+
+
+async def test_el_borrador_de_lead_vacio_no_cuenta_como_dato_de_ventas(app_client) -> None:
+    tid_a, tid_b = await _negocio(), await _negocio()
+    vacio = await _cliente_con_lead(tid_a, "Borrador vacío")
+    en_blanco = await _cliente_con_lead(tid_a, "Borrador en blanco", name="  ", interest=" ")
+    con_correo = await _cliente_con_lead(tid_a, "Dejó correo", email="ana@example.com")
+    con_interes = await _cliente_con_lead(tid_a, "Dejó interés", interest="zapatos")
+    ajeno = await _cliente_con_lead(tid_b, "Ajeno con correo", email="otro@example.com")
+    headers = await api_headers(app_client, tid_a)
+
+    lista = (await app_client.get(URL, headers=headers)).json()
+    por_id = {i["id"]: i["agentes"] for i in lista["items"]}
+    # El lead que nace vacío con la conversación no es un dato; el que ya trae contacto o interés, sí.
+    assert por_id[str(vacio)] == ["general"]
+    assert por_id[str(en_blanco)] == ["general"]
+    assert por_id[str(con_correo)] == ["general", "ventas"]
+    assert por_id[str(con_interes)] == ["general", "ventas"]
+
+    ventas = (await app_client.get(URL, headers=headers, params={"agente": "ventas"})).json()
+    assert {i["id"] for i in ventas["items"]} == {str(con_correo), str(con_interes)}
+    assert str(ajeno) not in {i["id"] for i in ventas["items"]}
