@@ -16,12 +16,13 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 
 from core.admin.lead_registry import (
     LeadCampoEditable,
     LeadColumn,
     LeadEdicion,
+    LeadRelacion,
     lead_registry,
 )
 from core.db.session import get_session
@@ -44,6 +45,18 @@ def _pesos(valor: Any) -> str:
 
 def _fecha(valor: date | None) -> str:
     return valor.isoformat() if valor else "—"
+
+
+async def _con_datos(ids: list[uuid.UUID] | None) -> Select[Any]:
+    """Clientes enlazados a un cliente de cartera no borrado."""
+    q = select(Cliente.customer_id).where(
+        Cliente.tenant_id == get_current_tenant_id(),
+        Cliente.customer_id.is_not(None),
+        Cliente.deleted_at.is_(None),
+    )
+    if ids is not None:
+        q = q.where(Cliente.customer_id.in_(ids))
+    return q.distinct()
 
 
 async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any]]:
@@ -295,6 +308,7 @@ lead_registry.register(
     agent_key="cobranza",
     agent_name="Cobranza",
     icon="wallet",
+    relacion=LeadRelacion(con_datos=_con_datos),
 )
 
 
