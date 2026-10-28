@@ -8,9 +8,9 @@
    Las filas antiguas se rellenan desde `pack_id` + `modo`.
 3. Índice por `(tenant_id, modulo)` para el estado y el retiro por módulo.
 
-**Rollback:** el código anterior, después el downgrade. El downgrade vuelve `agent_id` a NOT NULL
-y falla si ya hay datos generados desde un módulo sin agente; en ese caso se limpian primero esos
-lotes desde la app.
+**Rollback:** el código anterior, después el downgrade. Para volver `agent_id` a NOT NULL se
+descartan las filas de seguimiento de lotes generados desde un módulo (solo `test_data_records`;
+los datos sembrados en los packs no se tocan desde esta migración).
 
 Revision ID: 0115
 Revises: 0114
@@ -53,5 +53,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("SET LOCAL lock_timeout = '5s'")
     op.execute("DROP INDEX IF EXISTS ix_test_data_records_modulo")
+    op.execute("DELETE FROM test_data_records WHERE agent_id IS NULL")
     op.execute("ALTER TABLE test_data_records ALTER COLUMN agent_id SET NOT NULL")
     op.execute("ALTER TABLE test_data_records DROP COLUMN IF EXISTS modulo")
