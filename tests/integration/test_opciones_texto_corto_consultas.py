@@ -251,3 +251,31 @@ async def test_apagar_la_bandera_rige_desde_el_siguiente_mensaje(  # type: ignor
         assert len(herramienta.llamadas) == 2, "encendida otra vez: ejecuta"
     finally:
         await _bandera(a.tid, True)
+
+
+async def test_dos_turnos_simultaneos_de_negocios_distintos_no_se_contaminan(  # type: ignore[no-untyped-def]
+    negocios, cola, recorded, herramienta, monkeypatch  # noqa: F811
+) -> None:
+    """A (encendido, menú vigente) y B (apagado, menú de texto como último saliente) contestan «1» a la vez en el mismo
+    proceso: A ejecuta su tool una sola vez y B llega al agente sin que su turno consulte nada de opciones."""
+    import asyncio
+
+    a, _, b = negocios
+    _inmediato(monkeypatch)
+    await _binding(a.tid)
+    await _binding(b.tid)
+    conv_a, cliente_a = await _abrir(a.tid, WEB)
+    conv_b, cliente_b = await _abrir(b.tid, WEB)
+    envio_a = await _menu(a.tid, conv_a)
+    envio_b = await crear_menu_de_texto(b.tid, conv_b)
+    espias = _Espias(monkeypatch)
+    recorded.clear()
+
+    await asyncio.gather(_por_el_gate(a.tid, cliente_a, "1"), _por_el_gate(b.tid, cliente_b, "1"))
+
+    assert [x for x, _ in herramienta.llamadas] == [{"pedido": "A-1"}], "solo A ejecutó su opción"
+    assert await _activaciones(a.tid, envio_a.send_id) == [("o1", "done")]
+    assert await _activaciones(b.tid, envio_b) == []
+    assert recorded == ["1"], "el «1» de B llegó al agente; el de A no"
+    assert espias.ultimo_saliente == 1, "solo el turno de A (encendido) buscó el menú"
+    assert espias.bandera_en_bd == 0
