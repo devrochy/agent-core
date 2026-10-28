@@ -1,6 +1,6 @@
 ## Aviso de tratamiento de datos y consentimiento del cliente (HU-CRM-16, ADR-0179 decisión 8)
 
-- Migración 0116: `customer_consents` suma `version_aviso` y acepta el propósito `tratamiento_datos` con los estados `informado`, `otorgado` y `revocado` (la tabla sigue siendo de solo inserción). `downgrade` se niega si ya hay filas de ese propósito.
+- Migración 0117: `customer_consents` suma `version_aviso` y acepta el propósito `tratamiento_datos` con los estados `informado`, `otorgado` y `revocado` (la tabla sigue siendo de solo inserción). `downgrade` se niega si ya hay filas de ese propósito.
 - Nuevo `core/consentimiento.py`: estado del cliente frente a la versión vigente del aviso (`sin_aviso`, `informado`, `otorgado`, `revocado`). `informado` solo dice «ya se le mostró»; no es consentimiento. Quien dijo que no no recibe el aviso de nuevo aunque cambie el texto.
 - Aviso por negocio en `behavior_config["datos_cliente"]["aviso"]` (activo + texto propio; sin texto usa un borrador **sin validar legalmente** de `playbooks/kernel/aviso-datos.md`). `GET/PUT /api/v1/admin/datos-cliente/aviso`: activarlo exige `confirmo_revision_legal` (P-37) y deja auditoría con el texto completo y su versión.
 - **Apagado por defecto.** Con el aviso apagado nada cambia: el perfil se escribe igual que antes y el loop no hace ninguna consulta extra.

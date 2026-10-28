@@ -15,8 +15,8 @@ Solo ALTER; las restricciones nuevas se crean `NOT VALID` y se validan aparte (n
 `tratamiento_datos` o `informado`: son evidencia de un consentimiento y no se descartan en silencio
 (exportar con `pg_dump -t customer_consents` y decidirlo a mano).
 
-Revision ID: 0116
-Revises: 0115
+Revision ID: 0117
+Revises: 0116
 Create Date: 2026-10-28
 """
 
@@ -24,8 +24,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0116"
-down_revision = "0115"
+revision = "0117"
+down_revision = "0116"
 branch_labels = None
 depends_on = None
 

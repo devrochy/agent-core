@@ -1489,13 +1489,13 @@ class CustomerConsent(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     proposito: Mapped[str] = mapped_column(Text, nullable=False, default="promociones")
-    estado: Mapped[str] = mapped_column(Text, nullable=False)  # otorgado | revocado | informado (0116)
-    # ficha | palabra_de_baja | meta_131050 | aviso_en_chat (0116)
+    estado: Mapped[str] = mapped_column(Text, nullable=False)  # otorgado | revocado | informado (0117)
+    # ficha | palabra_de_baja | meta_131050 | aviso_en_chat (0117)
     origen: Mapped[str] = mapped_column(Text, nullable=False)
     evidencia: Mapped[str] = mapped_column(Text, nullable=False, default="")
     actor_admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
     actor_label: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    # Huella del texto del aviso que se mostró (obligatoria en `tratamiento_datos`, 0116).
+    # Huella del texto del aviso que se mostró (obligatoria en `tratamiento_datos`, 0117).
     version_aviso: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
