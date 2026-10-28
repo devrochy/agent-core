@@ -30,6 +30,7 @@ from pack_subscriptions.models import Subscription, SubscriptionCharge
 PLUGIN_ID = "pack_subscriptions"
 
 ESTADOS = (
+    ("pendiente_pago", "Pendiente de pago"),
     ("activa", "Activa"),
     ("trialing", "En prueba"),
     ("pausada", "Pausada"),
