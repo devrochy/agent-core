@@ -78,7 +78,7 @@ jobs:
           fi
 
   rapido:
-    needs: nivel
+    # Sin `needs`: lint y unitarios arrancan en t=0 y el feedback rápido nunca queda detrás de nada.
     runs-on: [self-hosted, linux, x64]
     # Seguridad: no ejecutar workflows de PRs de forks en el runner self-hosted.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
@@ -141,7 +141,7 @@ jobs:
         # a `gitleaks-action` en el runner self-hosted).
         env:
           BASE: ${{ github.base_ref }}
-          NIVEL: ${{ needs.nivel.outputs.nivel }}
+          EVENTO: ${{ github.event_name }}
         run: |
           VER=8.24.3
           # Binario en una caché del host (como UV_CACHE_DIR): la descarga costaba ~30 s por corrida.
@@ -154,7 +154,8 @@ jobs:
               | tar -xz -C "$RUNNER_TEMP" gitleaks
             mv -f "$RUNNER_TEMP/gitleaks" "$BIN.$$" && mv -f "$BIN.$$" "$BIN"
           fi
-          if [ "$NIVEL" = "rapido" ]; then
+          # Mismo criterio que el job `nivel` (PR a una rama que no es main = nivel rápido).
+          if [ "$EVENTO" = "pull_request" ] && [ "$BASE" != "main" ]; then
             "$BIN" detect --source . --redact -v --log-opts="origin/${BASE}..HEAD"
           else
             "$BIN" detect --source . --redact -v

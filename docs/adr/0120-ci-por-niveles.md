@@ -101,8 +101,10 @@ Medido sobre los últimos 25 runs de `ci.yml`: el job `rapido` dura 2–3,5 min;
 apagado desde el 2026-10-09.
 
 - **Job `nivel`.** El cálculo del nivel y de las rutas relevantes sale de `rapido` a un job corto (checkout + diff).
-  `rapido`, `integracion` y `evals-replay` arrancan a la vez, en vez de `integracion` y `evals-replay` esperar a
-  `rapido`. Si lint falla, la integración ya habrá corrido: es el costo aceptado.
+  `rapido` (que ya no depende de nadie), `integracion` y `evals-replay` arrancan a la vez, en vez de esperar a
+  `rapido`. Si lint falla, la integración ya habrá corrido: es el costo aceptado. **Requiere el segundo runner en
+  línea:** con uno solo, GitHub no garantiza qué job listo toma primero, y un error de lint podría verse tras 11–20 min
+  en vez de ~2.
 - **Gitleaks** usa un binario cacheado en el host (`~/.cache/ci-bin/`) en vez de bajarlo en cada corrida.
 - **Unitarios con `pytest -n 4`** (pytest-xdist). Exige que la colección sea idéntica en todos los workers: los ids de
   `parametrize` no pueden usar `uuid4()`; se usan `uuid5` con nombre fijo.
