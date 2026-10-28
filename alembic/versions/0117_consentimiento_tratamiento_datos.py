@@ -11,9 +11,9 @@
 
 Solo ALTER; las restricciones nuevas se crean `NOT VALID` y se validan aparte (no bloquean la tabla).
 
-**Rollback:** el código anterior, después el downgrade. El downgrade SE NIEGA si ya hay filas de
-`tratamiento_datos` o `informado`: son evidencia de un consentimiento y no se descartan en silencio
-(exportar con `pg_dump -t customer_consents` y decidirlo a mano).
+**Rollback:** el código anterior, después el downgrade. El downgrade BORRA las filas de `tratamiento_datos`
+(y los `informado`), porque el CHECK anterior no puede representarlas: son evidencia de consentimiento,
+así que antes de bajar exportarlas con `pg_dump -t customer_consents`.
 
 Revision ID: 0117
 Revises: 0116
@@ -57,19 +57,10 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("SET LOCAL lock_timeout = '5s'")
-    op.execute(
-        """
-        DO $do$
-        BEGIN
-          IF EXISTS (
-            SELECT 1 FROM customer_consents WHERE proposito = 'tratamiento_datos' OR estado = 'informado'
-          ) THEN
-            RAISE EXCEPTION 'Hay consentimientos de tratamiento de datos guardados: no se descartan en un downgrade. Exportalos y decidilo a mano.';
-          END IF;
-        END
-        $do$
-        """
-    )
+    # Los estados nuevos no caben en el CHECK anterior: se quitan las filas de tratamiento_datos (el
+    # downgrade de 0100 descarta la tabla entera, así que esto es lo menos destructivo que cabe). El aviso
+    # y las respuestas solo existen mientras el código nuevo corre; antes de bajar, `pg_dump -t customer_consents`.
+    op.execute("DELETE FROM customer_consents WHERE proposito = 'tratamiento_datos' OR estado = 'informado'")
     for restriccion in ("informado", "version_aviso", "proposito", "estado"):
         op.execute(f"ALTER TABLE customer_consents DROP CONSTRAINT IF EXISTS ck_customer_consents_{restriccion}")
     op.execute(
