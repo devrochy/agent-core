@@ -277,3 +277,31 @@ PR no se enciende nada en ningún negocio**: la bandera sigue apagada y solo cam
   antes de encender cualquier negocio. (2) La prueba del sandbox de Meta es una puerta HUMANA (runbook §1): la ruta no
   la verifica, y mientras el master sea el dueño es aceptable. (3) Endurecer `option_safe` a dueño o master antes de
   encender más allá de test.
+
+## Adenda (2026-10-28) · B1: probar sin Meta desde el playground
+
+Los botones reales solo existen en WhatsApp Cloud y la sesión QR de test no siempre está viva, así que el playground
+(canal `test`) pasa a ser un **canal con botones** para poder probar de punta a punta, sin Meta.
+
+- **Capacidad del canal (enmienda a §2).** `decidir_via` manda `test` por la vía interactiva (o texto si no cabe en
+  los topes de Meta), sin ventana de 24 h ni plantilla. `send_to_conversation` y `send_interactive_to_conversation`
+  guardan el mensaje como entregado (`status = sent`, una fila, sin burbujas, sin Celery, sin `ON_MESSAGE_SENT`) y se
+  niegan a escribir en una conversación de otro negocio. `enviar_confirmacion` del toque acepta `test`, para que
+  `optc`/`optn` funcionen. **Sitios que conocen la capacidad del canal** (los que migra la tabla de capacidades de la
+  pista C1): `envio.decidir_via`, `sender.send_interactive_to_conversation`, `opciones_toque.enviar_confirmacion` y los
+  literales `"whatsapp"` de `sender.py` y de `opciones_envio.py`.
+- **Segunda entrada al resolver (enmienda a §4).** Además del consumer, `POST /api/v1/admin/playground/tap` llama a
+  `opciones_toque.atender`. La firma, la pertenencia al negocio y a la conversación, la vigencia y la única ejecución
+  son las de siempre: no hay camino que se salte el resolver, y la conversación sale del servidor (la de prueba del
+  negocio), nunca del cliente. `POST …/options` reutiliza `plantillas_opciones_service.enviar_prueba`. Permisos y
+  bandera como el editor (dueño o master con escritura en `connections`; 404 si la bandera está apagada).
+- **Lo que el playground NO prueba:** las políticas de entrada del consumer (pausa, escalada, horario), la dedupe por
+  `wamid` (`wamid = None`) ni los reintentos de Meta. Un verde en el playground no demuestra esos caminos.
+- **La tool corre de verdad** contra los datos del negocio, con el cliente sintético de prueba. Hoy solo es apta
+  `list_client_appointments` (lectura). El día que una tool que cambie estado sea apta, el control es usar un agente con
+  datos de prueba (SPEC-32), no el playground.
+- **Seguimientos conocidos:** las métricas del toque (`option_taps_total{outcome}`, `bad_signature`) no llevan etiqueta
+  de canal y cuentan también los toques del playground (un botón viejo tras `/reset` da `bad_signature`): etiquetarlas
+  o excluir `test` antes de alertar sobre ellas; cada `POST /options` crea un `option_sends` nuevo (solo INSERT) sin
+  tope por negocio; con la conexión de la conversación de prueba pausada, `/options` responde 409 `pausada` aunque el
+  envío de prueba ignore la pausa.

@@ -4081,6 +4081,200 @@
         }
       }
     },
+    "/api/v1/admin/playground/options": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · playground"
+        ],
+        "summary": "Playground Options",
+        "description": "Envía la plantilla con opciones `clave` a la conversación de prueba, con `send_options_to_conversation`: crea el\n`option_sends` con sus payloads firmados y guarda el mensaje con los botones, sin Meta ni cola. Los errores son\nlos de `POST /plantillas-opciones/{clave}/enviar-prueba` (404 si la bandera está apagada o la clave no existe,\n409 si no está publicada, 422 si falta contexto).",
+        "operationId": "playground_options_api_v1_admin_playground_options_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaygroundOpcionesIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundOpcionesOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/playground/tap": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · playground"
+        ],
+        "summary": "Playground Tap",
+        "description": "Simula el toque de un botón de la conversación de prueba con el MISMO resolver que atiende WhatsApp: firma\npor negocio y conversación, vigencia, una sola ejecución y autorización de la tool, sin LLM. Devuelve el\n`outcome` y los mensajes que produjo. **Ejecuta la tool de verdad.** Un payload que no es de opciones es 422.",
+        "operationId": "playground_tap_api_v1_admin_playground_tap_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaygroundToqueIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundToqueOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
     "/api/v1/admin/escalations": {
       "get": {
         "tags": [
@@ -47282,6 +47476,193 @@
           "operational"
         ],
         "title": "PlatformTenant"
+      },
+      "PlaygroundMensajeOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "direction": {
+            "type": "string",
+            "title": "Direction",
+            "description": "`outbound` (lo que el sistema le dijo al cliente de prueba) o `inbound`."
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "interactive": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interactive",
+            "description": "Botones o lista del mensaje (payload de WhatsApp) con los ids firmados que `/tap` recibe."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "direction",
+          "content",
+          "created_at"
+        ],
+        "title": "PlaygroundMensajeOut"
+      },
+      "PlaygroundOpcionesIn": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave",
+            "description": "Clave de la plantilla con opciones (versión vigente publicada)."
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id",
+            "description": "Conexión por cuya release se prueba, como en `/message`. Sin ella, la de siempre."
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave"
+        ],
+        "title": "PlaygroundOpcionesIn"
+      },
+      "PlaygroundOpcionesOut": {
+        "properties": {
+          "enviado": {
+            "type": "boolean",
+            "title": "Enviado"
+          },
+          "ya_enviado": {
+            "type": "boolean",
+            "title": "Ya Enviado",
+            "default": false
+          },
+          "via": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "interactivo",
+                  "texto"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Via",
+            "description": "`interactivo` (botones) o `texto`."
+          },
+          "ejecucion_directa": {
+            "type": "boolean",
+            "title": "Ejecucion Directa"
+          },
+          "degradado": {
+            "type": "boolean",
+            "title": "Degradado"
+          },
+          "send_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Send Id"
+          },
+          "mensajes": {
+            "items": {
+              "$ref": "#/components/schemas/PlaygroundMensajeOut"
+            },
+            "type": "array",
+            "title": "Mensajes",
+            "description": "Los mensajes del envío, listos para pintar."
+          }
+        },
+        "type": "object",
+        "required": [
+          "enviado",
+          "ejecucion_directa",
+          "degradado",
+          "mensajes"
+        ],
+        "title": "PlaygroundOpcionesOut"
+      },
+      "PlaygroundToqueIn": {
+        "properties": {
+          "payload": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "Payload",
+            "description": "`id` de un botón del mensaje (`opt:…`, `optc:…` o `optn:…`), tal cual lo devolvió `/options` o `/tap`."
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id",
+            "description": "La misma conexión con la que se envió."
+          }
+        },
+        "type": "object",
+        "required": [
+          "payload"
+        ],
+        "title": "PlaygroundToqueIn"
+      },
+      "PlaygroundToqueOut": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "title": "Outcome",
+            "description": "Resultado del resolver (`ok`, `tool_error`, `denied`, `confirm_requested`, `cancelled`, `expired`, `duplicate`, `bad_signature`, `unknown_send`, `foreign_conversation`, …). Un payload manipulado, de otro negocio o de otra conversación se descarta sin mensajes: `mensajes` vacío."
+          },
+          "mensajes": {
+            "items": {
+              "$ref": "#/components/schemas/PlaygroundMensajeOut"
+            },
+            "type": "array",
+            "title": "Mensajes",
+            "description": "Lo que el toque produjo: respuesta fija o botones de confirmación."
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome",
+          "mensajes"
+        ],
+        "title": "PlaygroundToqueOut"
       },
       "PluginAction": {
         "properties": {

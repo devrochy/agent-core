@@ -89,6 +89,15 @@ def test_canal_sin_botones_sale_texto_aunque_haya_ventana_y_plantilla(canal: str
     assert decidir(canal=canal, proveedor=proveedor, plantilla_utilizable=True) == envio.Decision(envio.TEXTO, envio.CANAL_SIN_BOTONES)
 
 
+@pytest.mark.parametrize("ventana", [True, False])
+def test_playground_es_un_canal_con_botones_sin_ventana_ni_plantilla(ventana: bool) -> None:
+    """El canal `test` (playground) decide solo por los topes de Meta: ni ventana de 24 h ni plantilla (SPEC-40, B1)."""
+    assert decidir(canal="test", proveedor="", ventana_abierta=ventana) == envio.Decision(envio.INTERACTIVO)
+    assert decidir(canal="test", proveedor="", ventana_abierta=ventana, interactivo_valido=False) == envio.Decision(
+        envio.TEXTO, envio.FUERA_DE_TOPES
+    )
+
+
 def test_ventana_desconocida_cuenta_como_cerrada() -> None:
     assert envio.ventana_abierta(None, AHORA) is False
     assert envio.ventana_abierta(AHORA - timedelta(seconds=1), AHORA) is False
