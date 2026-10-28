@@ -18,6 +18,7 @@ from typing import Any
 
 from sqlalchemy import or_, select, text
 
+from core.datos_cliente.guardar import guardar as guardar_datos
 from core.datos_cliente.legado import base_desde_lista, requeridos_efectivos
 from core.datos_cliente.servicio import evaluar_accion
 from core.db.session import get_owned, get_session
@@ -61,6 +62,8 @@ from pack_commerce.planes import (
 CUSTOMER_SEGMENTS = ("nuevo", "ocasional", "frecuente", "fiel", "inactivo")
 
 log = get_logger(__name__)
+# Datos que el cliente deja al pedir que lo contacten: son operativos del lead (HU-CRM-16).
+OPERATIVOS_DE_LEAD = ("name", "email", "phone", "crm_lead_id")
 
 ORDER_STATUS_ACTIVE = ("abierto", "despachado")
 # Una cotización "en curso": se puede confirmar o convertir en pedido (ADR-0130).
@@ -970,7 +973,7 @@ class LeadSkill(BaseSkill):
         telefono = _ESPACIOS.sub(" ", str(arguments.get("phone") or "")).strip()[:40]
         if telefono:
             perfil["phone"] = telefono
-        await entity_memory.upsert_attributes(context.customer_id, perfil)
+        await guardar_datos(context.customer_id, perfil, operativos=OPERATIVOS_DE_LEAD, source="tool")
         return {"lead_id": lead_id, "status": "created"}
 
     async def calificar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
@@ -1016,7 +1019,7 @@ class LeadSkill(BaseSkill):
         }
         contacto = {k: v for k, v in contacto.items() if v}
         if contacto:
-            await entity_memory.upsert_attributes(context.customer_id, contacto)
+            await guardar_datos(context.customer_id, contacto, operativos=OPERATIVOS_DE_LEAD, source="tool")
         return {"lead_id": str(lead.id), "status": "actualizado"}
 
 

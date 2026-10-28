@@ -38346,6 +38346,301 @@
           }
         }
       }
+    },
+    "/api/v1/admin/leads/{lead_id}/consentimiento-datos": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Ver Consentimiento Datos",
+        "description": "Estado del cliente frente al aviso de datos (informado, aceptó, rechazó).",
+        "operationId": "ver_consentimiento_datos_api_v1_admin_leads__lead_id__consentimiento_datos_get",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentimientoDatosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/leads/{lead_id}/consentimiento-datos/revocar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Revocar Consentimiento Datos",
+        "description": "El cliente pidió que no se guarden más datos suyos: se registra la revocación y se retiran del\nperfil sus datos personales. Solo dueño o master. Los registros de los módulos (pedidos, citas…)\nno se borran aquí: la supresión en los módulos queda pendiente (aviso en la respuesta y auditoría).",
+        "operationId": "revocar_consentimiento_datos_api_v1_admin_leads__lead_id__consentimiento_datos_revocar_post",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevocacionDatosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/datos-cliente/aviso": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · datos del cliente"
+        ],
+        "summary": "Get Aviso",
+        "operationId": "get_aviso_api_v1_admin_datos_cliente_aviso_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvisoDatosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · datos del cliente"
+        ],
+        "summary": "Save Aviso",
+        "description": "Guarda el texto y el interruptor del aviso. Activarlo exige confirmar la revisión legal del texto.\nEl texto completo queda en la auditoría junto con su versión.",
+        "operationId": "save_aviso_api_v1_admin_datos_cliente_aviso_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AvisoDatosUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvisoDatosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -70083,6 +70378,192 @@
           "canjes_usados"
         ],
         "title": "PromocionOut"
+      },
+      "AvisoDatosOut": {
+        "properties": {
+          "activo": {
+            "type": "boolean",
+            "title": "Activo"
+          },
+          "texto": {
+            "type": "string",
+            "title": "Texto"
+          },
+          "texto_propio": {
+            "type": "string",
+            "title": "Texto Propio"
+          },
+          "es_borrador": {
+            "type": "boolean",
+            "title": "Es Borrador"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "activo",
+          "texto",
+          "texto_propio",
+          "es_borrador",
+          "version"
+        ],
+        "title": "AvisoDatosOut"
+      },
+      "AvisoDatosUpdate": {
+        "properties": {
+          "activo": {
+            "type": "boolean",
+            "title": "Activo"
+          },
+          "texto": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Texto",
+            "default": ""
+          },
+          "confirmo_revision_legal": {
+            "type": "boolean",
+            "title": "Confirmo Revision Legal",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "activo"
+        ],
+        "title": "AvisoDatosUpdate"
+      },
+      "ConsentimientoDatosItem": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "enum": [
+              "informado",
+              "otorgado",
+              "revocado"
+            ],
+            "title": "Estado"
+          },
+          "origen": {
+            "type": "string",
+            "title": "Origen"
+          },
+          "quien": {
+            "type": "string",
+            "title": "Quien"
+          },
+          "version_aviso": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Aviso"
+          },
+          "evidencia": {
+            "type": "string",
+            "title": "Evidencia"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado",
+          "origen",
+          "quien",
+          "version_aviso",
+          "evidencia",
+          "created_at"
+        ],
+        "title": "ConsentimientoDatosItem"
+      },
+      "ConsentimientoDatosOut": {
+        "properties": {
+          "aviso_activo": {
+            "type": "boolean",
+            "title": "Aviso Activo"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "sin_aviso",
+              "informado",
+              "otorgado",
+              "revocado"
+            ],
+            "title": "Estado"
+          },
+          "historial": {
+            "items": {
+              "$ref": "#/components/schemas/ConsentimientoDatosItem"
+            },
+            "type": "array",
+            "title": "Historial"
+          }
+        },
+        "type": "object",
+        "required": [
+          "aviso_activo",
+          "estado",
+          "historial"
+        ],
+        "title": "ConsentimientoDatosOut",
+        "description": "Estado del cliente frente al aviso de tratamiento de datos y su historial (hasta 20)."
+      },
+      "RevocacionDatosOut": {
+        "properties": {
+          "aviso_activo": {
+            "type": "boolean",
+            "title": "Aviso Activo"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "sin_aviso",
+              "informado",
+              "otorgado",
+              "revocado"
+            ],
+            "title": "Estado"
+          },
+          "historial": {
+            "items": {
+              "$ref": "#/components/schemas/ConsentimientoDatosItem"
+            },
+            "type": "array",
+            "title": "Historial"
+          },
+          "datos_retirados": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Datos Retirados"
+          },
+          "supresion_en_modulos_pendiente": {
+            "type": "boolean",
+            "title": "Supresion En Modulos Pendiente",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "aviso_activo",
+          "estado",
+          "historial",
+          "datos_retirados"
+        ],
+        "title": "RevocacionDatosOut"
       }
     }
   }

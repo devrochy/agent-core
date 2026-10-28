@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 
 from core.agents.playbooks import load_playbook
 from core.agents.spec import load_active_spec
+from core.datos_cliente.guardar import guardar as guardar_datos
 from core.db.models import Conversation, UsageLedger
 from core.db.session import get_session
 from core.kernel.opciones.bandera import oferta_habilitada
@@ -76,15 +77,23 @@ class CoreSkill(BaseSkill):
         if not attributes:
             return {"error": "attributes vacío: no hay nada que actualizar"}
         try:
-            await entity_memory.upsert_attributes(
-                ctx.customer_id, attributes, source="agent", concedidos=ctx.write_namespaces
-            )
+            guardado = await guardar_datos(ctx.customer_id, attributes, source="agent", concedidos=ctx.write_namespaces)
         except NamespaceNoConcedido:
             return {"error": "este agente no puede guardar datos en el perfil del cliente"}
         except HechoInvalido:
             return {
                 "error": "dato no admitido en el perfil: claves cortas de una línea, sin datos de pago, "
                 "salud ni contraseñas"
+            }
+        if guardado.requiere_aceptacion:
+            # Aviso de datos activo y el cliente aún no aceptó (HU-CRM-16): lo operativo ya quedó guardado,
+            # el resto no. El aviso se lo muestra el sistema; el modelo no lo redacta ni lo repite.
+            return {
+                "status": "requiere_aceptacion",
+                "updated": guardado.guardados,
+                "no_guardado": guardado.diferidos,
+                "estado_aviso": guardado.estado_aviso,
+                "hint": "Esos datos se guardan solo si el cliente acepta el aviso de datos. No se los vuelvas a pedir.",
             }
         return {"status": "ok", "updated": list(attributes.keys())}
 
@@ -360,7 +369,7 @@ class CoreSkill(BaseSkill):
 def register_core_skills(host) -> None:
     """Registra las skills del core en el MCPHost (idempotente)."""
     registradas = {name for name, _ in getattr(host, "_skills", {}).items()}
-    if registradas >= {"core", "subscriptions", "datos_cliente", "historial_cliente"}:
+    if registradas >= {"core", "subscriptions", "datos_cliente", "historial_cliente", "aviso_datos"}:
         return
     host.begin_activation("core")
     try:
@@ -378,6 +387,10 @@ def register_core_skills(host) -> None:
             from core.memory.historial_tool import HistorialClienteSkill
 
             host.register_skill(HistorialClienteSkill())
+        if "aviso_datos" not in registradas:
+            from core.datos_cliente.aviso_tool import AvisoDatosSkill
+
+            host.register_skill(AvisoDatosSkill())
     finally:
         host.end_activation()
 
