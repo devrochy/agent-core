@@ -118,7 +118,7 @@ class CalendarConfig(BasePluginConfig):
             "Mensaje que recibe el cliente por WhatsApp cuando se mueve su cita. "
             "Placeholders: {fecha}, {hora}, {titulo}, {link}"
         ),
-        json_schema_extra={"format": "textarea"},
+        json_schema_extra={"mensaje": "whatsapp", "format": "textarea"},
     )
     appointment_cancelled_message: str = Field(
         default=DEFAULT_CANCELLED_MESSAGE,
@@ -126,7 +126,7 @@ class CalendarConfig(BasePluginConfig):
             "Mensaje que recibe el cliente por WhatsApp cuando se cancela su cita. "
             "Placeholders: {fecha}, {hora}, {titulo}"
         ),
-        json_schema_extra={"format": "textarea"},
+        json_schema_extra={"mensaje": "whatsapp", "format": "textarea"},
     )
     appointments_cancelled_summary: str = Field(
         default=DEFAULT_CANCELLED_SUMMARY,
@@ -134,7 +134,7 @@ class CalendarConfig(BasePluginConfig):
             "Mensaje resumen que recibe el cliente por WhatsApp cuando se cancelan "
             "VARIAS citas a la vez. Placeholder: {cantidad}"
         ),
-        json_schema_extra={"format": "textarea"},
+        json_schema_extra={"mensaje": "whatsapp", "format": "textarea"},
     )
     # -------------------------------------------------- correo de agendamiento (HU-CAL-02)
     email_subject_confirmed: str = Field(
@@ -143,6 +143,7 @@ class CalendarConfig(BasePluginConfig):
             "Asunto del correo de confirmación de cita. Placeholders: {cliente}, "
             "{titulo}, {fecha}, {hora}, {negocio}, {link}"
         ),
+        json_schema_extra={"mensaje": "email"},
     )
     email_body_confirmed: str = Field(
         default=DEFAULT_EMAIL_BODY_CONFIRMED,
@@ -151,25 +152,27 @@ class CalendarConfig(BasePluginConfig):
             "{fecha}, {hora}, {negocio}, {link} (link para agregar la cita al calendario; "
             "si no lo ponés, se agrega al final)"
         ),
-        json_schema_extra={"format": "textarea"},
+        json_schema_extra={"mensaje": "email", "format": "textarea"},
     )
     email_subject_moved: str = Field(
         default=DEFAULT_EMAIL_SUBJECT_MOVED,
         description="Asunto del correo de reagenda. Mismos placeholders.",
+        json_schema_extra={"mensaje": "email"},
     )
     email_body_moved: str = Field(
         default=DEFAULT_EMAIL_BODY_MOVED,
         description="Cuerpo del correo de reagenda. Mismos placeholders.",
-        json_schema_extra={"format": "textarea"},
+        json_schema_extra={"mensaje": "email", "format": "textarea"},
     )
     email_subject_cancelled: str = Field(
         default=DEFAULT_EMAIL_SUBJECT_CANCELLED,
         description="Asunto del correo de cancelación. Mismos placeholders.",
+        json_schema_extra={"mensaje": "email"},
     )
     email_body_cancelled: str = Field(
         default=DEFAULT_EMAIL_BODY_CANCELLED,
         description="Cuerpo del correo de cancelación. Mismos placeholders.",
-        json_schema_extra={"format": "textarea"},
+        json_schema_extra={"mensaje": "email", "format": "textarea"},
     )
     # ---------------------------------------------------------- demo de punta a punta (HU-SH-02)
     enlace_reunion: str = Field(
@@ -183,7 +186,7 @@ class CalendarConfig(BasePluginConfig):
     confirmacion_texto: str = Field(
         default="📅 Tu cita «{titulo}» quedó agendada para el {fecha} a las {hora} ({zona}).{enlace}",
         max_length=1000,
-        json_schema_extra={"format": "textarea"},
+        json_schema_extra={"mensaje": "whatsapp", "format": "textarea"},
         description="Confirmación al cliente. Placeholders: {titulo}, {fecha}, {hora}, {zona}, {enlace}, {agenda} (solo con varias agendas)",
     )
     recordatorios_horas: list[Annotated[int, Field(ge=0, le=720)]] = Field(
@@ -196,7 +199,7 @@ class CalendarConfig(BasePluginConfig):
             "{cita.hora} ({cita.zona}). {cita.enlace}"
         ),
         max_length=1000,
-        json_schema_extra={"format": "textarea"},
+        json_schema_extra={"mensaje": "whatsapp", "format": "textarea"},
         description="Recordatorio al cliente dentro de las 24 h (fuera de la ventana, la plantilla mapeada).",
     )
     no_asistio_texto: str = Field(
@@ -205,7 +208,7 @@ class CalendarConfig(BasePluginConfig):
             "¿Querés que la reagendemos? Decime qué día te queda bien."
         ),
         max_length=1000,
-        json_schema_extra={"format": "textarea"},
+        json_schema_extra={"mensaje": "whatsapp", "format": "textarea"},
         description="Mensaje al cliente cuando el equipo marca que no asistió (ofrece reagendar).",
     )
     cita_desde_panel_texto: str = Field(
@@ -214,7 +217,7 @@ class CalendarConfig(BasePluginConfig):
             "{cita.hora} ({cita.zona}). {cita.enlace}"
         ),
         max_length=1000,
-        json_schema_extra={"format": "textarea"},
+        json_schema_extra={"mensaje": "whatsapp", "format": "textarea"},
         description="Aviso al cliente cuando el equipo crea la cita desde el panel.",
     )
 

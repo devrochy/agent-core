@@ -77,7 +77,7 @@ def test_la_bandera_esta_apagada_salvo_el_literal_true(settings, esperado: bool)
 def test_nadie_fuera_del_modulo_ni_de_la_ruta_master_toca_la_bandera() -> None:
     """`bandera.fijar` solo la llama la ruta de plataforma master-only (`platform.py`). Los otros módulos que
     importan la bandera solo la LEEN: el consumer (`habilitada`, HU-OPC-03), el envío (`habilitada`, HU-OPC-02) y la
-    tool `enviar_plantilla_opciones` (`oferta_habilitada`) y la API de plantillas (`habilitada`, PR 6); nunca la
+    tool `enviar_plantilla_opciones` (`oferta_habilitada`) la API de plantillas (`habilitada`, PR 6) y el catálogo de mensajes (`habilitada`, solo lectura); nunca la
     escriben. Entre los routers, solo `platform.py` (master) importa la bandera: NINGÚN router del dueño."""
     from pathlib import Path
 
@@ -87,6 +87,7 @@ def test_nadie_fuera_del_modulo_ni_de_la_ruta_master_toca_la_bandera() -> None:
         "core/gateway/opciones_envio.py",
         "core/tools/core_skill.py",
         "core/api/routers/plantillas_opciones.py",
+        "core/admin/catalogo_mensajes_service.py",  # catálogo de mensajes (solo lectura): omite `opciones` si está apagada
     }
     # La ruta master-only de plataforma es la ÚNICA que llama a `fijar` (y a `leer` para el GET).
     escritor = "core/api/routers/platform.py"

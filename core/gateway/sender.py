@@ -40,6 +40,7 @@ from core.shared.events import ON_MESSAGE_SENT, event_bus
 from core.shared.exceptions import OutboundWindowExpiredError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import is_test_channel
 
 if TYPE_CHECKING:
     from core.kernel.opciones.envio import ResultadoEnvio
@@ -408,6 +409,43 @@ async def _registrar_si_pausada(conversation: Conversation, content: str, sender
     return True
 
 
+async def _guardar_saliente_de_prueba(
+    conversation: Conversation,
+    content: str,
+    sender_type: str,
+    *,
+    interactive: dict[str, Any] | None = None,
+    client_message_id: str | None = None,
+    image_url: str | None = None,
+) -> bool:
+    """Conversación del playground (canal `test`): no hay proveedor, ventana ni cola. El mensaje saliente queda
+    guardado como entregado (el navegador lo pinta), igual que `playground._guardar_mensaje`: una sola fila, sin
+    partir en burbujas, sin Celery y sin `ON_MESSAGE_SENT`."""
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None or conversation.tenant_id != tenant_id:
+        # Defensa en profundidad (además de RLS): nunca se escribe en la conversación de otro negocio.
+        log.error("envio_prueba_tenant_distinto", conversation_id=str(conversation.id))
+        return False
+    async with get_session() as session:
+        session.add(
+            Message(
+                tenant_id=tenant_id,
+                conversation_id=conversation.id,
+                direction="outbound",
+                sender_type=sender_type,
+                content=content,
+                status="sent",
+                client_message_id=client_message_id or str(uuid.uuid4()),
+                media_type="image" if image_url else None,
+                media_url=image_url,
+                # Sin `interactive` la columna queda en NULL del SQL: pasar None guardaría un JSON `null`, que el
+                # CHECK `ck_messages_interactive_objeto` rechaza.
+                **({"interactive": dict(interactive)} if interactive is not None else {}),
+            )
+        )
+    return True
+
+
 async def send_to_conversation(
     conversation_id: uuid.UUID,
     text: str,
@@ -441,6 +479,12 @@ async def send_to_conversation(
         customer = await session.get(Customer, conversation.customer_id)
         if customer is None:
             return False
+
+    if is_test_channel(conversation.channel):
+        return await _guardar_saliente_de_prueba(
+            conversation, text, sender_type, image_url=image_url,
+            client_message_id=f"{client_message_id_prefix}:0" if client_message_id_prefix else None,
+        )
 
     if await _registrar_si_pausada(conversation, text, sender_type):
         return False
@@ -684,6 +728,7 @@ async def send_interactive_to_conversation(
     waweb, Messenger, ventana cerrada, payload fuera de topes) sale `fallback_text` por el camino
     de texto de siempre, que registra el fallo si la ventana está cerrada. `content` guarda el
     cuerpo para el panel; `interactive`, el payload. Devuelve True si quedó encolado.
+    El playground (canal `test`) también cuenta como canal con botones: el mensaje queda guardado como entregado.
     `sin_degradar`: si no se puede mandar el interactivo, no manda `fallback_text` y devuelve False (quien
     pide un botón para CONFIRMAR algo no puede conformarse con un texto que no confirma nada).
     `client_message_id`: id estable del mensaje (índice único por negocio) para que un envío repetido no
@@ -699,6 +744,17 @@ async def send_interactive_to_conversation(
         # Defensa en profundidad (además de RLS): la fila sale con el negocio de la conversación.
         log.error("envio_interactivo_tenant_distinto", conversation_id=str(conversation_id))
         return False
+
+    if is_test_channel(conversation.channel):
+        # Playground: sin ventana ni proveedor. El interactivo queda guardado como entregado y lo pinta el navegador.
+        if interactivo_valido(interactive):
+            return await _guardar_saliente_de_prueba(
+                conversation, str(interactive["body"]), sender_type,
+                interactive=interactive, client_message_id=client_message_id,
+            )
+        if sin_degradar:
+            return False
+        return await send_to_conversation(conversation_id, fallback_text, sender_type=sender_type)
 
     expira = conversation.service_window_expires_at
     ventana_abierta = expira is None or expira >= utcnow()

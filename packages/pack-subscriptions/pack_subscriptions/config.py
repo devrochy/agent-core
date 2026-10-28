@@ -109,6 +109,7 @@ class SubscriptionConfig(BasePluginConfig):
             "(vence el {cargo.fecha_vencimiento}). Puedes pagarlo aquí: {cargo.link}"
         ),
         description="Texto del aviso de cargo nuevo cuando el cliente escribió en las últimas 24 h.",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
     recordatorio_texto: str = Field(
         default=(
@@ -116,6 +117,7 @@ class SubscriptionConfig(BasePluginConfig):
             "{cargo.monto}, que vence {recordatorio.dias}. Link de pago: {cargo.link}"
         ),
         description="Texto de los recordatorios de un cargo impago (dentro de las 24 h).",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
     aviso_pausa_texto: str = Field(
         default=(
@@ -124,6 +126,7 @@ class SubscriptionConfig(BasePluginConfig):
             "{cargo.link}"
         ),
         description="Texto del aviso de pausa por mora (dentro de las 24 h).",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
     # HU-SUB-24: cuando el cargo no tiene link (monto bajo el mínimo, sin pasarela o link caído) el aviso
     # lleva los datos de transferencia del negocio en lugar del link.
@@ -135,6 +138,7 @@ class SubscriptionConfig(BasePluginConfig):
             "{cargo.periodo}. Cuando pagues, avísanos por aquí."
         ),
         description="Aviso de cargo nuevo cuando no hay link de pago y el negocio tiene cuentas de transferencia.",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
     recordatorio_transferencia_texto: str = Field(
         default=(
@@ -144,6 +148,7 @@ class SubscriptionConfig(BasePluginConfig):
             "{cargo.periodo}."
         ),
         description="Recordatorio de un cargo impago sin link de pago (con cuentas de transferencia).",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
     aviso_pausa_transferencia_texto: str = Field(
         default=(
@@ -153,6 +158,7 @@ class SubscriptionConfig(BasePluginConfig):
             "{cargo.periodo}."
         ),
         description="Aviso de pausa por mora cuando el cargo no tiene link de pago.",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
 
     varias_por_cliente: bool = Field(
@@ -176,6 +182,7 @@ class SubscriptionConfig(BasePluginConfig):
             "{prueba.termina}. Si quieres seguir, respóndenos y te ayudamos a elegir un plan."
         ),
         description="Texto del aviso de fin de la prueba (dentro de las 24 h).",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
 
     # ------------------------------------------------------ horario legal (HU-SUB-18)

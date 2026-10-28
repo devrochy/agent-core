@@ -3,6 +3,8 @@ HU-OPC-02). La parte con base y cola está en `core/gateway/opciones_envio.py`; 
 
 **Cascada** (`decidir_via`):
 
+0. Playground (canal `test`): interactivo si cabe en los topes de Meta, texto si no; sin ventana ni plantilla. El
+   navegador pinta los botones y el toque pasa por el mismo resolver y la misma firma que en WhatsApp.
 1. Canal sin botones (web, WhatsApp Web, Messenger, Instagram, correo; o un WhatsApp cuya conexión no es de Meta):
    texto numerado con las opciones y SIN ejecución directa.
 2. WhatsApp Cloud con la ventana de 24 h ABIERTA (conocida y vigente: desconocida cuenta como cerrada, ADR-0108):
@@ -37,6 +39,7 @@ from typing import Any
 
 from core.kernel.opciones.definicion import MAX_TTL_HORAS, Definicion
 from core.kernel.opciones.mapeo import nombre_de_parametro, variables_del_cuerpo
+from core.shared.test_mode import TEST_CHANNEL
 
 # Vías (valores del CHECK `ck_option_sends_via`) y su etiqueta en logs y métricas.
 INTERACTIVO = "interactive"
@@ -104,6 +107,9 @@ def decidir_via(
     motivo_plantilla: str = "",
 ) -> Decision:
     """La vía de un envío. Ver la cascada en el docstring del módulo."""
+    if canal == TEST_CHANNEL:
+        # Playground: el navegador pinta los botones, no hay proveedor ni ventana de 24 h ni plantilla.
+        return Decision(INTERACTIVO) if interactivo_valido else Decision(TEXTO, FUERA_DE_TOPES)
     if canal != "whatsapp" or proveedor != "meta":
         return Decision(TEXTO, CANAL_SIN_BOTONES)
     if ventana_abierta:

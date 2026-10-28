@@ -139,12 +139,14 @@ class CRMConfig(BasePluginConfig):
             "¿Sigues interesado? Estoy aquí para ayudarte con lo que necesites."
         ),
         description="Mensaje de reenganche de leads ({name}, {interest})",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
     follow_up_quote_message: str = Field(
         default=(
             "¡Hola! Te tengo lista tu cotización por {total}. ¿La confirmo para armar tu pedido? 😋"
         ),
         description="Mensaje de reenganche de cotizaciones ({total})",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
     order_status_visible: dict[str, str] = Field(
         default_factory=lambda: {
@@ -169,12 +171,14 @@ class CRMConfig(BasePluginConfig):
     order_confirmed_message: str = Field(
         default="✅ Tu pedido {public_order_number} quedó confirmado. Total a pagar: {total}.",
         description="Mensaje de confirmación de pedido (efectivo)",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
     order_confirmed_transfer_message: str = Field(
         default=(
             "Tu pedido {public_order_number} quedó confirmado por transferencia.\n\n{transfer_block}"
         ),
         description="Mensaje de confirmación de pedido por transferencia",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
 
     # ---------------------------------------------------------------- crm_completion_check (ADR-0025)

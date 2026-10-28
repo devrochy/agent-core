@@ -4081,6 +4081,200 @@
         }
       }
     },
+    "/api/v1/admin/playground/options": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · playground"
+        ],
+        "summary": "Playground Options",
+        "description": "Envía la plantilla con opciones `clave` a la conversación de prueba, con `send_options_to_conversation`: crea el\n`option_sends` con sus payloads firmados y guarda el mensaje con los botones, sin Meta ni cola. Los errores son\nlos de `POST /plantillas-opciones/{clave}/enviar-prueba` (404 si la bandera está apagada o la clave no existe,\n409 si no está publicada, 422 si falta contexto).",
+        "operationId": "playground_options_api_v1_admin_playground_options_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaygroundOpcionesIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundOpcionesOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/playground/tap": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · playground"
+        ],
+        "summary": "Playground Tap",
+        "description": "Simula el toque de un botón de la conversación de prueba con el MISMO resolver que atiende WhatsApp: firma\npor negocio y conversación, vigencia, una sola ejecución y autorización de la tool, sin LLM. Devuelve el\n`outcome` y los mensajes que produjo. **Ejecuta la tool de verdad.** Un payload que no es de opciones es 422.",
+        "operationId": "playground_tap_api_v1_admin_playground_tap_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaygroundToqueIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundToqueOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
     "/api/v1/admin/escalations": {
       "get": {
         "tags": [
@@ -29151,6 +29345,73 @@
         }
       }
     },
+    "/api/v1/mensajes/catalogo": {
+      "get": {
+        "tags": [
+          "api",
+          "mensajes"
+        ],
+        "summary": "Catalogo",
+        "description": "Los mensajes del negocio activo en una sola lista, de solo lectura. No sincroniza con Meta (muestra lo último\nguardado) y no descifra nada fuera de la lectura de configuración de los packs. 403 si no se puede leer\nninguna de las fuentes; 400 `no_tenant` si no hay un negocio seleccionado.",
+        "operationId": "catalogo_api_v1_mensajes_catalogo_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogoDeMensajesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/meta/wizard/resume": {
       "post": {
         "tags": [
@@ -39501,6 +39762,46 @@
         ],
         "title": "Catalogo"
       },
+      "CatalogoDeMensajesOut": {
+        "properties": {
+          "mensajes": {
+            "items": {
+              "$ref": "#/components/schemas/MensajeDelCatalogo"
+            },
+            "type": "array",
+            "title": "Mensajes"
+          },
+          "omitidas": {
+            "items": {
+              "$ref": "#/components/schemas/MensajeOmitido"
+            },
+            "type": "array",
+            "title": "Omitidas",
+            "description": "Tipos que no se listan y por qué."
+          },
+          "truncado": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "meta",
+                "evento",
+                "opciones",
+                "texto_pack"
+              ]
+            },
+            "type": "array",
+            "title": "Truncado",
+            "description": "Tipos que pasaron el tope por tipo: la lista está recortada."
+          }
+        },
+        "type": "object",
+        "required": [
+          "mensajes",
+          "omitidas",
+          "truncado"
+        ],
+        "title": "CatalogoDeMensajesOut"
+      },
       "CategoryOut": {
         "properties": {
           "id": {
@@ -47536,6 +47837,193 @@
           "operational"
         ],
         "title": "PlatformTenant"
+      },
+      "PlaygroundMensajeOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "direction": {
+            "type": "string",
+            "title": "Direction",
+            "description": "`outbound` (lo que el sistema le dijo al cliente de prueba) o `inbound`."
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "interactive": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interactive",
+            "description": "Botones o lista del mensaje (payload de WhatsApp) con los ids firmados que `/tap` recibe."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "direction",
+          "content",
+          "created_at"
+        ],
+        "title": "PlaygroundMensajeOut"
+      },
+      "PlaygroundOpcionesIn": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave",
+            "description": "Clave de la plantilla con opciones (versión vigente publicada)."
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id",
+            "description": "Conexión por cuya release se prueba, como en `/message`. Sin ella, la de siempre."
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave"
+        ],
+        "title": "PlaygroundOpcionesIn"
+      },
+      "PlaygroundOpcionesOut": {
+        "properties": {
+          "enviado": {
+            "type": "boolean",
+            "title": "Enviado"
+          },
+          "ya_enviado": {
+            "type": "boolean",
+            "title": "Ya Enviado",
+            "default": false
+          },
+          "via": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "interactivo",
+                  "texto"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Via",
+            "description": "`interactivo` (botones) o `texto`."
+          },
+          "ejecucion_directa": {
+            "type": "boolean",
+            "title": "Ejecucion Directa"
+          },
+          "degradado": {
+            "type": "boolean",
+            "title": "Degradado"
+          },
+          "send_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Send Id"
+          },
+          "mensajes": {
+            "items": {
+              "$ref": "#/components/schemas/PlaygroundMensajeOut"
+            },
+            "type": "array",
+            "title": "Mensajes",
+            "description": "Los mensajes del envío, listos para pintar."
+          }
+        },
+        "type": "object",
+        "required": [
+          "enviado",
+          "ejecucion_directa",
+          "degradado",
+          "mensajes"
+        ],
+        "title": "PlaygroundOpcionesOut"
+      },
+      "PlaygroundToqueIn": {
+        "properties": {
+          "payload": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "Payload",
+            "description": "`id` de un botón del mensaje (`opt:…`, `optc:…` o `optn:…`), tal cual lo devolvió `/options` o `/tap`."
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id",
+            "description": "La misma conexión con la que se envió."
+          }
+        },
+        "type": "object",
+        "required": [
+          "payload"
+        ],
+        "title": "PlaygroundToqueIn"
+      },
+      "PlaygroundToqueOut": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "title": "Outcome",
+            "description": "Resultado del resolver (`ok`, `tool_error`, `denied`, `confirm_requested`, `cancelled`, `expired`, `duplicate`, `bad_signature`, `unknown_send`, `foreign_conversation`, …). Un payload manipulado, de otro negocio o de otra conversación se descarta sin mensajes: `mensajes` vacío."
+          },
+          "mensajes": {
+            "items": {
+              "$ref": "#/components/schemas/PlaygroundMensajeOut"
+            },
+            "type": "array",
+            "title": "Mensajes",
+            "description": "Lo que el toque produjo: respuesta fija o botones de confirmación."
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome",
+          "mensajes"
+        ],
+        "title": "PlaygroundToqueOut"
       },
       "PluginAction": {
         "properties": {
@@ -57342,6 +57830,160 @@
         "title": "MemoryUpdate",
         "description": "Entrada de `PUT /memory`: turnos de contexto 1–200, top-k 0–20 (0 = sin RAG) y\numbral 0–1 (los rangos de `save_memory`); fuera de rango responde 422."
       },
+      "MensajeDelCatalogo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "Estable y único en el catálogo (`<tipo>:<…>`)."
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "meta",
+              "evento",
+              "opciones",
+              "texto_pack"
+            ],
+            "title": "Tipo"
+          },
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "idioma": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idioma",
+            "description": "`meta`: idioma de la plantilla; `evento`: el del mapeo, si hay."
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado",
+            "description": "`meta`: el de Meta (`APPROVED`, `PENDING`…); `evento`: `sin_mapear`, `mapeado` o `plantilla_no_aprobada`; `opciones`: `draft`, `published` o `retired`; `texto_pack`: `por_defecto`, `personalizado` o `config_invalida`."
+          },
+          "estado_detalle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estado Detalle",
+            "description": "`meta`: categoría; `evento`: plantilla mapeada; `opciones`: estado de su plantilla en Meta si se publicó allí; `texto_pack`: nombre del pack."
+          },
+          "canales_soportados": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Canales Soportados",
+            "description": "Canales por los que sale hoy (constante por tipo hasta la pista C1)."
+          },
+          "variables": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Variables",
+            "description": "Tal como las usa la fuente, sin normalizar: marcadores de Meta, rutas permitidas del evento, variables de la definición o llaves del texto."
+          },
+          "dialecto_variables": {
+            "type": "string",
+            "enum": [
+              "meta_posicionales",
+              "meta_nombradas",
+              "llaves_con_ruta"
+            ],
+            "title": "Dialecto Variables"
+          },
+          "resumen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resumen",
+            "description": "Primeros ~160 caracteres del texto propio del negocio (nunca datos de un cliente)."
+          },
+          "actualizado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actualizado En",
+            "description": "`meta`: la última sincronización con Meta (el estado puede estar desfasado: no se sincroniza al listar); `opciones`: la última edición. Nulo en `evento` y `texto_pack`."
+          },
+          "fuente": {
+            "$ref": "#/components/schemas/FuenteDeMensaje"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tipo",
+          "clave",
+          "nombre",
+          "idioma",
+          "estado",
+          "estado_detalle",
+          "canales_soportados",
+          "variables",
+          "dialecto_variables",
+          "resumen",
+          "actualizado_en",
+          "fuente"
+        ],
+        "title": "MensajeDelCatalogo"
+      },
+      "MensajeOmitido": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "meta",
+              "evento",
+              "opciones",
+              "texto_pack"
+            ],
+            "title": "Tipo"
+          },
+          "motivo": {
+            "type": "string",
+            "enum": [
+              "sin_permiso",
+              "bandera_apagada"
+            ],
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "motivo"
+        ],
+        "title": "MensajeOmitido"
+      },
       "UnlinkRequest": {
         "properties": {
           "tenant": {
@@ -59226,6 +59868,100 @@
           "enabled_skills"
         ],
         "title": "FromTemplateOut"
+      },
+      "FuenteDeMensaje": {
+        "properties": {
+          "editor": {
+            "type": "string",
+            "enum": [
+              "meta",
+              "evento",
+              "opciones",
+              "texto_pack"
+            ],
+            "title": "Editor"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id",
+            "description": "`meta`: la conexión de la WABA que tiene la plantilla."
+          },
+          "message_template_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Template Id",
+            "description": "`meta`: la fila de `message_templates`."
+          },
+          "evento": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evento",
+            "description": "`evento`: clave del evento."
+          },
+          "clave": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clave",
+            "description": "`opciones`: clave de la plantilla con opciones."
+          },
+          "plugin_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plugin Id",
+            "description": "`texto_pack`: el pack dueño del texto."
+          },
+          "campo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campo",
+            "description": "`texto_pack`: el campo de la configuración del pack."
+          }
+        },
+        "type": "object",
+        "required": [
+          "editor"
+        ],
+        "title": "FuenteDeMensaje",
+        "description": "Dónde se edita: el panel arma el enlace con estos ids. Solo vienen los del tipo (el resto es nulo)."
       },
       "GateBandera": {
         "properties": {
