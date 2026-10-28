@@ -16,6 +16,7 @@ tests no pasan por el gate y caen en la lectura de siempre. Requiere el stack lo
 from __future__ import annotations
 
 import os
+import sys
 import uuid
 from collections import Counter
 from collections.abc import Iterator
@@ -82,14 +83,18 @@ def _sentencias() -> Iterator[list[str]]:
 
 
 class _Espias:
-    """Cuenta cuántas veces se consulta cada paso de la respuesta de texto (y la lectura de la bandera en BD)."""
+    """Cuenta cuántas veces se consulta cada paso de la respuesta de texto y cuántas veces `_toque_de_opcion` lee la
+    bandera de la base (`bandera_en_bd`). `bandera.habilitada` la llaman también otros caminos legítimos del turno
+    (p. ej. `oferta_habilitada`, el predicado que decide si se ofrecen al agente las tools de opciones): esas no se
+    cuentan, se anotan por nombre en `otros_llamadores`. Con `explotar=True`, la lectura desde `_toque_de_opcion` falla."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, explotar: bool = False) -> None:
         from core.kernel.opciones import activaciones, bandera
 
         self.ultimo_saliente = 0
         self.cargar_envio = 0
         self.bandera_en_bd = 0
+        self.otros_llamadores: list[str] = []
         real_ultimo, real_cargar, real_bandera = activaciones.envio_del_ultimo_saliente, activaciones.cargar_envio, bandera.habilitada
 
         async def ultimo(*a: Any, **k: Any) -> Any:
@@ -101,7 +106,13 @@ class _Espias:
             return await real_cargar(*a, **k)
 
         async def en_bd(*a: Any, **k: Any) -> Any:
-            self.bandera_en_bd += 1
+            llamador = sys._getframe(1).f_code.co_name
+            if llamador == "_toque_de_opcion":
+                self.bandera_en_bd += 1
+                if explotar:
+                    raise AssertionError("el consumer no debe volver a leer la bandera de la base")
+            else:
+                self.otros_llamadores.append(llamador)
             return await real_bandera(*a, **k)
 
         monkeypatch.setattr(activaciones, "envio_del_ultimo_saliente", ultimo)
@@ -168,19 +179,13 @@ async def test_la_bandera_sale_de_la_fila_del_gate_no_de_otra_lectura(  # type: 
 ) -> None:
     """Journey completo por `handle_inbound` con la lectura de la bandera en BD rota: si el menú se resuelve, la
     decisión salió de la fila que el gate ya había leído."""
-    from core.kernel.opciones import bandera
-
     a, _, _ = negocios
     _inmediato(monkeypatch)
     await _binding(a.tid)
     conv, cliente = await _abrir(a.tid, WEB)
     r = await _menu(a.tid, conv)
 
-    async def no_deberia_leerse(*_a: Any, **_k: Any) -> bool:
-        raise AssertionError("el consumer no debe volver a leer la bandera de la base")
-
-    espias = _Espias(monkeypatch)
-    monkeypatch.setattr(bandera, "habilitada", no_deberia_leerse)  # pisa al espía: leerla de la base explota
+    espias = _Espias(monkeypatch, explotar=True)  # leer la bandera de la base desde el consumer explota
     recorded.clear()
 
     await _por_el_gate(a.tid, cliente, "1")
@@ -279,3 +284,16 @@ async def test_dos_turnos_simultaneos_de_negocios_distintos_no_se_contaminan(  #
     assert recorded == ["1"], "el «1» de B llegó al agente; el de A no"
     assert espias.ultimo_saliente == 1, "solo el turno de A (encendido) buscó el menú"
     assert espias.bandera_en_bd == 0
+
+
+async def test_el_espia_distingue_la_lectura_del_consumer_de_la_oferta_de_tools(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]  # noqa: F811
+    """`oferta_habilitada` (el predicado de oferta de las tools de opciones) también lee la bandera en BD, y es legítimo:
+    el espía la anota aparte y NO la cuenta como lectura del consumer."""
+    from core.kernel.opciones import bandera
+    from core.shared.tenant import tenant_scope
+
+    a, _, _ = negocios
+    espias = _Espias(monkeypatch)
+    async with tenant_scope(a.tid):
+        assert await bandera.oferta_habilitada(set()) is True
+    assert espias.bandera_en_bd == 0 and espias.otros_llamadores == ["oferta_habilitada"]
