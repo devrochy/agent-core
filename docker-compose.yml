@@ -146,8 +146,10 @@ services:
       - ./plugins:/app/plugins
     # Las credenciales de sesión viven en RAM; la copia durable y cifrada está
     # en `waweb_sessions.creds_encrypted`.
+    # `mode=1777`: la imagen corre como `app`; un tmpfs root:root 0755 impedía
+    # crear los directorios de sesión y el connector no emitía QR (2026-10-28).
     tmpfs:
-      - /tmp/waweb-sessions
+      - /tmp/waweb-sessions:mode=1777
     depends_on:
       core-api:
         condition: service_healthy

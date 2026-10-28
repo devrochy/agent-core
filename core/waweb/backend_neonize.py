@@ -86,6 +86,10 @@ class NeonizeSocket:
     # Tope para `alive()`: esperar el lock del puente más que esto (otro tenant
     # ocupándolo) no es evidencia de socket muerto.
     alive_timeout_s: float = 10.0
+    # `disconnect()` no puede esperar el lock para siempre: si otra llamada al
+    # puente quedó trabada (deadlock de Neonize), este tenant nunca salía del
+    # `finally` y el panel se quedaba sin QR (visto en test 2026-10-28).
+    disconnect_lock_timeout_s: float = 10.0
 
     def __init__(self) -> None:
         self.closed = asyncio.Event()
@@ -252,8 +256,19 @@ class NeonizeSocket:
             self._idle_task.cancel()
         if self._client is not None:
             try:
-                async with _BRIDGE_LOCK:
-                    await self._client.disconnect()
+                # Solo se acota la ESPERA del lock: cancelar la llamada ya en
+                # curso liberaría el lock con el hilo todavía dentro de Go
+                # (`concurrent map writes`). Si el lock no llega, el watchdog de
+                # progreso del manager reinicia el proceso.
+                await asyncio.wait_for(_BRIDGE_LOCK.acquire(), self.disconnect_lock_timeout_s)
+            except TimeoutError:
+                log.warning("waweb_neonize_disconnect_lock_timeout")
+                self.closed.set()
+                return
+            try:
+                await self._client.disconnect()
             except Exception:
                 log.warning("waweb_neonize_disconnect_failed")
+            finally:
+                _BRIDGE_LOCK.release()
         self.closed.set()

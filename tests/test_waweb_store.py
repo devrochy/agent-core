@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 import uuid
 from pathlib import Path
+
+import pytest
 
 from core.waweb.store import DbEncryptedSessionStore, pack_dir, unpack_dir
 
@@ -85,3 +89,26 @@ def test_unpack_rechaza_path_traversal(tmp_path: Path) -> None:
         assert "fuera del directorio" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("debía rechazar la entrada")
+
+
+def test_base_sin_permiso_cae_a_tmp_y_no_rompe_el_vinculo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Un tmpfs root:root 0755 no debe dejar al conector sin QR."""
+    base = tmp_path / "waweb-sessions"
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    real_write = Path.write_bytes
+
+    def _sin_escritura(self: Path, data: bytes) -> int:
+        if self.name.startswith(".escritura-"):
+            raise PermissionError(13, "permiso denegado")
+        return real_write(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", _sin_escritura)
+
+    store = DbEncryptedSessionStore(base)
+    work = store.work_dir(uuid.UUID(int=3))
+
+    assert work.parent == tmp_path / f"waweb-sessions-{os.getpid()}"
+    work.mkdir()
+    assert work.is_dir()

@@ -39,6 +39,7 @@ class SessionRegistry(Protocol):
         tenant_id: uuid.UUID,
         new_status: str,
         *,
+        connection_id: uuid.UUID | None = None,
         detail: str | None = None,
         jid: str | None = None,
     ) -> None: ...
@@ -102,17 +103,26 @@ class DbSessionRegistry:
         tenant_id: uuid.UUID,
         new_status: str,
         *,
+        connection_id: uuid.UUID | None = None,
         detail: str | None = None,
         jid: str | None = None,
     ) -> None:
         async with tenant_scope(tenant_id):
             async with get_session() as session:
+                filters = [
+                    WaWebSession.tenant_id == tenant_id,
+                    WaWebSession.deleted_at.is_(None),
+                ]
+                # Con dos sesiones por tenant (una huérfana de una conexión
+                # borrada), escribir en la primera dejaba el estado real en la
+                # fila equivocada y el panel no veía `connected`/`jid`.
+                if connection_id is not None:
+                    filters.append(WaWebSession.connection_id == connection_id)
                 row = (
                     await session.execute(
-                        select(WaWebSession).where(
-                            WaWebSession.tenant_id == tenant_id,
-                            WaWebSession.deleted_at.is_(None),
-                        )
+                        select(WaWebSession)
+                        .where(*filters)
+                        .order_by(WaWebSession.created_at)
                     )
                 ).scalars().first()
                 if row is None:

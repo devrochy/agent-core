@@ -93,7 +93,7 @@ class RegistroDurable:
             )
         ]
 
-    async def set_status(self, tenant_id, new_status, *, detail=None, jid=None):
+    async def set_status(self, tenant_id, new_status, *, connection_id=None, detail=None, jid=None):
         self.estado = new_status
         self.historial.append((new_status, detail))
         if detail is not None:
