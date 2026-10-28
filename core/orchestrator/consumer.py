@@ -530,7 +530,8 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
     # ---------------- opciones directas (SPEC-40, ADR-0172): el toque de un botón `opt:`/`optc:`/`optn:`
     # ejecuta su tool y contesta con un texto fijo. Con la bandera del negocio encendida lo atiende el
     # resolver y el turno termina aquí (ni debounce ni LLM); apagada, o con cualquier otro payload, el
-    # mensaje sigue exactamente como siempre.
+    # mensaje sigue exactamente como siempre. En un canal de texto, el «1» (o el título exacto) que contesta
+    # un menú numerado vigente equivale al toque (pista C2); cualquier otro texto sigue al agente.
     if await _toque_de_opcion(conversation, customer, fields):
         return
 
@@ -735,13 +736,22 @@ _SERVICE_WINDOW_HOURS = 24
 
 
 async def _toque_de_opcion(conversation: Conversation, customer: Customer, fields: dict[str, str]) -> bool:
-    """¿Lo atendió el resolver de opciones directas? Solo un payload con prefijo `opt` consulta la bandera
-    (el resto de los mensajes no paga ni una consulta). Una bandera que no se puede leer cuenta como apagada
-    (fail-closed: el mensaje sigue su camino de siempre)."""
+    """¿Lo atendió el resolver de opciones directas? Dos entradas: el payload `opt:`/`optc:`/`optn:` de un botón, y
+    (pista C2) el texto «1» o el título de una opción que contesta un menú numerado en un canal sin botones. Un
+    mensaje que no es ninguna de las dos (el caso común) no paga ni una consulta; la respuesta de texto paga la
+    bandera y, solo si la bandera está encendida, la búsqueda del menú. Una bandera que no se puede leer cuenta como
+    apagada (fail-closed: el mensaje sigue su camino de siempre)."""
     from core.kernel.opciones import bandera
     from core.kernel.opciones.payload import es_de_opciones
+    from core.kernel.opciones.resolver import VIA_TEXTO
+    from core.orchestrator.opciones_toque import (
+        atender,
+        opcion_elegida_por_texto,
+        puede_ser_respuesta_de_menu,
+    )
 
-    if not es_de_opciones((fields.get("interactive_id") or "").strip()):
+    por_texto = not (fields.get("interactive_id") or "").strip() and puede_ser_respuesta_de_menu(conversation, fields)
+    if not por_texto and not es_de_opciones((fields.get("interactive_id") or "").strip()):
         return False
     try:
         async with get_session() as session:
@@ -751,8 +761,17 @@ async def _toque_de_opcion(conversation: Conversation, customer: Customer, field
         return False
     if not encendida:
         return False
-    from core.orchestrator.opciones_toque import atender
-
+    if por_texto:
+        try:
+            firmado = await opcion_elegida_por_texto(conversation, fields)
+        except Exception as exc:
+            # No es un toque: ante cualquier fallo el mensaje sigue al agente como siempre.
+            log.warning("opciones_respuesta_texto_fallo", tenant_id=str(conversation.tenant_id), error=type(exc).__name__)
+            return False
+        if firmado is None:
+            return False
+        await atender(conversation, customer, fields, payload_firmado=firmado, via=VIA_TEXTO)
+        return True
     await atender(conversation, customer, fields)
     return True
 

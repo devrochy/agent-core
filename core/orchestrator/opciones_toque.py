@@ -28,10 +28,14 @@ from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
+from pydantic import ValidationError
+
 from core.agents.spec import enabled_packs, load_active_spec
 from core.agents.spec_de_release import spec_del_turno
-from core.gateway.connection_types import capacidades_del_canal
-from core.kernel.opciones import resolver
+from core.db.models import utcnow
+from core.gateway.connection_types import capacidades_de, capacidades_del_canal
+from core.kernel.opciones import activaciones, payload, resolver, respuesta_texto
+from core.kernel.opciones.definicion import leer as leer_definicion
 from core.kernel.opciones.lint import FichaTool, acciones_de_procedimientos, fichas_de_tools
 from core.kernel.opciones.textos import texto
 from core.kernel.release_del_turno import fijar_release_del_turno
@@ -102,8 +106,62 @@ def abrir_entorno(conversation: Any, customer: Any) -> AbstractAsyncContextManag
     return _abrir()
 
 
-async def atender(conversation: Any, customer: Any, fields: dict[str, str]) -> str:
-    """Atiende el toque de la conversación. Devuelve el `outcome` (ver `resolver`)."""
+def puede_ser_respuesta_de_menu(conversation: Any, fields: dict[str, str]) -> bool:
+    """Guardas BARATAS (sin base) de una respuesta de texto a un menú numerado (pista C2): un texto corto, sin botón ni
+    adjunto, en un canal cuyo proveedor interpreta la respuesta numérica (`respuesta_numerica`). El proveedor lo
+    pone el ingreso del canal (`waweb/inbound.py`, `web_chat.py`, el webhook de Meta), no el cliente; un WhatsApp sin
+    proveedor conocido es solo texto sin capacidad (fail-closed), así que no cuesta resolver credenciales."""
+    if (fields.get("interactive_id") or "").strip():
+        return False
+    media = (fields.get("media") or "").strip()
+    if media not in ("", "[]"):
+        return False
+    contenido = (fields.get("content") or "").strip()
+    if not contenido or len(contenido) > respuesta_texto.MAX_LARGO_ELECCION:
+        return False
+    return capacidades_de(conversation.channel, fields.get("provider")).respuesta_numerica
+
+
+async def opcion_elegida_por_texto(conversation: Any, fields: dict[str, str]) -> str | None:
+    """El `opt:` FIRMADO por el servidor de la opción que el cliente eligió con su texto, o `None` (el mensaje sigue
+    al agente). Todas deben cumplirse:
+
+    1. el ÚLTIMO mensaje saliente de la conversación es (una burbuja de) un envío de opciones que no falló;
+    2. ese envío es de esta conversación y de esta vía `text` (un menú numerado; los botones y plantillas se tocan);
+    3. no venció (`expires_at` = `ttl_horas` de la definición, 24 h por defecto);
+    4. el texto es una elección inequívoca de ese menú (`respuesta_texto.elegir`).
+
+    El cliente solo aporta texto: el payload lo construye el servidor con la misma firma HMAC del flujo normal, y el
+    resolver vuelve a verificarlo todo (negocio, conversación, envío, opción, vigencia, autorización fail-closed)."""
+    tenant_id, conversation_id = conversation.tenant_id, conversation.id
+    send_id = await activaciones.envio_del_ultimo_saliente(tenant_id, conversation_id)
+    if send_id is None:
+        return None
+    envio = await activaciones.cargar_envio(tenant_id, send_id)
+    if envio is None or envio.via != "text" or envio.conversation_id != conversation_id:
+        return None
+    if utcnow() >= envio.expires_at:
+        return None  # un número a destiempo casi nunca es del menú: va al agente, no a «este mensaje venció»
+    try:
+        definicion = leer_definicion(envio.definition)
+    except ValidationError:
+        return None
+    indice = respuesta_texto.elegir((fields.get("content") or "").strip(), [o.titulo for o in definicion.opciones])
+    if indice is None:
+        return None
+    try:
+        return payload.construir(
+            payload.secreto_del_servidor(), "opt", tenant_id, conversation_id, envio.send_id, definicion.opciones[indice].id
+        )
+    except ValueError:
+        return None
+
+
+async def atender(
+    conversation: Any, customer: Any, fields: dict[str, str], *, payload_firmado: str | None = None, via: str = resolver.VIA_BOTON
+) -> str:
+    """Atiende el toque de la conversación. Devuelve el `outcome` (ver `resolver`). `payload_firmado`/`via`: la
+    elección por texto de un menú numerado (el `opt:` lo construyó el servidor, no vino del cliente)."""
     from core.gateway.sender import (
         interactivo_valido,
         send_interactive_to_conversation,
@@ -128,8 +186,9 @@ async def atender(conversation: Any, customer: Any, fields: dict[str, str]) -> s
     toque = resolver.Toque(
         tenant_id=conversation.tenant_id,
         conversation_id=conversation_id,
-        payload=(fields.get("interactive_id") or "").strip()[:256],
+        payload=payload_firmado or (fields.get("interactive_id") or "").strip()[:256],
         wamid=fields.get("external_message_id") or None,
+        via=via,
     )
     bordes = resolver.Bordes(
         abrir_entorno=lambda: abrir_entorno(conversation, customer),

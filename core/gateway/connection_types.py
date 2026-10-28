@@ -303,8 +303,9 @@ class CapacidadesCanal:
     plantilla_aprobada: bool = False
     # El canal tiene ventana de 24 h para texto libre/interactivos (Meta). Sin ella, siempre se puede escribir.
     ventana_24h: bool = False
-    # El canal interpreta la respuesta «1» / el título de una opción como un toque (menú numerado, pista C2).
-    # Hoy NINGÚN canal lo hace: la respuesta numérica llega al LLM. C2 lo enciende en los canales de texto.
+    # El canal interpreta la respuesta «1» / el título de una opción como un toque (menú numerado, pista C2):
+    # el consumer la resuelve ANTES del LLM (`kernel/opciones/respuesta_texto.py`, ADR-0172 adenda C2). Solo los
+    # canales de texto donde el cliente contesta con un mensaje corto; el correo no (el cuerpo trae citado y firma).
     respuesta_numerica: bool = False
 
     def admite(self, tipo_interactivo: object) -> bool:
@@ -317,6 +318,8 @@ class CapacidadesCanal:
 
 
 SOLO_TEXTO = CapacidadesCanal()
+# Solo texto, pero el menú numerado se contesta con «1» o con el título (pista C2).
+TEXTO_CON_MENU = CapacidadesCanal(respuesta_numerica=True)
 
 # Por `ConnectionType.id`. Un tipo de conexión con canal que falte aquí hace fallar
 # `tests/test_capacidades_canal.py`: un canal nuevo declara sus capacidades a propósito, no por omisión.
@@ -324,12 +327,12 @@ CAPACIDADES_POR_TIPO: dict[str, CapacidadesCanal] = {
     # WhatsApp Cloud: botones y lista dentro de la ventana de 24 h; fuera, plantilla aprobada (QUICK_REPLY).
     "whatsapp_meta": CapacidadesCanal(botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True),
     # Por QR (neonize): solo texto entrante y saliente, sin plantillas ni ventana (ADR-0103).
-    "whatsapp_waweb": SOLO_TEXTO,
+    "whatsapp_waweb": TEXTO_CON_MENU,
     "whatsapp_twilio": SOLO_TEXTO,
     "whatsapp_plivo": SOLO_TEXTO,
-    "instagram_meta": SOLO_TEXTO,
-    "messenger_meta": SOLO_TEXTO,
-    "webchat": SOLO_TEXTO,
+    "instagram_meta": TEXTO_CON_MENU,
+    "messenger_meta": TEXTO_CON_MENU,
+    "webchat": TEXTO_CON_MENU,
     "email_smtp": SOLO_TEXTO,
     # Playground (canal `test`, SPEC-40 B1): el navegador pinta los botones; sin proveedor, ventana ni plantilla.
     # `lista=True` porque hoy acepta lo mismo que Meta (`interactivo_valido`); el panel (B2) decide cómo lo pinta.
