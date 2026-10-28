@@ -6,7 +6,8 @@ HU-OPC-02). La parte con base y cola está en `core/gateway/opciones_envio.py`; 
 0. Playground (canal `test`): interactivo si cabe en los topes de Meta, texto si no; sin ventana ni plantilla. El
    navegador pinta los botones y el toque pasa por el mismo resolver y la misma firma que en WhatsApp.
 1. Canal sin botones (web, WhatsApp Web, Messenger, Instagram, correo; o un WhatsApp cuya conexión no es de Meta):
-   texto numerado con las opciones y SIN ejecución directa.
+   texto numerado con las opciones y SIN ejecución directa del envío (ni botón ni payload): si el canal declara
+   `respuesta_numerica`, la respuesta «1» o el título la resuelve el consumer (pista C2), no este envío.
 2. WhatsApp Cloud con la ventana de 24 h ABIERTA (conocida y vigente: desconocida cuenta como cerrada, ADR-0108):
    mensaje interactivo, `button` hasta 3 opciones y `list` de 4 a 10. Si el payload no cabe en los topes de Meta,
    texto.

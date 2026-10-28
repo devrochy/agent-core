@@ -13,6 +13,7 @@ from core.gateway.connection_types import (
     CAPACIDADES_POR_TIPO,
     CONNECTION_TYPES,
     SOLO_TEXTO,
+    TEXTO_CON_MENU,
     CapacidadesCanal,
     canales_con,
     capacidades_de,
@@ -36,12 +37,12 @@ def test_todo_tipo_de_conexion_con_canal_declara_sus_capacidades() -> None:
     ("canal", "proveedor", "esperado"),
     [
         ("whatsapp", "meta", META),
-        ("whatsapp", "waweb", SOLO_TEXTO),
+        ("whatsapp", "waweb", TEXTO_CON_MENU),
         ("whatsapp", "twilio", SOLO_TEXTO),
         ("whatsapp", "plivo", SOLO_TEXTO),
-        ("web", "web", SOLO_TEXTO),
-        ("instagram", "meta", SOLO_TEXTO),
-        ("messenger", "meta", SOLO_TEXTO),
+        ("web", "web", TEXTO_CON_MENU),
+        ("instagram", "meta", TEXTO_CON_MENU),
+        ("messenger", "meta", TEXTO_CON_MENU),
         ("email", "smtp", SOLO_TEXTO),
         ("test", "internal", PLAYGROUND),
     ],
@@ -54,9 +55,9 @@ def test_capacidades_de_cada_canal_y_proveedor(canal: str, proveedor: str, esper
     ("canal", "esperado"),
     [
         # Sin proveedor (lo que pasa `opciones_envio` fuera de WhatsApp): vale lo que comparten los tipos del canal.
-        ("web", SOLO_TEXTO),
-        ("instagram", SOLO_TEXTO),
-        ("messenger", SOLO_TEXTO),
+        ("web", TEXTO_CON_MENU),
+        ("instagram", TEXTO_CON_MENU),
+        ("messenger", TEXTO_CON_MENU),
         ("email", SOLO_TEXTO),
         ("test", PLAYGROUND),
         # WhatsApp sin proveedor o con uno desconocido: los proveedores difieren, así que solo texto (antes:
@@ -77,15 +78,24 @@ def test_whatsapp_con_proveedor_desconocido_es_solo_texto() -> None:
 
 
 def test_capacidades_del_canal_es_lo_maximo_de_sus_proveedores() -> None:
-    assert capacidades_del_canal("whatsapp") == META
+    # El O lógico de los proveedores de WhatsApp: Meta tiene botones y QR (waweb) responde con número.
+    assert capacidades_del_canal("whatsapp") == CapacidadesCanal(
+        botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True, respuesta_numerica=True
+    )
     assert capacidades_del_canal("test") == PLAYGROUND
-    for canal in ("web", "instagram", "messenger", "email", "sms", ""):
+    for canal in ("web", "instagram", "messenger"):
+        assert capacidades_del_canal(canal) == TEXTO_CON_MENU
+    for canal in ("email", "sms", ""):
         assert capacidades_del_canal(canal) == SOLO_TEXTO
 
 
-def test_ningun_canal_interpreta_hoy_la_respuesta_numerica() -> None:
-    """C2 lo enciende en los canales de texto; mientras, «1» llega al LLM en todos."""
-    assert not any(c.respuesta_numerica for c in CAPACIDADES_POR_TIPO.values())
+def test_la_respuesta_numerica_solo_la_tienen_los_canales_de_texto_donde_el_cliente_contesta_corto() -> None:
+    """C2: el QR, el chat web, Messenger e Instagram interpretan «1» o el título. Meta (tiene botones), el playground, el
+    correo (el cuerpo trae citado y firma) y los proveedores que no existen aún, no."""
+    con_menu = {tipo for tipo, c in CAPACIDADES_POR_TIPO.items() if c.respuesta_numerica}
+    assert con_menu == {"whatsapp_waweb", "webchat", "messenger_meta", "instagram_meta"}
+    # Quien tiene botones nunca interpreta además el texto: el cliente toca el botón.
+    assert not any(c.respuesta_numerica and c.botones for c in CAPACIDADES_POR_TIPO.values())
 
 
 def test_admite_distingue_botones_y_lista() -> None:
@@ -102,7 +112,7 @@ def test_canales_con_solo_lista_canales_de_clientes() -> None:
     # a revisar los avisos por evento (D2) antes de que el catálogo diga que salen por ahí.
     assert canales_con("plantilla_aprobada") == ["whatsapp"]
     assert canales_con("ventana_24h") == ["whatsapp"]
-    assert canales_con("respuesta_numerica") == []
+    assert canales_con("respuesta_numerica") == ["whatsapp", "instagram", "messenger", "web"]
     with pytest.raises(ValueError):
         canales_con("inventada")
 

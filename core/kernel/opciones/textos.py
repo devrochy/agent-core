@@ -26,6 +26,7 @@ CLAVES = (
     "error_generico",
     "ok_generico",
     "confirmacion_no_disponible",
+    "sensible_por_texto",
     "boton_confirmar",
     "boton_cancelar",
     "instruccion_boton",

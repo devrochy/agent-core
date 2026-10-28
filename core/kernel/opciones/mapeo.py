@@ -74,8 +74,10 @@ def a_interactivo(definicion: Definicion, cuerpo: str, payloads: Mapping[str, st
 
 
 def texto_de_respaldo(definicion: Definicion, cuerpo: str) -> str:
-    """Canal sin botones o payload interactivo fuera de topes: el cuerpo y las opciones numeradas. Nada de esto se
-    ejecuta por lo que escriba el cliente (el número que responda llega como texto al agente)."""
+    """Canal sin botones o payload interactivo fuera de topes: el cuerpo y las opciones numeradas. El envío no lleva
+    ningún payload: contestar «1» o el título lo interpreta el consumer solo en los canales con `respuesta_numerica`
+    y con las guardas de `kernel/opciones/respuesta_texto.py` (pista C2); en cualquier otro caso el texto llega al
+    agente. El orden de las opciones de esta lista es el que `respuesta_texto.elegir` usa para el número."""
     lineas = [cuerpo.strip(), ""]
     lineas += [f"{i}. {o.titulo}" for i, o in enumerate(definicion.opciones, 1)]
     return "\n".join(lineas).strip()

@@ -15,6 +15,7 @@ No guarda argumentos ni resultados: solo `args_hash` y un `error_code`.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -56,6 +57,7 @@ class Envio:
     definition: dict[str, Any]
     context: dict[str, Any]
     expires_at: datetime
+    via: str = "interactive"  # `interactive` | `template` | `text` (CHECK `ck_option_sends_via`)
 
 
 def _activacion(fila: Any) -> Activacion:
@@ -71,7 +73,7 @@ async def cargar_envio(tenant_id: uuid.UUID, send_id: uuid.UUID) -> Envio | None
                 text(
                     "SELECT s.id, s.conversation_id, s.option_template_id, t.key, "
                     "(t.status = 'retired' OR t.deleted_at IS NOT NULL), s.version_id, v.version_n, "
-                    "(v.retired_at IS NOT NULL), v.definition, s.context, s.expires_at "
+                    "(v.retired_at IS NOT NULL), v.definition, s.context, s.expires_at, s.via "
                     "FROM option_sends s "
                     "JOIN option_template_versions v ON v.tenant_id = s.tenant_id AND v.id = s.version_id "
                     "JOIN option_templates t ON t.tenant_id = s.tenant_id AND t.id = s.option_template_id "
@@ -84,7 +86,35 @@ async def cargar_envio(tenant_id: uuid.UUID, send_id: uuid.UUID) -> Envio | None
         return None
     contexto = fila[9] if isinstance(fila[9], dict) else {}
     definicion = fila[8] if isinstance(fila[8], dict) else {}
-    return Envio(*fila[:8], definition=definicion, context=contexto, expires_at=fila[10])
+    return Envio(*fila[:8], definition=definicion, context=contexto, expires_at=fila[10], via=fila[11])
+
+
+# Los mensajes de un envío salen con `client_message_id = opt_send:<send_id>[:<burbuja>]` (`opciones_envio`): el menú
+# de texto puede partirse en varias burbujas y la última es la que el cliente tiene delante.
+_MENSAJE_DE_ENVIO = re.compile(r"opt_send:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?::[0-9]+)?")
+
+
+async def envio_del_ultimo_saliente(tenant_id: uuid.UUID, conversation_id: uuid.UUID) -> uuid.UUID | None:
+    """El `send_id` del ÚLTIMO mensaje saliente de la conversación si ese mensaje es (una burbuja de) un envío de
+    opciones que no falló; `None` si el último saliente es cualquier otra cosa (la respuesta del agente, un mensaje
+    del operador, una respuesta fija, uno fallido) o no hay. Es la guarda de la respuesta numérica (pista C2): el
+    menú solo se contesta mientras sea lo último que el cliente recibió. Cualquier tipo de remitente cuenta (un
+    humano que escribe después también cierra el menú). Una sola consulta por el índice de la conversación."""
+    async with get_session() as s:
+        fila = (
+            await s.execute(
+                text(
+                    "SELECT client_message_id, status FROM messages "
+                    "WHERE tenant_id = :t AND conversation_id = :c AND direction = 'outbound' AND deleted_at IS NULL "
+                    "ORDER BY created_at DESC, id DESC LIMIT 1"
+                ),
+                {"t": tenant_id, "c": conversation_id},
+            )
+        ).first()
+    if fila is None or fila[1] == "failed" or not fila[0]:
+        return None
+    m = _MENSAJE_DE_ENVIO.fullmatch(str(fila[0]))
+    return uuid.UUID(m.group(1)) if m else None
 
 
 async def por_dedupe(tenant_id: uuid.UUID, dedupe_key: str) -> Activacion | None:
