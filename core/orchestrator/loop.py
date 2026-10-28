@@ -32,6 +32,7 @@ from core.agents.spec_de_release import spec_del_turno
 from core.config import get_settings
 from core.config_limites import leer_entero
 from core.datos_cliente.ajustes import herramientas_de as datos_del_cliente_activos
+from core.datos_cliente.aviso_chat import texto_a_anexar as aviso_en_el_chat
 from core.db.models import AppSettings, AuditLog, Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
 from core.kernel import horario_de_servicio
@@ -902,6 +903,14 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         confirmacion = await motor.confirmacion_del_turno() if motor is not None else None
         if confirmacion is not None:
             final_text = confirmacion.confirmacion.texto
+        elif final_text.strip():
+            # Aviso de tratamiento de datos (HU-CRM-16): la primera respuesta útil lo lleva, una vez por
+            # versión. Lo anexa el sistema después de los guardrails; apagado por defecto.
+            aviso_de_datos = await aviso_en_el_chat(
+                get_current_tenant_id(), conversation, customer, app_settings.behavior_config if app_settings else None
+            )
+            if aviso_de_datos:
+                final_text = f"{final_text.rstrip()}\n\n{aviso_de_datos}"
         resultado = await _close_turn(
             conversation_id,
             spec,

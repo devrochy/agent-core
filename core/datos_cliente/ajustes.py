@@ -110,3 +110,26 @@ async def herramientas_activas(tenant_id: uuid.UUID | None) -> bool:
             )
         ).scalar_one_or_none()
     return herramientas_de(behavior)
+
+
+def aviso_de(behavior: dict[str, Any] | None) -> dict[str, Any]:
+    """Aviso de tratamiento de datos guardado: `{activo: bool, texto: str}` (texto vacío = el borrador)."""
+    bloque = (behavior or {}).get(CLAVE)
+    crudo = bloque.get("aviso") if isinstance(bloque, dict) else None
+    if not isinstance(crudo, dict):
+        return {"activo": False, "texto": ""}
+    return {"activo": bool(crudo.get("activo")), "texto": str(crudo.get("texto") or "")[:1000]}
+
+
+def con_aviso(behavior: dict[str, Any] | None, activo: bool, texto: str) -> dict[str, Any]:
+    nuevo = dict(behavior or {})
+    bloque = dict(nuevo.get(CLAVE) or {}) if isinstance(nuevo.get(CLAVE), dict) else {}
+    if activo or texto.strip():
+        bloque["aviso"] = {"activo": bool(activo), "texto": texto.strip()[:1000]}
+    else:
+        bloque.pop("aviso", None)
+    if bloque:
+        nuevo[CLAVE] = bloque
+    else:
+        nuevo.pop(CLAVE, None)
+    return nuevo

@@ -258,6 +258,46 @@ async def escribir_hechos(
     return [f.key for f in nuevos]
 
 
+async def retirar_hechos(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    customer_id: uuid.UUID,
+    clases: Collection[str] = CLASES,
+    now: datetime | None = None,
+) -> list[str]:
+    """Retira del perfil los hechos de las clases dadas (por defecto todas: revocación del consentimiento,
+    HU-CRM-16; una preferencia ligada a una persona identificada también es dato suyo).
+
+    Marca `deleted_at` en los hechos vigentes y quita sus claves de la proyección `customers.attributes`.
+    No toca `customers.name` ni `contact_phone` (identidad del cliente en el canal, como en
+    `purgar_de_cliente`) ni los registros de los packs: esa supresión depende de ADR-0164, que aún no
+    existe. Devuelve las claves retiradas."""
+    ahora = _ahora(now)
+    cliente = await _bloquear_cliente(session, tenant_id, customer_id)
+    if cliente is None:
+        return []
+    filas = (
+        await session.execute(
+            select(MemoryFact).where(
+                MemoryFact.tenant_id == tenant_id,
+                MemoryFact.customer_id == customer_id,
+                MemoryFact.namespace == PERFIL,
+                MemoryFact.data_class.in_(list(clases)),
+                MemoryFact.deleted_at.is_(None),
+                MemoryFact.superseded_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    claves = sorted({f.key for f in filas})
+    for f in filas:
+        f.deleted_at = ahora
+    if claves:
+        cliente.attributes = {k: v for k, v in (cliente.attributes or {}).items() if k not in claves}
+    await session.flush()
+    return claves
+
+
 async def purgar_de_cliente(
     session: AsyncSession, *, tenant_id: uuid.UUID, customer_id: uuid.UUID, now: datetime | None = None
 ) -> int:

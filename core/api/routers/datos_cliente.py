@@ -196,3 +196,93 @@ async def save_politica(
                 )
             )
     return await _leer(await _behavior_de(principal.tenant_id), list(acciones.values()))
+
+
+# ------------------------------------------------------------------ aviso de tratamiento de datos (HU-CRM-16)
+
+
+class AvisoDatosOut(BaseModel):
+    activo: bool
+    texto: str  # el texto efectivo: el del negocio o, si no hay, el borrador
+    texto_propio: str  # lo que escribió el negocio ("" = usa el borrador)
+    es_borrador: bool  # el borrador NO está validado legalmente
+    version: str
+
+
+class AvisoDatosUpdate(BaseModel):
+    activo: bool
+    texto: str = Field(default="", max_length=1000)
+    # Para ACTIVAR el aviso, quien lo hace confirma que el texto pasó por revisión legal (P-37).
+    confirmo_revision_legal: bool = False
+
+
+def _aviso_out(behavior: dict | None) -> AvisoDatosOut:
+    from core.datos_cliente import aviso as aviso_mod
+    from core.datos_cliente.ajustes import aviso_de
+
+    aviso = aviso_mod.desde(behavior)
+    return AvisoDatosOut(
+        activo=aviso.activo,
+        texto=aviso.texto,
+        texto_propio=aviso_de(behavior)["texto"],
+        es_borrador=aviso.es_borrador,
+        version=aviso.version,
+    )
+
+
+@router.get("/aviso", response_model=AvisoDatosOut)
+async def get_aviso(principal: Annotated[Principal, Depends(require("settings"))]) -> AvisoDatosOut:
+    _exigir_negocio(principal)
+    return _aviso_out(await _behavior_de(principal.tenant_id))
+
+
+@router.put("/aviso", response_model=AvisoDatosOut)
+async def save_aviso(
+    payload: AvisoDatosUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> AvisoDatosOut:
+    """Guarda el texto y el interruptor del aviso. Activarlo exige confirmar la revisión legal del texto.
+    El texto completo queda en la auditoría junto con su versión."""
+    from core.datos_cliente import aviso as aviso_mod
+    from core.datos_cliente.ajustes import aviso_de, con_aviso
+
+    _exigir_negocio(principal)
+    if payload.activo and not payload.confirmo_revision_legal:
+        raise ApiError(
+            422,
+            "revision_legal_requerida",
+            "Para activar el aviso confirma que el texto fue revisado legalmente.",
+            fields={"confirmo_revision_legal": "Confirma la revisión legal del texto."},
+        )
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings)
+                .where(AppSettings.tenant_id == principal.tenant_id, AppSettings.deleted_at.is_(None))
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+        antes = aviso_de(app_settings.behavior_config)
+        nuevo = con_aviso(app_settings.behavior_config, payload.activo, payload.texto)
+        if aviso_de(nuevo) != antes:
+            app_settings.behavior_config = nuevo
+            efectivo = aviso_mod.desde(nuevo)
+            session.add(
+                AuditLog(
+                    tenant_id=principal.tenant_id,
+                    actor=f"admin:{principal.admin.email}",
+                    action="settings.aviso_datos",
+                    input={
+                        "antes": antes,
+                        "despues": aviso_de(nuevo),
+                        "version": efectivo.version,
+                        "texto_efectivo": efectivo.texto,
+                        "es_borrador": efectivo.es_borrador,
+                        "confirmo_revision_legal": payload.confirmo_revision_legal,
+                    },
+                )
+            )
+    return _aviso_out(await _behavior_de(principal.tenant_id))

@@ -356,3 +356,134 @@ async def registrar_consentimiento(
     except envios.EnvioError as exc:
         raise _error(exc) from exc
     return await ver_consentimiento(lead_id, principal)
+
+
+# ------------------------------------------------------------------ consentimiento de datos (HU-CRM-16)
+
+
+class ConsentimientoDatosItem(BaseModel):
+    estado: Literal["informado", "otorgado", "revocado"]
+    origen: str
+    quien: str
+    version_aviso: str | None
+    evidencia: str
+    created_at: datetime
+
+
+class ConsentimientoDatosOut(BaseModel):
+    """Estado del cliente frente al aviso de tratamiento de datos y su historial (hasta 20)."""
+
+    aviso_activo: bool
+    estado: Literal["sin_aviso", "informado", "otorgado", "revocado"]
+    historial: list[ConsentimientoDatosItem]
+
+
+class RevocacionDatosOut(ConsentimientoDatosOut):
+    datos_retirados: list[str]
+    # La supresión dentro de los módulos depende de ADR-0164, que aún no existe: queda avisado.
+    supresion_en_modulos_pendiente: bool = True
+
+
+async def _consentimiento_datos(tenant_id: uuid.UUID, lead_id: uuid.UUID) -> ConsentimientoDatosOut:
+    from core import consentimiento
+    from core.datos_cliente import aviso as aviso_mod
+    from core.db.models import AppSettings
+
+    async with get_session() as session:
+        behavior = (
+            await session.execute(
+                select(AppSettings.behavior_config).where(
+                    AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
+                )
+            )
+        ).scalar_one_or_none()
+        aviso = aviso_mod.desde(behavior)
+        filas = (
+            await session.execute(
+                select(CustomerConsent)
+                .where(
+                    CustomerConsent.tenant_id == tenant_id,
+                    CustomerConsent.customer_id == lead_id,
+                    CustomerConsent.proposito == consentimiento.PROPOSITO,
+                )
+                .order_by(CustomerConsent.created_at.desc(), CustomerConsent.id.desc())
+                .limit(20)
+            )
+        ).scalars().all()
+        estado = consentimiento.estado_de(filas[0] if filas else None, aviso.version)
+    return ConsentimientoDatosOut(
+        aviso_activo=aviso.activo,
+        estado=estado,  # type: ignore[arg-type]
+        historial=[ConsentimientoDatosItem(**consentimiento.como_dict(f)) for f in filas],  # type: ignore[arg-type]
+    )
+
+
+@router.get("/{lead_id}/consentimiento-datos", response_model=ConsentimientoDatosOut)
+async def ver_consentimiento_datos(
+    lead_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("leads"))],
+) -> ConsentimientoDatosOut:
+    """Estado del cliente frente al aviso de datos (informado, aceptó, rechazó)."""
+    from core.api.routers.leads import _cliente
+
+    async with get_session() as session:
+        await _cliente(session, principal.tenant_id, lead_id)
+    return await _consentimiento_datos(principal.tenant_id, lead_id)
+
+
+@router.post("/{lead_id}/consentimiento-datos/revocar", response_model=RevocacionDatosOut)
+async def revocar_consentimiento_datos(
+    lead_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("leads", write=True))],
+) -> RevocacionDatosOut:
+    """El cliente pidió que no se guarden más datos suyos: se registra la revocación y se retiran del
+    perfil sus datos personales. Solo dueño o master. Los registros de los módulos (pedidos, citas…)
+    no se borran aquí: la supresión en los módulos queda pendiente (aviso en la respuesta y auditoría)."""
+    from core import consentimiento
+    from core.api.routers.leads import _cliente
+    from core.datos_cliente import aviso as aviso_mod
+    from core.db.models import AppSettings, AuditLog
+    from core.memory import facts
+
+    tenant_id = principal.tenant_id
+    async with get_session() as session:
+        await _cliente(session, tenant_id, lead_id)
+        behavior = (
+            await session.execute(
+                select(AppSettings.behavior_config).where(
+                    AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
+                )
+            )
+        ).scalar_one_or_none()
+        aviso = aviso_mod.desde(behavior)
+        await facts._bloquear_cliente(session, tenant_id, lead_id)
+        fila = await consentimiento.ultima_fila(session, tenant_id, lead_id)
+        if fila is not None and fila.estado == consentimiento.REVOCADO:
+            retirados: list[str] = []
+        else:
+            await consentimiento.registrar(
+                session,
+                tenant_id=tenant_id,
+                customer_id=lead_id,
+                estado=consentimiento.REVOCADO,
+                version=aviso.version,
+                origen=consentimiento.ORIGEN_FICHA,
+                evidencia="Revocado desde la ficha por el equipo.",
+                actor_admin_id=principal.admin.id,
+                actor_label=_quien(principal),
+            )
+            retirados = await facts.retirar_hechos(session, tenant_id=tenant_id, customer_id=lead_id)
+            session.add(
+                AuditLog(
+                    tenant_id=tenant_id,
+                    actor=f"admin:{principal.admin.email}",
+                    action="consentimiento_datos.revocado",
+                    input={
+                        "customer_id": str(lead_id),
+                        "claves_retiradas": retirados,
+                        "supresion_en_modulos_pendiente": True,
+                    },
+                )
+            )
+    base = await _consentimiento_datos(tenant_id, lead_id)
+    return RevocacionDatosOut(**base.model_dump(), datos_retirados=retirados)
