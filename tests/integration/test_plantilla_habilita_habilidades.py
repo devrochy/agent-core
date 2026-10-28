@@ -195,6 +195,23 @@ async def test_dos_plantillas_a_la_vez_dejan_las_dos_habilidades(app_client) -> 
     assert creadas, "al menos una de las dos tiene que haber entrado"
 
 
+async def test_guardar_el_spec_sobre_una_base_vieja_no_pisa_la_edicion_que_confirmo_antes(app_client) -> None:
+    """La causa de la carrera, sin azar: dos lectores parten del mismo spec y los dos confirman EN SERIE.
+    Sin `base_id` la segunda versión borraba la habilidad de la primera (los índices parciales solo atajan
+    a dos que confirman a la vez). Con `base_id` la segunda devuelve None y no escribe."""
+    from core.agents.spec import leer_spec_activo, save_spec_version
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio_sin_packs()
+    async with tenant_scope(tid):
+        base_id, base = await leer_spec_activo(tid)  # type: ignore[misc]
+        primera = await save_spec_version(base.model_copy(update={"packs": ["pack_commerce"]}), tid, base_id=base_id)
+        assert primera is not None
+        segunda = await save_spec_version(base.model_copy(update={"packs": ["pack_calendar"]}), tid, base_id=base_id)
+        assert segunda is None
+    assert await _packs(tid) == {"pack_commerce"}
+
+
 async def test_el_dueno_del_negocio_puede_habilitar_sin_permisos_explicitos(app_client) -> None:
     """El owner no tiene filas en `admin_permissions`: su acceso a `plugins` sale del rol. Si no fuera
     `write`, el dueño recibiría 403 en su propio onboarding."""

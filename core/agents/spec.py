@@ -369,7 +369,7 @@ async def next_spec_version(tenant_id: uuid.UUID) -> str:
 
 
 async def save_spec_version(
-    new_spec: AgentSpec, tenant_id: uuid.UUID | None = None
+    new_spec: AgentSpec, tenant_id: uuid.UUID | None = None, *, base_id: uuid.UUID | None = None
 ) -> str | None:
     """Persiste `new_spec` como nueva versión ACTIVA del tenant.
 
@@ -378,6 +378,11 @@ async def save_spec_version(
     (ADR-0076/0077). Devuelve la versión nueva, o `None` si hubo una edición
     concurrente (los índices parciales protegen la integridad).
     El `tenantId` del spec se fuerza al negocio que guarda, nunca el del JSON.
+
+    Con `base_id` (el id de la fila activa de la que partió `new_spec`, de `leer_spec_activo`) guarda
+    solo si esa fila SIGUE activa: si otra edición ya confirmó una versión nueva devuelve `None` y no
+    pisa nada. Sin él, leer-modificar-guardar pierde la edición del que confirmó en medio (los índices
+    parciales solo atajan a dos que confirman a la vez, no a uno que lee después de que el otro confirmó).
     """
     tid = tenant_id or get_current_tenant_id()
     if tid is None:
@@ -395,6 +400,8 @@ async def save_spec_version(
                     )
                 )
             ).scalar_one_or_none()
+            if base_id is not None and (current_row is None or current_row.id != base_id):
+                return None
             if current_row is not None:
                 current_row.is_active = False
             session.add(
