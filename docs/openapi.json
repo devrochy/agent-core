@@ -16483,7 +16483,9 @@
           "pack · cobranza"
         ],
         "summary": "List Alerts",
+        "description": "Wrapper de `GET /api/v1/access/events` con la forma anterior (ADR-0174).",
         "operationId": "list_alerts_api_v1_pack_cobranza_alerts_get",
+        "deprecated": true,
         "parameters": [
           {
             "name": "X-Tenant-Id",
@@ -16621,7 +16623,9 @@
           "pack · cobranza"
         ],
         "summary": "List Devices",
+        "description": "Wrapper de `GET /api/v1/access/devices` con la forma anterior (ADR-0174): los equipos de los\ngestores salen del core (ids del core) y los dispositivos v1 (código + API key) siguen en el pack.",
         "operationId": "list_devices_api_v1_pack_cobranza_devices_get",
+        "deprecated": true,
         "parameters": [
           {
             "name": "X-Tenant-Id",
@@ -16728,7 +16732,9 @@
           "pack · cobranza"
         ],
         "summary": "Set Device Status",
+        "description": "Wrapper de las acciones de `/api/v1/access/devices/{id}` (ADR-0174): `activo` aprueba o reactiva,\n`bloqueado` bloquea la cuenta en ese equipo. El id es el de la fila del core (o el de un dispositivo v1).",
         "operationId": "set_device_status_api_v1_pack_cobranza_devices__device_id__status_post",
+        "deprecated": true,
         "parameters": [
           {
             "name": "device_id",

@@ -167,6 +167,53 @@ async def _crear(
     return existente, False
 
 
+async def _reclamar_legacy(
+    session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID, device_id: str, ip: str | None
+) -> AccountDevice | None:
+    """Completa con `device_id` la fila heredada ACTIVA de la cuenta que aún no tiene equipo.
+
+    Solo si la cuenta no tiene otro equipo activo con id: así un equipo desconocido no entra "colgado"
+    de una fila heredada cuando el gestor ya tiene un equipo vinculado (mismo criterio que ADR-0068).
+    `FOR UPDATE SKIP LOCKED`: dos logins simultáneos no reclaman la misma fila."""
+    ya_tiene_activo = (
+        await session.execute(
+            select(AccountDevice.id)
+            .where(
+                AccountDevice.tenant_id == tenant_id,
+                AccountDevice.admin_id == admin_id,
+                AccountDevice.estado == ACTIVO,
+                AccountDevice.device_id.is_not(None),
+                AccountDevice.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+    ).first()
+    if ya_tiene_activo is not None:
+        return None
+    fila = (
+        await session.execute(
+            select(AccountDevice)
+            .where(
+                AccountDevice.tenant_id == tenant_id,
+                AccountDevice.admin_id == admin_id,
+                AccountDevice.legacy.is_(True),
+                AccountDevice.device_id.is_(None),
+                AccountDevice.estado == ACTIVO,
+                AccountDevice.deleted_at.is_(None),
+            )
+            .order_by(AccountDevice.created_at)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+    ).scalar_one_or_none()
+    if fila is None:
+        return None
+    fila.device_id, fila.legacy = device_id, False
+    fila.ultimo_uso_at, fila.ultima_ip = _ahora(), ip
+    await session.flush()
+    return fila
+
+
 def _denegar(code: str, estado: str, politica: str, fila: AccountDevice | None = None) -> Decision:
     return Decision(False, estado, politica, code, fila.id if fila is not None else None)
 
@@ -184,11 +231,13 @@ async def evaluar(
     ip: str | None = None,
     es_master_plataforma: bool = False,
     request_id: str | None = None,
+    detalle_alta: dict[str, Any] | None = None,
 ) -> Decision:
     """Decide si esta cuenta puede entrar desde este equipo (ADR-0174 §3) y deja el rastro.
 
     `rol` es `owner`, `colaborador` o `gestor` (rol efectivo en el negocio). Registra el equipo si
-    es nuevo y escribe los eventos de la decisión en `session`.
+    es nuevo y escribe los eventos de la decisión en `session`. `detalle_alta` viaja en el evento del
+    alta (p. ej. el contacto que dio el gestor al pedir el vínculo).
     """
     if rol not in policy.ROLES:
         raise ValueError(f"rol desconocido: {rol}")
@@ -248,7 +297,20 @@ async def evaluar(
             )
             return Decision(True, ACTIVO, politica, None, fila.id)
 
-        # 6. Sin fila: se registra.
+        # 6. Sin fila. Una fila heredada del pack sin equipo (vínculo manual de ADR-0068) se completa con
+        # este primer equipo en vez de registrar otro: el gestor que ya estaba vinculado sigue entrando.
+        reclamada = await _reclamar_legacy(session, tenant_id, admin_id, device_id, ip)
+        if reclamada is not None:
+            registrar_evento(
+                session,
+                tipo="legado_pack",
+                device_row_id=reclamada.id,
+                device_id=device_id,
+                detalle={"por": "primer_login"},
+                **ev,
+            )
+            return Decision(True, ACTIVO, politica, None, reclamada.id)
+
         restringido = politica == policy.RESTRINGIDO
         fila, creada = await _crear(
             session,
@@ -277,6 +339,7 @@ async def evaluar(
             tipo="dispositivo_pendiente" if restringido else "dispositivo_nuevo",
             device_row_id=fila.id,
             device_id=device_id,
+            detalle=detalle_alta,
             **ev,
         )
         if restringido:

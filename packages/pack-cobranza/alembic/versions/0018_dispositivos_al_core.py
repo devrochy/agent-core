@@ -19,7 +19,8 @@ Corre con `app.tenant_id` fijado por negocio (RLS forzada en `account_devices` y
 que falte, de a un gestor, con `adoptar_legado` (red de seguridad).
 
 Downgrade: borra las filas migradas de `account_devices` (los eventos `legado_pack` se quedan: la tabla es
-append-only por diseño).
+append-only por diseño). Ojo: los bloqueos decididos en el core DESPUÉS de esta migración se pierden (la tabla
+del pack quedó congelada con el estado anterior); bajar de aquí en producción exige revisar los equipos bloqueados.
 
 Revision ID: pack_cobranza_0018
 Revises: pack_cobranza_0017
