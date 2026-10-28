@@ -29773,6 +29773,620 @@
         }
       }
     },
+    "/api/v1/mensajes/guardados/catalogo-opciones": {
+      "get": {
+        "tags": [
+          "api",
+          "mensajes"
+        ],
+        "summary": "Catalogo Opciones",
+        "description": "Canales y variables que el formulario puede ofrecer, y los topes de largo.",
+        "operationId": "catalogo_opciones_api_v1_mensajes_guardados_catalogo_opciones_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesGuardadoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/mensajes/guardados/vista-previa": {
+      "post": {
+        "tags": [
+          "api",
+          "mensajes"
+        ],
+        "summary": "Vista Previa",
+        "description": "El texto con valores de muestra, sin guardar ni enviar nada. 422 con el mismo código que al guardar si el texto\nno es válido (`texto_invalido`, `variable_no_permitida`).",
+        "operationId": "vista_previa_api_v1_mensajes_guardados_vista_previa_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VistaPreviaGuardadoIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VistaPreviaGuardadoOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardadoErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardadoErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardadoErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/v1/mensajes/guardados": {
+      "get": {
+        "tags": [
+          "api",
+          "mensajes"
+        ],
+        "summary": "Listar",
+        "operationId": "listar_api_v1_mensajes_guardados_get",
+        "parameters": [
+          {
+            "name": "estado",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "borrador",
+                    "activo",
+                    "archivado"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtra por estado; sin él, todos los vivos.",
+              "title": "Estado"
+            },
+            "description": "Filtra por estado; sin él, todos los vivos."
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MensajesGuardadosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardadoErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "mensajes"
+        ],
+        "summary": "Crear",
+        "description": "Crea un mensaje guardado. 409 `clave_repetida` si el negocio ya tiene uno vivo con esa clave; 409\n`limite_de_mensajes` al pasar el tope; 422 por texto, variables, canales o estado inválidos.",
+        "operationId": "crear_api_v1_mensajes_guardados_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MensajeGuardadoCrearIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MensajeGuardadoOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardadoErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardadoErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardadoErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/v1/mensajes/guardados/{clave}": {
+      "get": {
+        "tags": [
+          "api",
+          "mensajes"
+        ],
+        "summary": "Obtener",
+        "operationId": "obtener_api_v1_mensajes_guardados__clave__get",
+        "parameters": [
+          {
+            "name": "clave",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Clave"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MensajeGuardadoOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardadoErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "api",
+          "mensajes"
+        ],
+        "summary": "Editar",
+        "description": "Cambia solo los campos que llegan; `estado: archivado` lo archiva y `activo` lo reactiva. 422 `sin_cambios` si\nno llega ninguno.",
+        "operationId": "editar_api_v1_mensajes_guardados__clave__patch",
+        "parameters": [
+          {
+            "name": "clave",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Clave"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MensajeGuardadoEditarIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MensajeGuardadoOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardadoErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardadoErrorOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardadoErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "api",
+          "mensajes"
+        ],
+        "summary": "Eliminar",
+        "description": "Borra (lógicamente) el mensaje y libera su clave.",
+        "operationId": "eliminar_api_v1_mensajes_guardados__clave__delete",
+        "parameters": [
+          {
+            "name": "clave",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Clave"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardadoErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/meta/wizard/resume": {
       "post": {
         "tags": [
@@ -40944,7 +41558,8 @@
                 "meta",
                 "evento",
                 "opciones",
-                "texto_pack"
+                "texto_pack",
+                "guardado"
               ]
             },
             "type": "array",
@@ -44056,6 +44671,49 @@
           "created_at"
         ],
         "title": "GraphVersion"
+      },
+      "GuardadoError": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "GuardadoError"
+      },
+      "GuardadoErrorOut": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/GuardadoError"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "GuardadoErrorOut",
+        "description": "El sobre de error de la API (`{error: {code, message, details?}}`). En un 422, `details` trae los valores\nválidos (`permitidas`) y, según el caso, los inválidos (`desconocidas`, `invalidos`)."
       },
       "GuardrailsSettings": {
         "properties": {
@@ -47466,6 +48124,42 @@
         ],
         "title": "OpcionesErrorOut",
         "description": "El sobre de error de la API (`{error: {code, message, details?}}`). En un 422 de esta API,\n`error.details.hallazgos` trae los mismos `{path, code, severity, mensaje}` del lint."
+      },
+      "OpcionesGuardadoOut": {
+        "properties": {
+          "canales": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Canales",
+            "description": "`ConnectionType.id` que se pueden elegir (más `todos`, que equivale a la lista vacía)."
+          },
+          "variables": {
+            "items": {
+              "$ref": "#/components/schemas/VariablePermitidaOut"
+            },
+            "type": "array",
+            "title": "Variables"
+          },
+          "max_texto": {
+            "type": "integer",
+            "title": "Max Texto"
+          },
+          "max_titulo": {
+            "type": "integer",
+            "title": "Max Titulo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "canales",
+          "variables",
+          "max_texto",
+          "max_titulo"
+        ],
+        "title": "OpcionesGuardadoOut",
+        "description": "Lo que el formulario de edición ofrece: canales y variables válidos."
       },
       "OpcionesHallazgoOut": {
         "properties": {
@@ -55300,6 +55994,60 @@
         ],
         "title": "VerifyCodeRequest"
       },
+      "VistaPreviaGuardadoIn": {
+        "properties": {
+          "texto": {
+            "type": "string",
+            "maxLength": 4096,
+            "title": "Texto"
+          },
+          "ejemplos": {
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "type": "object",
+            "maxProperties": 10,
+            "title": "Ejemplos",
+            "description": "Valor de muestra por variable; si falta se usa uno genérico."
+          }
+        },
+        "type": "object",
+        "required": [
+          "texto"
+        ],
+        "title": "VistaPreviaGuardadoIn"
+      },
+      "VistaPreviaGuardadoOut": {
+        "properties": {
+          "texto_renderizado": {
+            "type": "string",
+            "title": "Texto Renderizado"
+          },
+          "variables": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Variables"
+          },
+          "ejemplos_usados": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Ejemplos Usados",
+            "description": "El valor de muestra que se usó por variable."
+          }
+        },
+        "type": "object",
+        "required": [
+          "texto_renderizado",
+          "variables",
+          "ejemplos_usados"
+        ],
+        "title": "VistaPreviaGuardadoOut"
+      },
       "WawebState": {
         "properties": {
           "status": {
@@ -59186,7 +59934,8 @@
               "meta",
               "evento",
               "opciones",
-              "texto_pack"
+              "texto_pack",
+              "guardado"
             ],
             "title": "Tipo"
           },
@@ -59213,7 +59962,7 @@
           "estado": {
             "type": "string",
             "title": "Estado",
-            "description": "`meta`: el de Meta (`APPROVED`, `PENDING`…); `evento`: `sin_mapear`, `mapeado` o `plantilla_no_aprobada`; `opciones`: `draft`, `published` o `retired`; `texto_pack`: `por_defecto`, `personalizado` o `config_invalida`."
+            "description": "`meta`: el de Meta (`APPROVED`, `PENDING`…); `evento`: `sin_mapear`, `mapeado` o `plantilla_no_aprobada`; `opciones`: `draft`, `published` o `retired`; `texto_pack`: `por_defecto`, `personalizado` o `config_invalida`; `guardado`: `borrador`, `activo` o `archivado`."
           },
           "estado_detalle": {
             "anyOf": [
@@ -59233,7 +59982,7 @@
             },
             "type": "array",
             "title": "Canales Soportados",
-            "description": "Canales por los que sale hoy (constante por tipo hasta la pista C1)."
+            "description": "Canales por los que sale hoy (de la tabla de capacidades por canal, pista C1). `guardado`: los canales de los tipos de conexión que el mensaje declara (todos si no declara ninguno); no promete envío: nada lo envía todavía."
           },
           "variables": {
             "items": {
@@ -59275,7 +60024,7 @@
               }
             ],
             "title": "Actualizado En",
-            "description": "`meta`: la última sincronización con Meta (el estado puede estar desfasado: no se sincroniza al listar); `opciones`: la última edición. Nulo en `evento` y `texto_pack`."
+            "description": "`meta`: la última sincronización con Meta (el estado puede estar desfasado: no se sincroniza al listar); `opciones` y `guardado`: la última edición. Nulo en `evento` y `texto_pack`."
           },
           "fuente": {
             "$ref": "#/components/schemas/FuenteDeMensaje"
@@ -59299,6 +60048,184 @@
         ],
         "title": "MensajeDelCatalogo"
       },
+      "MensajeGuardadoCrearIn": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]{1,40}$",
+            "title": "Clave",
+            "description": "Única entre los mensajes vivos del negocio."
+          },
+          "titulo": {
+            "type": "string",
+            "maxLength": 240,
+            "title": "Titulo"
+          },
+          "texto": {
+            "type": "string",
+            "maxLength": 4096,
+            "title": "Texto",
+            "description": "Hasta 1024 caracteres; solo variables permitidas."
+          },
+          "canales": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Canales",
+            "description": "`ConnectionType.id` donde puede salir. Vacío o `todos`: todos los canales."
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "borrador",
+              "activo"
+            ],
+            "title": "Estado",
+            "default": "borrador"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "titulo",
+          "texto"
+        ],
+        "title": "MensajeGuardadoCrearIn"
+      },
+      "MensajeGuardadoEditarIn": {
+        "properties": {
+          "titulo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Titulo"
+          },
+          "texto": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Texto"
+          },
+          "canales": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canales"
+          },
+          "estado": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "borrador",
+                  "activo",
+                  "archivado"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estado"
+          }
+        },
+        "type": "object",
+        "title": "MensajeGuardadoEditarIn",
+        "description": "Solo cambian los campos que llegan. La clave no se cambia."
+      },
+      "MensajeGuardadoOut": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "texto": {
+            "type": "string",
+            "title": "Texto",
+            "description": "Con variables `{cliente.nombre}`; conserva los saltos de línea."
+          },
+          "canales": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Canales",
+            "description": "`ConnectionType.id` donde puede salir; vacío si es para todos."
+          },
+          "todos_los_canales": {
+            "type": "boolean",
+            "title": "Todos Los Canales",
+            "description": "`canales` vacío: vale para todos los canales que atienden conversaciones."
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "borrador",
+              "activo",
+              "archivado"
+            ],
+            "title": "Estado"
+          },
+          "variables": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Variables",
+            "description": "Las que cita el texto, en orden y sin repetir."
+          },
+          "creado_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Creado En"
+          },
+          "actualizado_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Actualizado En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "titulo",
+          "texto",
+          "canales",
+          "todos_los_canales",
+          "estado",
+          "variables",
+          "creado_en",
+          "actualizado_en"
+        ],
+        "title": "MensajeGuardadoOut"
+      },
       "MensajeOmitido": {
         "properties": {
           "tipo": {
@@ -59307,7 +60234,8 @@
               "meta",
               "evento",
               "opciones",
-              "texto_pack"
+              "texto_pack",
+              "guardado"
             ],
             "title": "Tipo"
           },
@@ -59326,6 +60254,22 @@
           "motivo"
         ],
         "title": "MensajeOmitido"
+      },
+      "MensajesGuardadosOut": {
+        "properties": {
+          "mensajes": {
+            "items": {
+              "$ref": "#/components/schemas/MensajeGuardadoOut"
+            },
+            "type": "array",
+            "title": "Mensajes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mensajes"
+        ],
+        "title": "MensajesGuardadosOut"
       },
       "UnlinkRequest": {
         "properties": {
@@ -61220,7 +62164,8 @@
               "meta",
               "evento",
               "opciones",
-              "texto_pack"
+              "texto_pack",
+              "guardado"
             ],
             "title": "Editor"
           },
@@ -61272,7 +62217,7 @@
               }
             ],
             "title": "Clave",
-            "description": "`opciones`: clave de la plantilla con opciones."
+            "description": "`opciones` y `guardado`: clave de la plantilla o del mensaje guardado."
           },
           "plugin_id": {
             "anyOf": [
@@ -63280,6 +64225,24 @@
         },
         "type": "object",
         "title": "VariableIn"
+      },
+      "VariablePermitidaOut": {
+        "properties": {
+          "ruta": {
+            "type": "string",
+            "title": "Ruta"
+          },
+          "descripcion": {
+            "type": "string",
+            "title": "Descripcion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ruta",
+          "descripcion"
+        ],
+        "title": "VariablePermitidaOut"
       },
       "VistaPreviaIn": {
         "properties": {

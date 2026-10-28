@@ -41,6 +41,7 @@ from core.api.routers import (
     leads_acciones,
     me,
     mensajes,
+    mensajes_guardados,
     meta_instagram,
     meta_mensaje_prueba,
     meta_messenger,
@@ -109,6 +110,7 @@ api_router.include_router(meta_promocion.router)
 api_router.include_router(meta_mensaje_prueba.router)
 api_router.include_router(plantillas_opciones.router)
 api_router.include_router(mensajes.router)
+api_router.include_router(mensajes_guardados.router)
 api_router.include_router(collaborators.router)
 api_router.include_router(invitations.router)
 api_router.include_router(files.router)
