@@ -121,3 +121,17 @@ colaborador con escritura en Configuración puede marcar una tool apta. Con un A
   `option_tool_errors_total{tool}`; alerta si crece `bad_signature`.
 - `audit_log`: `option_template_*` (quién creó, publicó o retiró), `option_send` (con el actor `admin:<id>` de un envío
   de prueba) y `option_tap`.
+
+## 4. Menú numerado en canales de texto (pista C2)
+
+En QR, chat web, Messenger e Instagram el envío de una plantilla con opciones sale como texto numerado. Con la bandera
+encendida, la respuesta «1» (o el título exacto) se ejecuta como un toque (ADR-0172, adenda C2). Para probarlo en test:
+
+1. Bandera encendida en el negocio y la tool apta habilitada con binding (§2.1); la opción NO debe pedir `confirmar`.
+2. Enviar la plantilla a una conversación de un canal de texto (§1 de la API: `enviar-prueba`); el mensaje es el cuerpo
+   más «1. título»…
+3. Contestar «1» o el título: respuesta fija de la opción, sin LLM. `audit_log` `option_tap` con `via = text`.
+4. Casos que deben seguir al agente: «1 por favor», un número fuera de rango, otro mensaje saliente entre medias, el menú
+   vencido (`ttl_horas`), la bandera apagada. Una opción con `confirmar` responde el texto fijo `sensible_por_texto`.
+
+QR: la respuesta sale por la cola normal (delay humano, tope de 50/día, `reply_only`). No usarlo con números importantes.
