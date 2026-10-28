@@ -1331,16 +1331,17 @@ async def save_message_templates(
                 errores[evento] = error_canal
                 continue
         # ADR-0178 D3: plantilla con opciones del evento. Mismo criterio: omitido = conservar; presente (aun vacío) = reemplazar.
-        opcion = ""
+        # `opcion` None = omitido: se lee lo guardado solo al armar `limpio`, después de validar (el mapa se valida
+        # antes de tocar la base).
+        opcion: str | None = None
         if "option_template" in entrada.model_fields_set:
             opcion = entrada.option_template.strip()
             if opcion and (error_opcion := await avisos_opciones.error_de_mapeo(principal.tenant_id, evento, opcion)):
                 errores[evento] = error_opcion
                 continue
-        else:
-            opcion = await _opcion_guardada(evento)
         if not nombre:
             por_canal = por_canal if pedido else await _textos_guardados(evento)
+            opcion = await _opcion_guardada(evento) if opcion is None else opcion
             if fallback or por_canal or opcion:
                 limpio[evento] = {
                     "template": "", "language": idioma, "variables": [], "fallback_text": fallback,
@@ -1377,6 +1378,7 @@ async def save_message_templates(
             errores[evento] = f"La plantilla tiene {len(placeholders)} variables y mapeaste {len(rutas)}."
             continue
         por_canal = por_canal if pedido else await _textos_guardados(evento)
+        opcion = await _opcion_guardada(evento) if opcion is None else opcion
         limpio[evento] = {
             "template": nombre,
             "language": idioma,
