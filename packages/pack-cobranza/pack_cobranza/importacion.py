@@ -199,12 +199,14 @@ def plantillas() -> list[PlantillaDeImportacion]:
     ]
 
 
-async def _existentes(tenant_id: uuid.UUID, filas: list[ClienteImportado]) -> tuple[dict[str, uuid.UUID], set[tuple[uuid.UUID, str]]]:
-    """Carteras vivas por nombre (minúsculas) y pares (cartera, documento) de clientes vivos."""
+async def _existentes(
+    tenant_id: uuid.UUID, filas: list[ClienteImportado]
+) -> tuple[dict[str, tuple[uuid.UUID, str]], set[tuple[uuid.UUID, str]]]:
+    """Carteras vivas por nombre en minúsculas (con su id y su nombre real) y pares (cartera, documento)."""
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             carteras = {
-                c.nombre.casefold(): c.id
+                c.nombre.casefold(): (c.id, c.nombre)
                 for c in (
                     await session.execute(
                         select(Cartera).where(
@@ -214,7 +216,7 @@ async def _existentes(tenant_id: uuid.UUID, filas: list[ClienteImportado]) -> tu
                     )
                 ).scalars()
             }
-            ids = [carteras[f.cartera.casefold()] for f in filas if f.cartera.casefold() in carteras]
+            ids = [carteras[f.cartera.casefold()][0] for f in filas if f.cartera.casefold() in carteras]
             clientes: set[tuple[uuid.UUID, str]] = set()
             if ids:
                 filas_c = await session.execute(
@@ -229,16 +231,18 @@ async def _existentes(tenant_id: uuid.UUID, filas: list[ClienteImportado]) -> tu
     return carteras, clientes
 
 
-def _a_seed(nuevas: list[ClienteImportado], carteras_vivas: dict[str, uuid.UUID], moneda: str) -> dict[str, Any]:
+def _a_seed(nuevas: list[ClienteImportado], carteras_vivas: dict[str, tuple[uuid.UUID, str]], moneda: str) -> dict[str, Any]:
     hoy = date.today()
     por_cartera: dict[str, list[ClienteImportado]] = {}
     for fila in nuevas:
         por_cartera.setdefault(fila.cartera, []).append(fila)
     salida = []
     for nombre, clientes in por_cartera.items():
-        item: dict[str, Any] = {"nombre": nombre, "moneda": moneda, "clientes": []}
+        # Una cartera que ya existe se reutiliza con su nombre real (el seed la busca con igualdad exacta).
+        existente = carteras_vivas.get(nombre.casefold())
+        item: dict[str, Any] = {"nombre": existente[1] if existente else nombre, "moneda": moneda, "clientes": []}
         con_prestamo = [c for c in clientes if c.tiene_prestamo]
-        if nombre.casefold() not in carteras_vivas:
+        if existente is None:
             primero = con_prestamo[0] if con_prestamo else None
             item["tipo_interes"] = float(primero.interes_porcentaje or 0) if primero else 0
             item["num_cuotas"] = primero.num_cuotas if primero and primero.num_cuotas else 1
@@ -280,7 +284,8 @@ async def importar(
     resultado = ResultadoDeImportacion()
     nuevas: list[ClienteImportado] = []
     for i, fila in enumerate(clientes_in):
-        cartera_id = carteras.get(fila.cartera.casefold())
+        cartera = carteras.get(fila.cartera.casefold())
+        cartera_id = cartera[0] if cartera else None
         if cartera_id is not None and (cartera_id, fila.numero_documento) in existentes:
             resultado.existentes.append(i)
         else:

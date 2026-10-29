@@ -10,8 +10,8 @@ CHECK es instantáneo. Respaldo previo recomendado, como toda migración.
 **Rollback:** el código anterior, después el downgrade. El downgrade borra las filas de seguimiento de
 origen `importacion` (los datos importados quedan en sus tablas, sin lote que los retire) y restaura el CHECK.
 
-Revision ID: 0118
-Revises: 0117
+Revision ID: 0119
+Revises: 0118
 Create Date: 2026-10-28
 """
 
@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0118"
-down_revision = "0117"
+revision = "0119"
+down_revision = "0118"
 branch_labels = None
 depends_on = None
 

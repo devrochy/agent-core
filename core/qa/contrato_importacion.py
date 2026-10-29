@@ -132,9 +132,13 @@ def numero(valor: Any) -> Decimal:
     elif "." in texto and _MILES_PUNTO.match(texto):
         texto = texto.replace(".", "")
     try:
-        return Decimal(texto)
+        n = Decimal(texto)
     except InvalidOperation as exc:
         raise ValueError("Debe ser un número.") from exc
+    # `NaN`, `Infinity` y `1E+900000000` son Decimal válidos: no son números de una hoja de cálculo.
+    if not n.is_finite() or abs(n.adjusted()) > 15:
+        raise ValueError("Debe ser un número.")
+    return n
 
 
 def entero(valor: Any) -> int:

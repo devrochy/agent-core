@@ -264,13 +264,17 @@ async def _permiso_importar(principal: Principal, agent_id: uuid.UUID, *, escrib
         d = await svc.destino(_tenant(principal), agent_id)
     except svc.ErrorDatosDePrueba as exc:  # agente inexistente o de otro negocio: 404 sin eco
         raise _error(exc) from exc
-    if isinstance(d, str):
-        return  # el servicio responde 409 sin_plantilla (o 404 si el agente no es del negocio)
     if principal.admin.role == "master":
         return
-    acceso = await effective_access(principal.admin, d.modulo.seccion, principal.tenant_id)
-    if acceso is None or (escribir and acceso != "write"):
-        raise ApiError.forbidden(f"Sin permiso para la sección '{d.modulo.seccion}'.")
+    # Sin plantilla (el agente cambió o se desactivó el pack) solo queda borrar: se exige escritura en las
+    # secciones de lo que se borraría. Importar y validar responden 409 más adelante.
+    secciones = {d.modulo.seccion} if not isinstance(d, str) else await svc.secciones_importadas(
+        _tenant(principal), agent_id
+    )
+    for seccion in sorted(secciones):
+        acceso = await effective_access(principal.admin, seccion, principal.tenant_id)
+        if acceso is None or (escribir and acceso != "write"):
+            raise ApiError.forbidden(f"Sin permiso para la sección '{seccion}'.")
 
 
 async def _leer_archivo(archivo: UploadFile) -> bytes:

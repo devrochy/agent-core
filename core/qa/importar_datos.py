@@ -152,6 +152,15 @@ def _lote(registros: list[TestDataRecord]) -> dict[str, Any] | None:
     }
 
 
+async def secciones_importadas(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> set[str]:
+    """Secciones de los módulos de lo importado por el agente (para borrar si el agente ya no tiene plantilla)."""
+    return {
+        MODULOS[r.modulo].seccion
+        for r in await _registros_importados(tenant_id, agent_id)
+        if r.modulo in MODULOS
+    }
+
+
 async def estado(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> dict[str, Any]:
     encontrado = await destino(tenant_id, agent_id)
     importado = _lote(await _registros_importados(tenant_id, agent_id))

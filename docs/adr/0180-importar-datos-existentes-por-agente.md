@@ -40,7 +40,7 @@ omite en silencio las filas malas, no deja rastro de lo que creó y no sirve par
    «ya existía» y **no se modifica**. Subir dos veces el mismo archivo no duplica. Un SKU que pertenece a un
    producto eliminado a mano es error de la fila: no se resucita lo que el negocio borró.
 5. **Lote propio.** Cada importación escribe en `test_data_records` con `origen = 'importacion'` (migración
-   0118: amplía el CHECK; sin tablas ni RLS nuevas). «Generar datos de prueba» y su borrado excluyen ese
+   0119: amplía el CHECK; sin tablas ni RLS nuevas). «Generar datos de prueba» y su borrado excluyen ese
    origen: lo importado es del dueño. `DELETE …/importar-datos` retira solo lo importado.
 6. **Retirar libera el SKU.** El SKU es único por negocio aunque la variante esté inactiva, así que
    `retirar` de Comercio renombra el SKU de la variante retirada (`<sku>~retirado-<id8>`). Así «borrar y
@@ -71,7 +71,7 @@ omite en silencio las filas malas, no deja rastro de lo que creó y no sirve par
 
 ## Consecuencias
 
-- Una migración (0118) que se aplica al arrancar la API; recrear el CHECK de una tabla pequeña es instantáneo.
+- Una migración (0119) que se aplica al arrancar la API; recrear el CHECK de una tabla pequeña es instantáneo.
 - Importar datos reales en test los mezcla con datos de prueba: si esto sale a producción hay que reabrir
   D-SPEC-32-2 (los datos serían reales y no se marcarían como de prueba).
 - Cada pack nuevo con una forma de datos puede declarar su plantilla sin tocar el core.

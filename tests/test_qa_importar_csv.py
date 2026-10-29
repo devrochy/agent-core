@@ -51,10 +51,18 @@ def test_numero_como_en_excel(texto: str, esperado: str) -> None:
     assert numero(texto) == Decimal(esperado)
 
 
-@pytest.mark.parametrize("texto", ["", "abc", "12x", "1.2.3,4,5a"])
+@pytest.mark.parametrize("texto", ["", "abc", "12x", "1.2.3,4,5a", "NaN", "sNaN", "Infinity", "-Infinity", "1E+900000000", "1e-99"])
 def test_numero_invalido(texto: str) -> None:
     with pytest.raises(ValueError):
         numero(texto)
+
+
+def test_valores_no_finitos_son_error_de_la_fila_y_no_una_excepcion() -> None:
+    contenido = b"sku,nombre,precio\r\nA1,Cera,NaN\r\nA2,Aceite,Infinity\r\nA3,Gel,1E+900000000\r\n"
+    filas = validar(leer_archivo(contenido, PRODUCTOS), PRODUCTOS)
+    assert [f.errores[0][0] for f in filas] == ["precio", "precio", "precio"]
+    with pytest.raises(ValueError):
+        entero("Infinity")
 
 
 def test_entero_y_fecha() -> None:
