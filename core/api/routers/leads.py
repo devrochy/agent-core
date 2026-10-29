@@ -21,7 +21,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import Select, exists, func, or_, select
@@ -29,6 +29,13 @@ from sqlalchemy import Select, exists, func, or_, select
 from core.admin.lead_registry import LeadProvider, lead_registry
 from core.admin.roles import actua_como_master
 from core.agents.spec import enabled_packs, load_active_spec
+from core.almacenamiento import (
+    StorageInvalido,
+    borrar,
+    carpeta_de,
+    guardar,
+    resolver_avatar,
+)
 from core.api.deps import Principal, es_owner_o_master, require
 from core.api.errors import ApiError
 from core.api.pagination import PageParams, page_params
@@ -41,13 +48,14 @@ from core.db.models import (
     MemoryFact,
 )
 from core.db.session import get_session
-from core.geocoding import GeocodingError
+from core.geocoding import GeocodingError, geocodificar_inverso
 from core.geocoding import consumir_cuota as consumir_cuota_geocoding
 from core.geocoding import disponible as geocoding_disponible
 from core.geocoding import geocodificar as geocodificar_direccion
 from core.memory import facts
 from core.memory import perfil as perfil_cliente
 from core.shared.logger import get_logger
+from core.shared.tenant import tenant_slug
 from core.shared.test_mode import TEST_CHANNEL
 
 log = get_logger(__name__)
@@ -55,6 +63,7 @@ log = get_logger(__name__)
 router = APIRouter(prefix="/admin/leads", tags=["admin · leads"])
 
 MAX_CSV = 5000
+MAX_BYTES_AVATAR = 2 * 1024 * 1024
 # Lo que una persona puede escribir desde la ficha (los mismos límites que al agente).
 _MAX_VALOR = 500
 _MAX_CLAVES = 20
@@ -235,6 +244,26 @@ class LeadGeocodificacion(BaseModel):
     perfil: LeadPerfilOut
 
 
+class LeadGeocodificacionInversa(BaseModel):
+    """Dirección propuesta a partir de un punto del mapa; no se guarda hasta confirmarla."""
+
+    latitud: float
+    longitud: float
+    direccion: str | None = None
+    municipio: str | None = None
+    departamento: str | None = None
+    pais: str | None = None
+    precision: str | None = None
+    proveedor: str
+
+
+class LeadUbicacionInversa(BaseModel):
+    """Coordenadas que manda el mapa táctil de la ficha."""
+
+    latitud: float
+    longitud: float
+
+
 class LeadPerfilUpdate(BaseModel):
     """Campos canónicos del perfil que se cambian desde la pestaña General.
 
@@ -268,14 +297,16 @@ async def _providers() -> tuple[set[str], list[LeadProvider]]:
 
 
 def _perfil_de(cliente: Customer) -> LeadPerfilOut:
-    return LeadPerfilOut(
-        **perfil_cliente.leer_perfil(
-            cliente.attributes or {},
-            telefono=cliente.contact_phone,
-            nombre_cliente=cliente.name,
-            external_id=cliente.external_id,
-        )
+    datos = perfil_cliente.leer_perfil(
+        cliente.attributes or {},
+        telefono=cliente.contact_phone,
+        nombre_cliente=cliente.name,
+        external_id=cliente.external_id,
     )
+    # En la API el avatar siempre es una URL usable: externa tal cual o firmada para el
+    # almacenamiento del negocio (la APK/el panel lo pintan directo con <Image>/<img>).
+    datos["avatar_url"] = resolver_avatar(datos.get("avatar_url"))
+    return LeadPerfilOut(**datos)
 
 
 async def _registros_de_agentes(tenant_id: uuid.UUID) -> list[AgentRecord]:
@@ -894,6 +925,152 @@ async def geocodificar_lead(
         precision=resultado.precision,
         proveedor=resultado.proveedor,
         perfil=perfil_actualizado,
+    )
+
+
+@router.post("/{lead_id}/avatar", response_model=LeadDetail)
+async def upload_lead_avatar(
+    lead_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("leads", write=True))],
+    file: Annotated[UploadFile, File()],
+) -> LeadDetail:
+    """Sube o reemplaza la foto del cliente en el almacenamiento del negocio.
+
+    La foto queda como dato de una persona (`source="human"`) y la API devuelve el
+    `avatar_url` ya firmado para que el panel y la APK lo pinten sin proxys.
+    """
+    tenant_id = principal.tenant_id
+    slug = await tenant_slug(tenant_id)
+    if slug is None:
+        raise ApiError.bad_request("No hay negocio activo.", "no_tenant")
+    contenido = await file.read(MAX_BYTES_AVATAR + 1)
+    if len(contenido) > MAX_BYTES_AVATAR:
+        raise ApiError.bad_request("La imagen no puede superar 2 MB.", "avatar_grande")
+
+    async with get_session() as session:
+        cliente = await _cliente(session, tenant_id, lead_id)
+        perfil = perfil_cliente.leer_perfil(
+            cliente.attributes or {},
+            telefono=cliente.contact_phone,
+            nombre_cliente=cliente.name,
+            external_id=cliente.external_id,
+        )
+        previo = perfil.get("avatar_url")
+
+    try:
+        ref = guardar(
+            "avatar_cliente",
+            contenido,
+            mimetype=file.content_type,
+            tenant_slug=slug,
+            nombre_base=str(lead_id),
+        )
+    except StorageInvalido as exc:
+        raise ApiError.bad_request(str(exc), exc.codigo) from exc
+
+    try:
+        async with get_session() as session:
+            await _cliente(session, tenant_id, lead_id)
+            await facts.escribir_hechos(
+                session,
+                tenant_id=tenant_id,
+                customer_id=lead_id,
+                namespace=facts.PERFIL,
+                valores={"avatar_url": ref.key},
+                source="human",
+            )
+    except facts.HechoInvalido as exc:
+        borrar(ref.key, dentro_de=carpeta_de("avatar_cliente", slug))
+        raise ApiError.bad_request("No se pudo guardar la foto.", "avatar_invalido") from exc
+
+    if previo and not str(previo).startswith(("http://", "https://")) and previo != ref.key:
+        borrar(previo, dentro_de=carpeta_de("avatar_cliente", slug))
+    log.info(
+        "lead_avatar_actualizado",
+        customer_id=str(lead_id),
+        admin_id=str(principal.admin.id),
+    )
+    return await get_lead(lead_id, principal)
+
+
+@router.delete("/{lead_id}/avatar", status_code=204)
+async def delete_lead_avatar(
+    lead_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("leads", write=True))],
+) -> Response:
+    """Quita la foto del cliente y borra el archivo si era del almacenamiento."""
+    tenant_id = principal.tenant_id
+    slug = await tenant_slug(tenant_id)
+    if slug is None:
+        raise ApiError.bad_request("No hay negocio activo.", "no_tenant")
+
+    async with get_session() as session:
+        cliente = await _cliente(session, tenant_id, lead_id)
+        perfil = perfil_cliente.leer_perfil(
+            cliente.attributes or {},
+            telefono=cliente.contact_phone,
+            nombre_cliente=cliente.name,
+            external_id=cliente.external_id,
+        )
+        previo = perfil.get("avatar_url")
+        await facts.escribir_hechos(
+            session,
+            tenant_id=tenant_id,
+            customer_id=lead_id,
+            namespace=facts.PERFIL,
+            valores={"avatar_url": ""},
+            source="human",
+        )
+
+    if previo and not str(previo).startswith(("http://", "https://")):
+        borrar(previo, dentro_de=carpeta_de("avatar_cliente", slug))
+    log.info(
+        "lead_avatar_quitado",
+        customer_id=str(lead_id),
+        admin_id=str(principal.admin.id),
+    )
+    return Response(status_code=204)
+
+
+@router.post("/{lead_id}/geocodificar/reverso", response_model=LeadGeocodificacionInversa)
+async def geocodificar_lead_inverso(
+    lead_id: uuid.UUID,
+    body: LeadUbicacionInversa,
+    principal: Annotated[Principal, Depends(require("leads", write=True))],
+) -> LeadGeocodificacionInversa:
+    """Propone una dirección a partir de un punto del mapa, sin escribir el perfil.
+
+    Solo se envían latitud y longitud al proveedor. La persona confirma la propuesta y
+    el guardado sigue siendo un `PATCH /perfil` normal, con `source="human"`.
+    """
+    if not geocoding_disponible():
+        raise ApiError(503, "geocoding_no_configurado", "La geocodificación no está configurada.")
+    tenant_id = principal.tenant_id
+    async with get_session() as session:
+        await _cliente(session, tenant_id, lead_id)
+
+    await consumir_cuota_geocoding(tenant_id)
+    try:
+        resultado = await geocodificar_inverso(body.latitud, body.longitud)
+    except GeocodingError as exc:
+        raise ApiError(exc.status, exc.code, exc.message) from exc
+
+    log.info(
+        "lead_geocodificado_inverso",
+        customer_id=str(lead_id),
+        provider=resultado.proveedor,
+        precision=resultado.precision,
+        admin_id=str(principal.admin.id),
+    )
+    return LeadGeocodificacionInversa(
+        latitud=resultado.latitud,
+        longitud=resultado.longitud,
+        direccion=resultado.direccion,
+        municipio=resultado.municipio,
+        departamento=resultado.departamento,
+        pais=resultado.pais,
+        precision=resultado.precision,
+        proveedor=resultado.proveedor,
     )
 
 
