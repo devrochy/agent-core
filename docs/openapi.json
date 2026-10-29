@@ -4504,6 +4504,45 @@
             "description": "Solo los clientes con datos reales de este agente (clave de `agents`). `general` no filtra; una clave sin datos propios responde 400 `filtro_invalido`."
           },
           {
+            "name": "orden",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "alta",
+                "actividad",
+                "nombre",
+                "nombre_desc"
+              ],
+              "type": "string",
+              "description": "`alta` (por defecto, el más nuevo primero), `actividad` (último mensaje, el más reciente primero; los clientes sin mensajes van al final), `nombre` o `nombre_desc`.",
+              "default": "alta",
+              "title": "Orden"
+            },
+            "description": "`alta` (por defecto, el más nuevo primero), `actividad` (último mensaje, el más reciente primero; los clientes sin mensajes van al final), `nombre` o `nombre_desc`."
+          },
+          {
+            "name": "facetas",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Claves de `filters` de las que se quieren contadores por opción (se repite el parámetro). Una clave que no declara ningún pack, o que no sabe contar, responde 400 `filtro_invalido`.",
+              "title": "Facetas"
+            },
+            "description": "Claves de `filters` de las que se quieren contadores por opción (se repite el parámetro). Una clave que no declara ningún pack, o que no sabe contar, responde 400 `filtro_invalido`."
+          },
+          {
             "name": "page",
             "in": "query",
             "required": false,
@@ -46767,6 +46806,18 @@
             "type": "string",
             "title": "Alta"
           },
+          "ultima_actividad": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ultima Actividad"
+          },
           "extras": {
             "additionalProperties": true,
             "type": "object",
@@ -46810,6 +46861,13 @@
             },
             "type": "array",
             "title": "Filters"
+          },
+          "facetas": {
+            "items": {
+              "$ref": "#/components/schemas/LeadFacetaOut"
+            },
+            "type": "array",
+            "title": "Facetas"
           },
           "agents": {
             "items": {
@@ -72249,6 +72307,38 @@
           "columnas_faltantes"
         ],
         "title": "VistaPreviaImportacion"
+      },
+      "LeadFacetaOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "sin_valor": {
+            "type": "integer",
+            "title": "Sin Valor"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "counts",
+          "sin_valor",
+          "total"
+        ],
+        "title": "LeadFacetaOut",
+        "description": "Cuántos clientes hay por opción de un filtro, con el resto de los filtros de la lista aplicados\n(pero no el propio, para que las pestañas de un mismo filtro sumen contra el mismo total)."
       }
     }
   }

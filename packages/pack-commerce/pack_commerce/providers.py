@@ -17,7 +17,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Select, and_, case, func, literal, or_, select, union
+from sqlalchemy import Select, and_, case, func, literal, or_, select, union, union_all
 
 from core.admin.lead_registry import (
     Cursor,
@@ -118,6 +118,28 @@ async def _filter_query(key: str, value: str) -> Select[Any] | None:
     if key == "estado_lead":
         ultimo = _ultimo_lead(tid).subquery()
         return select(ultimo.c.customer_id).where(ultimo.c.status == value)
+    return None
+
+
+async def _facet_query(key: str) -> Select[Any] | None:
+    """`(customer_id, valor)` de cada cliente para el filtro `key`, a lo sumo una fila por cliente.
+
+    Es la misma regla que `_filter_query`, vista por cliente en vez de por valor, para que el core
+    cuente las opciones con una sola consulta agrupada (HU-CRM-17).
+    """
+    tid = get_current_tenant_id()
+    if key == "estado_lead":
+        ultimo = _ultimo_lead(tid).subquery()
+        return select(ultimo.c.customer_id.label("customer_id"), ultimo.c.status.label("valor"))
+    if key == "clasificacion":
+        seg = _segmentos_con_pedidos(tid, await _umbrales()).subquery()
+        con_pedidos = select(Order.customer_id).where(Order.tenant_id == tid, Order.status != "expirado")
+        return union_all(
+            select(seg.c.customer_id.label("customer_id"), seg.c.segmento.label("valor")),
+            select(Customer.id.label("customer_id"), literal("nuevo").label("valor")).where(
+                Customer.tenant_id == tid, Customer.id.not_in(con_pedidos)
+            ),
+        )
     return None
 
 
@@ -378,6 +400,7 @@ lead_registry.register(
         LeadFilter(key="estado_lead", label="Estado del lead", options=ESTADOS_LEAD),
     ],
     filter_query=_filter_query,
+    facet_query=_facet_query,
     timeline=_timeline,
     edicion=LeadEdicion(
         campos=(
