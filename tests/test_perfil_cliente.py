@@ -67,7 +67,7 @@ def test_valida_y_normaliza_los_campos_del_panel() -> None:
     assert valores["phone"] == "+573001234567"
     assert valores["pais_telefono"] == "CO"
     assert valores["tipo_documento"] == "cc"
-    assert valores["clasificacion"] == "prospecto"
+    assert valores["clasificacion"] == "nuevo"
     assert valores["latitud"] == 3.45 and valores["longitud"] == -76.53
 
 
@@ -96,7 +96,7 @@ def test_campos_editables_traen_etiquetas_y_opciones() -> None:
     campos = {c["key"]: c for c in perfil.campos_editables()}
     assert campos["name"]["required"] is True
     assert {o["value"] for o in campos["clasificacion"]["options"]} == {
-        "prospecto", "cliente", "vip", "inactivo", "bloqueado"
+        "nuevo", "prospecto", "cliente", "vip", "inactivo", "bloqueado"
     }
     assert {o["value"] for o in campos["tipo_documento"]["options"]} >= {"cc", "nit", "pasaporte"}
     assert any(o["value"] == "CO" for o in campos["pais_telefono"]["options"])

@@ -62,6 +62,20 @@ class ResultadoGeocodificacion:
     proveedor: str
 
 
+@dataclass(frozen=True)
+class ResultadoGeocodificacionInversa:
+    """Dirección propuesta a partir de unas coordenadas (mapa táctil de la ficha)."""
+
+    latitud: float
+    longitud: float
+    direccion: str | None
+    municipio: str | None
+    departamento: str | None
+    pais: str | None
+    precision: str | None
+    proveedor: str
+
+
 def disponible() -> bool:
     settings = get_geocoding_settings()
     return settings.provider == PROVEEDOR_LOCATIONIQ and bool(settings.api_key)
@@ -195,5 +209,140 @@ async def geocodificar(direccion: str, *, pais: str | None = None) -> ResultadoG
         longitud=longitud,
         direccion_normalizada=primero.get("display_name"),
         precision=_precision(primero.get("type")),
+        proveedor=settings.provider,
+    )
+
+
+def _texto_direccion(valor: object) -> str | None:
+    texto = " ".join(str(valor or "").split())
+    return texto or None
+
+
+async def geocodificar_inverso(latitud: float, longitud: float) -> ResultadoGeocodificacionInversa:
+    """Convierte coordenadas en una dirección propuesta (mapa táctil de la ficha).
+
+    Solo se envían latitud y longitud al proveedor. El resultado no se escribe: el
+    panel/la APK lo propone y la persona decide si lo usa antes de guardar.
+    """
+    settings = get_geocoding_settings()
+    if not disponible():
+        raise GeocodingError(
+            503, "geocoding_no_configurado", "La geocodificación no está configurada en la plataforma."
+        )
+    try:
+        lat = float(latitud)
+        lon = float(longitud)
+    except (TypeError, ValueError) as exc:
+        raise GeocodingError(400, "geocoding_coordenadas_invalidas", "Las coordenadas no son válidas.") from exc
+    if not -90 <= lat <= 90 or not -180 <= lon <= 180:
+        raise GeocodingError(400, "geocoding_coordenadas_invalidas", "Las coordenadas no son válidas.")
+
+    params: dict[str, str | int] = {
+        "key": settings.api_key,
+        "lat": lat,
+        "lon": lon,
+        "format": "json",
+        "addressdetails": 1,
+        "accept-language": "es",
+        "zoom": 18,
+    }
+    url = f"{settings.base_url.rstrip('/')}/reverse"
+    inicio = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=settings.timeout_seconds) as client:
+            respuesta = await client.get(url, params=params)
+    except httpx.TimeoutException as exc:
+        log.warning("geocoding_inverso_timeout", provider=settings.provider)
+        raise GeocodingError(
+            504, "geocoding_timeout", "El proveedor de mapas tardó demasiado. Intenta de nuevo."
+        ) from exc
+    except httpx.HTTPError as exc:
+        log.warning("geocoding_inverso_proveedor_error", provider=settings.provider, error=type(exc).__name__)
+        raise GeocodingError(
+            502, "geocoding_proveedor", "No se pudo consultar el proveedor de mapas."
+        ) from exc
+
+    latencia = int((time.monotonic() - inicio) * 1000)
+    if respuesta.status_code == 429:
+        log.warning("geocoding_inverso_cuota_proveedor", provider=settings.provider, latency_ms=latencia)
+        raise GeocodingError(
+            429, "geocoding_cuota", "El proveedor de mapas no acepta más consultas por hoy."
+        )
+    if respuesta.status_code in (404, 400):
+        log.info("geocoding_inverso_sin_resultado", provider=settings.provider, latency_ms=latencia)
+        raise GeocodingError(
+            422, "geocoding_no_encontrada", "No pudimos ubicar una dirección en ese punto."
+        )
+    if respuesta.status_code != 200:
+        log.warning(
+            "geocoding_inverso_respuesta",
+            provider=settings.provider,
+            status=respuesta.status_code,
+            latency_ms=latencia,
+        )
+        raise GeocodingError(502, "geocoding_proveedor", "El proveedor de mapas respondió con un error.")
+
+    try:
+        datos = respuesta.json()
+    except ValueError as exc:
+        raise GeocodingError(502, "geocoding_proveedor", "El proveedor de mapas respondió mal.") from exc
+    if not isinstance(datos, dict) or not datos:
+        log.info("geocoding_inverso_sin_resultado", provider=settings.provider, latency_ms=latencia)
+        raise GeocodingError(
+            422, "geocoding_no_encontrada", "No pudimos ubicar una dirección en ese punto."
+        )
+
+    direccion_datos = datos.get("address") if isinstance(datos.get("address"), dict) else {}
+    via = " ".join(
+        parte
+        for parte in (
+            _texto_direccion(direccion_datos.get("road")),
+            _texto_direccion(direccion_datos.get("house_number")),
+        )
+        if parte
+    )
+    municipio = next(
+        (
+            _texto_direccion(direccion_datos.get(clave))
+            for clave in ("city", "town", "village", "municipality", "county")
+            if _texto_direccion(direccion_datos.get(clave))
+        ),
+        None,
+    )
+    departamento = _texto_direccion(
+        direccion_datos.get("state") or direccion_datos.get("state_district")
+    )
+    pais = _texto_direccion(direccion_datos.get("country"))
+    direccion = via or _texto_direccion(datos.get("display_name"))
+    if direccion and len(direccion) > 300:
+        direccion = direccion[:300].rstrip()
+    if municipio and len(municipio) > 120:
+        municipio = municipio[:120].rstrip()
+    if departamento and len(departamento) > 120:
+        departamento = departamento[:120].rstrip()
+    if pais and len(pais) > 60:
+        pais = pais[:60].rstrip()
+    precision = _precision(datos.get("addresstype") or datos.get("type"))
+    try:
+        lat_resultado = float(datos["lat"])
+        lon_resultado = float(datos["lon"])
+    except (KeyError, TypeError, ValueError):
+        lat_resultado, lon_resultado = lat, lon
+
+    log.info(
+        "geocoding_inverso_llamado",
+        provider=settings.provider,
+        status=200,
+        latency_ms=latencia,
+        precision=precision,
+    )
+    return ResultadoGeocodificacionInversa(
+        latitud=lat_resultado,
+        longitud=lon_resultado,
+        direccion=direccion,
+        municipio=municipio,
+        departamento=departamento,
+        pais=pais,
+        precision=precision,
         proveedor=settings.provider,
     )

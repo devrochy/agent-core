@@ -30,6 +30,14 @@ def test_producto_acepta_imagen_y_rechaza_pdf() -> None:
         validar(PERFILES["producto"], "application/pdf", "doc.pdf", PDF)
 
 
+def test_avatar_cliente_es_imagen_por_negocio() -> None:
+    perfil = PERFILES["avatar_cliente"]
+    assert perfil.tenant_scoped is True
+    validar(perfil, "image/jpeg", "cliente.jpg", JPEG)
+    with pytest.raises(StorageInvalido):
+        validar(perfil, "application/pdf", "doc.pdf", PDF)
+
+
 def test_conocimiento_acepta_pdf_docx_txt_y_rechaza_imagen() -> None:
     for mime, nombre, contenido in [
         ("application/pdf", "a.pdf", PDF),

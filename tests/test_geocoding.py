@@ -113,3 +113,57 @@ async def test_la_cuota_por_negocio_corta_en_el_tope(monkeypatch: pytest.MonkeyP
     with pytest.raises(service.GeocodingError) as exc:
         await service.consumir_cuota(tenant_id)
     assert exc.value.status == 429
+
+
+@pytest.mark.asyncio
+async def test_reverso_propone_direccion_sin_escribir(monkeypatch: pytest.MonkeyPatch) -> None:
+    capturado: dict = {}
+    respuesta = _Respuesta(
+        200,
+        {
+            "lat": "3.4516",
+            "lon": "-76.532",
+            "display_name": "Calle 1 #2-3, Cali, Valle del Cauca, Colombia",
+            "addresstype": "house",
+            "address": {
+                "house_number": "2-3",
+                "road": "Calle 1",
+                "city": "Cali",
+                "state": "Valle del Cauca",
+                "country": "Colombia",
+            },
+        },
+    )
+    monkeypatch.setattr(service.httpx, "AsyncClient", lambda **kw: _Cliente(respuesta, capturado))
+
+    resultado = await service.geocodificar_inverso(3.4516, -76.532)
+    assert resultado.direccion == "Calle 1 2-3"
+    assert resultado.municipio == "Cali"
+    assert resultado.departamento == "Valle del Cauca"
+    assert resultado.pais == "Colombia"
+    assert resultado.precision == "exacta"
+    assert resultado.latitud == 3.4516 and resultado.longitud == -76.532
+    assert capturado["url"].endswith("/reverse")
+    assert capturado["params"]["lat"] == 3.4516
+    assert capturado["params"]["lon"] == -76.532
+    assert "q" not in capturado["params"]
+
+
+@pytest.mark.asyncio
+async def test_reverso_coordenadas_invalidas_es_400() -> None:
+    with pytest.raises(service.GeocodingError) as exc:
+        await service.geocodificar_inverso(120, -76)
+    assert exc.value.status == 400
+    assert exc.value.code == "geocoding_coordenadas_invalidas"
+
+
+@pytest.mark.asyncio
+async def test_reverso_sin_resultado_es_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    capturado: dict = {}
+    monkeypatch.setattr(
+        service.httpx, "AsyncClient", lambda **kw: _Cliente(_Respuesta(200, {}), capturado)
+    )
+    with pytest.raises(service.GeocodingError) as exc:
+        await service.geocodificar_inverso(2, -75)
+    assert exc.value.status == 422
+    assert exc.value.code == "geocoding_no_encontrada"

@@ -269,3 +269,99 @@ async def test_geocodificar_no_cruza_negocios(app_client, monkeypatch) -> None:
     monkeypatch.setattr(leads_router, "geocoding_disponible", lambda: True)
 
     assert (await app_client.post(f"{URL}/{ajeno}/geocodificar", headers=headers)).status_code == 404
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+
+async def test_avatar_del_cliente_subida_y_borrado(app_client) -> None:
+    tid = await _negocio()
+    ana = await _cliente(tid)
+    headers = await api_headers(app_client, tid)
+
+    r = await app_client.post(
+        f"{URL}/{ana}/avatar", headers=headers, files={"file": ("foto.png", PNG, "image/png")}
+    )
+    assert r.status_code == 200, r.text
+    ficha = r.json()
+    assert ficha["perfil"]["avatar_url"]
+    assert "files/" in ficha["perfil"]["avatar_url"]
+    avatar = next(d for d in ficha["datos"] if d["namespace"] == "perfil" and d["key"] == "avatar_url")
+    assert avatar["source"] == "human"
+
+    r = await app_client.delete(f"{URL}/{ana}/avatar", headers=headers)
+    assert r.status_code == 204, r.text
+    ficha = (await app_client.get(f"{URL}/{ana}", headers=headers)).json()
+    assert ficha["perfil"]["avatar_url"] is None
+
+
+async def test_avatar_del_cliente_no_cruza_negocios(app_client) -> None:
+    tid = await _negocio()
+    otro = await _negocio()
+    ajeno = await _cliente(otro, "Ajeno")
+    headers = await api_headers(app_client, tid)
+
+    r = await app_client.post(
+        f"{URL}/{ajeno}/avatar", headers=headers, files={"file": ("foto.png", PNG, "image/png")}
+    )
+    assert r.status_code == 404
+
+
+async def test_geocodificacion_inversa_propone_sin_escribir(app_client, monkeypatch) -> None:
+    from core.api.routers import leads as leads_router
+    from core.geocoding import ResultadoGeocodificacionInversa
+
+    tid = await _negocio()
+    ana = await _cliente(tid)
+    headers = await api_headers(app_client, tid)
+
+    async def _noop_cuota(_tid):
+        return None
+
+    async def _inverso(latitud, longitud):
+        return ResultadoGeocodificacionInversa(
+            latitud=latitud,
+            longitud=longitud,
+            direccion="Calle 1 2-3",
+            municipio="Cali",
+            departamento="Valle del Cauca",
+            pais="Colombia",
+            precision="exacta",
+            proveedor="locationiq",
+        )
+
+    monkeypatch.setattr(leads_router, "geocoding_disponible", lambda: True)
+    monkeypatch.setattr(leads_router, "consumir_cuota_geocoding", _noop_cuota)
+    monkeypatch.setattr(leads_router, "geocodificar_inverso", _inverso)
+
+    r = await app_client.post(
+        f"{URL}/{ana}/geocodificar/reverso",
+        headers=headers,
+        json={"latitud": 3.4516, "longitud": -76.532},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["direccion"] == "Calle 1 2-3"
+    assert body["municipio"] == "Cali"
+    assert body["proveedor"] == "locationiq"
+
+    ficha = (await app_client.get(f"{URL}/{ana}", headers=headers)).json()
+    claves = {d["key"] for d in ficha["datos"]}
+    assert "latitud" not in claves and "longitud" not in claves
+
+
+async def test_geocodificacion_inversa_no_cruza_negocios(app_client, monkeypatch) -> None:
+    from core.api.routers import leads as leads_router
+
+    tid = await _negocio()
+    otro = await _negocio()
+    ajeno = await _cliente(otro, "Ajeno")
+    headers = await api_headers(app_client, tid)
+    monkeypatch.setattr(leads_router, "geocoding_disponible", lambda: True)
+
+    r = await app_client.post(
+        f"{URL}/{ajeno}/geocodificar/reverso",
+        headers=headers,
+        json={"latitud": 3.4516, "longitud": -76.532},
+    )
+    assert r.status_code == 404
