@@ -45,6 +45,11 @@ if TYPE_CHECKING:
         RegistroSembrado,
         ResumenDeEscenario,
     )
+    from core.qa.contrato_importacion import (
+        ContextoDeImportacion,
+        PlantillaDeImportacion,
+        ResultadoDeImportacion,
+    )
 
 log = get_logger(__name__)
 
@@ -620,6 +625,27 @@ class BaseModule(ABC):
 
     async def retirar_datos_de_prueba(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> int:
         """Retira lo sembrado (borrado lógico o desactivación, nunca físico). Devuelve cuántos."""
+        raise NotImplementedError
+
+    def plantillas_de_importacion(self) -> list[PlantillaDeImportacion]:
+        """Hook opcional (HU-QA-12, ADR-0180): las plantillas CSV con las que el dueño importa sus
+        datos existentes para probar el agente. Default: ninguna (el agente no importa)."""
+        return []
+
+    async def importar_filas(
+        self,
+        tenant_id: uuid.UUID,
+        plantilla_id: str,
+        filas: list[BaseModel],
+        contexto: ContextoDeImportacion,
+        *,
+        simular: bool,
+    ) -> ResultadoDeImportacion:
+        """Crea las `filas` (ya validadas con el esquema de la plantilla) y devuelve lo que creó.
+
+        Idempotente: una fila cuya clave ya existe (viva) no se toca y va en `existentes`. Con
+        `simular` no escribe nada y devuelve lo mismo que haría. Cada fila se mira acotada al
+        `tenant_id`, bajo su `tenant_scope`. Nunca guarda teléfono ni correo."""
         raise NotImplementedError
 
     async def sembrar_escenario(

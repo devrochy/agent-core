@@ -15,7 +15,7 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from core.db.models import utcnow
 from core.db.session import get_session
@@ -108,10 +108,21 @@ async def retirar(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> in
                 ids = [r.ref for r in registros if r.kind == kind]
                 if not ids:
                     continue
-                res = await session.execute(
-                    update(modelo)
-                    .where(modelo.tenant_id == tenant_id, modelo.id.in_(ids), modelo.deleted_at.is_(None))
-                    .values(deleted_at=utcnow())
-                )
+                condiciones = [modelo.tenant_id == tenant_id, modelo.id.in_(ids), modelo.deleted_at.is_(None)]
+                if kind == "cartera":
+                    # Una cartera con clientes vivos de otro origen (p. ej. importada y luego ampliada a
+                    # mano) se queda: no deja clientes huérfanos.
+                    retirados = [r.ref for r in registros if r.kind == "cliente"]
+                    condiciones.append(
+                        ~select(Cliente.id)
+                        .where(
+                            Cliente.tenant_id == tenant_id,
+                            Cliente.cartera_id == Cartera.id,
+                            Cliente.deleted_at.is_(None),
+                            Cliente.id.not_in(retirados or [uuid.uuid4()]),
+                        )
+                        .exists()
+                    )
+                res = await session.execute(update(modelo).where(*condiciones).values(deleted_at=utcnow()))
                 total += res.rowcount or 0  # type: ignore[attr-defined]
     return total

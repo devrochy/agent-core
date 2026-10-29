@@ -6,6 +6,9 @@
   el lote anterior del agente y siembra el nuevo. 409 `en_curso` con otra generación del mismo
   agente; 409 `sin_datos` si el agente no tiene forma; 422 `descripcion_requerida`.
 - `DELETE …` — retira los datos de prueba del agente (borrado lógico en el pack).
+- `GET …/importar-datos` (+ `/plantilla.csv`), `POST …/importar-datos/validar`, `POST …/importar-datos` y
+  `DELETE …/importar-datos` — importar datos existentes desde un CSV (HU-QA-12, ADR-0180). Escribir
+  exige además escritura en la sección del pack del agente. La vista previa no escribe nada.
 
 Sin `QA_TESTERS_ENABLED` las tres responden 404: en producción la función no existe. Permiso:
 sección `agents` (escritura para generar o borrar). El agente se busca con el `tenant_id` de la
@@ -18,12 +21,13 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from core.api.deps import Principal, effective_access, get_principal, require
 from core.api.errors import ApiError
 from core.config import get_settings
+from core.qa.contrato_importacion import TOPE_BYTES
 
 router = APIRouter(prefix="/admin/agents", tags=["admin · agentes"])
 modulos_router = APIRouter(prefix="/admin/datos-de-prueba", tags=["admin · datos de prueba"])
@@ -186,5 +190,179 @@ async def borrar_modulo(
     await _permiso_modulo(principal, modulo, write=True)
     try:
         return await svc.borrar_modulo(_tenant(principal), modulo)
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+
+
+# ------------------------------------------------------------------ importar datos existentes (HU-QA-12)
+class ColumnaOut(BaseModel):
+    nombre: str
+    descripcion: str
+    obligatoria: bool
+
+
+class PlantillaImportacionOut(BaseModel):
+    id: str
+    titulo: str
+    ayuda: str
+    columna_clave: str
+    columnas: list[ColumnaOut]
+    tope_filas: int
+    tope_bytes: int
+
+
+class LoteImportado(BaseModel):
+    lotes: int
+    creado_en: datetime
+    conteos: dict[str, int] = Field(description="Registros importados por tipo (`producto`, `cliente`, `cuota`…).")
+
+
+class EstadoImportacion(BaseModel):
+    disponible: bool
+    motivo: str | None = Field(default=None, description="Por qué el agente no importa datos.")
+    plantilla: PlantillaImportacionOut | None
+    importado: LoteImportado | None
+
+
+class ErrorDeFila(BaseModel):
+    fila: int = Field(description="Número de fila en el archivo (la cabecera es la 1).")
+    columna: str | None
+    mensaje: str
+
+
+class VistaPreviaImportacion(BaseModel):
+    total_filas: int
+    nuevas: int = Field(description="Filas que se crearían.")
+    existentes: int = Field(description="Filas cuya clave ya existe: se omiten.")
+    con_errores: int
+    errores: list[ErrorDeFila] = Field(description="Hasta 50; el total está en `errores_total`.")
+    errores_total: int
+    columnas_ignoradas: list[str] = Field(description="Cabeceras del archivo que no son de la plantilla.")
+    columnas_faltantes: list[str] = Field(description="Columnas obligatorias que el archivo no trae.")
+
+
+class ImportacionHecha(BaseModel):
+    lote_id: uuid.UUID
+    plantilla: str
+    creado_en: datetime
+    creadas: int
+    existentes: int
+    con_errores: int
+    conteos: dict[str, int]
+
+
+def _actor(principal: Principal) -> str:
+    return f"admin:{principal.admin.email}"
+
+
+async def _permiso_importar(principal: Principal, agent_id: uuid.UUID, *, escribir: bool) -> None:
+    """Sección `agents` (la de la ruta) y la del pack del agente: lo que el tester no pueda tocar a mano
+    tampoco lo importa por aquí."""
+    from core.qa import importar_datos as svc
+
+    try:
+        d = await svc.destino(_tenant(principal), agent_id)
+    except svc.ErrorDatosDePrueba as exc:  # agente inexistente o de otro negocio: 404 sin eco
+        raise _error(exc) from exc
+    if isinstance(d, str):
+        return  # el servicio responde 409 sin_plantilla (o 404 si el agente no es del negocio)
+    if principal.admin.role == "master":
+        return
+    acceso = await effective_access(principal.admin, d.modulo.seccion, principal.tenant_id)
+    if acceso is None or (escribir and acceso != "write"):
+        raise ApiError.forbidden(f"Sin permiso para la sección '{d.modulo.seccion}'.")
+
+
+async def _leer_archivo(archivo: UploadFile) -> bytes:
+    contenido = await archivo.read(TOPE_BYTES + 1)
+    if len(contenido) > TOPE_BYTES:
+        raise ApiError(413, "archivo_muy_grande", f"El archivo pesa más de {TOPE_BYTES // 1_000_000} MB. Divídelo en partes.")
+    return contenido
+
+
+@router.get("/{agent_id}/importar-datos", response_model=EstadoImportacion)
+async def estado_importacion(
+    agent_id: uuid.UUID, principal: Annotated[Principal, Depends(require("agents"))]
+) -> dict[str, object]:
+    """Si el agente importa datos, su plantilla (columnas y topes) y lo ya importado."""
+    from core.qa import importar_datos as svc
+
+    _habilitado()
+    try:
+        return await svc.estado(_tenant(principal), agent_id)
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/{agent_id}/importar-datos/plantilla.csv")
+async def plantilla_importacion(
+    agent_id: uuid.UUID, principal: Annotated[Principal, Depends(require("agents"))]
+) -> Response:
+    """La plantilla CSV del agente: cabeceras y filas de ejemplo (UTF-8 con BOM, para Excel)."""
+    from core.qa import importar_datos as svc
+
+    _habilitado()
+    try:
+        nombre, contenido = await svc.plantilla_del_agente(_tenant(principal), agent_id)
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+    return Response(
+        content=contenido,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
+    )
+
+
+@router.post("/{agent_id}/importar-datos/validar", response_model=VistaPreviaImportacion)
+async def validar_importacion(
+    agent_id: uuid.UUID,
+    archivo: Annotated[UploadFile, File()],
+    principal: Annotated[Principal, Depends(require("agents", write=True))],
+) -> dict[str, object]:
+    """Vista previa del archivo: errores por fila y cuántas filas se crearían o ya existen. No escribe."""
+    from core.qa import importar_datos as svc
+
+    _habilitado()
+    await _permiso_importar(principal, agent_id, escribir=True)
+    contenido = await _leer_archivo(archivo)
+    try:
+        return await svc.previsualizar(_tenant(principal), agent_id, contenido)
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/{agent_id}/importar-datos", response_model=ImportacionHecha, status_code=201)
+async def importar_datos(
+    agent_id: uuid.UUID,
+    archivo: Annotated[UploadFile, File()],
+    principal: Annotated[Principal, Depends(require("agents", write=True))],
+    solo_validas: Annotated[bool, Form()] = False,
+) -> dict[str, object]:
+    """Importa el archivo. Con errores en alguna fila responde 422 `archivo_con_errores` salvo `solo_validas`.
+    Las filas cuya clave ya existe se omiten (idempotente)."""
+    from core.qa import importar_datos as svc
+
+    _habilitado()
+    await _permiso_importar(principal, agent_id, escribir=True)
+    contenido = await _leer_archivo(archivo)
+    try:
+        return await svc.importar(
+            _tenant(principal), agent_id, contenido, solo_validas=solo_validas, actor=_actor(principal)
+        )
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+
+
+@router.delete("/{agent_id}/importar-datos", response_model=DatosRetirados)
+async def borrar_importacion(
+    agent_id: uuid.UUID, principal: Annotated[Principal, Depends(require("agents", write=True))]
+) -> dict[str, object]:
+    """Retira solo lo que se importó para este agente; lo generado y lo creado a mano no se tocan."""
+    from core.qa import importar_datos as svc
+
+    _habilitado()
+    await _permiso_importar(principal, agent_id, escribir=True)
+    try:
+        return await svc.borrar(_tenant(principal), agent_id, actor=_actor(principal))
     except svc.ErrorDatosDePrueba as exc:
         raise _error(exc) from exc

@@ -65,6 +65,11 @@ if TYPE_CHECKING:
     from core.mcp.host import MCPHost
     from core.primeros_pasos.contrato import ContenidoCargado
     from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
+    from core.qa.contrato_importacion import (
+        ContextoDeImportacion,
+        PlantillaDeImportacion,
+        ResultadoDeImportacion,
+    )
 
 log = get_logger(__name__)
 
@@ -1113,6 +1118,25 @@ class CRMModule(BaseModule):
         from pack_commerce.datos_de_prueba import retirar
 
         return await retirar(tenant_id, registros)
+
+    def plantillas_de_importacion(self) -> list[PlantillaDeImportacion]:
+        """Importar productos y planes desde un CSV (HU-QA-12, ADR-0180)."""
+        from pack_commerce.importacion import plantillas
+
+        return plantillas()
+
+    async def importar_filas(
+        self,
+        tenant_id: uuid.UUID,
+        plantilla_id: str,
+        filas: list[Any],
+        contexto: ContextoDeImportacion,
+        *,
+        simular: bool,
+    ) -> ResultadoDeImportacion:
+        from pack_commerce.importacion import importar
+
+        return await importar(tenant_id, plantilla_id, filas, contexto, simular=simular)
 
     async def sembrar_escenario(self, tenant_id: uuid.UUID, escenario: str, entrada: Any) -> Any:
         """Pedidos, leads, promoción y planes de los escenarios de datos de prueba (HU-QA-13)."""

@@ -34,6 +34,11 @@ if TYPE_CHECKING:
     from core.mcp.host import MCPHost
     from core.primeros_pasos.contrato import ContenidoCargado
     from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
+    from core.qa.contrato_importacion import (
+        ContextoDeImportacion,
+        PlantillaDeImportacion,
+        ResultadoDeImportacion,
+    )
 
 log = get_logger(__name__)
 
@@ -192,6 +197,25 @@ class CobranzaModule(BaseModule):
         from pack_cobranza.datos_de_prueba import retirar
 
         return await retirar(tenant_id, registros)
+
+    def plantillas_de_importacion(self) -> list[PlantillaDeImportacion]:
+        """Importar clientes y préstamos desde un CSV, sin teléfono (HU-QA-12, ADR-0180)."""
+        from pack_cobranza.importacion import plantillas
+
+        return plantillas()
+
+    async def importar_filas(
+        self,
+        tenant_id: uuid.UUID,
+        plantilla_id: str,
+        filas: list[Any],
+        contexto: ContextoDeImportacion,
+        *,
+        simular: bool,
+    ) -> ResultadoDeImportacion:
+        from pack_cobranza.importacion import importar
+
+        return await importar(tenant_id, plantilla_id, filas, contexto, simular=simular)
 
     async def contenido_cargado(self, tenant_id: Any) -> ContenidoCargado:
         """Clientes de cartera para el paso «catálogo o servicios» de los primeros pasos

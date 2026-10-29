@@ -177,8 +177,10 @@ async def test_generar_regenerar_y_borrar_catalogo(app_client, monkeypatch, qa_o
     assert r.status_code == 201, r.text
     assert r.json()["retirados"] == 8  # 3 variantes + 3 productos + 2 categorías
     variantes = await _variantes(tid)
-    assert not any(variantes[s] for s in primeras)
-    segundas = {s for s in variantes if s.startswith("PRUEBA-")} - primeras
+    # Retirar libera el SKU (HU-QA-12): la variante queda inactiva con el SKU renombrado.
+    assert not any(variantes.get(s) for s in primeras)
+    assert sum(1 for s, activa in variantes.items() if "~retirado-" in s and not activa) == 3
+    segundas = {s for s in variantes if s.startswith("PRUEBA-") and "~retirado-" not in s} - primeras
     assert len(segundas) == 3 and all(variantes[s] for s in segundas)
     assert variantes["MANUAL-1"] is True
     vivas = await _sql(
@@ -195,7 +197,7 @@ async def test_generar_regenerar_y_borrar_catalogo(app_client, monkeypatch, qa_o
     r = await app_client.delete(f"{_BASE}/{ventas}/datos-de-prueba", headers=h)
     assert r.status_code == 200 and r.json()["retirados"] == 8
     variantes = await _variantes(tid)
-    assert not any(variantes[s] for s in segundas) and variantes["MANUAL-1"] is True
+    assert not any(variantes.get(s) for s in segundas) and variantes["MANUAL-1"] is True
     assert (await app_client.get(f"{_BASE}/{ventas}/datos-de-prueba", headers=h)).json()["lote"] is None
     assert proveedor.llamadas == 2
 

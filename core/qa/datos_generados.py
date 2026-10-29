@@ -47,6 +47,8 @@ from core.shared.logger import get_logger
 log = get_logger(__name__)
 
 PLAYBOOK = "datos_de_prueba"
+# Lo importado de un CSV (HU-QA-12) es del dueño: generar y borrar datos de prueba no lo tocan.
+ORIGEN_IMPORTACION = "importacion"
 TIMEOUT_LLM_S = 90
 MAX_TOKENS = 4000
 TEMPERATURA = 0.4
@@ -237,6 +239,7 @@ async def _registros_vivos(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> list[Te
                     .where(
                         TestDataRecord.tenant_id == tenant_id,
                         TestDataRecord.agent_id == agent_id,
+                        TestDataRecord.origen != ORIGEN_IMPORTACION,
                         TestDataRecord.deleted_at.is_(None),
                     )
                     .order_by(TestDataRecord.created_at)
@@ -254,6 +257,7 @@ async def _registros_modulo(tenant_id: uuid.UUID, modulo: str) -> list[TestDataR
                     .where(
                         TestDataRecord.tenant_id == tenant_id,
                         TestDataRecord.modulo == modulo,
+                        TestDataRecord.origen != ORIGEN_IMPORTACION,
                         TestDataRecord.deleted_at.is_(None),
                     )
                     .order_by(TestDataRecord.created_at)
