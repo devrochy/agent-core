@@ -39255,6 +39255,405 @@
           }
         }
       }
+    },
+    "/api/v1/admin/agents/{agent_id}/importar-datos": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Estado Importacion",
+        "description": "Si el agente importa datos, su plantilla (columnas y topes) y lo ya importado.",
+        "operationId": "estado_importacion_api_v1_admin_agents__agent_id__importar_datos_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstadoImportacion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Importar Datos",
+        "description": "Importa el archivo. Con errores en alguna fila responde 422 `archivo_con_errores` salvo `solo_validas`.\nLas filas cuya clave ya existe se omiten (idempotente).",
+        "operationId": "importar_datos_api_v1_admin_agents__agent_id__importar_datos_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_importar_datos_api_v1_admin_agents__agent_id__importar_datos_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportacionHecha"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Borrar Importacion",
+        "description": "Retira solo lo que se importó para este agente; lo generado y lo creado a mano no se tocan.",
+        "operationId": "borrar_importacion_api_v1_admin_agents__agent_id__importar_datos_delete",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatosRetirados"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/importar-datos/plantilla.csv": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Plantilla Importacion",
+        "description": "La plantilla CSV del agente: cabeceras y filas de ejemplo (UTF-8 con BOM, para Excel).",
+        "operationId": "plantilla_importacion_api_v1_admin_agents__agent_id__importar_datos_plantilla_csv_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/importar-datos/validar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Validar Importacion",
+        "description": "Vista previa del archivo: errores por fila y cuántas filas se crearían o ya existen. No escribe.",
+        "operationId": "validar_importacion_api_v1_admin_agents__agent_id__importar_datos_validar_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_validar_importacion_api_v1_admin_agents__agent_id__importar_datos_validar_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VistaPreviaImportacion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -71532,6 +71931,324 @@
           "datos_retirados"
         ],
         "title": "RevocacionDatosOut"
+      },
+      "Body_importar_datos_api_v1_admin_agents__agent_id__importar_datos_post": {
+        "properties": {
+          "archivo": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Archivo"
+          },
+          "solo_validas": {
+            "type": "boolean",
+            "title": "Solo Validas",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "archivo"
+        ],
+        "title": "Body_importar_datos_api_v1_admin_agents__agent_id__importar_datos_post"
+      },
+      "Body_validar_importacion_api_v1_admin_agents__agent_id__importar_datos_validar_post": {
+        "properties": {
+          "archivo": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Archivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "archivo"
+        ],
+        "title": "Body_validar_importacion_api_v1_admin_agents__agent_id__importar_datos_validar_post"
+      },
+      "ColumnaOut": {
+        "properties": {
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "descripcion": {
+            "type": "string",
+            "title": "Descripcion"
+          },
+          "obligatoria": {
+            "type": "boolean",
+            "title": "Obligatoria"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nombre",
+          "descripcion",
+          "obligatoria"
+        ],
+        "title": "ColumnaOut"
+      },
+      "ErrorDeFila": {
+        "properties": {
+          "fila": {
+            "type": "integer",
+            "title": "Fila",
+            "description": "Número de fila en el archivo (la cabecera es la 1)."
+          },
+          "columna": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Columna"
+          },
+          "mensaje": {
+            "type": "string",
+            "title": "Mensaje"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fila",
+          "columna",
+          "mensaje"
+        ],
+        "title": "ErrorDeFila"
+      },
+      "EstadoImportacion": {
+        "properties": {
+          "disponible": {
+            "type": "boolean",
+            "title": "Disponible"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo",
+            "description": "Por qué el agente no importa datos."
+          },
+          "plantilla": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlantillaImportacionOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "importado": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoteImportado"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "disponible",
+          "plantilla",
+          "importado"
+        ],
+        "title": "EstadoImportacion"
+      },
+      "ImportacionHecha": {
+        "properties": {
+          "lote_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Lote Id"
+          },
+          "plantilla": {
+            "type": "string",
+            "title": "Plantilla"
+          },
+          "creado_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Creado En"
+          },
+          "creadas": {
+            "type": "integer",
+            "title": "Creadas"
+          },
+          "existentes": {
+            "type": "integer",
+            "title": "Existentes"
+          },
+          "con_errores": {
+            "type": "integer",
+            "title": "Con Errores"
+          },
+          "conteos": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Conteos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lote_id",
+          "plantilla",
+          "creado_en",
+          "creadas",
+          "existentes",
+          "con_errores",
+          "conteos"
+        ],
+        "title": "ImportacionHecha"
+      },
+      "LoteImportado": {
+        "properties": {
+          "lotes": {
+            "type": "integer",
+            "title": "Lotes"
+          },
+          "creado_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Creado En"
+          },
+          "conteos": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Conteos",
+            "description": "Registros importados por tipo (`producto`, `cliente`, `cuota`…)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "lotes",
+          "creado_en",
+          "conteos"
+        ],
+        "title": "LoteImportado"
+      },
+      "PlantillaImportacionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "ayuda": {
+            "type": "string",
+            "title": "Ayuda"
+          },
+          "columna_clave": {
+            "type": "string",
+            "title": "Columna Clave"
+          },
+          "columnas": {
+            "items": {
+              "$ref": "#/components/schemas/ColumnaOut"
+            },
+            "type": "array",
+            "title": "Columnas"
+          },
+          "tope_filas": {
+            "type": "integer",
+            "title": "Tope Filas"
+          },
+          "tope_bytes": {
+            "type": "integer",
+            "title": "Tope Bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "titulo",
+          "ayuda",
+          "columna_clave",
+          "columnas",
+          "tope_filas",
+          "tope_bytes"
+        ],
+        "title": "PlantillaImportacionOut"
+      },
+      "VistaPreviaImportacion": {
+        "properties": {
+          "total_filas": {
+            "type": "integer",
+            "title": "Total Filas"
+          },
+          "nuevas": {
+            "type": "integer",
+            "title": "Nuevas",
+            "description": "Filas que se crearían."
+          },
+          "existentes": {
+            "type": "integer",
+            "title": "Existentes",
+            "description": "Filas cuya clave ya existe: se omiten."
+          },
+          "con_errores": {
+            "type": "integer",
+            "title": "Con Errores"
+          },
+          "errores": {
+            "items": {
+              "$ref": "#/components/schemas/ErrorDeFila"
+            },
+            "type": "array",
+            "title": "Errores",
+            "description": "Hasta 50; el total está en `errores_total`."
+          },
+          "errores_total": {
+            "type": "integer",
+            "title": "Errores Total"
+          },
+          "columnas_ignoradas": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Columnas Ignoradas",
+            "description": "Cabeceras del archivo que no son de la plantilla."
+          },
+          "columnas_faltantes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Columnas Faltantes",
+            "description": "Columnas obligatorias que el archivo no trae."
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_filas",
+          "nuevas",
+          "existentes",
+          "con_errores",
+          "errores",
+          "errores_total",
+          "columnas_ignoradas",
+          "columnas_faltantes"
+        ],
+        "title": "VistaPreviaImportacion"
       }
     }
   }

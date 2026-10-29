@@ -11,7 +11,7 @@ import uuid
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from core.db.models import utcnow
 from core.db.session import get_session
@@ -81,10 +81,21 @@ async def retirar(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> in
                 if not ids:
                     continue
                 modelo = _MODELOS[kind]
-                res = await session.execute(
-                    update(modelo)
-                    .where(modelo.tenant_id == tenant_id, modelo.id.in_(ids), modelo.deleted_at.is_(None))
-                    .values(deleted_at=utcnow())
-                )
+                condiciones = [modelo.tenant_id == tenant_id, modelo.id.in_(ids), modelo.deleted_at.is_(None)]
+                if kind == "tipo":
+                    # Un tipo con citas vivas que no son del lote (creadas a mano o por el agente) se queda:
+                    # no deja citas colgando de un tipo retirado.
+                    citas = [r.ref for r in registros if r.kind == "cita"]
+                    condiciones.append(
+                        ~select(Appointment.id)
+                        .where(
+                            Appointment.tenant_id == tenant_id,
+                            Appointment.appointment_type_id == AppointmentType.id,
+                            Appointment.deleted_at.is_(None),
+                            Appointment.id.not_in(citas or [uuid.uuid4()]),
+                        )
+                        .exists()
+                    )
+                res = await session.execute(update(modelo).where(*condiciones).values(deleted_at=utcnow()))
                 total += res.rowcount or 0  # type: ignore[attr-defined]
     return total

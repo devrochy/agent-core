@@ -2311,7 +2311,7 @@ class TestDataRecord(Base):
     """Registro sembrado por «Generar datos de prueba» (HU-QA-10, ADR-0146, 0098).
 
     El registro vive en la tabla de su pack; aquí su referencia lógica, el módulo, el agente
-    (si lo hay) y el lote. Retirar marca `deleted_at` (invariante 8). `origen`: `llm` | `plantilla`.
+    (si lo hay) y el lote. Retirar marca `deleted_at` (invariante 8). `origen`: `llm` | `plantilla` | `importacion` (HU-QA-12: lo que el dueño importó de un CSV).
     `agent_id` es nulo cuando la generación se hizo desde un módulo (incluido el onboarding)."""
 
     __tablename__ = "test_data_records"

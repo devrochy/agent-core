@@ -21,7 +21,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select, update
+from sqlalchemy import Text, case, cast, func, select, update
 
 from core.db.models import utcnow
 from core.db.session import get_session
@@ -203,7 +203,22 @@ async def retirar(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> in
                 res = await session.execute(
                     update(ProductVariant)
                     .where(ProductVariant.tenant_id == tenant_id, ProductVariant.id.in_(variantes))
-                    .values(active=False)
+                    # El SKU es único por negocio aunque la variante esté inactiva: se libera para que
+                    # volver a importar el mismo archivo (HU-QA-12) cree el producto otra vez.
+                    .values(
+                        active=False,
+                        sku=case(
+                            (
+                                ProductVariant.sku.like("%~retirado-%"),
+                                ProductVariant.sku,
+                            ),
+                            else_=func.concat(
+                                func.left(ProductVariant.sku, 200),
+                                "~retirado-",
+                                func.substr(cast(ProductVariant.id, Text), 1, 8),
+                            ),
+                        ),
+                    )
                 )
                 total += res.rowcount or 0  # type: ignore[attr-defined]
             if productos:

@@ -34,6 +34,11 @@ if TYPE_CHECKING:
     from core.mcp.host import MCPHost
     from core.primeros_pasos.contrato import ContenidoCargado
     from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
+    from core.qa.contrato_importacion import (
+        ContextoDeImportacion,
+        PlantillaDeImportacion,
+        ResultadoDeImportacion,
+    )
 
 PLUGIN_ID = "pack_calendar"
 
@@ -476,6 +481,25 @@ class GoogleCalendarModule(BaseModule):
         from pack_calendar.datos_de_prueba import retirar
 
         return await retirar(tenant_id, registros)
+
+    def plantillas_de_importacion(self) -> list[PlantillaDeImportacion]:
+        """Importar tipos de cita desde un CSV (HU-QA-12, ADR-0180)."""
+        from pack_calendar.importacion import plantillas
+
+        return plantillas()
+
+    async def importar_filas(
+        self,
+        tenant_id: uuid.UUID,
+        plantilla_id: str,
+        filas: list[Any],
+        contexto: ContextoDeImportacion,
+        *,
+        simular: bool,
+    ) -> ResultadoDeImportacion:
+        from pack_calendar.importacion import importar
+
+        return await importar(tenant_id, plantilla_id, filas, contexto, simular=simular)
 
     async def contenido_cargado(self, tenant_id: uuid.UUID) -> ContenidoCargado:
         """Tipos de cita activos (los servicios que se agendan) para el paso «catálogo o
