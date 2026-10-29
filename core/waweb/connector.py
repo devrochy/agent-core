@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from core.config import get_settings
@@ -23,6 +24,12 @@ from core.waweb.store import DbEncryptedSessionStore
 
 log = get_logger(__name__)
 
+# Hilos del executor por defecto (`asyncio.to_thread`, que usa Neonize para cada llamada al puente
+# Go). Por defecto son `min(32, CPU + 4)` (12 en el servidor de test). neonize 0.5.2 deja un hilo
+# bloqueado en Go por cada ciclo de QR de una sesión sin vincular y no hay forma de liberarlo:
+# esto solo espacia los reinicios. La red de seguridad es `WaWebConnector._check_executor`.
+EXECUTOR_WORKERS = 64
+
 
 async def run_connector() -> None:
     settings = get_settings()
@@ -31,6 +38,10 @@ async def run_connector() -> None:
         return
 
     from core.waweb.backend_neonize import NeonizeSocket
+
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(max_workers=EXECUTOR_WORKERS, thread_name_prefix="waweb_go")
+    )
 
     store = DbEncryptedSessionStore(Path(settings.waweb_session_dir))
     connector = WaWebConnector(

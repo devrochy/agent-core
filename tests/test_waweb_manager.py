@@ -160,6 +160,78 @@ async def test_watchdog_de_progreso_no_reinicia_una_sesion_conectada(tmp_path: P
         task.cancel()
 
 
+async def _sonda_colgada() -> None:
+    await asyncio.sleep(60)
+
+
+async def test_sonda_del_executor_agotado_alerta_y_reinicia_tras_fallos_seguidos(tmp_path: Path) -> None:
+    """Sin ningún hilo libre el envío y el chequeo de vida quedan colgados: se reinicia."""
+    connector = _connector(tmp_path, FakeRegistry([]))
+    fatal = {"n": 0}
+    alertas: list[tuple[str, str]] = []
+
+    async def _alert(titulo: str, detalle: str, **_: Any) -> None:
+        alertas.append((titulo, detalle))
+
+    connector.alert = _alert
+    connector.fatal = lambda: fatal.__setitem__("n", fatal["n"] + 1)
+    connector.probe_executor = _sonda_colgada
+    connector.executor_probe_timeout_s = 0.01
+    connector.executor_fallos_para_reiniciar = 2
+
+    await connector._check_executor()
+    assert fatal["n"] == 0  # un solo fallo no reinicia: puede ser un pico
+    await connector._check_executor()
+
+    assert fatal["n"] == 1
+    assert len(alertas) == 1
+    assert "pool de hilos" in alertas[0][0]
+
+
+async def test_sonda_del_executor_sana_no_reinicia_y_borra_los_fallos(tmp_path: Path) -> None:
+    connector = _connector(tmp_path, FakeRegistry([]))
+    fatal = {"n": 0}
+    connector.fatal = lambda: fatal.__setitem__("n", fatal["n"] + 1)
+    connector.executor_probe_timeout_s = 0.01
+    connector.executor_fallos_para_reiniciar = 2
+
+    connector.probe_executor = _sonda_colgada
+    await connector._check_executor()
+    assert connector._executor_fallos == 1
+
+    async def _sana() -> None:
+        return None
+
+    connector.probe_executor = _sana
+    await connector._check_executor()
+    assert connector._executor_fallos == 0
+
+    connector.probe_executor = _sonda_colgada
+    await connector._check_executor()  # el contador volvió a 1: tampoco reinicia
+    assert fatal["n"] == 0
+
+
+async def test_sonda_real_tarda_solo_cuando_no_queda_ningun_hilo_libre() -> None:
+    """La sonda por defecto usa el executor del loop: con el único hilo ocupado, no arranca."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    loop = asyncio.get_running_loop()
+    pool = ThreadPoolExecutor(max_workers=1)
+    loop.set_default_executor(pool)
+    soltar = threading.Event()
+    try:
+        await asyncio.wait_for(manager_mod._probar_executor(), 2)  # con hilo libre, vuelve al instante
+        ocupado = loop.run_in_executor(None, soltar.wait)  # simula el hilo bloqueado en Go
+        await asyncio.sleep(0.05)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(manager_mod._probar_executor(), 0.1)
+    finally:
+        soltar.set()
+        await ocupado
+        pool.shutdown(wait=True)
+
+
 def _ctx() -> SessionContext:
     return SessionContext(
         tenant_id=uuid.UUID(int=1),

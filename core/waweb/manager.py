@@ -52,6 +52,14 @@ def _salida_fatal() -> None:
     os._exit(1)
 
 
+async def _probar_executor() -> None:
+    """Un no-op en el executor por defecto: solo tarda si no queda ningún hilo libre.
+
+    Cada llamada al puente Go (`send_message`, `is_connected`, `disconnect`…) corre con
+    `asyncio.to_thread`, y `Neonize()` ocupa un hilo mientras viva el cliente."""
+    await asyncio.to_thread(lambda: None)
+
+
 @dataclass
 class WaWebConnector:
     registry: SessionRegistry
@@ -95,6 +103,16 @@ class WaWebConnector:
     # Cancelar la tarea no libera una llamada al puente Go en curso; la única
     # recuperación segura es reiniciar el proceso y dejar que Docker lo levante.
     stall_timeout_s: float = 300.0
+    # Pool de hilos agotado (incidente 2026-10-28/29): en neonize 0.5.2 el hilo de `Neonize()` de
+    # un cliente que se vinculaba por QR NO se libera con `disconnect()`, `stop()` ni cancelando
+    # `connect_task`; cada ciclo de QR de una sesión sin vincular deja un hilo del executor
+    # bloqueado en Go. Con todos ocupados, ninguna llamada al puente arranca: el chequeo de vida
+    # y el envío esperan para siempre, el drain del negocio no refresca `waweb:ready` (TTL 120 s)
+    # y el agente "responde" pero la API rechaza cada envío ("WhatsApp (waweb) no está conectado").
+    # No se puede liberar el hilo desde Python: la sonda detecta el agotamiento y se reinicia.
+    probe_executor: Callable[[], Awaitable[None]] = _probar_executor
+    executor_probe_timeout_s: float = 10.0
+    executor_fallos_para_reiniciar: int = 2
     fatal: Callable[[], None] = _salida_fatal
     now: Callable[[], float] = time.monotonic
     _tasks: dict[uuid.UUID, asyncio.Task] = field(default_factory=dict, init=False)
@@ -132,6 +150,7 @@ class WaWebConnector:
     _lost_alerted: set[uuid.UUID] = field(default_factory=set, init=False)
     # Último instante con señal de vida por tenant (QR, estado o sesión conectada).
     _progress_at: dict[uuid.UUID, float] = field(default_factory=dict, init=False)
+    _executor_fallos: int = field(default=0, init=False)
 
     async def run(self) -> None:
         """Bucle principal: barre sesiones y arranca/detiene sockets."""
@@ -139,6 +158,7 @@ class WaWebConnector:
             try:
                 await self.sweep()
                 await self._check_stalls()
+                await self._check_executor()
             except Exception:
                 log.exception("waweb_sweep_failed")
             await self.sleep(self.sweep_interval_s)
@@ -363,6 +383,32 @@ class WaWebConnector:
                 log.exception("waweb_stall_alert_failed", tenant_id=str(tenant_id))
             self.fatal()
             return
+
+    async def _check_executor(self) -> None:
+        """Reinicia el conector si el pool de hilos no tiene ningún hilo libre.
+
+        Cancelar la sonda es seguro: un no-op que nunca arrancó se saca de la cola (no es una
+        llamada al puente en curso). Se exigen varios fallos seguidos para no reiniciar por
+        un pico: con el pool dimensionado en `connector.py`, ni una ráfaga de envíos lo agota.
+        """
+        try:
+            await asyncio.wait_for(self.probe_executor(), self.executor_probe_timeout_s)
+        except TimeoutError:
+            self._executor_fallos += 1
+        else:
+            self._executor_fallos = 0
+            return
+        log.warning("waweb_executor_sin_hilos", fallos=self._executor_fallos)
+        if self._executor_fallos < self.executor_fallos_para_reiniciar:
+            return
+        log.critical("waweb_executor_agotado", fallos=self._executor_fallos)
+        await self._alertar(
+            "WhatsApp (waweb) pool de hilos agotado",
+            "Ningún hilo libre para llamar al puente de Neonize: los envíos y el chequeo de "
+            "vida quedarían colgados. Se reinicia el conector.",
+            severity="critical",
+        )
+        self.fatal()
 
     def _was_linked(self, ctx: SessionContext) -> bool:
         """¿La sesión se vinculó alguna vez y conserva credenciales?
