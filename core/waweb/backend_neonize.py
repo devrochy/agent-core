@@ -235,7 +235,9 @@ class NeonizeSocket:
         try:
             await asyncio.wait_for(_BRIDGE_LOCK.acquire(), self.alive_timeout_s)
         except TimeoutError:
-            # Puente ocupado (otro tenant enviando o conectando): no es evidencia.
+            # Puente ocupado (otro tenant enviando o conectando): no es evidencia de que ESTE
+            # socket esté muerto. Si dura (el pool de hilos agotado, ver
+            # `WaWebConnector._check_executor`), el que reinicia es el watchdog del manager.
             log.warning("waweb_neonize_alive_timeout")
             return True
         try:
