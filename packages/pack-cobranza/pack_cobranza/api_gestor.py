@@ -440,10 +440,27 @@ async def login(request: Request) -> JSONResponse:
     if not (usuario and password):
         return JSONResponse({"error": "faltan datos"}, status_code=400)
 
+    from core.security.login_lockout import (
+        client_ip,
+        is_blocked,
+        register_failure,
+        register_success,
+    )
+
+    # Mismo bloqueo progresivo que el login por negocio (HU-ARCH-04): este login unificado no lo tenía.
+    ip = client_ip(request)
+    identificador = usuario.lower()
+    if await is_blocked("campo", identificador, ip):
+        return JSONResponse({"error": "demasiados intentos, espera unos minutos"}, status_code=429)
     async with get_session() as session:
         admin = await _admin_por_credenciales(session, usuario, password)
     if admin is None:
+        bloqueado = await register_failure("campo", identificador, ip)
+        from core.access.events import registrar_fallo_de_login
+
+        await registrar_fallo_de_login(usuario, ip, canal="campo", bloqueado=bloqueado)
         return JSONResponse({"error": "credenciales inválidas"}, status_code=401)
+    await register_success("campo", identificador, ip)
 
     solo = await _tenant_id_por_ref(ref) if ref else None
     if ref and solo is None:
@@ -543,6 +560,9 @@ async def _login_con_tenant(request: Request, rol_esperado: str) -> JSONResponse
         admin = await _admin_por_credenciales(session, usuario, password)
     if admin is None:
         bloqueado = await register_failure(scope, identificador, ip)
+        from core.access.events import registrar_fallo_de_login
+
+        await registrar_fallo_de_login(usuario, ip, canal="campo", bloqueado=bloqueado, tenant_id=tenant_id)
         if bloqueado:
             from core.shared.audit import record_audit
             from core.shared.tenant import tenant_scope
