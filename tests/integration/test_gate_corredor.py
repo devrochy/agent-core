@@ -97,7 +97,7 @@ async def _negocio_y_candidata(nombre: str = "Otro") -> tuple[uuid.UUID, uuid.UU
 
     slug = uniq("corredor")
     tid, _ = await onboard_tenant(
-        name=f"Corredor {slug}", slug=slug, packs=["pack_commerce", "pack_payments", "pack_calendar"], plan="premium"
+        name=f"Corredor {slug}", slug=slug, packs=["pack_commerce", "pack_payments", "pack_calendar", "pack_subscriptions"], plan="premium"
     )
     cid = uuid.uuid4()
     await _sql(

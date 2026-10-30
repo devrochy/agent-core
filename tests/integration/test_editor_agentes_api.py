@@ -185,7 +185,7 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
     assert r.status_code == 422, r.text
     error = r.json()["error"]
     assert error["code"] == "invalid_spec"
-    assert set(error["fields"]) == {"procedures[0].overrides.examples", "procedures[1].overrides.examples"}
+    assert set(error["fields"]) == {"procedures[0].overrides.examples"}
     assert "frases" in error["fields"]["procedures[0].overrides.examples"]
 
     # Copiar frases de la habilidad no suma; frases propias sí. Y un modelo de otro proveedor no pasa.
@@ -262,7 +262,7 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
     r = await app_client.post(
         f"/api/v1/admin/agents/{agenda_otro}/publish", headers=h_otro, json={"connection_ids": [str(cid)]}
     )
-    # (Sigue el superpoder con pocas frases: los dos errores vienen juntos, por campo.)
+    # (Sigue el superpoder con pocas frases: ambos errores vienen juntos, por campo.)
     assert r.status_code == 422 and "connection_ids[0]" in r.json()["error"]["fields"], r.text
     assert await _sql(otro, "select 1 from agent_versions where agent_id = :a", a=uuid.UUID(agenda_otro)) == []
 
@@ -348,13 +348,13 @@ async def test_superpoderes_por_enfoque(app_client) -> None:
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
     assert r.status_code == 422, r.text
     campos = r.json()["error"]["fields"]
-    assert "procedures[2].id" in campos and "enfoque" in campos["procedures[2].id"]
+    assert "procedures[1].id" in campos and "enfoque" in campos["procedures[1].id"]
     assert await _sql(tid, "select 1 from agent_versions where agent_id = :a", a=uuid.UUID(aid)) == []
 
     # HU-AOS-51: la API genérica de versiones tampoco se salta el enfoque.
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/versions", headers=h, json={})
     assert r.status_code == 422, r.text
-    assert "enfoque" in r.json()["error"]["fields"]["procedures[2].id"]
+    assert "enfoque" in r.json()["error"]["fields"]["procedures[1].id"]
     assert await _sql(tid, "select 1 from agent_versions where agent_id = :a", a=uuid.UUID(aid)) == []
 
     # Aislamiento: el agente de un negocio no se consulta desde otro.
