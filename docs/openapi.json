@@ -20193,6 +20193,24 @@
             "description": "Estado del pedido."
           },
           {
+            "name": "pago",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Estado del pago: pendiente, pagado o rechazado.",
+              "title": "Pago"
+            },
+            "description": "Estado del pago: pendiente, pagado o rechazado."
+          },
+          {
             "name": "q",
             "in": "query",
             "required": false,

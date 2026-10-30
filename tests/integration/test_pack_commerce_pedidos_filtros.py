@@ -113,6 +113,32 @@ async def test_filtra_por_estado(app_client) -> None:
     assert r.headers["X-Total-Count"] == "2"
 
 
+async def test_filtra_por_estado_del_pago(app_client) -> None:
+    from pack_commerce.models import Order
+    from sqlalchemy import update
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    _, numeros = await _cliente_con_pedidos(tid, "Ana", [("abierto", 1), ("abierto", 2)])
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            await session.execute(
+                update(Order).where(Order.public_order_number == numeros[1]).values(payment_status="pagado")
+            )
+    headers = await api_headers(app_client, tid)
+
+    pagados = await app_client.get(URL, params={"pago": "pagado"}, headers=headers)
+    pendientes = await app_client.get(URL, params={"pago": "pendiente"}, headers=headers)
+    invalido = await app_client.get(URL, params={"pago": "nada"}, headers=headers)
+
+    assert [f["public_order_number"] for f in pagados.json()] == [numeros[1]]
+    assert [f["public_order_number"] for f in pendientes.json()] == [numeros[0]]
+    assert invalido.status_code == 400
+    assert invalido.json()["error"]["code"] == "invalid_payment_status"
+
+
 async def test_estado_fuera_de_catalogo_responde_400(app_client) -> None:
     tid = await _negocio()
     headers = await api_headers(app_client, tid)

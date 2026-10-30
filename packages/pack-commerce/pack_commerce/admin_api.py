@@ -36,6 +36,7 @@ from .models import Ally, Category, Inventory, Order, OrderItem, Product, Produc
 router = APIRouter(prefix="/api/v1/pack/commerce", tags=["pack · comercio"])
 
 ORDER_STATUSES = ("abierto", "despachado", "entregado", "cancelado", "expirado")
+PAYMENT_STATUSES = ("pendiente", "pagado", "rechazado")
 
 # HU-CRM-01: la foto del producto es un link público. Solo https (WhatsApp la descarga
 # por el link) y con tope de largo.
@@ -1107,6 +1108,7 @@ async def list_orders(
     principal: Annotated[Principal, Depends(require("pack_commerce"))],
     response: Response,
     estado: Annotated[str | None, Query(description="Estado del pedido.")] = None,
+    pago: Annotated[str | None, Query(description="Estado del pago: pendiente, pagado o rechazado.")] = None,
     q: Annotated[
         str | None,
         Query(max_length=120, description="Número de pedido o nombre del cliente."),
@@ -1127,12 +1129,19 @@ async def list_orders(
             f"Estado inválido: {estado}. Válidos: {', '.join(ORDER_STATUSES)}",
             "invalid_status",
         )
+    if pago is not None and pago not in PAYMENT_STATUSES:
+        raise ApiError.bad_request(
+            f"Estado de pago inválido: {pago}. Válidos: {', '.join(PAYMENT_STATUSES)}",
+            "invalid_payment_status",
+        )
     tenant_id = principal.tenant_id
     texto = (q or "").strip()
     async with get_session() as session:
         filtros = [Order.tenant_id == tenant_id]
         if estado is not None:
             filtros.append(Order.status == estado)
+        if pago is not None:
+            filtros.append(Order.payment_status == pago)
         if customer_id is not None:
             filtros.append(Order.customer_id == customer_id)
         if texto:
