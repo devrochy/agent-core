@@ -286,14 +286,14 @@ def _sombra(estado: dict[str, Any] | None, accion: str, args: dict[str, Any] | N
 
 
 def test_sombra_empieza_con_una_accion_de_la_primera_etapa_y_no_guarda_valores() -> None:
-    estado, difs = _sombra(None, "informar_plan", {"variante_id": "premium"})
+    estado, difs = _sombra(None, "consultar_inventario", {"variante_id": "premium"})
     assert difs.get("inicio") == 1 and difs.get("transicion") == 1  # variante_id → sale de elegir_plan
     assert estado is not None and estado["etapa"] == "datos"
     assert "premium" not in json.dumps(estado)
 
 
 def test_sombra_cuenta_acciones_fuera_de_etapa_y_sin_confirmacion() -> None:
-    estado, _ = _sombra(None, "informar_plan")
+    estado, _ = _sombra(None, "consultar_inventario")
     estado, difs = _sombra(estado, "crear_pedido")
     assert difs.get("accion_fuera_de_etapa") == 1
     estado = {**(estado or {}), "etapa": "confirmar", "acciones": []}
@@ -305,7 +305,7 @@ def test_sombra_registra_dato_invalido_y_cierre() -> None:
     estado = {"pid": "pack_commerce.contratar_plan", "v": "1.0.0", "etapa": "datos", "llenos": [], "conds": {}, "acciones": []}
     _, difs = _sombra(dict(estado), "remember_fact", {"correo": "no"})
     assert difs == {}  # acción del core: sin diferencias
-    _, difs = _sombra({**estado, "etapa": "elegir_plan"}, "informar_plan", {"correo": "no-es-correo"})
+    _, difs = _sombra({**estado, "etapa": "elegir_plan"}, "consultar_inventario", {"correo": "no-es-correo"})
     assert difs.get("dato_invalido") == 1
     pagar = {**estado, "etapa": "pagar", "llenos": ["pedido_id"]}
     nuevo, difs = _sombra(pagar, "confirmar_pago_pedido", resultado={"link_pago": "https://pago.co/x"})
@@ -314,7 +314,7 @@ def test_sombra_registra_dato_invalido_y_cierre() -> None:
 
 def test_sombra_sin_tarea_y_accion_ambigua_no_hace_nada() -> None:
     assert _sombra(None, "accion_que_no_existe") == (None, {})
-    assert _sombra(None, "informar_plan", ok=False) == (None, {})
+    assert _sombra(None, "consultar_inventario", ok=False) == (None, {})
 
 
 # ---------------------------------------------------------------- linter y registro

@@ -1,7 +1,7 @@
 """Procedimientos de comercio (HU-AOS-07, ADR-0113 §1): resolvers y resumen de confirmación.
 
 Los procedimientos son datos del pack (`procedures/*.json`, invariante 3): `tomar_pedido`
-(pedido con entrega). Contratar un plan es de pack_subscriptions (SPEC-43). Solo los ejecuta el
+(pedido con entrega). Contratar un plan es del pack de Suscripciones (SPEC-43). Solo los ejecuta el
 motor de procedimientos del core (`tenants.aos_procedures`); con la bandera apagada nada de esto
 corre.
 

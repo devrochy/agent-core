@@ -3,7 +3,7 @@
 Una forma, sobre el catálogo:
 - `catalogo` (agente con `pack_commerce`): categorías y productos con variantes.
 
-Los planes de suscripción ya no son del catálogo: los siembra pack_subscriptions (SPEC-43).
+Los planes de suscripción ya no son del catálogo: los siembra el pack de Suscripciones (SPEC-43).
 
 Los esquemas validan lo que genera el LLM (dato no confiable): topes de cantidad y de largo, sin
 SKU propio (los pone el pack con el sufijo del lote, así nunca chocan con los del negocio) y sin

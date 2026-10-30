@@ -14,9 +14,10 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[1]
 MINIMO = 2
-# Procedimiento → escenarios que tiene hoy (2026-10-25).
+# Procedimiento → escenarios que tiene hoy (2026-10-30). `pack_subscriptions.contratar_plan` ya tiene 2
+# (los journeys 01 y 02 de `procedimientos/`, que antes declaraban el de commerce: SPEC-43, HU-COM-17);
+# sus pasos de verificación se ajustan al regrabarlos con LLM real y OK del dueño.
 PENDIENTES = {
-    "pack_subscriptions.contratar_plan": 0,  # SPEC-43: los escenarios se graban con LLM real y OK del dueño
     "pack_subscriptions.cambiar_plan": 0,
     "pack_cobranza.promesa_de_pago": 0,
     "pack_commerce.tomar_pedido": 1,

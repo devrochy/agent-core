@@ -27,7 +27,7 @@ from core.kernel.tarjeta import RotulosInvalidos
 
 RAIZ = Path(__file__).resolve().parents[1]
 GOLDEN = RAIZ / "tests" / "fixtures" / "ruteo" / "golden.jsonl"
-PLAN = "pack_commerce.contratar_plan"
+PLAN = "pack_subscriptions.contratar_plan"
 CAMBIO = "pack_subscriptions.cambiar_plan"
 CITA = "pack_calendar.agendar_cita"
 PROMESA = "pack_cobranza.promesa_de_pago"

@@ -11,12 +11,12 @@
     {
       "id": "informar",
       "goal": "Responder con los planes y precios reales del catálogo",
-      "actions": ["informar_plan", "consultar_inventario"]
+      "actions": ["consultar_inventario"]
     }
   ],
   "recovery": { "actionError": "explicar_y_reintentar_una_vez", "timeout": "relevo_humano" },
   "claims": [
-    { "kind": "amount", "mustMatch": ["action:informar_plan.precio"] }
+    { "kind": "amount", "mustMatch": ["action:consultar_inventario.price"] }
   ],
   "evals": ["planes-precio-premium", "planes-compara-basico-premium"]
 }

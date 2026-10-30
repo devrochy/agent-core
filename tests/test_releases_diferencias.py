@@ -22,7 +22,13 @@ AGENDA = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
 
 def _proc(pack: str, nombre: str, **cambios: Any) -> Procedure:
-    datos = json.loads((RAIZ / "packages" / pack / "procedures" / f"{nombre}.json").read_text(encoding="utf-8"))
+    # `contratar_plan` de commerce se retiró (SPEC-43): su última versión queda como fixture para
+    # medir las diferencias entre releases con un procedimiento de ventas más.
+    if (pack, nombre) == ("pack-commerce", "contratar_plan"):
+        ruta = RAIZ / "tests" / "fixtures" / "procedures" / "contratar_plan_comercio.json"
+    else:
+        ruta = RAIZ / "packages" / pack / "procedures" / f"{nombre}.json"
+    datos = json.loads(ruta.read_text(encoding="utf-8"))
     datos.update(cambios)
     return Procedure.model_validate(datos)
 

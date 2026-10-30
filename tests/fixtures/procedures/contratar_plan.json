@@ -19,7 +19,7 @@
   },
   "stages": [
     { "id": "elegir_plan", "goal": "Que el cliente elija plan y periodicidad con precios reales",
-      "actions": ["informar_plan", "consultar_inventario"], "exitWhen": { "slots": ["variante_id"] } },
+      "actions": ["consultar_inventario"], "exitWhen": { "slots": ["variante_id"] } },
     { "id": "datos", "goal": "Pedir y confirmar el correo de facturación",
       "actions": [], "exitWhen": { "slots": ["correo"], "confirmed": ["correo"] } },
     { "id": "confirmar", "goal": "Mostrar el total del servidor y pedir confirmación explícita",
@@ -31,7 +31,7 @@
   "completion": { "events": ["core.payment.confirmed", "pack_commerce.pedido_free_confirmado"], "returnControl": true },
   "recovery": { "actionError": "explicar_y_reintentar_una_vez", "timeout": "relevo_humano" },
   "claims": [
-    { "kind": "amount", "mustMatch": ["action:informar_plan.precio", "action:generar_cotizacion.total"] },
+    { "kind": "amount", "mustMatch": ["action:consultar_inventario.price", "action:generar_cotizacion.total"] },
     { "kind": "link", "mustMatch": ["slot:link_pago"] },
     { "kind": "status", "phrases": ["pedido creado", "quedó registrado"], "requires": "slot:pedido_id" }
   ],

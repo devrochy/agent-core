@@ -38,8 +38,14 @@ class _FakeCap:
     async def cancel(self, subscription_id, *, reason="", actor=""):
         return {"subscription_id": str(subscription_id), "estado": "cancelada"}
 
-    async def change_plan(self, subscription_id, *, variant_id, plan):
+    async def change_plan(self, subscription_id, *, plan_id, plan, **_kw):
         return {"subscription_id": str(subscription_id), "estado": "activa", "plan": plan["nombre"]}
+
+    async def plan_por_codigo(self, codigo):
+        if codigo != "PLAN-PREMIUM":
+            return None
+        return {"plan_code": "PLAN-PREMIUM", "plan_id": "plan-premium", "nombre": "Premium", "precio": 600000.0,
+                "moneda": "COP", "periodicidad": "mensual", "trial_dias": 0}
 
 
 @pytest.fixture()
@@ -121,33 +127,13 @@ async def test_sub_pausar_y_cancelar_despachan(fake_cap) -> None:
     assert (await skill.cancelar({}, _ctx()))["estado"] == "cancelada"
 
 
-class _CatalogoFalso:
-    provider_id = "pack_commerce"
-
-    async def plan_por_codigo(self, codigo):
-        if codigo != "PLAN-PREMIUM":
-            return None
-        return "var-premium", {"plan_code": "PLAN-PREMIUM", "nombre": "Premium", "precio": 600000.0,
-                               "moneda": "COP", "periodicidad": "mensual", "trial_dias": 0}
-
-
-@pytest.fixture()
-def catalogo(monkeypatch):
-    from core.subscriptions import plan_catalog_registry
-
-    async def _para_negocio(_tid):
-        return _CatalogoFalso()
-
-    monkeypatch.setattr(plan_catalog_registry, "para_negocio", _para_negocio)
-
-
 @pytest.mark.asyncio
-async def test_sub_cambiar_plan_usa_el_precio_del_catalogo(fake_cap, catalogo) -> None:
+async def test_sub_cambiar_plan_usa_el_precio_del_catalogo(fake_cap) -> None:
     """HU-SUB-07 (ADR-0111): el precio que mande el LLM se ignora; manda el catálogo."""
     recibido = {}
 
-    async def _change_plan(subscription_id, *, variant_id, plan):
-        recibido.update(variant_id=variant_id, plan=plan)
+    async def _change_plan(subscription_id, *, plan_id, plan, **_kw):
+        recibido.update(plan_id=plan_id, plan=plan)
         return {"subscription_id": str(subscription_id), "estado": "activa", "plan": "Basic",
                 "cambio": "pendiente_pago",
                 "cargo_cambio": {"monto": 200000.0, "link": "https://pagos/x", "referencia": "sub-1"}}
@@ -156,13 +142,13 @@ async def test_sub_cambiar_plan_usa_el_precio_del_catalogo(fake_cap, catalogo) -
     resultado = await tools_mod.SubscriptionSkill().cambiar_plan(
         {"plan_code": "PLAN-PREMIUM", "precio": 0, "nombre": "Gratis"}, _ctx()
     )
-    assert recibido["variant_id"] == "var-premium"
+    assert recibido["plan_id"] == "plan-premium"
     assert recibido["plan"]["precio"] == 600000.0
     assert "https://pagos/x" in resultado["_safe_append"]
 
 
 @pytest.mark.asyncio
-async def test_sub_cambiar_plan_a_un_plan_que_no_existe(fake_cap, catalogo) -> None:
+async def test_sub_cambiar_plan_a_un_plan_que_no_existe(fake_cap) -> None:
     from core.subscriptions import SubscriptionError
 
     with pytest.raises(SubscriptionError) as exc:

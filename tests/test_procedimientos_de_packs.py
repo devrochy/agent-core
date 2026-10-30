@@ -227,7 +227,7 @@ def test_horario_ofrecido_solo_si_esta_en_los_libres_del_servidor() -> None:
 def _sub(**campos: Any) -> Any:
     ahora = datetime.now(UTC)
     base = {
-        "variante_id": uuid.uuid4(), "estado": "activa", "valor_periodo": Decimal("200000"), "periodicidad": "mensual",
+        "plan_id": uuid.uuid4(), "estado": "activa", "valor_periodo": Decimal("200000"), "periodicidad": "mensual",
         "periodo_actual_inicio": ahora - timedelta(days=15), "proximo_cargo": ahora + timedelta(days=15),
         "dia_ancla": 1, "moneda": "COP",
     }
@@ -244,22 +244,22 @@ def test_evaluar_cambio_upgrade_prorrateado_downgrade_programado_y_rechazos() ->
 
     ahora = datetime.now(UTC)
     sub = _sub()
-    up = evaluar_cambio(sub, variant_id=str(uuid.uuid4()), plan=PREMIUM, ahora=ahora)
+    up = evaluar_cambio(sub, plan_id=str(uuid.uuid4()), plan=PREMIUM, ahora=ahora)
     assert (up.cambio, up.monto) == ("pendiente_pago", Decimal("200000"))  # 400.000 × 15/30
-    down = evaluar_cambio(_sub(valor_periodo=Decimal("600000")), variant_id=str(uuid.uuid4()),
+    down = evaluar_cambio(_sub(valor_periodo=Decimal("600000")), plan_id=str(uuid.uuid4()),
                           plan={**PREMIUM, "precio": 200000.0}, ahora=ahora)
     assert (down.cambio, down.monto) == ("programado", Decimal("0"))
-    igual = evaluar_cambio(sub, variant_id=str(uuid.uuid4()), plan={**PREMIUM, "precio": 200000.0}, ahora=ahora)
+    igual = evaluar_cambio(sub, plan_id=str(uuid.uuid4()), plan={**PREMIUM, "precio": 200000.0}, ahora=ahora)
     assert igual.cambio == "inmediato"
     with pytest.raises(SubscriptionError) as exc:
-        evaluar_cambio(sub, variant_id=str(sub.variante_id), plan=PREMIUM, ahora=ahora)
+        evaluar_cambio(sub, plan_id=str(sub.plan_id), plan=PREMIUM, ahora=ahora)
     assert exc.value.code == "mismo_plan"
     for sub_mala, plan, codigo in (
         (_sub(estado="pausada"), PREMIUM, "estado_no_permite_cambio"),
         (sub, {**PREMIUM, "periodicidad": "anual"}, "periodicidad_distinta"),
     ):
         with pytest.raises(SubscriptionError) as exc:
-            evaluar_cambio(sub_mala, variant_id=str(uuid.uuid4()), plan=plan, ahora=ahora)
+            evaluar_cambio(sub_mala, plan_id=str(uuid.uuid4()), plan=plan, ahora=ahora)
         assert exc.value.code == codigo
 
 

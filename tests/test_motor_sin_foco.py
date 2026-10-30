@@ -42,15 +42,21 @@ PEDIDO = "pack_commerce.tomar_pedido"
 
 
 def _publicado(pack: str, nombre: str) -> Procedure:
-    ruta = ROOT / "packages" / pack / "procedures" / f"{nombre}.json"
+    # `contratar_plan` de commerce se retiró (SPEC-43): su última versión queda como fixture del motor
+    # (sus puertas `confirmar_cotizacion`/`crear_pedido`), que es lo que estas pruebas ejercitan.
+    if (pack, nombre) == ("pack-commerce", "contratar_plan"):
+        ruta = ROOT / "tests" / "fixtures" / "procedures" / "contratar_plan_comercio.json"
+    else:
+        ruta = ROOT / "packages" / pack / "procedures" / f"{nombre}.json"
     return Procedure.model_validate(json.loads(ruta.read_text(encoding="utf-8")))
 
 
 def _todos() -> list[Procedure]:
-    return [
+    publicados = [
         Procedure.model_validate(json.loads(p.read_text(encoding="utf-8")))
         for p in sorted(ROOT.glob("packages/pack-*/procedures/*.json"))
     ]
+    return [*publicados, _publicado("pack-commerce", "contratar_plan")]
 
 
 async def _nada(args: dict[str, Any], ctx: Any) -> dict[str, Any]:

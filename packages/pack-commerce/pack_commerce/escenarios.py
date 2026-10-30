@@ -3,7 +3,7 @@
 - `clientes-y-pedidos`: un lead por cliente (estado e interés), pedidos pendiente, pagado y
   cancelado sobre el catálogo de «Preparar mis datos» y una promoción.
 
-El escenario `planes-de-suscripcion` es de pack_subscriptions (SPEC-43).
+El escenario `planes-de-suscripcion` es del pack de Suscripciones (SPEC-43).
 
 El contenido sale de `presets/escenarios.json`. Determinista y aditivo: cada caso usa claves de
 idempotencia con su sufijo. Nada se cobra ni se envía: los pedidos no llevan link de pago y el

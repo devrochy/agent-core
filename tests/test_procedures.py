@@ -163,7 +163,7 @@ def _mutar(raw: dict[str, Any], cambio: str) -> None:
         case "confirmacion_sin_dato":
             stages[0]["exitWhen"]["confirmed"] = ["variante_id"]
         case "accion_fuera_de_etapa":
-            stages[1]["exitWhen"] = {"action": "informar_plan"}
+            stages[1]["exitWhen"] = {"action": "consultar_inventario"}
         case "accion_fuera_de_etapas":
             slots["cotizacion_id"]["setBy"] = "action:aplicar_promocion"
         case "prefijo_interactivo_repetido":
@@ -396,7 +396,7 @@ async def test_conversion_del_flujo_compuesto_real_sin_cambiar_acciones(
     propia del negocio + un override de una sección de pack → un procedimiento abierto
     por sección, con exactamente las mismas acciones."""
     propias = [
-        FlowSection(id="planes", label="Planes", purpose="Planes del negocio", pack="tenant", tools=["informar_plan"]),
+        FlowSection(id="planes", label="Planes", purpose="Planes del negocio", pack="tenant", tools=["consultar_inventario"]),
         # Override real de `pack_commerce:cotizacion`: trae una tool de otra sección.
         FlowSection(
             id="cotizacion",
@@ -530,7 +530,7 @@ def test_endpoint_valido_y_con_errores(client) -> None:
     assert body["errors"] == [
         {
             "code": "accion_inexistente",
-            "path": "stages[0].actions[2]",
+            "path": "stages[0].actions[1]",
             "message": "La acción 'vender_humo' no existe: ni el core ni ninguna habilidad la trae.",
         }
     ]

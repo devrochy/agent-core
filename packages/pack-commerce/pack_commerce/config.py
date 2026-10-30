@@ -11,7 +11,7 @@ from core.mcp.types import BasePluginConfig
 
 _PREFIJO = re.compile(r"^[A-Za-z0-9]{1,8}$")
 # `business_name` y `vertical` se siguen aceptando por compatibilidad con configuraciones ya
-# guardadas (antes los pedía el pedido de un plan; hoy los planes son de pack_subscriptions).
+# guardadas (antes los pedía el pedido de un plan; hoy los planes son del pack de Suscripciones).
 _CAMPOS_VALIDOS = {
     "full_name", "id_document", "address", "municipality", "city", "phone", "email",
     "business_name", "vertical",

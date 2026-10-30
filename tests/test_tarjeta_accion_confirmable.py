@@ -16,7 +16,7 @@ from core.kernel.tarjeta import renderizar_tarjeta
 T0 = datetime(2026, 10, 20, 5, 14, tzinfo=UTC)
 RAIZ = Path(__file__).resolve().parents[1]
 PLAN = Procedure.model_validate(
-    json.loads((RAIZ / "packages/pack-commerce/procedures/contratar_plan.json").read_text(encoding="utf-8"))
+    json.loads((RAIZ / "tests/fixtures/procedures/contratar_plan_comercio.json").read_text(encoding="utf-8"))
 )
 
 

@@ -3,7 +3,7 @@
 Una plantilla sobre el catálogo:
 - `productos` (forma `catalogo`): SKU, nombre, precio, categoría, descripción y stock.
 
-Importar planes por CSV ya no está en Comercio: los planes son de pack_subscriptions (SPEC-43) y
+Importar planes por CSV ya no está en Comercio: los planes son del pack de Suscripciones (SPEC-43) y
 su importación queda para una HU aparte.
 
 La clave es el SKU, que es único por negocio. Un SKU de un producto vivo ya existe y no se toca; el de

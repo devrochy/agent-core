@@ -24,7 +24,6 @@ from core.qa.datos_generados import ErrorDatosDePrueba
 from core.qa.importar_datos import leer_archivo, plantilla_csv, validar
 
 PRODUCTOS = next(p for p in plantillas_comercio() if p.id == "productos")
-PLANES = next(p for p in plantillas_comercio() if p.id == "planes")
 TIPOS = plantillas_agenda()[0]
 CARTERA = plantillas_cobranza()[0]
 
@@ -76,7 +75,7 @@ def test_entero_y_fecha() -> None:
 
 
 def test_plantilla_descargable_trae_cabeceras_y_ejemplos_validos() -> None:
-    for plantilla in (PRODUCTOS, PLANES, TIPOS, CARTERA):
+    for plantilla in (PRODUCTOS, TIPOS, CARTERA):
         contenido = plantilla_csv(plantilla)
         assert contenido.startswith(b"\xef\xbb\xbf")  # BOM: Excel respeta las tildes
         archivo = leer_archivo(contenido, plantilla)
@@ -161,17 +160,12 @@ def test_prestamo_incompleto_o_incoherente() -> None:
     assert filas[5].errores[0][0] == "numero_documento"
 
 
-def test_planes_y_productos() -> None:
-    planes = validar(
-        leer_archivo(
-            b"sku,nombre,precio,periodicidad,dias_de_prueba\r\nP1,Basico,49.000,Mes,7\r\nP2,Anual,490000,trimestral,0\r\n",
-            PLANES,
-        ),
-        PLANES,
-    )
-    assert planes[0].datos is not None and planes[0].datos.periodicidad == "mensual"  # type: ignore[union-attr]
-    assert planes[0].datos.precio == Decimal("49000.00")  # type: ignore[union-attr]
-    assert planes[1].errores[0][0] == "periodicidad"
+def test_comercio_ya_no_importa_planes_solo_productos() -> None:
+    """HU-COM-17: los planes son de Suscripciones; importarlos por CSV queda para una HU aparte."""
+    assert [p.id for p in plantillas_comercio()] == ["productos"]
+
+
+def test_validacion_de_productos() -> None:
     productos = validar(
         leer_archivo(b"sku,nombre,precio,categoria\r\nA1,Cera,-5,\r\nA2,Aceite,1000,Barba > Aceites\r\nA3,Gel,10,\r\n", PRODUCTOS),
         PRODUCTOS,

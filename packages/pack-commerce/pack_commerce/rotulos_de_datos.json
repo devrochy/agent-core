@@ -1,11 +1,5 @@
 {
-  "full_name": "Nombre completo",
-  "id_document": "Documento",
-  "email": "Correo",
-  "phone": "Teléfono",
   "address": "Dirección",
-  "municipality": "Barrio o municipio",
-  "city": "Ciudad",
   "payment_method": "Forma de pago",
   "payment_method.pago_en_linea": "Pago en línea",
   "payment_method.transferencia": "Transferencia",

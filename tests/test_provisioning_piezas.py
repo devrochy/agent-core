@@ -264,63 +264,18 @@ def test_invitacion_vence_en_siete_dias() -> None:
     assert VIGENCIA_ENLACE.days == 7
 
 
-# ------------------------------------------------------------------ checkout del plan (pack_commerce)
-def test_checkout_de_un_plan_acepta_negocio_y_vertical() -> None:
-    from pack_commerce.config import CRMConfig
-
-    cfg = CRMConfig(
-        checkout_fields={"plan": ["full_name", "email", "phone", "business_name", "vertical"]}
-    )
-    assert "vertical" in cfg.checkout_fields["plan"]
-
-
-def test_la_tool_crear_pedido_declara_los_datos_del_alta_sin_cambiar_con_los_presets() -> None:
-    """ADR-0129 (enmienda ADR-0121): `business_name`, `vertical` y `acepta_terminos` van en el
-    schema, opcionales y sin enum: la tool es la misma para todos los negocios y no cambia con
-    los presets. Qué es obligatorio lo decide `checkout_fields.plan` y la tool los valida."""
+# ------------------------------------------------------------------ checkout (pack_commerce)
+def test_la_tool_crear_pedido_ya_no_declara_los_datos_del_alta() -> None:
+    """HU-COM-17 (SPEC-43): `business_name`, `vertical` y `acepta_terminos` eran del pedido de un plan;
+    ahora el alta la pide Suscripciones, así que `crear_pedido` no los declara."""
     from pack_commerce.skills import OrderSkill
 
     tool = next(t for t in OrderSkill().get_tools() if t.name == "crear_pedido")
     datos = tool.parameters["properties"]["customer_data"]
     for campo in ("business_name", "vertical", "acepta_terminos"):
-        assert datos["properties"][campo]["type"] == "string"
-        assert datos["properties"][campo]["description"]
-        assert "enum" not in datos["properties"][campo]
+        assert campo not in datos["properties"]
     assert "required" not in datos
-    assert datos.get("additionalProperties") is not False
     assert tool.parameters["required"] == ["quote_id", "payment_method", "customer_data"]
-
-
-def test_datos_alta_del_checkout_solo_guarda_lo_que_hay() -> None:
-    from pack_commerce.skills import _datos_alta
-
-    datos = _datos_alta(
-        {
-            "email": " Ana@Correo.co ",
-            "phone": "+57 300 000 0000",
-            "business_name": "  Pizzería   Roma ",
-            "vertical": "restaurante",
-            "full_name": "Ana",
-        }
-    )
-    assert datos == {
-        "email": "ana@correo.co",
-        "telefono": "+57 300 000 0000",
-        "negocio": "Pizzería Roma",
-        "vertical": "restaurante",
-    }
-    assert _datos_alta({}) is None
-
-
-def test_vertical_invalido_se_rechaza_con_las_opciones() -> None:
-    from pack_commerce.skills import _vertical_invalido
-
-    assert _vertical_invalido("restaurante") is None
-    assert _vertical_invalido("") is None  # no es obligatorio salvo que el negocio lo pida
-    rechazo = _vertical_invalido("Restaurante de comida rápida")
-    assert rechazo is not None
-    assert rechazo["field"] == "vertical"
-    assert {o["id"] for o in rechazo["opciones"]} >= {"restaurante", "comercio"}
 
 
 # ------------------------------------------------------------------ fuente de datos de alta

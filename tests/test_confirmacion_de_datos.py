@@ -29,7 +29,7 @@ def _plan_con_correo_confirmado() -> Procedure:
     """`contratar_plan` con la confirmación aparte del correo en `datos`, como en 1.1.0: el
     mecanismo del kernel sigue para los procedimientos que confirman un dato por separado. Desde
     1.2.0 (adenda 2026-10-13) el plan lo confirma dentro del resumen único."""
-    crudo = json.loads((RAIZ / "packages/pack-commerce/procedures/contratar_plan.json").read_text(encoding="utf-8"))
+    crudo = json.loads((RAIZ / "tests/fixtures/procedures/contratar_plan_comercio.json").read_text(encoding="utf-8"))
     for etapa in crudo["stages"]:
         if etapa["id"] == "datos":
             etapa["exitWhen"]["confirmed"] = ["email"]

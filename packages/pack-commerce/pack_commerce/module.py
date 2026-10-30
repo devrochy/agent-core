@@ -1059,7 +1059,7 @@ async def order_update_status(request: Request, order_id: uuid.UUID, status: str
 class CRMModule(BaseModule):
     id = PLUGIN_ID
     name = "CRM"
-    version = "2.5.0"
+    version = "3.0.0"
     description = "Leads, catálogo (menú), promociones y pedidos para el negocio"
     display_name = "Comercio"
     category = "Ventas"
@@ -1100,7 +1100,7 @@ class CRMModule(BaseModule):
         return await seed_catalog(tenant_id, data)
 
     def formas_de_datos_de_prueba(self) -> list[FormaDeDatos]:
-        """Catálogo del agente de ventas (HU-QA-10). Los planes son de pack_subscriptions."""
+        """Catálogo del agente de ventas (HU-QA-10). Los planes son del pack de Suscripciones."""
         from pack_commerce.datos_de_prueba import formas
 
         return formas()
@@ -1390,7 +1390,7 @@ class CRMModule(BaseModule):
         # base para localizar el pedido.
         base_reference = reference.split("-r", 1)[0] if "-r" in reference else reference
 
-        # `sub-<cargo>` es un cobro de suscripción (pack_subscriptions) y `sub-<tenant>-…` uno de
+        # `sub-<cargo>` es un cobro de suscripción (pack de Suscripciones) y `sub-<tenant>-…` uno de
         # la plataforma: nunca es un pedido de este pack. Se ignora sin alarma (HU-COM-17).
         if reference.startswith("sub-"):
             return

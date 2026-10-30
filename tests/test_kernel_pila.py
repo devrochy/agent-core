@@ -25,7 +25,7 @@ from core.kernel.ruteo_sombra import metricas_de_pila
 from core.kernel.tarjeta import RotulosInvalidos
 
 GOLDEN_PILA = Path(__file__).resolve().parent / "fixtures" / "ruteo" / "golden_pila.jsonl"
-PLAN = "pack_commerce.contratar_plan"
+PLAN = "pack_subscriptions.contratar_plan"
 CITA = "pack_calendar.agendar_cita"
 
 
