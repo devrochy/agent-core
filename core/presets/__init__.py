@@ -189,6 +189,12 @@ class PlantillaAgente(BaseModel):
     # Guion del asistente de creación (HU-AOS-48): máximo 10 pasos entre preguntas y verificaciones;
     # el asistente suma identidad, conexión, verificación del contenido y publicación.
     preguntas: list[PreguntaDePlantilla] = Field(default_factory=list, max_length=8)
+    # Ids de preguntas que el guion ya no hace (SPEC-43, HU-COM-17: `que_vendes` de Ventas). Los
+    # clientes viejos (panel y APK de antes) todavía las envían: el servidor las IGNORA en vez de
+    # rechazarlas con 422 y no cambian nada. Nunca coinciden con una pregunta vigente.
+    preguntas_retiradas: list[Annotated[str, Field(pattern=r"^[a-z0-9_]{1,40}$")]] = Field(
+        default_factory=list, max_length=8
+    )
 
     @model_validator(mode="after")
     def _coherente(self) -> PlantillaAgente:
@@ -208,6 +214,9 @@ class PlantillaAgente(BaseModel):
         ids = [q.id for q in self.preguntas]
         if len(set(ids)) != len(ids):
             raise ValueError("preguntas con id repetido")
+        repetidas = sorted(set(ids) & set(self.preguntas_retiradas))
+        if repetidas:
+            raise ValueError(f"preguntas vigentes y retiradas a la vez: {repetidas}")
         if sum(q.tipo == "texto" for q in self.preguntas) > 1:
             raise ValueError("solo una pregunta de texto (el nombre del agente)")
         for q in self.preguntas:

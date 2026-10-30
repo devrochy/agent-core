@@ -93,7 +93,7 @@ ON_PLATFORM_PERIOD_PAID = "platform.period_paid"
 ON_PLATFORM_RENEWAL_DUE = "platform.renewal_due"
 # HU-AOS-07 (cierre por pago, decisión del dueño 2026-10-11): pack-commerce lo escribe en el
 # outbox en la misma transacción en que un pedido pasa a `pagado` (ya validado el monto contra
-# el total). Cierra las tareas de `contratar_plan` y `tomar_pedido` que esperan el pago, por el
+# el total). Cierra las tareas de `tomar_pedido` que esperan el pago, por el
 # `order_id` que fijó `crear_pedido`. payload: order_id, public_order_number.
 ON_ORDER_PAID = "order.paid"
 # Centro de notificaciones (ADR-0167): se escribe en el outbox junto con la fila de

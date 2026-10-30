@@ -1,7 +1,7 @@
 {
   "key": "ventas",
   "nombre": "Ventas",
-  "descripcion": "Vende el catálogo del negocio: pedidos, cotizaciones, planes y links de pago.",
+  "descripcion": "Vende el catálogo del negocio: pedidos, cotizaciones y links de pago.",
   "seccion": "Ventas",
   "habilidades": [
     "pack_commerce"
@@ -10,8 +10,7 @@
     "pack_payments"
   ],
   "procedimientos": [
-    "pack_commerce.tomar_pedido",
-    "pack_commerce.contratar_plan"
+    "pack_commerce.tomar_pedido"
   ],
   "playbooks": [
     "ventas",
@@ -19,40 +18,6 @@
     "pagos"
   ],
   "preguntas": [
-    {
-      "id": "que_vendes",
-      "texto": "¿Qué vende tu negocio?",
-      "ayuda": "Define qué superpoder tendrá tu agente: tomar pedidos de productos, contratar planes, o los dos.",
-      "tipo": "opcion",
-      "defecto": "productos",
-      "opciones": [
-        {
-          "id": "productos",
-          "texto": "Productos",
-          "ayuda": "Toma el pedido: ítems, entrega y pago.",
-          "procedimientos": [
-            "pack_commerce.tomar_pedido"
-          ]
-        },
-        {
-          "id": "planes",
-          "texto": "Planes o suscripciones",
-          "ayuda": "Contrata el plan que elige el cliente.",
-          "procedimientos": [
-            "pack_commerce.contratar_plan"
-          ]
-        },
-        {
-          "id": "ambos",
-          "texto": "Productos y planes",
-          "ayuda": "Los dos superpoderes.",
-          "procedimientos": [
-            "pack_commerce.tomar_pedido",
-            "pack_commerce.contratar_plan"
-          ]
-        }
-      ]
-    },
     {
       "id": "largo_respuesta",
       "texto": "¿Qué tan largas quieres sus respuestas?",
@@ -79,6 +44,9 @@
         }
       ]
     }
+  ],
+  "preguntas_retiradas": [
+    "que_vendes"
   ],
   "reglas": [
     {

@@ -36,12 +36,14 @@ class RespuestasInvalidas(ValueError):
 def resolver(plantilla: PlantillaAgente, respuestas: Mapping[str, Any]) -> Ajustes:
     """Valida las `respuestas` (`id de la pregunta` → id de la opción, o texto) contra el guion de la
     plantilla y devuelve sus ajustes. Una pregunta sin respuesta usa su `defecto`; una de texto sin
-    respuesta no cambia nada. Lanza `RespuestasInvalidas` sin aplicar nada si alguna no vale."""
+    respuesta no cambia nada. La respuesta a una pregunta retirada (`preguntas_retiradas`) se ignora.
+    Lanza `RespuestasInvalidas` sin aplicar nada si alguna no vale."""
     conocidas = {q.id for q in plantilla.preguntas}
+    retiradas = set(plantilla.preguntas_retiradas)
     errores = {
         str(clave): "Esta pregunta no existe para este tipo de agente."
         for clave in respuestas
-        if clave not in conocidas
+        if clave not in conocidas and clave not in retiradas
     }
     elegidos: set[str] = set()
     declara = False
