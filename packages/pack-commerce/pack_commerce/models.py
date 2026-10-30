@@ -72,7 +72,37 @@ class Lead(TenantMixin, Base):
     status: Mapped[str] = mapped_column(Text, default="nuevo")      # nuevo|calificado|contactado|convertido|perdido
     idempotency_key: Mapped[str | None] = mapped_column(Text)
     last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Desde cuándo está en la etapa actual (HU-CRM-18). NULL en los leads anteriores: no se inventa.
+    stage_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LeadStageChange(TenantMixin, Base):
+    """Un cambio de etapa de un lead: etapa anterior y nueva, quién lo hizo y cuándo (HU-CRM-18).
+
+    Solo la escribe `pack_commerce.etapas.cambiar_etapa`. `customer_id` va copiado del lead porque
+    la línea de tiempo de la ficha consulta por cliente."""
+
+    __tablename__ = "pack_commerce_lead_stage_changes"
+    __table_args__ = (
+        Index(
+            "uq_pack_commerce_lead_stage_changes_tenant_idem",
+            "tenant_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key is not null"),
+        ),
+        Index("ix_pack_commerce_lead_stage_changes_cliente", "tenant_id", "customer_id", "changed_at", "id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))  # FK lógica a pack_commerce_leads
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    from_stage: Mapped[str] = mapped_column(Text)  # puede ser texto libre de un lead anterior a la HU
+    to_stage: Mapped[str] = mapped_column(Text)  # una de las cinco etapas (CHECK en la migración)
+    actor: Mapped[str] = mapped_column(Text)  # agente | persona | sistema
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 # ------------------------------------------------------------------ catálogo
