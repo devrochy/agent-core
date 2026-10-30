@@ -1982,6 +1982,18 @@
               ],
               "title": "X-Device-Id"
             }
+          },
+          {
+            "name": "dias",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "description": "Ventana del Resumen en días: 7, 15 o 30.",
+              "default": 7,
+              "title": "Dias"
+            },
+            "description": "Ventana del Resumen en días: 7, 15 o 30."
           }
         ],
         "responses": {
@@ -4374,6 +4386,29 @@
               ],
               "title": "X-Device-Id"
             }
+          },
+          {
+            "name": "estado",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pendiente",
+                    "asignada",
+                    "resuelta"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtra por estado de la escalación",
+              "title": "Estado"
+            },
+            "description": "Filtra por estado de la escalación"
           }
         ],
         "responses": {
@@ -59280,6 +59315,27 @@
             },
             "type": "array",
             "title": "Modulos"
+          },
+          "serie": {
+            "items": {
+              "$ref": "#/components/schemas/PuntoActividadOut"
+            },
+            "type": "array",
+            "title": "Serie",
+            "description": "Serie diaria cero-rellena del período (días calendario del negocio)."
+          },
+          "ultima_actividad": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ultima Actividad",
+            "description": "Último turno del agente dentro del período."
           }
         },
         "type": "object",
@@ -65884,6 +65940,10 @@
             "type": "string",
             "format": "date-time",
             "title": "Previo Hasta"
+          },
+          "dias": {
+            "type": "integer",
+            "title": "Dias"
           }
         },
         "type": "object",
@@ -65891,7 +65951,8 @@
           "desde",
           "hasta",
           "previo_desde",
-          "previo_hasta"
+          "previo_hasta",
+          "dias"
         ],
         "title": "PeriodoOut"
       },
@@ -72603,6 +72664,43 @@
         ],
         "title": "LeadUbicacionInversa",
         "description": "Coordenadas que manda el mapa táctil de la ficha."
+      },
+      "PuntoActividadOut": {
+        "properties": {
+          "fecha": {
+            "type": "string",
+            "format": "date",
+            "title": "Fecha"
+          },
+          "turnos": {
+            "type": "integer",
+            "title": "Turnos"
+          },
+          "conversaciones": {
+            "type": "integer",
+            "title": "Conversaciones"
+          },
+          "costo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Costo",
+            "description": "Costo del día en USD; `null` sin la sección `costs`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "fecha",
+          "turnos",
+          "conversaciones",
+          "costo"
+        ],
+        "title": "PuntoActividadOut"
       }
     }
   }

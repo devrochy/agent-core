@@ -29,8 +29,9 @@ import logging
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import case, func, select, text
 
@@ -47,6 +48,7 @@ from core.billing.tipos_de_uso import NO_ES_ACTIVIDAD
 from core.db.models import (
     AgentInstanceRecord,
     AgentRecord,
+    AppSettings,
     Conversation,
     ConversationTask,
     Escalation,
@@ -59,8 +61,7 @@ from core.shared.test_mode import TEST_CHANNEL
 
 log = logging.getLogger(__name__)
 
-VENTANA = timedelta(days=7)
-VERSUS_POR_DEFECTO = "los 7 días anteriores"
+DIAS_VALIDOS = (7, 15, 30)
 ESTADOS_ABIERTOS = ("active", "suspended")
 REF_GENERAL = KEY_GENERAL
 
@@ -77,12 +78,20 @@ class Acceso:
     modulos: frozenset[str] = field(default_factory=frozenset)
 
 
-def periodo(ahora: datetime | None = None) -> PeriodoResumen:
+def periodo(ahora: datetime | None = None, dias: int = 7) -> PeriodoResumen:
+    """Ventana de `dias` (7, 15 o 30) y la inmediata anterior de la misma duración."""
+    if dias not in DIAS_VALIDOS:
+        raise ValueError(f"dias fuera de rango: {dias}")
     hasta = ahora or datetime.now(UTC)
-    desde = hasta - VENTANA
+    ventana = timedelta(days=dias)
+    desde = hasta - ventana
     return PeriodoResumen(
-        desde=desde, hasta=hasta, previo_desde=desde - VENTANA, previo_hasta=desde
+        desde=desde, hasta=hasta, previo_desde=desde - ventana, previo_hasta=desde
     )
+
+
+def _versus(dias: int) -> str:
+    return f"los {dias} días anteriores"
 
 
 def _exigir_scope(tenant_id: uuid.UUID) -> None:
@@ -90,7 +99,7 @@ def _exigir_scope(tenant_id: uuid.UUID) -> None:
         raise PermissionError("resumen: fuera del tenant_scope del negocio")
 
 
-def _kpi_a_dict(k: Kpi) -> dict[str, Any]:
+def _kpi_a_dict(k: Kpi, dias: int = 7) -> dict[str, Any]:
     return {
         "id": k.id,
         "label": k.label,
@@ -100,7 +109,7 @@ def _kpi_a_dict(k: Kpi) -> dict[str, Any]:
         "delta_pct": k.delta_pct,
         "polaridad": k.polaridad,
         "hint": k.hint,
-        "versus": k.versus or (VERSUS_POR_DEFECTO if k.previo is not None else None),
+        "versus": k.versus or (_versus(dias) if k.previo is not None else None),
         "destino": {"ruta": k.destino.ruta, "params": dict(k.destino.params)}
         if k.destino
         else None,
@@ -159,7 +168,7 @@ async def _general(
                 previo=float(
                     await _conversaciones(session, tenant_id, p.previo_desde, p.previo_hasta)
                 ),
-                hint="Últimos 7 días",
+                hint=f"Últimos {p.dias} días",
                 destino=Destino("conversaciones"),
             )
         )
@@ -210,7 +219,7 @@ async def _general(
                 unidad="usd",
                 previo=await _costo(session, tenant_id, p.previo_desde, p.previo_hasta),
                 polaridad="up-bad",
-                hint="Últimos 7 días",
+                hint=f"Últimos {p.dias} días",
                 destino=Destino("costos"),
             )
         )
@@ -349,12 +358,114 @@ async def _tareas_abiertas(
     return por
 
 
+async def _zona_horaria(session: Any, tenant_id: uuid.UUID) -> ZoneInfo:
+    """Zona del negocio (la misma de la agenda) para cortar la serie por día calendario."""
+    tz = (
+        await session.execute(
+            select(AppSettings.timezone).where(AppSettings.tenant_id == tenant_id)
+        )
+    ).scalar_one_or_none()
+    try:
+        return ZoneInfo(tz or "America/Bogota")
+    except Exception:  # una zona inválida no puede tumbar el Resumen
+        return ZoneInfo("America/Bogota")
+
+
+def _dias_del_periodo(p: PeriodoResumen, zona: ZoneInfo) -> list[date]:
+    """Los N días calendario que terminan hoy en la zona del negocio."""
+    fin = p.hasta.astimezone(zona).date()
+    return [fin - timedelta(days=i) for i in range(p.dias - 1, -1, -1)]
+
+
+async def _serie_diaria(
+    session: Any,
+    tenant_id: uuid.UUID,
+    p: PeriodoResumen,
+    agente_de: dict[uuid.UUID, uuid.UUID],
+    zona: ZoneInfo,
+) -> tuple[list[date], dict[Any, dict[date, dict[str, float]]], dict[Any, datetime]]:
+    """Turnos, conversaciones y costo por agente y día (misma atribución que `_actividad`)."""
+    dias = _dias_del_periodo(p, zona)
+    desde = datetime.combine(dias[0], time.min, tzinfo=zona)
+    dia = func.date_trunc(
+        "day", func.timezone(str(zona), UsageLedger.created_at)
+    ).label("dia")
+    filas = (
+        await session.execute(
+            select(
+                UsageLedger.agent_instance_id,
+                dia,
+                func.count(UsageLedger.id),
+                func.count(func.distinct(UsageLedger.conversation_id)),
+                func.coalesce(func.sum(UsageLedger.cost_usd), 0),
+                func.max(UsageLedger.created_at),
+            )
+            .where(
+                UsageLedger.tenant_id == tenant_id,
+                UsageLedger.created_at >= desde,
+                UsageLedger.created_at < p.hasta,
+                UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
+            )
+            .group_by(UsageLedger.agent_instance_id, dia)
+        )
+    ).all()
+    puntos: dict[Any, dict[date, dict[str, float]]] = defaultdict(dict)
+    ultima: dict[Any, datetime] = {}
+    for instancia, fecha, turnos, conversaciones, costo, ultimo in filas:
+        agente = agente_de.get(instancia) if instancia is not None else None
+        clave_dia = fecha.date() if isinstance(fecha, datetime) else fecha
+        if clave_dia < dias[0] or clave_dia > dias[-1]:
+            continue
+        puntos[agente][clave_dia] = {
+            "turnos": float(turnos),
+            "conversaciones": float(conversaciones),
+            "costo": float(costo),
+        }
+        if ultimo is not None and (agente not in ultima or ultimo > ultima[agente]):
+            ultima[agente] = ultimo
+    return dias, puntos, ultima
+
+
+def _serie_de(
+    puntos: dict[Any, dict[date, dict[str, float]]],
+    claves: list[Any],
+    dias: list[date],
+    ver_costo: bool,
+) -> list[dict[str, Any]]:
+    """Serie cero-rellena del agente; el General suma su instancia y lo no atribuido."""
+    salida: list[dict[str, Any]] = []
+    for dia in dias:
+        turnos = conversaciones = costo = 0.0
+        for clave in claves:
+            fila = puntos.get(clave, {}).get(dia)
+            if fila is None:
+                continue
+            turnos += fila["turnos"]
+            conversaciones += fila["conversaciones"]
+            costo += fila["costo"]
+        salida.append(
+            {
+                "fecha": dia,
+                "turnos": int(turnos),
+                "conversaciones": int(conversaciones),
+                "costo": round(costo, 6) if ver_costo else None,
+            }
+        )
+    return salida
+
+
+def _ultima_de(ultima: dict[Any, datetime], claves: list[Any]) -> datetime | None:
+    fechas = [ultima[c] for c in claves if c in ultima]
+    return max(fechas) if fechas else None
+
+
 def _kpis_de_agente(
     ref: str,
     actual: dict[str, dict[str, float]],
     escalados: dict[str, float] | None,
     tareas: float,
     acceso: Acceso,
+    dias: int,
 ) -> list[Kpi]:
     kpis = [
         Kpi(
@@ -362,7 +473,7 @@ def _kpis_de_agente(
             "Turnos atendidos",
             actual["actual"]["turnos"],
             previo=actual["previo"]["turnos"],
-            hint="Últimos 7 días",
+            hint=f"Últimos {dias} días",
             destino=Destino("agente", {"ref": ref, "pestana": "conversaciones"}),
         ),
         Kpi(
@@ -418,7 +529,7 @@ async def _modulo(
         return {
             "id": provider.plugin_id,
             "nombre": provider.nombre,
-            "kpis": [_kpi_a_dict(k) for k in kpis],
+            "kpis": [_kpi_a_dict(k, p.dias) for k in kpis],
             "error": None,
         }
     except Exception:  # un pack caído no tumba el Resumen
@@ -440,11 +551,15 @@ async def _habilitados() -> set[str]:
 
 # ------------------------------------------------------------------ ensamble
 async def resumen(
-    tenant_id: uuid.UUID, acceso: Acceso, *, ahora: datetime | None = None
+    tenant_id: uuid.UUID,
+    acceso: Acceso,
+    *,
+    dias: int = 7,
+    ahora: datetime | None = None,
 ) -> dict[str, Any]:
     """El Resumen por agente del negocio. El router decide `acceso`; aquí no hay permisos."""
     _exigir_scope(tenant_id)
-    p = periodo(ahora)
+    p = periodo(ahora, dias)
     habilitados = await _habilitados()
     providers = [
         x for x in resumen_registry.providers_for(habilitados) if x.seccion in acceso.modulos
@@ -461,10 +576,17 @@ async def resumen(
         actividad: dict[Any, dict[str, dict[str, float]]] = {}
         escalados: dict[Any, dict[str, float]] = {}
         tareas: dict[Any, float] = {}
+        dias_serie: list[date] = []
+        puntos: dict[Any, dict[date, dict[str, float]]] = {}
+        ultima: dict[Any, datetime] = {}
         if acceso.agentes:
             agentes, agente_de = await _agentes(session, tenant_id)
             actividad = await _actividad(session, tenant_id, p, agente_de)
             tareas = await _tareas_abiertas(session, tenant_id, agente_de)
+            zona = await _zona_horaria(session, tenant_id)
+            dias_serie, puntos, ultima = await _serie_diaria(
+                session, tenant_id, p, agente_de, zona
+            )
             if runtime == "v3":
                 escalados = await _escalados(session, tenant_id, p, agente_de)
 
@@ -503,14 +625,19 @@ async def resumen(
                 esc = {v: esc[v] + extra_e[v] for v in esc}
             n_tareas += tareas.get(None, 0.0)
         propios = [x for x in providers if x.agent_key == key] + (huerfanos if es_general else [])
+        claves_serie = [agente_id] if agente_id is not None else []
+        if es_general:
+            claves_serie.append(None)
         salida.append(
             {
                 "ref": ref,
                 "key": key,
                 "name": nombre,
                 "kind": tipo,
-                "kpis": [_kpi_a_dict(k) for k in _kpis_de_agente(ref, act, esc, n_tareas, acceso)],
+                "kpis": [_kpi_a_dict(k, p.dias) for k in _kpis_de_agente(ref, act, esc, n_tareas, acceso, p.dias)],
                 "modulos": [await _modulo(x, tenant_id, p) for x in propios],
+                "serie": _serie_de(puntos, claves_serie, dias_serie, acceso.costos),
+                "ultima_actividad": _ultima_de(ultima, claves_serie),
             }
         )
 
@@ -520,8 +647,9 @@ async def resumen(
             "hasta": p.hasta,
             "previo_desde": p.previo_desde,
             "previo_hasta": p.previo_hasta,
+            "dias": p.dias,
         },
         "runtime": runtime,
-        "general": {"kpis": [_kpi_a_dict(k) for k in general]},
+        "general": {"kpis": [_kpi_a_dict(k, p.dias) for k in general]},
         "agentes": salida,
     }

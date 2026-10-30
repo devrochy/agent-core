@@ -26,3 +26,10 @@
 - Cada carga del Resumen ejecuta las consultas de los módulos habilitados. Si el costo molesta con datos reales, se cachea por negocio unos segundos; no antes de medir.
 - pass^k es por negocio/conexión, no por agente: el KPI «Consistencia» está en el bloque general y enlaza a la pestaña de calidad.
 - El contrato nuevo se refleja en `docs/openapi.json`; el panel y la app regeneran sus tipos.
+
+## Adenda 2026-10-29 — Ventana 7/15/30 y serie diaria de actividad
+
+- **Ventana configurable.** `GET /admin/dashboard/agents` acepta `?dias=7|15|30` (por defecto 7). La ventana aplica a todos los KPIs, sus `hint` y el `versus`, y a la ventana previa de la misma duración. Un valor distinto de 7, 15 o 30 devuelve 422.
+- **Serie diaria.** Cada `agente` trae `serie[]` (`fecha`, `turnos`, `conversaciones`, `costo`) cero-rellena para los N días calendario que terminan hoy en la zona horaria del negocio (`app_settings.timezone`), y `ultima_actividad`. La atribución es la misma del punto 3; el General suma su instancia y lo no atribuido.
+- **Costo protegido.** `costo` de la serie es `null` sin la sección `costs`, igual que el KPI. La serie no incluye los turnos del Coordinador: el bloque `general` sigue siendo la cifra completa del negocio.
+- **Compatibilidad.** Los campos son aditivos; una app instalada que no manda `dias` sigue recibiendo 7 días y puede ignorar `serie`/`ultima_actividad`.
