@@ -127,6 +127,84 @@ class CobranzaModule(BaseModule):
         async with get_session() as session:
             return "gestor" if await _gestor_de(session, tenant_id, admin_id) is not None else None
 
+    async def collaborator_profiles(self, tenant_id: Any, admin_ids: list[Any]) -> dict[Any, list[Any]]:
+        """Perfil de gestor de los colaboradores pedidos, para Equipo (ADR-0176).
+
+        Tres consultas por lote (gestores, carteras y permisos), sin importar cuántos ids lleguen. El
+        resumen lleva el estatus, las carteras `{id, nombre}` y el conteo de permisos de campo activos;
+        editar los permisos se hace con el `PUT …/collectors/{id}/permissions` ya existente."""
+        from sqlalchemy import select
+
+        from core.db.session import get_session
+        from core.mcp.types import PackProfile, PackProfileEdit
+        from pack_cobranza.models import Cartera, Gestor, GestorPermiso
+        from pack_cobranza.permisos import GESTOR_PERMISOS
+
+        if not admin_ids:
+            return {}
+        async with get_session() as session:
+            gestores = (
+                (
+                    await session.execute(
+                        select(Gestor).where(
+                            Gestor.tenant_id == tenant_id,
+                            Gestor.admin_id.in_(admin_ids),
+                            Gestor.deleted_at.is_(None),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not gestores:
+                return {}
+            ids = [g.id for g in gestores]
+            carteras = (
+                await session.execute(
+                    select(Cartera.gestor_id, Cartera.id, Cartera.nombre)
+                    .where(
+                        Cartera.tenant_id == tenant_id,
+                        Cartera.gestor_id.in_(ids),
+                        Cartera.deleted_at.is_(None),
+                    )
+                    .order_by(Cartera.nombre)
+                )
+            ).all()
+            permisos = (
+                await session.execute(
+                    select(GestorPermiso.gestor_id, GestorPermiso.permiso).where(
+                        GestorPermiso.tenant_id == tenant_id,
+                        GestorPermiso.gestor_id.in_(ids),
+                        GestorPermiso.habilitado.is_(True),
+                    )
+                )
+            ).all()
+        carteras_de: dict[Any, list[dict[str, str]]] = {}
+        for gestor_id, cartera_id, nombre in carteras:
+            carteras_de.setdefault(gestor_id, []).append({"id": str(cartera_id), "nombre": nombre})
+        activos_de: dict[Any, int] = {}
+        for gestor_id, permiso in permisos:
+            if permiso in GESTOR_PERMISOS:
+                activos_de[gestor_id] = activos_de.get(gestor_id, 0) + 1
+        return {
+            g.admin_id: [
+                PackProfile(
+                    pack=self.id,
+                    role_id="gestor",
+                    ref_id=str(g.id),
+                    etiqueta="Gestor",
+                    resumen={
+                        "estatus": g.estatus,
+                        "carteras": carteras_de.get(g.id, []),
+                        "permisos_activos": activos_de.get(g.id, 0),
+                        "permisos_total": len(GESTOR_PERMISOS),
+                    },
+                    edit=PackProfileEdit(kind="cobranza_gestor_permisos", ref_id=str(g.id)),
+                )
+            ]
+            for g in gestores
+        }
+
     async def on_collaborator_role(self, tenant_id: Any, admin_id: Any, role_id: str) -> None:
         """Rol de pack asignado a un colaborador (ADR-0066): crea su perfil `Gestor`.
 
