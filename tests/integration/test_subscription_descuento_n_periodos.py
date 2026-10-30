@@ -503,3 +503,46 @@ async def test_la_base_rechaza_un_descuento_incoherente(sentencia) -> None:
     with pytest.raises(IntegrityError):
         async with tenant_scope(tid), get_session() as session:
             await session.execute(text(sentencia), {"i": sub_id})
+
+
+# ============================================================================= Free → pago y cambio inmediato
+async def test_tras_un_cambio_desde_free_pagado_el_link_del_periodo_no_cobra_otra_vez_ese_periodo() -> None:
+    tid = await _negocio()
+    await _plan(tid, "FREE", "0", trial_dias=14)
+    await _plan(tid, "BASIC", "100000")
+    promo = await _promo(tid, valor="50", periodos=3)
+    cliente = await _cliente(tid)
+    free = await _inscribir(tid, cliente, "FREE")
+    sub_id = uuid.UUID(free["subscription_id"])
+    await _con_codigo(tid, cliente)
+    cargo = next(c for c in await _cargos(tid, sub_id) if c.tipo == "cambio_plan")
+    await _pago(tid, cargo.id, float(cargo.monto))
+    assert (await _sub(tid, sub_id)).descuento_periodos_restantes == 2
+
+    cap = await _cap()
+    async with tenant_scope(tid):
+        with pytest.raises(SubscriptionError) as e:
+            await cap.charge_link(sub_id)
+    assert e.value.code == "ya_pagado"
+    assert await _periodos(tid, sub_id) == []
+    assert (await _sub(tid, sub_id)).descuento_periodos_restantes == 2
+
+    # El período siguiente sí sale con descuento: 2 de 3.
+    await _correr_cron(tid, sub_id)
+    [p2] = await _periodos(tid, sub_id)
+    assert (p2.monto, p2.monto_bruto, p2.periodo_n) == (Decimal("50000.00"), Decimal("100000.00"), 2)
+    assert promo.id is not None
+
+
+async def test_un_cambio_inmediato_termina_el_descuento_vigente() -> None:
+    from pack_subscriptions import planes
+
+    tid, _, promo, _, sub_id = await _activa_con_descuento(periodos=3)
+    gemelo = await _plan(tid, "GEMELO", "100000")  # mismo precio: el cambio es inmediato
+    cap = await _cap()
+    async with tenant_scope(tid):
+        vista = await cap.change_plan(sub_id, variant_id=str(gemelo.id), plan=planes.snapshot(gemelo))
+    assert vista["cambio"] == "inmediato"
+    sub = await _sub(tid, sub_id)
+    assert sub.plan_id == gemelo.id and sub.promocion_id is None and sub.descuento_periodos_restantes is None
+    assert await _estados_canje(tid, promo.id) == ["terminado"]

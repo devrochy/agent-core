@@ -7,8 +7,10 @@ período las columnas vuelven a NULL y el canje pasa a `agotado`.
 
 Crea `uq_pack_subscriptions_charges_periodo`: un solo cargo de período no anulado por suscripción y etiqueta
 de período. Es la red de seguridad del consumo único del descuento (dos corridas del cron, o el cron y
-`charge_link`, nunca crean dos cargos del mismo período). Si ya hay duplicados la migración se detiene con el
-detalle: no los anula por su cuenta.
+`charge_link`, nunca crean dos cargos del mismo período). Antes de crearlo se buscan duplicados para detenerse
+con el detalle (no los anula por su cuenta); esa búsqueda ve las filas solo si el rol de migraciones salta la RLS
+forzada (superusuario o BYPASSRLS). Si no la salta, `CREATE UNIQUE INDEX` falla igual ante un duplicado y la
+migración se revierte completa: en ningún caso queda un estado a medias.
 
 Backfill: los canjes de un solo período que quedaron `confirmado` (HU-SUB-33) pasan a `agotado`, que es su
 estado terminal.
@@ -102,6 +104,23 @@ def upgrade() -> None:
     op.execute(f"update {CANJES} set estado = 'agotado' where estado = 'confirmado' and periodos_total = 1")
     op.execute(f"alter table {CANJES} enable row level security")
     op.execute(f"alter table {CANJES} force row level security")
+    # Falla ruidosamente si el backfill dejó la tabla sin RLS habilitada y forzada o sin su policy.
+    op.execute(
+        f"""
+        do $$
+        begin
+            if not exists (
+                select 1 from pg_class
+                where relname = '{CANJES}' and relkind = 'r' and relrowsecurity and relforcerowsecurity
+            ) then
+                raise exception 'pack_subscriptions_0012: {CANJES} sin RLS habilitada y forzada';
+            end if;
+            if not exists (select 1 from pg_policies where tablename = '{CANJES}' and policyname = 'tenant_isolation') then
+                raise exception 'pack_subscriptions_0012: {CANJES} sin policy tenant_isolation';
+            end if;
+        end $$;
+        """
+    )
 
 
 def downgrade() -> None:

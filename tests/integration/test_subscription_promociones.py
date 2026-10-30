@@ -189,9 +189,9 @@ async def test_el_pago_manual_tambien_confirma_el_canje() -> None:
     assert [c.estado for c in await _canjes(tid, promo.id)] == ["agotado"]
 
 
-async def test_un_pago_que_llega_a_una_inscripcion_que_ya_no_espera_deja_el_canje_reservado() -> None:
-    """El dinero llegó con el descuento pero el plan no se pudo aplicar: lo resuelve una persona. El canje NO se
-    libera (el cobro con descuento sí se hizo) ni se confirma; queda a la vista del gauge de reservados antiguos."""
+async def test_un_pago_que_llega_a_una_inscripcion_que_ya_no_espera_libera_el_canje() -> None:
+    """El dinero llegó pero el plan no se pudo aplicar (lo resuelve una persona): el descuento no se otorgó, así
+    que el canje no se confirma y su cupo vuelve a la promoción (HU-SUB-35)."""
     from core.db.session import get_session
 
     tid, _, promo = await _escenario()
@@ -208,8 +208,8 @@ async def test_un_pago_que_llega_a_una_inscripcion_que_ya_no_espera_deja_el_canj
     [cargo] = await _cargos(tid, sub_id)
     assert cargo.estado == "pagado"
     assert (await _sub(tid, sub_id)).estado == "pausada"
-    assert [c.estado for c in await _canjes(tid, promo.id)] == ["reservado"]
-    assert (await _promo_fila(tid, promo.id)).canjes_usados == 1
+    assert [c.estado for c in await _canjes(tid, promo.id)] == ["liberado"]
+    assert (await _promo_fila(tid, promo.id)).canjes_usados == 0
 
 
 # ============================================================================= liberar en TODOS los sitios que anulan

@@ -829,7 +829,9 @@ async def _activar_por_pago(
     cargo.estado = "pagado"
     motivo = motivo_no_aplicable(sub, cargo)
     if motivo:
-        # El dinero llegó pero no se aplicó: un canje `reservado` se queda así (lo resuelve una persona).
+        # El dinero llegó pero no se aplicó (lo resuelve una persona): el descuento no se otorgó, así que el
+        # cupo del canje `reservado` vuelve a la promoción (HU-SUB-35).
+        await promociones.liberar_por_cargos(session, [cargo])
         return motivo
     if cargo.tipo == CARGO_INSCRIPCION:
         sub.estado = "activa"
@@ -851,6 +853,9 @@ async def _activar_por_pago(
         # un código nuevo, su canje queda confirmado y es el descuento de aquí en adelante (HU-SUB-35).
         await promociones.terminar_descuento(session, sub, motivo="cambio_de_plan")
         aplicar_plan(sub, cargo.cambio_plan, ahora)
+        if cargo.cambio_plan.get("desde_cero") and sub.periodo_actual_inicio is not None:
+            # Marca qué período activó este cobro: el link de pago no crea otro cargo encima (HU-SUB-35).
+            cargo.cambio_plan = {**cargo.cambio_plan, "activado_en": sub.periodo_actual_inicio.isoformat()}
         await session.flush()
         await promociones.confirmar_por_cargo(session, cargo, sub)
         await _emitir_activada(session, sub, None, cambio=True, charge_id=cargo.id, monto_cobrado=Decimal(cargo.monto))

@@ -258,7 +258,9 @@ async def crear_suscripcion_para(
             )
             if not otra_variante and Decimal(existente.valor_periodo or 0) == precio:
                 return existente  # mismo plan: idempotente
-            # Cambio de plan al comprar otro (Free → pago): activa con el período pagado.
+            # Cambio de plan al comprar otro (Free → pago): activa con el período pagado. Cualquier cambio de
+            # plan termina el descuento vigente (HU-SUB-35).
+            await promociones.terminar_descuento(session, existente, motivo="cambio_de_plan")
             existente.variante_id = variante_id
             existente.concepto = plan.get("nombre") or existente.concepto
             existente.valor_periodo = precio
@@ -517,29 +519,63 @@ def evaluar_cambio(
     return EvaluacionCambio("pendiente_pago", monto, desde_cero)
 
 
+async def _cargo_que_cubre_el_periodo(session, sub: Subscription) -> SubscriptionCharge | None:  # type: ignore[no-untyped-def]
+    """El cobro pagado que activó el período en curso: el de inscripción (la suscripción se activó en este
+    instante) o el de un cambio desde un plan gratuito (`activado_en` = inicio del período). None si el período en
+    curso lo cubre un cargo de período o aún no empezó."""
+    if sub.periodo_actual_inicio is None:
+        return None
+    inicio = sub.periodo_actual_inicio
+    condiciones = [
+        and_(
+            SubscriptionCharge.tipo == "cambio_plan",
+            SubscriptionCharge.cambio_plan["activado_en"].astext == inicio.isoformat(),
+        )
+    ]
+    if sub.fecha_alta is not None and inicio == sub.fecha_alta:
+        condiciones.append(SubscriptionCharge.tipo == "inscripcion")
+    return (
+        await session.execute(
+            select(SubscriptionCharge)
+            .where(
+                SubscriptionCharge.tenant_id == get_current_tenant_id(),
+                SubscriptionCharge.subscription_id == sub.id,
+                SubscriptionCharge.estado == "pagado",
+                SubscriptionCharge.deleted_at.is_(None),
+                or_(*condiciones),
+            )
+            .order_by(SubscriptionCharge.created_at.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+
+
 async def factor_del_periodo(session, sub: Subscription) -> Decimal | None:  # type: ignore[no-untyped-def]
     """`monto / monto_bruto` del cargo pagado del período en curso, o None si ese período se pagó a precio de lista.
 
-    El período en curso lo cubre su cargo de período o, si la suscripción se activó en él, el cobro de inscripción."""
+    El período en curso lo cubre su cargo de período o, si la suscripción se activó en él, el cobro de inscripción
+    o de cambio desde un plan gratuito."""
     if sub.periodo_actual_inicio is None:
         return None
     periodo = etiqueta_periodo(sub.periodo_actual_inicio, sub.periodicidad)
-    base = [
-        SubscriptionCharge.tenant_id == get_current_tenant_id(),
-        SubscriptionCharge.subscription_id == sub.id,
-        SubscriptionCharge.estado == "pagado",
-        SubscriptionCharge.monto_bruto.isnot(None),
-        SubscriptionCharge.deleted_at.is_(None),
-    ]
-    condicion = and_(SubscriptionCharge.tipo == "periodo", SubscriptionCharge.periodo == periodo)
-    if sub.fecha_alta is not None and sub.periodo_actual_inicio == sub.fecha_alta:
-        condicion = or_(condicion, SubscriptionCharge.tipo == "inscripcion")
     cargo = (
         await session.execute(
-            select(SubscriptionCharge).where(*base, condicion).order_by(SubscriptionCharge.created_at.desc()).limit(1)
+            select(SubscriptionCharge)
+            .where(
+                SubscriptionCharge.tenant_id == get_current_tenant_id(),
+                SubscriptionCharge.subscription_id == sub.id,
+                SubscriptionCharge.tipo == "periodo",
+                SubscriptionCharge.periodo == periodo,
+                SubscriptionCharge.estado == "pagado",
+                SubscriptionCharge.deleted_at.is_(None),
+            )
+            .order_by(SubscriptionCharge.created_at.desc())
+            .limit(1)
         )
     ).scalars().first()
-    if cargo is None or not Decimal(cargo.monto_bruto):
+    if cargo is None:
+        cargo = await _cargo_que_cubre_el_periodo(session, sub)
+    if cargo is None or cargo.monto_bruto is None or not Decimal(cargo.monto_bruto):
         return None
     return Decimal(cargo.monto) / Decimal(cargo.monto_bruto)
 
@@ -959,24 +995,9 @@ class SubscriptionCapabilityImpl:
                 ).scalars().first()
                 periodo = cargo.periodo if cargo is not None else (period or actual)
                 if cargo is None:
-                    # El período en que se activó la inscripción lo pagó el cobro de inscripción (su etiqueta es
-                    # «inscripcion», no la del período): no se crea un cargo de período encima (HU-SUB-35).
-                    cubierto_por_inscripcion = (
-                        sub.fecha_alta is not None
-                        and sub.periodo_actual_inicio == sub.fecha_alta
-                        and (
-                            await session.execute(
-                                select(SubscriptionCharge.id).where(
-                                    SubscriptionCharge.tenant_id == get_current_tenant_id(),
-                                    SubscriptionCharge.subscription_id == subscription_id,
-                                    SubscriptionCharge.tipo == "inscripcion",
-                                    SubscriptionCharge.estado == "pagado",
-                                    SubscriptionCharge.deleted_at.is_(None),
-                                )
-                            )
-                        ).first()
-                        is not None
-                    )
+                    # El período en que se activó la suscripción lo pagó su cobro de inscripción o de cambio desde un
+                    # plan gratuito (su etiqueta no es la del período): no se crea un cargo de período encima de él.
+                    cubierto = await _cargo_que_cubre_el_periodo(session, sub)
                     pagado = (
                         await session.execute(
                             select(SubscriptionCharge.id).where(
@@ -984,7 +1005,7 @@ class SubscriptionCapabilityImpl:
                             )
                         )
                     ).first()
-                    if pagado is not None or cubierto_por_inscripcion:
+                    if pagado is not None or cubierto is not None:
                         raise SubscriptionError("Ese período ya está pago.", code="ya_pagado")
                     # Quien crea el cargo bloquea la suscripción (suscripción → cargo) y consume el descuento una
                     # sola vez, igual que el cron (HU-SUB-35).
