@@ -13,7 +13,7 @@ from decimal import Decimal
 
 import pytest
 from _api_helpers import uniq
-from _subs_helpers import nueva_sub
+from _subs_helpers import nueva_sub, plan_por_defecto
 from _transferencia import con_cuentas_de_transferencia  # noqa: F401  (fixture)
 from sqlalchemy import select
 
@@ -46,7 +46,7 @@ async def _negocio(tz: str | None = None) -> uuid.UUID:
     return tid
 
 
-async def _sub(tid, *, cliente: uuid.UUID, proximo: datetime):
+async def _sub(tid, *, cliente: uuid.UUID, proximo: datetime, plan: str = "PLAN-DE-PRUEBA"):
 
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -54,7 +54,7 @@ async def _sub(tid, *, cliente: uuid.UUID, proximo: datetime):
     async with tenant_scope(tid):
         async with get_session() as s:
             sub = await nueva_sub(
-                s, tid, customer_id=cliente, concepto="Plan", estado="activa",
+                s, tid, plan_id=await plan_por_defecto(tid, codigo=plan), customer_id=cliente, concepto="Plan", estado="activa",
                 valor_periodo=Decimal("100000"), periodicidad="mensual", dia_ancla=proximo.day,
                 proximo_cargo=proximo,
             )
@@ -63,18 +63,18 @@ async def _sub(tid, *, cliente: uuid.UUID, proximo: datetime):
 
 
 async def _cargo(tid, *, cliente: uuid.UUID, vence: datetime, creado: datetime):
-    from pack_subscriptions.models import Subscription, SubscriptionCharge
+    from pack_subscriptions.models import SubscriptionCharge
 
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tid):
         async with get_session() as s:
-            sub = Subscription(
-                tenant_id=tid, customer_id=cliente, concepto="Plan", estado="activa",
+            sub = await nueva_sub(
+                s, tid, plan_id=await plan_por_defecto(tid, codigo=f"PLAN-{uuid.uuid4().hex[:6]}"),
+                customer_id=cliente, concepto="Plan", estado="activa",
                 valor_periodo=Decimal("100000"), periodicidad="mensual", dia_ancla=vence.day,
             )
-            s.add(sub)
             await s.flush()
             cargo = SubscriptionCharge(
                 tenant_id=tid, subscription_id=sub.id, periodo=vence.strftime("%Y-%m"),
@@ -133,8 +133,8 @@ async def test_dos_cargos_del_mismo_cliente_salen_en_dias_distintos() -> None:
 
     tid = await _negocio()
     cliente = uuid.uuid4()
-    await _sub(tid, cliente=cliente, proximo=NOCHE + timedelta(days=2))
-    await _sub(tid, cliente=cliente, proximo=NOCHE + timedelta(days=2))
+    await _sub(tid, cliente=cliente, proximo=NOCHE + timedelta(days=2), plan="PLAN-A")
+    await _sub(tid, cliente=cliente, proximo=NOCHE + timedelta(days=2), plan="PLAN-B")
     await _generar_cargos(NOCHE)
     eventos = await _eventos(tid, "subscription.charge_created")
     assert [e.next_attempt_at for e in eventos] == [

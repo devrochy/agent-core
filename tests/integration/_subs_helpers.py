@@ -18,16 +18,16 @@ from pack_subscriptions.models import Subscription
 CODIGO_POR_DEFECTO = "PLAN-DE-PRUEBA"
 
 
-async def plan_por_defecto(tid: uuid.UUID, *, precio: int = 200_000) -> uuid.UUID:
+async def plan_por_defecto(tid: uuid.UUID, *, precio: int = 200_000, codigo: str = CODIGO_POR_DEFECTO) -> uuid.UUID:
     """Id de un plan del catálogo del negocio (se crea la primera vez)."""
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tid):
-        existente = await planes.por_codigo(CODIGO_POR_DEFECTO, solo_activos=False)
+        existente = await planes.por_codigo(codigo, solo_activos=False)
         if existente is None:
             existente = await planes.crear(
                 planes.DatosDePlan(
-                    codigo=CODIGO_POR_DEFECTO, nombre="Plan de prueba", precio=Decimal(precio), periodicidad="mensual"
+                    codigo=codigo, nombre=f"Plan {codigo}", precio=Decimal(precio), periodicidad="mensual"
                 )
             )
         return existente.id

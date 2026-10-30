@@ -45,10 +45,11 @@ _QUOTE_EN_PROMPT = re.compile(r"- cotizacion: quote_id=([0-9a-f-]{36})")
 
 # ------------------------------------------------------------------ negocio y datos
 async def _negocio(con_basic: bool = False) -> tuple[uuid.UUID, str]:
-    """Negocio propio con pack-commerce y un plan Premium; devuelve (tenant, variant_id).
+    """Negocio propio con pack-commerce y un producto «Plan Premium»; devuelve (tenant, variant_id).
 
-    Sin pack de suscripciones: comprar el Premium con el Basic pagado es un pedido nuevo,
-    no un cambio de plan (`sub_cambiar_plan`). Con `con_basic`, también el Plan Basic."""
+    Desde SPEC-43 los planes son de `pack_subscriptions`; aquí «PLAN-PREMIUM» y «PLAN-BASIC» son productos
+    normales de commerce (el incidente de ADR-0130 no depende de que fueran planes). Con `con_basic`,
+    también el Basic."""
     from pack_commerce.models import Product, ProductVariant
 
     from core.alta_negocio import onboard_tenant
@@ -65,7 +66,7 @@ async def _negocio(con_basic: bool = False) -> tuple[uuid.UUID, str]:
             s.add(producto)
             await s.flush()
             variante = ProductVariant(
-                tenant_id=tid, product_id=producto.id, sku="PLAN-PREMIUM", price=PRECIO, billing_period="mensual"
+                tenant_id=tid, product_id=producto.id, sku="PLAN-PREMIUM", price=PRECIO
             )
             s.add(variante)
             if con_basic:
@@ -73,7 +74,7 @@ async def _negocio(con_basic: bool = False) -> tuple[uuid.UUID, str]:
                 s.add(basic)
                 await s.flush()
                 s.add(ProductVariant(
-                    tenant_id=tid, product_id=basic.id, sku="PLAN-BASIC", price=PRECIO_BASIC, billing_period="mensual"
+                    tenant_id=tid, product_id=basic.id, sku="PLAN-BASIC", price=PRECIO_BASIC
                 ))
             await s.flush()
             return tid, str(variante.id)
