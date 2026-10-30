@@ -36,6 +36,20 @@ async def kpis(tenant_id: uuid.UUID, p: PeriodoResumen) -> list[Kpi]:
             versus="el mes anterior",
             destino=Destino("suscripciones"),
         ),
+        *(
+            [
+                Kpi(
+                    "mrr_descuento",
+                    "Descuento vigente",
+                    -m.mrr_descuento,
+                    unidad="money",
+                    hint=f"Por mes, en {m.suscripciones_con_descuento} suscripciones; el MRR no lo resta",
+                    destino=Destino("suscripciones"),
+                )
+            ]
+            if m.suscripciones_con_descuento
+            else []
+        ),
         Kpi(
             "altas_mes",
             "Altas del mes",

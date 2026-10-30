@@ -1,0 +1,6 @@
+## Cobro de plataforma y MRR con descuentos (2026-10-30)
+
+- SPEC-43 · HU-SUB-36 (PR-2b-2b). `subscription.charge_paid` lleva `monto` (el neto cobrado), `monto_bruto` (precio de lista) y `descuento`. El cobro de plataforma (`core/billing/canales.py`) compara el precio de lista con el plan: un período pagado con descuento ya no dispara `monto_distinto`, se aplica al negocio y `SubscriptionPayment.amount_cop` queda con el neto; el audit de `cobro_plataforma_aplicado` suma `monto_bruto`, `descuento` y `monto_cobrado`. Una suscripción creada a mano con un precio menor y sin descuento sigue alertando.
+- El alta y el cambio desde Free registran lo cobrado: `subscription.activated` ya traía `monto_cobrado` y `registrar_periodo_pagado` recibe ahora `monto`.
+- La conciliación diaria compara contra el precio de lista (`monto_bruto`) y el `SubscriptionView` expone `monto_bruto` por cargo: un cargo pendiente con descuento ya no se marca `monto_distinto`.
+- Métricas de suscripciones: `mrr_descuento` y `suscripciones_con_descuento` (activas de pago con descuento y períodos por consumir; porcentaje o monto fijo normalizado a mes). El MRR sigue nominal. El Resumen muestra «Descuento vigente» solo si hay alguno.

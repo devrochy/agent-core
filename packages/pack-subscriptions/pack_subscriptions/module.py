@@ -288,7 +288,11 @@ async def _emitir_cargo_pagado(
             "periodo_inicio": inicio.isoformat(),
             "periodo_fin": fin.isoformat(),
             "dia_ancla": sub.dia_ancla,
+            # SPEC-43 (HU-SUB-36): `monto` es SIEMPRE el neto cobrado; con descuento llegan además el precio de
+            # lista y el descuento, que el core compara con el precio del plan y deja en la auditoría.
             "monto": str(cargo.monto),
+            "monto_bruto": str(cargo.monto_bruto) if cargo.monto_bruto is not None else None,
+            "descuento": cargo.descuento,
             "moneda": sub.moneda,
             "variant_id": str(sub.variante_id) if sub.variante_id else None,
             "plan_id": str(sub.plan_id) if sub.plan_id else None,

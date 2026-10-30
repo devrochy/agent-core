@@ -127,6 +127,12 @@ class Metricas(BaseModel):
     moneda: str
     otras_monedas: int = Field(description="Suscripciones activas en otra moneda, fuera de estas cifras.")
     mrr: float = Field(description="Ingreso recurrente mensual: activas de pago, trimestral ÷ 3 y anual ÷ 12.")
+    mrr_descuento: float = Field(
+        default=0,
+        description="Descuento vigente por mes (SPEC-43): de las activas de pago con descuento y períodos por consumir, "
+        "valor del período por el porcentaje, normalizado a mes. El MRR no lo resta.",
+    )
+    suscripciones_con_descuento: int = Field(default=0, description="Activas de pago con descuento vigente.")
     mrr_mes_anterior: float = Field(description="Aproximado: suscripciones vivas al cierre del mes anterior, a su precio actual.")
     activas: int
     en_prueba: int

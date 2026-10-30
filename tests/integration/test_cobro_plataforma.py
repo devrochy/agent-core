@@ -26,6 +26,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -591,6 +592,103 @@ async def test_pago_por_el_asistente_extiende_el_periodo_del_negocio(vendedores,
     assert otra_vez.period_end == negocio.period_end
     assert len([p for p in await _pagos(esc.negocio) if p.periodo == referencia]) == 1
     assert not [a for a in alertas if a["severity"] == "critical"]
+
+
+async def _rebajar_el_cargo(esc: Escenario, periodo: str, neto: int, *, con_descuento: bool) -> None:
+    """Deja el cargo del período como lo dejaría una promoción (SPEC-43): `monto` el neto, `monto_bruto` la lista y
+    el descuento. Sin `con_descuento` solo baja el monto, como una suscripción creada a mano con otro precio."""
+    from pack_subscriptions.models import SubscriptionCharge
+    from sqlalchemy import update
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    cargo = await _cargo(esc, periodo)
+    valores: dict[str, Any] = {"monto": neto}
+    if con_descuento:
+        valores.update(
+            monto_bruto=cargo.monto,
+            descuento={"etiqueta": "Lanzamiento", "tipo": "porcentaje", "valor": "50", "monto": float(cargo.monto) - neto},
+        )
+    async with tenant_scope(esc.vendedor):
+        async with get_session() as s:
+            await s.execute(update(SubscriptionCharge).where(SubscriptionCharge.id == cargo.id).values(**valores))
+
+
+async def test_un_periodo_pagado_con_descuento_no_es_monto_distinto_y_registra_lo_cobrado(
+    vendedores, correos, alertas
+) -> None:
+    """HU-SUB-36: el core compara el precio de lista, aplica el período y deja el neto como lo cobrado."""
+    esc = await _negocio_aprovisionado(vendedores)
+    inicio = (await _suscripcion_de(esc.negocio)).period_end
+    referencia = _referencia(esc, inicio)
+    cargo = await _cobrar_periodo(esc, inicio)
+    await _rebajar_el_cargo(esc, cargo["periodo"], 300_000, con_descuento=True)
+    await _pagar_por_el_asistente(esc, cargo["periodo"])
+
+    [evento] = await _eventos(esc.vendedor, "subscription.charge_paid")
+    assert (Decimal(evento.payload["monto"]), Decimal(evento.payload["monto_bruto"])) == (Decimal(300_000), Decimal(600_000))
+    assert evento.payload["descuento"]["etiqueta"] == "Lanzamiento"
+    assert await _entregar_cargos_pagados(esc) == 1
+
+    [pago] = [p for p in await _pagos(esc.negocio) if p.periodo == referencia]
+    assert (pago.status, int(pago.amount_cop)) == ("aprobado", 300_000)
+    assert (await _suscripcion_de(esc.negocio)).status == "active"
+    [auditada] = await _auditoria(esc.vendedor, "cobro_plataforma_aplicado")
+    assert (auditada.output["monto_bruto"], auditada.output["monto_cobrado"]) == ("600000.00", "300000.00")
+    assert not [p for p in await _pagos(esc.negocio) if p.status == "monto_distinto"]
+    assert not [a for a in alertas if a["severity"] == "critical"]
+
+
+async def test_una_suscripcion_a_menor_precio_sin_descuento_si_alerta_monto_distinto(vendedores, correos, alertas) -> None:
+    esc = await _negocio_aprovisionado(vendedores)
+    inicio = (await _suscripcion_de(esc.negocio)).period_end
+    antes = await _suscripcion_de(esc.negocio)
+    cargo = await _cobrar_periodo(esc, inicio)
+    await _rebajar_el_cargo(esc, cargo["periodo"], 300_000, con_descuento=False)
+    await _pagar_por_el_asistente(esc, cargo["periodo"])
+    assert await _entregar_cargos_pagados(esc) == 1
+
+    assert [p.status for p in await _pagos(esc.negocio) if p.periodo == _referencia(esc, inicio)] == ["monto_distinto"]
+    assert (await _suscripcion_de(esc.negocio)).period_end == antes.period_end
+    assert [a for a in alertas if a["severity"] == "critical"]
+
+
+async def test_el_alta_o_el_cambio_desde_free_con_descuento_registran_el_neto_cobrado(vendedores, correos, alertas) -> None:
+    """HU-SUB-36: `registrar_periodo_pagado` (alta y cambio desde Free) guarda lo cobrado, no el precio de lista."""
+    from core.billing.periodos import periodo_de
+    from core.billing.service import registrar_periodo_pagado
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    esc = await _negocio_aprovisionado(vendedores)
+    con_neto = periodo_de(esc.slug, datetime.now(UTC) + timedelta(days=120), desde_cero=True)
+    a_lista = periodo_de(esc.slug, datetime.now(UTC) + timedelta(days=240), desde_cero=True)
+    async with tenant_scope(esc.negocio):
+        async with get_session() as s:
+            await registrar_periodo_pagado(s, esc.negocio, "premium", periodo=con_neto, monto=Decimal(300_000))
+            await registrar_periodo_pagado(s, esc.negocio, "premium", periodo=a_lista)
+    pagos = {p.periodo: p for p in await _pagos(esc.negocio)}
+    assert int(pagos[con_neto.referencia].amount_cop) == 300_000
+    assert int(pagos[a_lista.referencia].amount_cop) == 600_000
+
+
+async def test_la_conciliacion_compara_el_precio_de_lista_de_un_cargo_con_descuento(vendedores, correos, alertas) -> None:
+    from core.billing.conciliacion import conciliar_vendedor
+
+    vendedor = await _vendedor()
+    con_descuento = await _negocio_aprovisionado(vendedores, vendedor=vendedor)
+    a_mano = await _negocio_aprovisionado(vendedores, vendedor=vendedor)
+    ahora = datetime.now(UTC)
+    for esc, descuento in ((con_descuento, True), (a_mano, False)):
+        inicio = await _acercar_el_vencimiento(esc, fin=ahora + timedelta(days=4))
+        await _cobrar_periodo(esc, inicio)
+        await _rebajar_el_cargo(esc, f"{inicio:%Y-%m}", 300_000, con_descuento=descuento)
+
+    _, diferencias = await conciliar_vendedor(vendedor, now=ahora)
+    assert not [d for d in diferencias if d.negocio == con_descuento.slug and d.tipo == "monto_distinto"]
+    [distinto] = [d for d in diferencias if d.negocio == a_mano.slug and d.tipo == "monto_distinto"]
+    assert distinto.detalle["asistente"] == 300_000
 
 
 async def test_pago_por_el_panel_deja_pagado_el_cargo_del_asistente(

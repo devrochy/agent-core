@@ -68162,6 +68162,18 @@
             "title": "Mrr",
             "description": "Ingreso recurrente mensual: activas de pago, trimestral ÷ 3 y anual ÷ 12."
           },
+          "mrr_descuento": {
+            "type": "number",
+            "title": "Mrr Descuento",
+            "description": "Descuento vigente por mes (SPEC-43): de las activas de pago con descuento y períodos por consumir, valor del período por el porcentaje, normalizado a mes. El MRR no lo resta.",
+            "default": 0
+          },
+          "suscripciones_con_descuento": {
+            "type": "integer",
+            "title": "Suscripciones Con Descuento",
+            "description": "Activas de pago con descuento vigente.",
+            "default": 0
+          },
           "mrr_mes_anterior": {
             "type": "number",
             "title": "Mrr Mes Anterior",
