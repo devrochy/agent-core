@@ -69,4 +69,6 @@ las necesitas.
 - Una inscripción `pendiente_pago` expira a los 7 días (`dias_pago_inscripcion`) con el cron `expirar_inscripciones`.
 - Un pago que llega tarde o a un cargo anulado no activa nada: queda `subs_pago_sin_aplicar` en la auditoría y
   una notificación a los dueños para resolverlo a mano.
-- `plan_id` y `numero_publico` son NULLABLE hasta `0013` (PR de commerce sin planes).
+- `plan_id` y `numero_publico` son NOT NULL desde `0013` (SPEC-43 PR-4, commerce sin planes): la migración retira
+  `variante_id` y `referencia_origen`, y se detiene (sin cambiar nada) si alguna suscripción no tiene plan o número:
+  hay que asignárselos o borrarlos antes de aplicarla.

@@ -42,7 +42,7 @@ Acciones de `audit_log` con actor `billing`:
 | `pagado_en_el_panel_sin_sincronizar` | Pagó por el panel y el asistente lo sigue cobrando | En la Bandeja de fallos del **negocio**, reintentar `platform.period_paid`. Mientras tanto, el asistente puede recordar el cargo: avisarle al cliente que ya está pago |
 | `pago_duplicado` | La plata llegó dos veces por el mismo período | Decidir con el cliente: **devolver** el segundo pago desde el dashboard de Wompi, o **abonarlo** extendiendo un período desde Plataforma. Se deja de reportar a los 7 días |
 | `plan_distinto` | El plan del asistente no es el del negocio (un cambio de plan que no se aplicó) | Reintentar el `subscription.activated` del vendedor (Bandeja de fallos). Si no aplica, corregir el plan desde Plataforma |
-| `monto_distinto` | El cargo pendiente del asistente no cobra el precio del plan | Revisar la variante del plan en el catálogo del vendedor (`precio_de_plan`) y el cron `sincronizar_precios_de_plan` |
+| `monto_distinto` | El cargo pendiente del asistente no cobra el precio del plan | Revisar el plan en el catálogo de suscripciones del vendedor (`precio_de_plan`) y el cron `sincronizar_precios_de_plan` |
 | `sin_suscripcion_en_el_asistente` | El cliente canceló en el asistente y el negocio sigue con plan pago | Nada, salvo que el cliente quiera seguir: paga por el panel. Al terminar el período, el negocio pasa a `past_due` |
 | `no_se_pudo_conciliar` | Falló la lectura de un lado | Ver el log `billing_conciliacion_negocio_fallo` |
 | `anticipacion_distinta` | El asistente cobra el período siguiente otro día que el panel | Poner `dias_anticipacion` de la config de Suscripciones del vendedor igual a `BILLING_DIAS_RENOVACION` |
