@@ -71825,7 +71825,7 @@
             "maximum": 12.0,
             "minimum": 1.0,
             "title": "Periodos",
-            "description": "Cobros que descuenta. Hoy solo se acepta 1.",
+            "description": "Cobros que descuenta. De 1 a 12 períodos; el monto fijo solo descuenta 1.",
             "default": 1
           },
           "plan_id": {
@@ -71935,7 +71935,7 @@
             "maximum": 12.0,
             "minimum": 1.0,
             "title": "Periodos",
-            "description": "Cobros que descuenta. Hoy solo se acepta 1.",
+            "description": "Cobros que descuenta. De 1 a 12 períodos; el monto fijo solo descuenta 1.",
             "default": 1
           },
           "plan_id": {
