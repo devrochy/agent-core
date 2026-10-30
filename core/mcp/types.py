@@ -29,7 +29,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from core.shared.logger import get_logger
 
@@ -526,6 +526,31 @@ class BasePluginConfig(BaseModel):
     """
 
 
+class PackProfileEdit(BaseModel):
+    """Cómo se edita un perfil: `kind` es una cadena abierta que el cliente reconoce o ignora."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str
+    ref_id: str
+
+
+class PackProfile(BaseModel):
+    """Perfil que un pack tiene de un colaborador (ADR-0176), para mostrarlo en Equipo.
+
+    `resumen` es un objeto pequeño y plano que el cliente pinta sin interpretar; lo define el pack. El core
+    lo descarta (y `edit`) para quien no tiene acceso a ninguna sección del pack."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pack: str
+    role_id: str
+    ref_id: str
+    etiqueta: str
+    resumen: dict[str, Any] | None = None
+    edit: PackProfileEdit | None = None
+
+
 class BaseModule(ABC):
     """Contrato del plugin. Ciclo de vida: Install -> Detect -> Configure -> Activate -> Run."""
 
@@ -583,6 +608,16 @@ class BaseModule(ABC):
         como su usuario (ej. perfil `Gestor`). Default: no-op.
         """
         return None
+
+    async def collaborator_profiles(
+        self, tenant_id: uuid.UUID, admin_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[PackProfile]]:
+        """Hook opcional (ADR-0176): los perfiles que este pack tiene de los colaboradores `admin_ids`
+        del negocio `tenant_id`, para mostrarlos en Equipo. Es POR LOTE (una consulta por pack y por
+        página, nunca una por colaborador), de solo lectura y bajo el `tenant_scope` del negocio; el core
+        lo llama con un tope de 1 s y, si falla o se pasa, el listado sale sin los perfiles de este pack.
+        Default: `{}` (el pack no aporta perfiles)."""
+        return {}
 
     async def rol_de_acceso(self, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> str | None:
         """Hook opcional (ADR-0174): el rol de ACCESO con el que esta cuenta cae bajo la política de
