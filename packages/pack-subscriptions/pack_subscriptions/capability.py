@@ -32,6 +32,7 @@ from core.subscriptions import (
     SubscriptionView,
 )
 from pack_subscriptions import promociones
+from pack_subscriptions.cargos import crear_cargo_de_periodo
 from pack_subscriptions.models import Subscription, SubscriptionCharge
 from pack_subscriptions.periodos import PERIODICIDADES, etiqueta_periodo, sumar_periodo
 
@@ -455,10 +456,21 @@ class EvaluacionCambio:
     desde_cero: bool
 
 
-def evaluar_cambio(sub: Subscription, *, variant_id: str, plan: PlanSnapshot, ahora: datetime) -> EvaluacionCambio:
+def evaluar_cambio(
+    sub: Subscription,
+    *,
+    variant_id: str,
+    plan: PlanSnapshot,
+    ahora: datetime,
+    factor: Decimal | None = None,
+) -> EvaluacionCambio:
     """Las reglas del cambio de plan (ADR-0111 §3 y §6), sin efectos: las usan `change_plan`, la
     cotización y el resolver del procedimiento, así los tres dicen lo mismo. Lanza
-    `SubscriptionError` con el código estable de cada rechazo."""
+    `SubscriptionError` con el código estable de cada rechazo.
+
+    `factor` (HU-SUB-35): `monto / monto_bruto` del cargo pagado del período en curso (`factor_del_periodo`).
+    Si el período se pagó con descuento, la diferencia del resto de ese período se calcula con el mismo factor,
+    aunque la suscripción ya no tenga descuento vigente. No aplica al contratar desde un plan gratuito."""
     from pack_subscriptions.prorrateo import diferencia_prorrateada
 
     nuevo = Decimal(str(plan.get("precio") or 0))
@@ -497,9 +509,39 @@ def evaluar_cambio(sub: Subscription, *, variant_id: str, plan: PlanSnapshot, ah
         inicio = sub.periodo_actual_inicio or ahora
         fin = sub.proximo_cargo or sumar_periodo(inicio, sub.periodicidad, sub.dia_ancla)
         monto = diferencia_prorrateada(actual, nuevo, inicio, fin, ahora, sub.moneda)
+        if factor is not None and monto > 0:
+            paso = Decimal("1") if (sub.moneda or "COP").upper() == "COP" else Decimal("0.01")
+            monto = (monto * factor).quantize(paso, rounding=ROUND_HALF_UP)
     if monto <= 0:
         return EvaluacionCambio("inmediato", Decimal("0"), desde_cero)
     return EvaluacionCambio("pendiente_pago", monto, desde_cero)
+
+
+async def factor_del_periodo(session, sub: Subscription) -> Decimal | None:  # type: ignore[no-untyped-def]
+    """`monto / monto_bruto` del cargo pagado del período en curso, o None si ese período se pagó a precio de lista.
+
+    El período en curso lo cubre su cargo de período o, si la suscripción se activó en él, el cobro de inscripción."""
+    if sub.periodo_actual_inicio is None:
+        return None
+    periodo = etiqueta_periodo(sub.periodo_actual_inicio, sub.periodicidad)
+    base = [
+        SubscriptionCharge.tenant_id == get_current_tenant_id(),
+        SubscriptionCharge.subscription_id == sub.id,
+        SubscriptionCharge.estado == "pagado",
+        SubscriptionCharge.monto_bruto.isnot(None),
+        SubscriptionCharge.deleted_at.is_(None),
+    ]
+    condicion = and_(SubscriptionCharge.tipo == "periodo", SubscriptionCharge.periodo == periodo)
+    if sub.fecha_alta is not None and sub.periodo_actual_inicio == sub.fecha_alta:
+        condicion = or_(condicion, SubscriptionCharge.tipo == "inscripcion")
+    cargo = (
+        await session.execute(
+            select(SubscriptionCharge).where(*base, condicion).order_by(SubscriptionCharge.created_at.desc()).limit(1)
+        )
+    ).scalars().first()
+    if cargo is None or not Decimal(cargo.monto_bruto):
+        return None
+    return Decimal(cargo.monto) / Decimal(cargo.monto_bruto)
 
 
 def mismo_monto(calculado: Decimal, esperado: Decimal | float | str, moneda: str | None) -> bool:
@@ -631,6 +673,8 @@ class SubscriptionCapabilityImpl:
             sub.motivo_cancelacion = "admin" if actor else "cliente"
             sub.fecha_cancelacion = datetime.now(UTC)
             sub.proximo_cargo = None
+            # Cancelar termina el descuento vigente (HU-SUB-35): el canje queda `terminado` y no se reutiliza.
+            await promociones.terminar_descuento(session, sub, motivo="cancelada")
             if antes == _PENDIENTE:
                 # Una inscripción sin pagar que se cancela deja su cargo `anulado`: su link deja de
                 # aplicar y un pago tardío se avisa como pago sin aplicar (nunca activa).
@@ -670,21 +714,33 @@ class SubscriptionCapabilityImpl:
         `ahora` que el cálculo; si no coincide no se hace nada (`monto_distinto`). Nunca se usa
         como monto: el cargo sale siempre del cálculo del servidor.
 
-        `codigo_promocion` (HU-SUB-33): solo se acepta cuando el cambio es `desde_cero` (una Free o una
-        prueba que contrata un plan de pago); el cobro sale neto y `monto_esperado` se compara con el neto.
-        En cualquier otro cambio un código se rechaza (`promo_no_aplica_a_cambio`), no se ignora.
+        `codigo_promocion` (HU-SUB-33, HU-SUB-35): se acepta al contratar un plan de pago desde uno gratuito
+        (`desde_cero`: el cobro es el período 1 del descuento) y en un upgrade (el descuento recae sobre la
+        diferencia prorrateada, esa diferencia no consume período y los N empiezan en el siguiente cargo
+        completo). El cobro sale neto y `monto_esperado` se compara con el neto. En un downgrade responde
+        `promo_no_aplica_a_downgrade`; en cualquier otro cambio, `promo_no_aplica_a_cambio`: nunca se ignora.
+        Pagar un cambio de plan termina el descuento vigente (el canje viejo pasa a `terminado`).
         """
         ahora = datetime.now(UTC)
         destino = {"variante_id": str(variant_id), "plan": dict(plan)}
+        if plan.get("plan_id"):
+            # Plan del catálogo (SPEC-43): `aplicar_plan` apunta la suscripción a `plan_id`, no a una variante.
+            destino["plan_id"] = str(plan["plan_id"])
         codigo = promociones.normalizar_codigo(codigo_promocion)
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
             # Dos cambios a la vez (dos canales) no dejan dos cargos pendientes: se serializan.
             await session.refresh(sub, with_for_update=True)
-            evaluacion = evaluar_cambio(sub, variant_id=variant_id, plan=plan, ahora=ahora)
+            # Con un código explícito el descuento sale del código; sin él, el período en curso conserva el factor
+            # con que se pagó (HU-SUB-35).
+            factor = None if codigo is not None else await factor_del_periodo(session, sub)
+            evaluacion = evaluar_cambio(sub, variant_id=variant_id, plan=plan, ahora=ahora, factor=factor)
             promo = None
+            consume = False
             if codigo is not None:
-                promo = await self._evaluar_promocion_de_cambio(session, sub, evaluacion, variant_id, plan, codigo, ahora)
+                promo, consume = await self._evaluar_promocion_de_cambio(
+                    session, sub, evaluacion, variant_id, plan, codigo, ahora
+                )
             a_cobrar = promo.neto if promo is not None else evaluacion.monto
             if monto_esperado is not None and not mismo_monto(a_cobrar, monto_esperado, sub.moneda):
                 raise SubscriptionError(
@@ -698,6 +754,7 @@ class SubscriptionCapabilityImpl:
                 return {**_view(sub), "cambio": "programado"}
             if evaluacion.cambio == "inmediato":
                 await _anular_cambios_pendientes(session, sub)
+                await promociones.terminar_descuento(session, sub, motivo="cambio_de_plan")
                 aplicar_plan(sub, {**destino, "desde_cero": evaluacion.desde_cero}, ahora)
                 await session.flush()
                 return {**_view(sub), "cambio": "inmediato"}
@@ -726,7 +783,7 @@ class SubscriptionCapabilityImpl:
                     },
                 )
                 if promo is not None:
-                    promociones.aplicar_al_cargo(cargo, promo)
+                    promociones.aplicar_al_cargo(cargo, promo, consume=consume)
                 session.add(cargo)
                 await session.flush()
                 if promo is not None:
@@ -766,10 +823,20 @@ class SubscriptionCapabilityImpl:
 
     async def _evaluar_promocion_de_cambio(
         self, session, sub: Subscription, evaluacion, variant_id: str, plan: PlanSnapshot, codigo: str, ahora: datetime  # type: ignore[no-untyped-def]
-    ) -> promociones.Evaluacion:
-        if evaluacion.cambio != "pendiente_pago" or not evaluacion.desde_cero:
+    ) -> tuple[promociones.Evaluacion, bool]:
+        """Evalúa el código de un cambio de plan: `(evaluación, consume_periodo)`.
+
+        Desde un plan gratuito el cobro es el período 1 (consume). En un upgrade el descuento recae sobre la
+        diferencia prorrateada y no consume: además se comprueba que el plan nuevo admita el descuento a precio
+        completo, porque desde el siguiente cargo se cobra así."""
+        if evaluacion.cambio == "programado":
             raise SubscriptionError(
-                "La promoción solo aplica al contratar un plan de pago desde un plan gratuito.",
+                "La promoción no aplica a una baja de plan: solo al contratar o al subir de plan.",
+                code="promo_no_aplica_a_downgrade",
+            )
+        if evaluacion.cambio != "pendiente_pago":
+            raise SubscriptionError(
+                "La promoción solo aplica al contratar un plan de pago o al subir de plan.",
                 code="promo_no_aplica_a_cambio",
             )
         try:
@@ -788,38 +855,67 @@ class SubscriptionCapabilityImpl:
                 )
             )
         ).scalars().all()
-        return await promociones.evaluar(
+        moneda = plan.get("moneda") or sub.moneda
+        promo = await promociones.evaluar(
             session,
             codigo=codigo,
             plan_id=plan_id,
             precio=evaluacion.monto,
-            moneda=plan.get("moneda") or sub.moneda,
+            moneda=moneda,
             customer_id=sub.customer_id,
             huella_=huella_,
             ahora=ahora,
             excluir_cargos=list(pendientes),
         )
+        if not evaluacion.desde_cero:
+            promociones.calcular(Decimal(str(plan.get("precio") or 0)), promo.tipo, promo.valor, moneda)
+        return promo, evaluacion.desde_cero
 
     async def cotizar_cambio(
-        self, subscription_id: uuid.UUID, *, variant_id: str, plan: PlanSnapshot
+        self,
+        subscription_id: uuid.UUID,
+        *,
+        variant_id: str,
+        plan: PlanSnapshot,
+        codigo_promocion: str | None = None,
     ) -> dict[str, Any]:
         """Operación opcional del proveedor (HU-AOS-08, adenda de ADR-0111): lo que haría
-        `change_plan` con este plan, sin efectos. Lanza los mismos `SubscriptionError`."""
+        `change_plan` con este plan, sin efectos. Lanza los mismos `SubscriptionError`.
+
+        Con descuento (HU-SUB-35): `monto_a_pagar` es el NETO y se suman `monto_bruto`, `descuento` y
+        `reemplaza_descuento` (`{periodos_restantes, etiqueta}` si el cambio termina un descuento vigente, o None)."""
         ahora = datetime.now(UTC)
+        codigo = promociones.normalizar_codigo(codigo_promocion)
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
-            evaluacion = evaluar_cambio(sub, variant_id=variant_id, plan=plan, ahora=ahora)
+            factor = None if codigo is not None else await factor_del_periodo(session, sub)
+            evaluacion = evaluar_cambio(sub, variant_id=variant_id, plan=plan, ahora=ahora, factor=factor)
+            promo = None
+            if codigo is not None:
+                promo, _ = await self._evaluar_promocion_de_cambio(session, sub, evaluacion, variant_id, plan, codigo, ahora)
             desde = (sub.proximo_cargo or ahora).isoformat() if evaluacion.cambio == "programado" else None
-            return {
+            reemplaza = None
+            if sub.promocion_id is not None:
+                reemplaza = {
+                    "periodos_restantes": sub.descuento_periodos_restantes,
+                    "etiqueta": (sub.descuento or {}).get("etiqueta"),
+                }
+            salida: dict[str, Any] = {
                 "plan_actual": sub.concepto,
                 "plan_nuevo": plan.get("nombre"),
                 "precio_nuevo": float(Decimal(str(plan.get("precio") or 0))),
                 "moneda": plan.get("moneda") or sub.moneda,
                 "periodicidad": _periodicidad(plan.get("periodicidad"), sub.periodicidad),
                 "cambio": evaluacion.cambio,
-                "monto_a_pagar": float(evaluacion.monto),
+                "monto_a_pagar": float(promo.neto if promo is not None else evaluacion.monto),
                 "desde": desde,
+                "reemplaza_descuento": reemplaza,
             }
+            if promo is not None:
+                salida["monto_bruto"] = float(promo.bruto)
+                salida["descuento"] = float(promo.descuento)
+                salida["promocion"] = promo.etiqueta
+            return salida
 
     async def charge_link(
         self, subscription_id: uuid.UUID, *, period: str = ""
@@ -863,6 +959,24 @@ class SubscriptionCapabilityImpl:
                 ).scalars().first()
                 periodo = cargo.periodo if cargo is not None else (period or actual)
                 if cargo is None:
+                    # El período en que se activó la inscripción lo pagó el cobro de inscripción (su etiqueta es
+                    # «inscripcion», no la del período): no se crea un cargo de período encima (HU-SUB-35).
+                    cubierto_por_inscripcion = (
+                        sub.fecha_alta is not None
+                        and sub.periodo_actual_inicio == sub.fecha_alta
+                        and (
+                            await session.execute(
+                                select(SubscriptionCharge.id).where(
+                                    SubscriptionCharge.tenant_id == get_current_tenant_id(),
+                                    SubscriptionCharge.subscription_id == subscription_id,
+                                    SubscriptionCharge.tipo == "inscripcion",
+                                    SubscriptionCharge.estado == "pagado",
+                                    SubscriptionCharge.deleted_at.is_(None),
+                                )
+                            )
+                        ).first()
+                        is not None
+                    )
                     pagado = (
                         await session.execute(
                             select(SubscriptionCharge.id).where(
@@ -870,18 +984,12 @@ class SubscriptionCapabilityImpl:
                             )
                         )
                     ).first()
-                    if pagado is not None:
+                    if pagado is not None or cubierto_por_inscripcion:
                         raise SubscriptionError("Ese período ya está pago.", code="ya_pagado")
-                    cargo = SubscriptionCharge(
-                        tenant_id=get_current_tenant_id(),
-                        subscription_id=subscription_id,
-                        periodo=periodo,
-                        monto=sub.valor_periodo or 0,
-                        estado="pendiente",
-                        fecha_vencimiento=inicio_actual,
-                    )
-                    session.add(cargo)
-                    await session.flush()
+                    # Quien crea el cargo bloquea la suscripción (suscripción → cargo) y consume el descuento una
+                    # sola vez, igual que el cron (HU-SUB-35).
+                    await session.refresh(sub, with_for_update=True)
+                    cargo, _ = await crear_cargo_de_periodo(session, sub, inicio_actual, ignorar_anulados=True)
 
         if cargo.link_url and cargo.referencia:
             # El cron ya generó el link de este cargo (HU-SUB-05): se reusa. Antes se pedía
@@ -1027,16 +1135,13 @@ class SubscriptionCapabilityImpl:
                 estado = "ya_registrado" if previo.get("referencia") == referencia else "duplicado"
                 return {"estado": estado, "periodo": periodo, "charge_id": str(cargo.id)}
             if cargo is None:
-                cargo = SubscriptionCharge(
-                    tenant_id=get_current_tenant_id(),
-                    subscription_id=sub.id,
-                    periodo=periodo,
-                    monto=sub.valor_periodo or 0,
-                    estado="pagado",
-                    fecha_vencimiento=inicio,
-                    pago_externo=externo,
+                # A precio de lista y sin consumir el descuento: lo cobró otro canal (HU-SUB-35).
+                cargo, creado = await crear_cargo_de_periodo(
+                    session, sub, inicio, estado="pagado", pago_externo=externo, descontar=False
                 )
-                session.add(cargo)
+                if not creado:  # otro lo creó entre la lectura y aquí: se marca pagado igual
+                    cargo.estado = "pagado"
+                    cargo.pago_externo = externo
             else:
                 cargo.estado = "pagado"
                 cargo.pago_externo = externo

@@ -157,7 +157,7 @@ async def test_pagar_el_neto_confirma_el_canje_y_activa() -> None:
 
     assert (await _sub(tid, sub_id)).estado == "activa"
     [canje] = await _canjes(tid, promo.id)
-    assert canje.estado == "confirmado"
+    assert canje.estado == "agotado", "un descuento de un solo período queda terminal al pagarse (HU-SUB-35)"
     assert (await _promo_fila(tid, promo.id)).canjes_usados == 1
     [cargo] = await _cargos(tid, sub_id)
     assert cargo.estado == "pagado"
@@ -186,7 +186,7 @@ async def test_el_pago_manual_tambien_confirma_el_canje() -> None:
     vista = await _con_codigo(tid, cliente, metodo_pago="transferencia")
     async with tenant_scope(tid):
         await confirmar_pago(uuid.UUID(vista["subscription_id"]), referencia="COMP-77", actor="admin:test")
-    assert [c.estado for c in await _canjes(tid, promo.id)] == ["confirmado"]
+    assert [c.estado for c in await _canjes(tid, promo.id)] == ["agotado"]
 
 
 async def test_un_pago_que_llega_a_una_inscripcion_que_ya_no_espera_deja_el_canje_reservado() -> None:
@@ -539,15 +539,15 @@ async def test_free_a_pago_con_codigo_lleva_el_descuento_y_cuenta_como_el_period
     await _pago(tid, cargo.id, 80000.0)
     sub = await _sub(tid, sub_id)
     assert sub.estado == "activa" and sub.plan_id == plan.id and sub.valor_periodo == Decimal("100000.00")
-    assert [c.estado for c in await _canjes(tid, promo.id)] == ["confirmado"]
+    assert [c.estado for c in await _canjes(tid, promo.id)] == ["agotado"]
 
 
-async def test_change_plan_con_codigo_solo_aplica_desde_cero() -> None:
+async def test_change_plan_con_codigo_aplica_desde_cero_y_un_downgrade_lo_rechaza() -> None:
     from pack_subscriptions import planes
     from pack_subscriptions.capability import SubscriptionCapabilityImpl
 
     tid, plan, promo = await _escenario()
-    pro = await _plan(tid, "PRO", "200000")
+    bajo = await _plan(tid, "BAJO", "50000")
     await _plan(tid, "FREE", "0", trial_dias=14)
     cliente = await _cliente(tid)
     free = await _inscribir(tid, cliente, "FREE")
@@ -562,14 +562,14 @@ async def test_change_plan_con_codigo_solo_aplica_desde_cero() -> None:
     assert vista["cargo_cambio"]["monto_bruto"] == 100000.0
     assert [c.estado for c in await _canjes(tid, promo.id)] == ["reservado"]
 
-    # Pagado el cambio, la suscripción ya es de pago: un upgrade con código NO lleva descuento.
+    # Pagado el cambio, la suscripción ya es de pago: bajar de plan con un código se rechaza, no se ignora.
     cargo = next(c for c in await _cargos(tid, sub_id) if c.tipo == "cambio_plan")
     await _pago(tid, cargo.id, 80000.0)
     otra_promo = await _promo(tid, "otra", valor="10")
     async with tenant_scope(tid):
         with pytest.raises(SubscriptionError) as e:
-            await cap.change_plan(sub_id, variant_id=str(pro.id), plan=planes.snapshot(pro), codigo_promocion="otra")
-    assert e.value.code == "promo_no_aplica_a_cambio"
+            await cap.change_plan(sub_id, variant_id=str(bajo.id), plan=planes.snapshot(bajo), codigo_promocion="otra")
+    assert e.value.code == "promo_no_aplica_a_downgrade"
     assert (await _promo_fila(tid, otra_promo.id)).canjes_usados == 0
 
 

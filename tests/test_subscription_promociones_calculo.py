@@ -72,12 +72,12 @@ def test_un_monto_fijo_con_dos_o_mas_periodos_se_rechaza() -> None:
     assert error.value.code == "monto_un_periodo"
 
 
-def test_la_api_solo_habilita_un_periodo_hasta_la_hu_sub_35() -> None:
+def test_la_api_acepta_de_1_a_12_periodos_y_rechaza_el_resto() -> None:
+    assert validar(_datos(periodos=3)).periodos == 3
+    assert validar(_datos(periodos=12)).periodos == 12
     with pytest.raises(PromoError) as error:
-        validar(_datos(periodos=3))
-    assert error.value.code == "periodos_no_disponibles"
-    # Con el tope levantado (HU-SUB-35) un porcentaje de N períodos es válido.
-    assert validar(_datos(periodos=3), max_periodos=12).periodos == 3
+        validar(_datos(periodos=13))
+    assert error.value.code == "periodos_invalidos"
 
 
 @pytest.mark.parametrize("codigo", ["ab", "con espacio", "-empieza", "x" * 41, "ñandú"])

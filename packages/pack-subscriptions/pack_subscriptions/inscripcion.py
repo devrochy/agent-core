@@ -831,7 +831,6 @@ async def _activar_por_pago(
     if motivo:
         # El dinero llegó pero no se aplicó: un canje `reservado` se queda así (lo resuelve una persona).
         return motivo
-    await promociones.confirmar_por_cargo(session, cargo)
     if cargo.tipo == CARGO_INSCRIPCION:
         sub.estado = "activa"
         sub.motivo_pausa = None
@@ -841,13 +840,19 @@ async def _activar_por_pago(
         sub.periodo_actual_inicio = ahora
         sub.proximo_cargo = sumar_periodo(ahora, sub.periodicidad, ahora.day)
         await session.flush()
+        # El canje pasa a `confirmado` y el descuento queda en la suscripción con los períodos que falten.
+        await promociones.confirmar_por_cargo(session, cargo, sub)
         await _emitir_activada(session, sub, None, cambio=False, charge_id=cargo.id, monto_cobrado=Decimal(cargo.monto))
         log.info("subs_inscripcion_activada", subscription_id=str(sub.id), numero_publico=sub.numero_publico)
         return None
     if cargo.tipo == "cambio_plan" and cargo.cambio_plan:
         # Upgrade pagado (HU-SUB-07, ADR-0111): el plan cambia en el acto.
+        # Cualquier cambio de plan termina el descuento vigente (el canje pasa a `terminado`); si este cobro trae
+        # un código nuevo, su canje queda confirmado y es el descuento de aquí en adelante (HU-SUB-35).
+        await promociones.terminar_descuento(session, sub, motivo="cambio_de_plan")
         aplicar_plan(sub, cargo.cambio_plan, ahora)
         await session.flush()
+        await promociones.confirmar_por_cargo(session, cargo, sub)
         await _emitir_activada(session, sub, None, cambio=True, charge_id=cargo.id, monto_cobrado=Decimal(cargo.monto))
         log.info("subs_cambio_de_plan_pagado", subscription_id=str(sub.id), plan=sub.concepto)
         return None
