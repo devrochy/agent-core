@@ -13,6 +13,7 @@ from decimal import Decimal
 
 import pytest
 from _api_helpers import uniq
+from _subs_helpers import nueva_sub
 from _transferencia import con_cuentas_de_transferencia  # noqa: F401  (fixture)
 from sqlalchemy import select
 
@@ -46,19 +47,17 @@ async def _negocio(tz: str | None = None) -> uuid.UUID:
 
 
 async def _sub(tid, *, cliente: uuid.UUID, proximo: datetime):
-    from pack_subscriptions.models import Subscription
 
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tid):
         async with get_session() as s:
-            sub = Subscription(
-                tenant_id=tid, customer_id=cliente, concepto="Plan", estado="activa",
+            sub = await nueva_sub(
+                s, tid, customer_id=cliente, concepto="Plan", estado="activa",
                 valor_periodo=Decimal("100000"), periodicidad="mensual", dia_ancla=proximo.day,
                 proximo_cargo=proximo,
             )
-            s.add(sub)
             await s.flush()
             return sub.id
 

@@ -26,7 +26,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from _alta_helpers import activar_inscripcion, corregir_datos_alta, suscripcion_de_plan
+from _alta_helpers import (
+    activar_inscripcion,
+    corregir_datos_alta,
+    inscribir_y_pagar,
+    plan_del_catalogo,
+    suscripcion_de_plan,
+)
 from _api_helpers import uniq
 from sqlalchemy import func, select
 
@@ -142,7 +148,7 @@ async def _cliente_con_whatsapp(tid: uuid.UUID) -> uuid.UUID:
 
 
 def _datos(email: str, *, negocio: str = "Pizzería Roma", vertical: str | None = "restaurante") -> dict[str, Any]:
-    datos: dict[str, Any] = {"email": email, "telefono": "+573000000000", "negocio": negocio}
+    datos: dict[str, Any] = {"email": email, "telefono": "+573000000000", "negocio": negocio, "nombre": "Ana Pérez"}
     if vertical:
         datos["vertical"] = vertical
     return datos
@@ -296,7 +302,7 @@ async def test_alta_automatica_premium_con_preset_e_invitacion(vendedores, corre
 
     [evento] = await _eventos(vendedor, referencia)
     assert evento.status == "entregado", evento.last_error
-    assert evento.payload["referencia"] == referencia and evento.payload["variant_id"]
+    assert evento.payload["referencia"] == referencia and evento.payload["plan_id"]
     registro = await _registro(vendedor, referencia)
     assert registro.estado == "completado", registro.motivo
     negocio = await _tenant(registro.negocio_tenant_id)
@@ -546,23 +552,36 @@ async def test_plan_que_no_es_de_la_plataforma_se_omite(vendedores, correos) -> 
 
 async def test_cambio_de_plan_no_crea_otro_negocio(vendedores, correos) -> None:
     """Free → Premium en la misma suscripción: un solo negocio; el cambio queda auditado."""
+    from pack_subscriptions.models import Subscription
+
+    from core.db.session import get_session
+    from core.events.outbox import payload_para_handlers
+    from core.provisioning.consumer import on_subscription_activated
+    from core.shared.tenant import tenant_scope
+
     vendedor = await _vendedor()
     vendedores(vendedor)
     email = _correo()
-    free, cliente = await _pedido_de_plan(vendedor, plan="free", precio=0, datos_alta=_datos(email))
+    cliente = await _cliente_con_whatsapp(vendedor)
+    free, _ = await _pedido_de_plan(vendedor, plan="free", precio=0, customer_id=cliente, datos_alta=_datos(email))
     await _entregar(vendedor, free)
-    premium, _ = await _pedido_de_plan(vendedor, customer_id=cliente, datos_alta=_datos(email))
-    [evento] = await _eventos(vendedor, premium)
-    assert evento.payload["cambio_de_plan"] is True
-    await _entregar(vendedor, premium)
+    async with tenant_scope(vendedor):
+        async with get_session() as s:
+            sub_id = (await s.execute(select(Subscription.id).where(Subscription.numero_publico == free))).scalar_one()
+    premium = await plan_del_catalogo(vendedor, plan="premium", precio=600_000)
+    await inscribir_y_pagar(vendedor, cliente, sub_id, premium)  # el cambio sale con la misma referencia de la suscripción
+    [alta, evento] = sorted(await _eventos(vendedor, free), key=lambda e: e.payload["cambio_de_plan"])
+    assert evento.payload["cambio_de_plan"] is True and evento.payload["subscription_id"] == str(sub_id)
+    async with tenant_scope(vendedor):
+        await on_subscription_activated(**payload_para_handlers(evento.payload))
 
     registro = await _registro(vendedor, free)
     assert registro.estado == "completado"
-    assert await _registro(vendedor, premium) is None
     [cambio] = await _auditoria(vendedor, "aprovisionamiento_cambio_de_plan")
-    assert cambio.input["referencia"] == premium
+    assert cambio.input["referencia"] == f"{free}:cambio"
     assert cambio.output["negocio_tenant_id"] == str(registro.negocio_tenant_id)
     assert len(await _auditoria(vendedor, "negocio_aprovisionado")) == 1
+    del alta
 
 
 # ------------------------------------------------------------------ owner e invitación

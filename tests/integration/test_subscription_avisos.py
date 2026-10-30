@@ -13,6 +13,7 @@ from decimal import Decimal
 
 import pytest
 from _api_helpers import api_headers, uniq
+from _subs_helpers import nueva_sub
 from _transferencia import con_cuentas_de_transferencia  # noqa: F401  (fixture)
 from sqlalchemy import select
 
@@ -42,18 +43,17 @@ async def _negocio(config: dict | None = None) -> uuid.UUID:
 
 
 async def _sub_con_cargo(tid, *, vence: datetime, creado: datetime, estado_cargo="pendiente", **campos):
-    from pack_subscriptions.models import Subscription, SubscriptionCharge
+    from pack_subscriptions.models import SubscriptionCharge
 
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tid):
         async with get_session() as s:
-            sub = Subscription(
-                tenant_id=tid, customer_id=uuid.uuid4(), concepto="Plan Pro", estado=campos.pop("estado", "activa"),
+            sub = await nueva_sub(
+                s, tid, customer_id=uuid.uuid4(), concepto="Plan Pro", estado=campos.pop("estado", "activa"),
                 valor_periodo=Decimal("200000"), moneda="COP", periodicidad="mensual", dia_ancla=15, **campos,
             )
-            s.add(sub)
             await s.flush()
             cargo = SubscriptionCharge(
                 tenant_id=tid, subscription_id=sub.id, periodo=vence.strftime("%Y-%m"),
@@ -81,7 +81,6 @@ async def _eventos(tid, topic: str) -> list:
 async def test_cargo_con_anticipacion_y_texto_del_negocio() -> None:
     """Gherkin «Link enviado»: el cargo sale `dias_anticipacion` antes, con el texto del pack."""
     from pack_subscriptions.jobs import _generar_cargos
-    from pack_subscriptions.models import Subscription
 
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -90,12 +89,11 @@ async def test_cargo_con_anticipacion_y_texto_del_negocio() -> None:
     tid = await _negocio({"aviso_cargo_transferencia_texto": "Hola {cliente.nombre}, paga así: {cargo.datos_transferencia}"})
     async with tenant_scope(tid):
         async with get_session() as s:
-            sub = Subscription(
-                tenant_id=tid, customer_id=uuid.uuid4(), concepto="Plan", estado="activa",
+            await nueva_sub(
+                s, tid, customer_id=uuid.uuid4(), concepto="Plan", estado="activa",
                 valor_periodo=Decimal("100000"), periodicidad="mensual", dia_ancla=20,
                 proximo_cargo=AHORA + timedelta(days=2),
             )
-            s.add(sub)
     await _generar_cargos(AHORA)
     [evento] = await _eventos(tid, "subscription.charge_created")
     assert evento.payload["texto"] == "Hola {cliente.nombre}, paga así: {cargo.datos_transferencia}"
@@ -214,7 +212,6 @@ def _sin_cuentas():
 @pytest.mark.asyncio
 async def test_cargo_nuevo_sin_link_lleva_las_cuentas_y_ningun_link() -> None:
     from pack_subscriptions.jobs import _generar_cargos
-    from pack_subscriptions.models import Subscription
 
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -222,12 +219,10 @@ async def test_cargo_nuevo_sin_link_lleva_las_cuentas_y_ningun_link() -> None:
     tid = await _negocio()
     async with tenant_scope(tid):
         async with get_session() as s:
-            s.add(
-                Subscription(
-                    tenant_id=tid, customer_id=uuid.uuid4(), concepto="Plan Básico", estado="activa",
-                    valor_periodo=Decimal("80000"), periodicidad="mensual", dia_ancla=20,
-                    proximo_cargo=AHORA + timedelta(days=2),
-                )
+            await nueva_sub(
+                s, tid, customer_id=uuid.uuid4(), concepto="Plan Básico", estado="activa",
+                valor_periodo=Decimal("80000"), periodicidad="mensual", dia_ancla=20,
+                proximo_cargo=AHORA + timedelta(days=2),
             )
     await _generar_cargos(AHORA)
     [evento] = await _eventos(tid, "subscription.charge_created")
@@ -241,7 +236,7 @@ async def test_cargo_nuevo_sin_link_lleva_las_cuentas_y_ningun_link() -> None:
 @pytest.mark.asyncio
 async def test_cargo_nuevo_sin_link_y_sin_cuentas_no_avisa_al_cliente() -> None:
     from pack_subscriptions.jobs import _generar_cargos
-    from pack_subscriptions.models import Subscription, SubscriptionCharge
+    from pack_subscriptions.models import SubscriptionCharge
 
     from core.db.models import AuditLog
     from core.db.session import get_session
@@ -251,12 +246,10 @@ async def test_cargo_nuevo_sin_link_y_sin_cuentas_no_avisa_al_cliente() -> None:
     tid = await _negocio()
     async with tenant_scope(tid):
         async with get_session() as s:
-            s.add(
-                Subscription(
-                    tenant_id=tid, customer_id=uuid.uuid4(), concepto="Plan Básico", estado="activa",
-                    valor_periodo=Decimal("80000"), periodicidad="mensual", dia_ancla=20,
-                    proximo_cargo=AHORA + timedelta(days=2),
-                )
+            await nueva_sub(
+                s, tid, customer_id=uuid.uuid4(), concepto="Plan Básico", estado="activa",
+                valor_periodo=Decimal("80000"), periodicidad="mensual", dia_ancla=20,
+                proximo_cargo=AHORA + timedelta(days=2),
             )
     await _generar_cargos(AHORA)
     assert await _eventos(tid, "subscription.charge_created") == []

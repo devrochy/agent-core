@@ -93,6 +93,7 @@ async def test_free_nace_en_prueba_y_emite_activated() -> None:
     from pack_subscriptions.capability import SubscriptionCapabilityImpl
     from pack_subscriptions.models import Subscription
 
+    from core.db.models import Customer
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -103,8 +104,16 @@ async def test_free_nace_en_prueba_y_emite_activated() -> None:
         from pack_subscriptions.planes import obtener
 
         codigo = (await obtener(plan_id)).codigo
+        async with get_session() as s:
+            cliente = Customer(
+                tenant_id=tid, channel="whatsapp", external_id=f"whatsapp:{uniq('c')}", name="Ana",
+                contact_phone="+573001112233",
+            )
+            s.add(cliente)
+            await s.flush()
+            cliente_id = cliente.id
         vista = await SubscriptionCapabilityImpl().inscribir(
-            customer_id=uuid.uuid4(), plan_code=codigo, datos_alta={"email": "ana@ejemplo.co"}, origen="panel"
+            customer_id=cliente_id, plan_code=codigo, datos_alta={"email": "ana@ejemplo.co"}, origen="panel"
         )
         async with get_session() as s:
             sub = await s.get(Subscription, uuid.UUID(vista["subscription_id"]))

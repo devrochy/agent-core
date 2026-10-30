@@ -13,6 +13,7 @@ from decimal import Decimal
 
 import pytest
 from _api_helpers import uniq
+from _subs_helpers import nueva_sub
 from sqlalchemy import select, text
 
 pytestmark = [
@@ -35,7 +36,6 @@ async def _negocio() -> uuid.UUID:
 
 
 async def _sub(tid, **campos):
-    from pack_subscriptions.models import Subscription
 
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -48,8 +48,7 @@ async def _sub(tid, **campos):
     }
     async with tenant_scope(tid):
         async with get_session() as s:
-            sub = Subscription(tenant_id=tid, **valores)
-            s.add(sub)
+            sub = await nueva_sub(s, tid, **valores)
             await s.flush()
             return sub.id
 

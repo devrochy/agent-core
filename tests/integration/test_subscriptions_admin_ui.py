@@ -14,6 +14,7 @@ from decimal import Decimal
 
 import pytest
 from _api_helpers import api_headers, uniq
+from _subs_helpers import nueva_sub
 from sqlalchemy import select
 
 pytestmark = [
@@ -59,7 +60,6 @@ async def _cliente(tid: uuid.UUID, nombre: str, *, con_whatsapp: bool = False) -
 
 async def _sub(tid: uuid.UUID, cliente: uuid.UUID, *, concepto="Plan Pro", estado="activa", valor="200000",
                periodicidad="mensual", moneda="COP", **campos) -> uuid.UUID:
-    from pack_subscriptions.models import Subscription
 
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -68,11 +68,10 @@ async def _sub(tid: uuid.UUID, cliente: uuid.UUID, *, concepto="Plan Pro", estad
     campos.setdefault("proximo_cargo", datetime.now(UTC) + timedelta(days=5))
     async with tenant_scope(tid):
         async with get_session() as session:
-            sub = Subscription(
-                tenant_id=tid, customer_id=cliente, concepto=concepto, estado=estado, valor_periodo=Decimal(valor),
+            sub = await nueva_sub(
+                session, tid, customer_id=cliente, concepto=concepto, estado=estado, valor_periodo=Decimal(valor),
                 moneda=moneda, periodicidad=periodicidad, dia_ancla=15, **campos,
             )
-            session.add(sub)
             await session.flush()
             return sub.id
 

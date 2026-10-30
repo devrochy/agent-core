@@ -196,7 +196,8 @@ async def test_inscribir_desde_el_panel_sin_datos_del_cliente_no_falla(app_clien
 
 
 async def test_un_codigo_sin_plan_se_rechaza_en_vez_de_ignorarse(app_client) -> None:
+    """Sin `plan_codigo` (el plan libre del contrato v1 se retiró, HU-COM-17) la petición es un 422."""
     tid, h, _ = await _con_plan(app_client)
     cuerpo = {"customer_id": str(await _cliente(tid)), "nombre": "Manual", "precio": 50000, "codigo_promocion": "LANZAMIENTO"}
     r = await app_client.post(f"{BASE}/suscripciones", json=cuerpo, headers=h)
-    assert r.status_code == 422 and r.json()["error"]["code"] == "promo_requiere_plan"
+    assert r.status_code == 422

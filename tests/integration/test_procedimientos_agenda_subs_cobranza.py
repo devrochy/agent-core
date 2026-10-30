@@ -39,8 +39,7 @@ pytestmark = [
 ]
 
 HORAS = '{"mon": "09:00-18:00", "tue": "09:00-18:00", "wed": "09:00-18:00", "thu": "09:00-18:00", "fri": "09:00-18:00", "sat": "09:00-18:00", "sun": "09:00-18:00"}'
-PREMIUM = {"plan_code": "PLAN-PREMIUM", "nombre": "Premium", "precio": 600000.0, "moneda": "COP", "periodicidad": "mensual", "trial_dias": 0}
-VARIANTE_PREMIUM = str(uuid.uuid4())
+PLANES = {"PLAN-BASIC": ("Basic", 200000), "PLAN-PREMIUM": ("Premium", 600000)}
 SOLO_PROCEDIMIENTO = {
     "sub_cotizar_cambio_plan", "sub_aplicar_cambio_plan", "cob_registrar_promesa_saldo", "cob_opciones_promesa",
 }
@@ -49,23 +48,16 @@ SOLO_PROCEDIMIENTO = {
 # ---------------------------------------------------------------- packs registrados en el proceso
 
 
-class _Catalogo:
-    provider_id = "pack_subscriptions"
-
-    async def plan_por_codigo(self, codigo: str) -> tuple[str, dict[str, Any]] | None:
-        return (VARIANTE_PREMIUM, dict(PREMIUM)) if codigo.upper() == "PLAN-PREMIUM" else None
-
-
 @pytest.fixture(scope="module")
 def packs_registrados() -> Any:
-    """Las skills del core, el proveedor de suscripciones y un catálogo de planes de prueba
-    (ADR-0111). Los packs los activa el alta del negocio (`onboard_tenant`); `_asegurar_pack`
+    """Las skills del core y el proveedor de suscripciones (los planes los crea cada test en el
+    catálogo del negocio, ADR-0111). Los packs los activa el alta del negocio (`onboard_tenant`); `_asegurar_pack`
     registra a mano lo que falte si la activación no corrió en este proceso."""
     from pack_subscriptions.capability import SubscriptionCapabilityImpl
 
     from core.mcp.host import mcp_host
     from core.plugin_manager import plugin_manager
-    from core.subscriptions import plan_catalog_registry, subscription_registry
+    from core.subscriptions import subscription_registry
     from core.tools.core_skill import register_core_skills
 
     plugin_manager.scan()
@@ -73,9 +65,7 @@ def packs_registrados() -> Any:
     # El proveedor real (idempotente): no se desregistra, otros tests del proceso lo usan.
     if subscription_registry.get("pack_subscriptions") is None:
         subscription_registry.register("pack_subscriptions", SubscriptionCapabilityImpl())
-    plan_catalog_registry.register("pack_subscriptions", _Catalogo())  # type: ignore[arg-type]
     yield
-    plan_catalog_registry.unregister("pack_subscriptions")
 
 
 def _asegurar_pack(pack_id: str) -> None:
@@ -315,15 +305,21 @@ async def test_agendar_rechaza_un_horario_no_ofrecido_y_ofrece_los_disponibles(p
 
 
 async def _suscripcion_basic(tid: uuid.UUID, customer_id: uuid.UUID) -> uuid.UUID:
+    from pack_subscriptions import planes
     from pack_subscriptions.capability import crear_suscripcion_para
     from pack_subscriptions.models import Subscription
 
     from core.shared.tenant import tenant_scope
 
-    basic = {"plan_code": "PLAN-BASIC", "nombre": "Basic", "precio": 200000.0, "moneda": "COP", "periodicidad": "mensual", "trial_dias": 0}
     ahora = datetime.now(UTC)
     async with tenant_scope(tid):
-        sub = await crear_suscripcion_para(customer_id=customer_id, variante_id=uuid.uuid4(), plan=basic)
+        ids = {}
+        for codigo, (nombre, precio) in PLANES.items():  # el catálogo del negocio: Basic (el actual) y Premium (el destino)
+            plan = await planes.por_codigo(codigo, solo_activos=False) or await planes.crear(
+                planes.DatosDePlan(codigo=codigo, nombre=nombre, precio=Decimal(precio), periodicidad="mensual")
+            )
+            ids[codigo] = plan.id
+        sub = await crear_suscripcion_para(customer_id=customer_id, plan_id=ids["PLAN-BASIC"])
     async with _scope(tid) as s:
         fila = await s.get(Subscription, sub.id)
         fila.periodo_actual_inicio = ahora - timedelta(days=15)

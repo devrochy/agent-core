@@ -28,7 +28,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from _alta_helpers import plan_del_catalogo, suscripcion_de_plan
+from _alta_helpers import inscribir_y_pagar, plan_del_catalogo, suscripcion_de_plan
 from _api_helpers import api_headers, uniq
 from sqlalchemy import func, select
 
@@ -240,33 +240,7 @@ async def _pedido(
 
 
 async def _inscribir_y_pagar(esc: Escenario, plan_id: uuid.UUID) -> None:
-    """El cliente del negocio (Free, vigente o vencida) contrata un plan de pago: `inscribir` lo trata como
-    un cambio sobre la misma suscripción (D-SPEC-43-3) y el webhook del pago lo aplica."""
-    from pack_subscriptions.capability import SubscriptionCapabilityImpl
-    from pack_subscriptions.models import SubscriptionCharge
-    from pack_subscriptions.module import SubscriptionsModule
-    from pack_subscriptions.planes import obtener
-
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(esc.vendedor):
-        codigo = (await obtener(plan_id)).codigo
-        vista = await SubscriptionCapabilityImpl().inscribir(
-            customer_id=esc.cliente, plan_code=codigo, datos_alta={"email": "otro@correo-prueba.co"}, origen="panel"
-        )
-        assert vista["inscripcion"] == "cambio_de_plan", vista
-        async with get_session() as s:
-            cargo = (
-                await s.execute(
-                    select(SubscriptionCharge).where(
-                        SubscriptionCharge.subscription_id == esc.subscription_id,
-                        SubscriptionCharge.tipo == "cambio_plan",
-                        SubscriptionCharge.estado == "pendiente",
-                    )
-                )
-            ).scalar_one()
-        await SubscriptionsModule()._on_payment_confirmed(f"sub-{cargo.id}", "wompi", "pl-cambio", float(cargo.monto))
+    await inscribir_y_pagar(esc.vendedor, esc.cliente, esc.subscription_id, plan_id)
 
 
 async def _eventos(tid: uuid.UUID, topic: str) -> list[Any]:
@@ -1334,7 +1308,7 @@ async def test_un_plan_activado_por_menos_que_su_precio_no_se_aplica(vendedores,
     async with tenant_scope(esc.vendedor):
         async with get_session() as s:
             sub = await s.get(Subscription, esc.subscription_id)
-            sub.plan_id, sub.valor_periodo, sub.concepto = premium, 1, "Plan Premium"
+            sub.plan_id, sub.valor_periodo, sub.concepto, sub.estado = premium, 1, "Plan Premium", "activa"
             await _emitir_activada(s, sub, cambio=True, charge_id=uuid.uuid4())
     await _entregar(esc.vendedor, "subscription.activated", on_subscription_activated, cambio_de_plan=True)
     negocio = await _suscripcion_de(esc.negocio)

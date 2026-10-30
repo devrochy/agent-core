@@ -137,6 +137,7 @@ async def suscripcion_de_plan(
     from pack_subscriptions.capability import _emitir_activada
     from pack_subscriptions.inscripcion import _siguiente_numero
     from pack_subscriptions.models import Plan, Subscription
+    from pack_subscriptions.periodos import sumar_periodo
 
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -149,6 +150,7 @@ async def suscripcion_de_plan(
             catalogo = (await s.execute(select(Plan).where(Plan.id == plan_id))).scalar_one()
             precio = int(catalogo.precio)  # con `plan_id` el precio es el del catálogo
             vigente = bool(pagado)
+            trial_termina = (ahora + timedelta(days=30)) if (vigente and precio == 0) else None
             estado = ("trialing" if precio == 0 else "activa") if vigente else "pendiente_pago"
             sub = Subscription(
                 tenant_id=tid,
@@ -164,8 +166,8 @@ async def suscripcion_de_plan(
                 periodicidad=catalogo.periodicidad,
                 dia_ancla=ahora.day,
                 periodo_actual_inicio=ahora if vigente else None,
-                trial_termina=(ahora + timedelta(days=30)) if (vigente and precio == 0) else None,
-                proximo_cargo=(ahora + timedelta(days=30)) if vigente else None,
+                trial_termina=trial_termina,
+                proximo_cargo=(trial_termina or sumar_periodo(ahora, catalogo.periodicidad, ahora.day)) if vigente else None,
                 fecha_alta=ahora if vigente else None,
             )
             s.add(sub)
@@ -206,3 +208,34 @@ async def corregir_datos_alta(tid: uuid.UUID, referencia: str, **cambios: Any) -
         async with get_session() as s:
             sub = (await s.execute(select(Subscription).where(Subscription.numero_publico == referencia))).scalar_one()
             sub.datos_alta = {**(sub.datos_alta or {}), **cambios}
+
+
+async def inscribir_y_pagar(tid: uuid.UUID, cliente: uuid.UUID, subscription_id: uuid.UUID, plan_id: uuid.UUID) -> None:
+    """El cliente de una suscripción Free (vigente o vencida) contrata un plan de pago: `inscribir` lo trata
+    como un cambio sobre la misma suscripción (D-SPEC-43-3) y el webhook del pago lo aplica (emite
+    `subscription.activated` con `cambio_de_plan`). El cliente debe existir en el negocio."""
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl
+    from pack_subscriptions.models import SubscriptionCharge
+    from pack_subscriptions.module import SubscriptionsModule
+    from pack_subscriptions.planes import obtener
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        codigo = (await obtener(plan_id)).codigo
+        vista = await SubscriptionCapabilityImpl().inscribir(
+            customer_id=cliente, plan_code=codigo, datos_alta={"email": "otro@correo-prueba.co"}, origen="panel"
+        )
+        assert vista["inscripcion"] == "cambio_de_plan", vista
+        async with get_session() as s:
+            cargo = (
+                await s.execute(
+                    select(SubscriptionCharge).where(
+                        SubscriptionCharge.subscription_id == subscription_id,
+                        SubscriptionCharge.tipo == "cambio_plan",
+                        SubscriptionCharge.estado == "pendiente",
+                    )
+                )
+            ).scalar_one()
+        await SubscriptionsModule()._on_payment_confirmed(f"sub-{cargo.id}", "wompi", "pl-cambio", float(cargo.monto))

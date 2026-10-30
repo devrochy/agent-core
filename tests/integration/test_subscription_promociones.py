@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from _subs_helpers import nueva_sub
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from test_subscription_inscripcion import (
@@ -407,7 +408,7 @@ async def test_el_ultimo_cupo_lo_gana_uno_solo_aunque_compitan_varios() -> None:
 async def test_reservar_sin_cupo_responde_promo_agotada() -> None:
     """Dos evaluaron con un cupo y el otro se gastó antes de reservar: el UPDATE atómico lo detecta."""
     from pack_subscriptions import promociones
-    from pack_subscriptions.models import Subscription, SubscriptionCharge
+    from pack_subscriptions.models import SubscriptionCharge
 
     from core.db.session import get_session
 
@@ -425,11 +426,10 @@ async def test_reservar_sin_cupo_responde_promo_agotada() -> None:
     with pytest.raises(SubscriptionError) as e:
         async with tenant_scope(tid):
             async with get_session() as session:
-                sub = Subscription(
-                    tenant_id=tid, customer_id=segundo, plan_id=plan.id, concepto="X", valor_periodo=Decimal("100000"),
+                sub = await nueva_sub(
+                    session, tid, customer_id=segundo, plan_id=plan.id, concepto="X", valor_periodo=Decimal("100000"),
                     estado="pendiente_pago",
                 )
-                session.add(sub)
                 await session.flush()
                 cargo = SubscriptionCharge(
                     tenant_id=tid, subscription_id=sub.id, periodo="inscripcion", tipo="inscripcion", monto=Decimal("100000")
@@ -556,7 +556,7 @@ async def test_change_plan_con_codigo_solo_aplica_desde_cero() -> None:
 
     async with tenant_scope(tid):
         vista = await cap.change_plan(
-            sub_id, variant_id=str(plan.id), plan=planes.snapshot(plan), monto_esperado=80000, codigo_promocion=CODIGO
+            sub_id, plan_id=str(plan.id), plan=planes.snapshot(plan), monto_esperado=80000, codigo_promocion=CODIGO
         )
     assert vista["cambio"] == "pendiente_pago" and vista["cargo_cambio"]["monto"] == 80000.0
     assert vista["cargo_cambio"]["monto_bruto"] == 100000.0
@@ -568,7 +568,7 @@ async def test_change_plan_con_codigo_solo_aplica_desde_cero() -> None:
     otra_promo = await _promo(tid, "otra", valor="10")
     async with tenant_scope(tid):
         with pytest.raises(SubscriptionError) as e:
-            await cap.change_plan(sub_id, variant_id=str(pro.id), plan=planes.snapshot(pro), codigo_promocion="otra")
+            await cap.change_plan(sub_id, plan_id=str(pro.id), plan=planes.snapshot(pro), codigo_promocion="otra")
     assert e.value.code == "promo_no_aplica_a_cambio"
     assert (await _promo_fila(tid, otra_promo.id)).canjes_usados == 0
 

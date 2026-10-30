@@ -1,5 +1,5 @@
-"""pack-subscriptions (ADR-0083, planes como productos): gestión, cobro del
-período, activación por pago de pedido y creación manual por admin. Requiere stack local."""
+"""pack-subscriptions (ADR-0083, planes del catálogo desde SPEC-43): gestión, cobro del
+período e inscripción manual por admin. Requiere stack local."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import uuid
 
 import pytest
 from _api_helpers import uniq
+from _subs_helpers import nueva_sub
 
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
@@ -17,7 +18,7 @@ pytestmark = [
     ),
 ]
 
-PLAN_SNAPSHOT = {"nombre": "Plan Basic", "precio": 200000, "moneda": "COP", "periodicidad": "mensual", "trial_dias": 30}
+PLAN_BASIC = {"codigo": "PLAN-BASIC", "nombre": "Plan Basic", "precio": 200000}
 
 
 async def _tenant_subs(packs: list[str] | None = None) -> uuid.UUID:
@@ -35,15 +36,15 @@ async def _tenant_subs(packs: list[str] | None = None) -> uuid.UUID:
 
 
 async def _crear_suscripcion_directa(tenant_id, customer_id, **overrides) -> uuid.UUID:
-    from pack_subscriptions.models import Subscription
 
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tenant_id):
         async with get_session() as session:
-            sub = Subscription(
-                tenant_id=tenant_id,
+            sub = await nueva_sub(
+                session,
+                tenant_id,
                 customer_id=customer_id,
                 concepto=overrides.get("concepto", "Plan Basic"),
                 estado=overrides.get("estado", "activa"),
@@ -51,32 +52,33 @@ async def _crear_suscripcion_directa(tenant_id, customer_id, **overrides) -> uui
                 moneda="COP",
                 **{k: v for k, v in overrides.items() if k in ("proximo_cargo", "fecha_alta")},
             )
-            session.add(sub)
             await session.flush()
             return sub.id
 
 
-async def test_gestion_de_suscripcion_por_snapshot() -> None:
-    """La suscripción se crea con el snapshot (sin tabla Plan) y el proveedor
-    del contrato v1 (ADR-0106) la gestiona."""
-    from pack_subscriptions.capability import SubscriptionCapabilityImpl
-    from pack_subscriptions.module import crear_suscripcion_para
+async def test_gestion_de_suscripcion_del_catalogo() -> None:
+    """La suscripción apunta a un plan del catálogo y el proveedor del contrato (ADR-0106) la gestiona."""
+    from decimal import Decimal
+
+    from pack_subscriptions import planes
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl, crear_suscripcion_para
 
     from core.shared.tenant import tenant_scope
 
     tenant_id = await _tenant_subs()
     customer_id = uuid.uuid4()
     async with tenant_scope(tenant_id):
-        sub = await crear_suscripcion_para(
-            customer_id=customer_id, variante_id=uuid.uuid4(), plan=PLAN_SNAPSHOT
+        plan = await planes.crear(
+            planes.DatosDePlan(
+                codigo=PLAN_BASIC["codigo"], nombre=PLAN_BASIC["nombre"], precio=Decimal(PLAN_BASIC["precio"]),
+                periodicidad="mensual",
+            )
         )
+        sub = await crear_suscripcion_para(customer_id=customer_id, plan_id=plan.id)
         assert sub.concepto == "Plan Basic"
         assert float(sub.valor_periodo or 0) == 200000
         assert sub.estado == "activa"  # D-16: un plan pago no tiene prueba (HU-SUB-06)
         assert sub.trial_termina is None
-        # Idempotente: no crea una segunda activa.
-        sub2 = await crear_suscripcion_para(customer_id=customer_id, variante_id=None, plan=PLAN_SNAPSHOT)
-        assert sub2.id == sub.id
 
         cap = SubscriptionCapabilityImpl()
         vistas = await cap.list_for_customer(customer_id)
@@ -189,99 +191,35 @@ async def test_cron_genera_cargo_y_avanza_periodo() -> None:
             assert len(n) == 1
 
 
-async def test_opcion_b_commerce_activa_suscripcion_por_pago() -> None:
-    """El plan es un producto de commerce (billing_period); al pagarse el pedido,
-    commerce entrega el snapshot y el registry activa la suscripción."""
-    from pack_commerce.models import Order, OrderItem, Product, ProductVariant
-    from pack_subscriptions.models import Subscription
-    from sqlalchemy import select
-
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    tenant_id = await _tenant_subs(["pack_commerce", "pack_subscriptions"])
-    customer_id = uuid.uuid4()
-    async with tenant_scope(tenant_id):
-        async with get_session() as session:
-            product = Product(tenant_id=tenant_id, name="Plan Basic", description="Recurrente", has_variants=False)
-            session.add(product)
-            await session.flush()
-            variant = ProductVariant(
-                tenant_id=tenant_id,
-                product_id=product.id,
-                sku="PLAN-BASIC",
-                price=200000,
-                billing_period="mensual",
-                trial_days=30,
-            )
-            session.add(variant)
-            await session.flush()
-            variant_id = variant.id
-
-    async with tenant_scope(tenant_id):
-        async with get_session() as session:
-            order = Order(
-                tenant_id=tenant_id,
-                conversation_id=uuid.uuid4(),
-                customer_id=customer_id,
-                status="abierto",
-                payment_status="pagado",
-                total=200000,
-                idempotency_key=str(uuid.uuid4()),
-                order_seq=1,
-                public_order_number="OC-0001",
-            )
-            session.add(order)
-            await session.flush()
-            session.add(
-                OrderItem(
-                    tenant_id=tenant_id,
-                    order_id=order.id,
-                    variant_id=variant_id,
-                    quantity=1,
-                    unit_price=200000,
-                )
-            )
-            await session.flush()
-
-            from pack_commerce.module import CRMModule
-
-            await CRMModule()._activate_plans_for_order(session, order)
-
-            subs = (
-                await session.execute(
-                    select(Subscription).where(Subscription.tenant_id == tenant_id)
-                )
-            ).scalars().all()
-            assert len(subs) == 1
-            assert subs[0].customer_id == customer_id
-            assert subs[0].concepto == "Plan Basic"
-            assert float(subs[0].valor_periodo or 0) == 200000
-            # D-16 (HU-SUB-06): el trial_days=30 de una variante paga se ignora.
-            assert subs[0].estado == "activa"
-            assert subs[0].trial_termina is None
-
-
 async def test_crear_suscripcion_manual_admin() -> None:
-    """Admin API: crea la suscripción manualmente a partir de un snapshot (idempotente)."""
+    """Admin API: inscribe al cliente en un plan del catálogo (idempotente: repetir devuelve la misma)."""
+    from decimal import Decimal
+
+    from pack_subscriptions import planes
     from pack_subscriptions.admin_api import CrearSuscripcionBody, crear_suscripcion_manual
     from pack_subscriptions.models import Subscription
     from sqlalchemy import select
 
+    from core.db.models import Customer
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
     tenant_id = await _tenant_subs()
-    customer_id = uuid.uuid4()
-    body = CrearSuscripcionBody(
-        customer_id=customer_id,
-        variant_id=uuid.uuid4(),
-        nombre="Plan Empresarial",
-        precio=1800000,
-        moneda="COP",
-        periodicidad="mensual",
-        trial_dias=0,
-    )
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            cliente = Customer(
+                tenant_id=tenant_id, channel="whatsapp", external_id=f"whatsapp:{uniq('c')}", name="Ana",
+                contact_phone="+573001112233",
+            )
+            session.add(cliente)
+            await session.flush()
+            customer_id = cliente.id
+        await planes.crear(
+            planes.DatosDePlan(
+                codigo="PLAN-EMPRESARIAL", nombre="Plan Empresarial", precio=Decimal(1800000), periodicidad="mensual"
+            )
+        )
+    body = CrearSuscripcionBody(customer_id=customer_id, plan_codigo="PLAN-EMPRESARIAL")
 
     # El handler usa `require(...)`: lo invocamos con un principal del tenant.
     from core.api.deps import Principal
@@ -294,7 +232,7 @@ async def test_crear_suscripcion_manual_admin() -> None:
     async with tenant_scope(tenant_id):
         principal = Principal(admin=admin, tenant_id=tenant_id, tenants=[], permissions={"pack_subscriptions:suscripciones": None})
         out1 = await crear_suscripcion_manual(body, principal)
-        assert out1.creada is True
+        assert out1.estado == "pendiente_pago" and out1.numero_publico
         out2 = await crear_suscripcion_manual(body, principal)
         assert out2.suscripcion_id == out1.suscripcion_id  # idempotente
 
