@@ -178,6 +178,58 @@ async def test_kpis_del_negocio_de_cada_agente_y_de_su_modulo(app_client) -> Non
     assert {m["id"] for m in gen["modulos"]} == {"pack_cobranza", "pack_subscriptions"}
 
 
+async def test_ventana_de_7_dias_y_serie_diaria_por_agente(app_client) -> None:
+    e = await _escenario()
+    datos = (await app_client.get(_URL, headers=await api_headers(app_client, e["tid"]))).json()
+
+    assert datos["periodo"]["dias"] == 7
+    ventas = _agente_por_key(datos, "ventas")
+    assert len(ventas["serie"]) == 7
+    assert sum(p["turnos"] for p in ventas["serie"]) == 3
+    assert all(p["costo"] is not None for p in ventas["serie"])
+    assert ventas["ultima_actividad"] is not None
+    assert _kpis(ventas)["turnos"]["hint"] == "Últimos 7 días"
+
+    # El General suma lo no atribuido a su propia instancia.
+    general = _agente_por_key(datos, "general")
+    assert len(general["serie"]) == 7
+    assert sum(p["turnos"] for p in general["serie"]) == 1
+
+
+async def test_ventanas_de_15_y_30_dias_cambian_kpis_textos_y_serie(app_client) -> None:
+    e = await _escenario()
+    h = await api_headers(app_client, e["tid"])
+
+    r15 = await app_client.get(f"{_URL}?dias=15", headers=h)
+    assert r15.status_code == 200, r15.text
+    datos15 = r15.json()
+    assert datos15["periodo"]["dias"] == 15
+    ventas15 = _agente_por_key(datos15, "ventas")
+    assert len(ventas15["serie"]) == 15
+    assert sum(p["turnos"] for p in ventas15["serie"]) == 4  # incluye el turno de hace 9 días
+    assert _kpis(ventas15)["turnos"]["hint"] == "Últimos 15 días"
+    assert _kpis(ventas15)["turnos"]["versus"] == "los 15 días anteriores"
+
+    datos30 = (await app_client.get(f"{_URL}?dias=30", headers=h)).json()
+    assert datos30["periodo"]["dias"] == 30
+    assert len(_agente_por_key(datos30, "ventas")["serie"]) == 30
+
+
+async def test_ventana_invalida_devuelve_422(app_client) -> None:
+    e = await _escenario()
+    r = await app_client.get(f"{_URL}?dias=8", headers=await api_headers(app_client, e["tid"]))
+    assert r.status_code == 422
+
+
+async def test_sin_permiso_de_costos_la_serie_no_expone_el_costo(app_client) -> None:
+    e = await _escenario()
+    h = await api_headers(
+        app_client, e["tid"], email=await _colaborador(e["tid"], ("costs",)), password=PASSWORD
+    )
+    datos = (await app_client.get(_URL, headers=h)).json()
+    assert all(p["costo"] is None for a in datos["agentes"] for p in a["serie"])
+
+
 async def test_permisos_omiten_el_kpi_en_vez_de_mostrar_cero(app_client) -> None:
     e = await _escenario()
     tid = e["tid"]

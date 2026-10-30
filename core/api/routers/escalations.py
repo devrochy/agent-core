@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -47,6 +47,10 @@ async def list_escalations(
     principal: Annotated[Principal, Depends(require("escalations"))],
     params: Annotated[PageParams, Depends(page_params)],
     reason_code: Annotated[MotivoCodigo | None, Query(description="Filtra por código de motivo")] = None,
+    estado: Annotated[
+        Literal["pendiente", "asignada", "resuelta"] | None,
+        Query(description="Filtra por estado de la escalación"),
+    ] = None,
 ) -> Page[EscalationItem]:
     tenant_id = principal.tenant_id
     query = (
@@ -57,6 +61,8 @@ async def list_escalations(
     )
     if reason_code is not None:
         query = query.where(motivos.condicion_sql(reason_code))
+    if estado is not None:
+        query = query.where(Escalation.status == estado)
     async with get_session() as session:
         total = (
             await session.execute(select(func.count()).select_from(query.subquery()))

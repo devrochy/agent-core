@@ -91,7 +91,7 @@ async def kpis(tenant_id: uuid.UUID, p: PeriodoResumen) -> list[Kpi]:
                 await recaudo(p.desde, p.hasta),
                 unidad="money",
                 previo=await recaudo(p.previo_desde, p.previo_hasta),
-                hint="Últimos 7 días",
+                hint=f"Últimos {p.dias} días",
                 destino=Destino("cobranza.pagos"),
             ),
             Kpi(

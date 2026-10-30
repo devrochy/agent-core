@@ -105,3 +105,21 @@ async def test_codigo_fuera_del_catalogo_da_422(app_client) -> None:
     tid = await _negocio_con_escalaciones([])
     r = await app_client.get(URL, params={"reason_code": "tool:queja"}, headers=await api_headers(app_client, tid))
     assert r.status_code == 422
+
+
+async def test_filtro_por_estado(app_client) -> None:
+    from test_backfill_agentes import _sql
+
+    tid = await _negocio_con_escalaciones([("tool:queja", "Pendiente"), ("tool:queja", "Resuelta")])
+    await _sql(
+        tid,
+        "update escalations set status = 'resuelta' where id = "
+        "(select id from escalations where tenant_id = :t order by created_at desc limit 1)",
+        t=tid,
+    )
+    headers = await api_headers(app_client, tid)
+    pendientes = (await app_client.get(URL, params={"estado": "pendiente"}, headers=headers)).json()
+    resueltas = (await app_client.get(URL, params={"estado": "resuelta"}, headers=headers)).json()
+    assert [i["summary"] for i in pendientes["items"]] == ["Pendiente"]
+    assert [i["summary"] for i in resueltas["items"]] == ["Resuelta"]
+    assert (await app_client.get(URL, params={"estado": "otro"}, headers=headers)).status_code == 422

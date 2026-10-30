@@ -14,7 +14,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 Unidad = Literal["count", "pct", "usd", "money", "ms"]
@@ -31,12 +31,17 @@ class Destino:
 
 @dataclass(frozen=True)
 class PeriodoResumen:
-    """Ventana actual y la inmediata anterior, de la misma duración (por defecto 7 d)."""
+    """Ventana actual y la inmediata anterior, de la misma duración (7, 15 o 30 d)."""
 
     desde: datetime
     hasta: datetime
     previo_desde: datetime
     previo_hasta: datetime
+
+    @property
+    def dias(self) -> int:
+        """Días de la ventana, para los textos («Últimos N días») y la serie diaria."""
+        return max(1, round((self.hasta - self.desde) / timedelta(days=1)))
 
 
 @dataclass(frozen=True)

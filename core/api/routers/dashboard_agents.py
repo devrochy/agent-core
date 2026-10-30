@@ -1,8 +1,9 @@
 """Resumen por agente: `GET /api/v1/admin/dashboard/agents` (ADR-0171).
 
 KPIs del negocio (el Coordinador) y, por cada agente, su actividad y la de los módulos que gestiona
-(pedidos, citas, recaudo, suscripciones…), cada uno con el valor de los últimos 7 días, el de los 7
-previos y un destino para ver el detalle. Lo construye `core.metricas.resumen_agentes`; los KPIs de
+(pedidos, citas, recaudo, suscripciones…), cada uno con el valor de los últimos 7, 15 o 30 días
+(`?dias=`), el de la ventana previa de la misma duración y un destino para ver el detalle. Cada agente
+trae además su serie diaria y su última actividad. Lo construye `core.metricas.resumen_agentes`; los KPIs de
 cada módulo los aporta su pack (`core.admin.resumen_registry`).
 
 Permisos: la sección `dashboard` abre el endpoint; cada KPI exige además la sección que lo respalda
@@ -15,10 +16,10 @@ propia sección (`pack_cobranza:resumen`, …). Un colaborador sin ninguna recib
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from core.admin.permissions import effective_access
@@ -66,6 +67,15 @@ class ModuloOut(BaseModel):
     )
 
 
+class PuntoActividadOut(BaseModel):
+    fecha: date
+    turnos: int
+    conversaciones: int
+    costo: float | None = Field(
+        description="Costo del día en USD; `null` sin la sección `costs`."
+    )
+
+
 class AgenteResumen(BaseModel):
     ref: str = Field(
         description="Id del agente o el literal `general`, como en `/admin/agents/{ref}`."
@@ -75,6 +85,13 @@ class AgenteResumen(BaseModel):
     kind: str
     kpis: list[KpiOut]
     modulos: list[ModuloOut]
+    serie: list[PuntoActividadOut] = Field(
+        default_factory=list,
+        description="Serie diaria cero-rellena del período (días calendario del negocio).",
+    )
+    ultima_actividad: datetime | None = Field(
+        default=None, description="Último turno del agente dentro del período."
+    )
 
 
 class BloqueGeneral(BaseModel):
@@ -86,6 +103,7 @@ class PeriodoOut(BaseModel):
     hasta: datetime
     previo_desde: datetime
     previo_hasta: datetime
+    dias: int
 
 
 class ResumenPorAgente(BaseModel):
@@ -125,6 +143,14 @@ async def _acceso(principal: Principal) -> svc.Acceso:
 @router.get("/agents", response_model=ResumenPorAgente)
 async def dashboard_agents(
     principal: Annotated[Principal, Depends(require("dashboard"))],
+    dias: Annotated[int, Query(description="Ventana del Resumen en días: 7, 15 o 30.")] = 7,
 ) -> ResumenPorAgente:
-    datos = await svc.resumen(_tenant(principal), await _acceso(principal))
+    if dias not in svc.DIAS_VALIDOS:
+        raise ApiError(
+            422,
+            "validation_error",
+            "Revisa los campos marcados.",
+            fields={"dias": "Valor no admitido (se espera 7, 15 o 30)."},
+        )
+    datos = await svc.resumen(_tenant(principal), await _acceso(principal), dias=dias)
     return ResumenPorAgente.model_validate(datos)

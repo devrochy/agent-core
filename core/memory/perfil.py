@@ -29,6 +29,7 @@ from core.shared.telefono import pais as pais_telefonico
 TipoCampo = Literal["texto", "email", "telefono", "opciones", "numero", "url"]
 
 CLASIFICACIONES: tuple[tuple[str, str], ...] = (
+    ("nuevo", "Nuevo"),
     ("prospecto", "Prospecto"),
     ("cliente", "Cliente"),
     ("vip", "VIP"),
@@ -54,7 +55,6 @@ _TIPO_DOCUMENTO_ALIAS = {
 }
 
 _CLASIFICACION_ALIAS = {
-    "nuevo": "prospecto",
     "potencial": "prospecto",
     "activo": "cliente",
     "frecuente": "cliente",
