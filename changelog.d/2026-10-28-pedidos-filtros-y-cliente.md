@@ -7,3 +7,4 @@
 - `OrderOut` incluye `customer_id` y `customer_name`, para que el panel enlace a la ficha del cliente.
 - Ya no se leen todos los ítems y variantes del negocio en cada listado: solo los de la página.
 - Migración `crm_0015`: índice `(tenant_id, customer_id)` en `pack_commerce_orders`.
+- `GET /admin/escalations`: cada escalación trae `customer_id`, para que el panel abra la ficha del cliente.
