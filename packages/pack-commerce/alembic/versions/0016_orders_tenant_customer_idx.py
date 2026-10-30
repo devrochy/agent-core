@@ -6,8 +6,8 @@ empiecen por `tenant_id`. `CREATE INDEX` toma un bloqueo de escritura sobre la t
 corre; `pack_commerce_orders` es chica (pedidos confirmados por negocio), así que no se usa
 `CONCURRENTLY` (no corre dentro de la transacción de Alembic).
 
-Revision ID: crm_0015
-Revises: crm_0014
+Revision ID: crm_0016
+Revises: crm_0015
 Create Date: 2026-10-28
 """
 
@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "crm_0015"
-down_revision = "crm_0014"
+revision = "crm_0016"
+down_revision = "crm_0015"
 branch_labels = None
 depends_on = None
 
