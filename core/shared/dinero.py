@@ -29,6 +29,9 @@ MONEY_KEYS = {
     # SPEC-43 (HU-SUB-33): cotización de una inscripción con promoción. Sin estas claves el verificador
     # bloquea la respuesta con el precio de lista, el descuento o el total del primer cargo.
     "precio_lista", "descuento", "total_primer_cargo", "precio_periodo_siguiente", "monto_bruto",
+    # SPEC-43 (HU-SUB-29/34): lo que el cliente confirma en la inscripción y en el cambio de plan. Las cotizaciones
+    # ya los devolvían sin verificarse, aunque `cambiar_plan.json` hace `mustMatch` sobre ambos.
+    "monto_a_pagar", "precio_nuevo",
 }
 
 

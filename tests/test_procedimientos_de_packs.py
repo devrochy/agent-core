@@ -27,12 +27,13 @@ from core.plugin_manager import plugin_manager
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLICADOS = {
-    "pack_calendar": "pack_calendar.agendar_cita",
-    "pack_subscriptions": "pack_subscriptions.cambiar_plan",
-    "pack_cobranza": "pack_cobranza.promesa_de_pago",
+    "pack_calendar": ["pack_calendar.agendar_cita"],
+    "pack_subscriptions": ["pack_subscriptions.cambiar_plan", "pack_subscriptions.contratar_plan"],
+    "pack_cobranza": ["pack_cobranza.promesa_de_pago"],
 }
 SOLO_PROCEDIMIENTO = {
     "sub_cotizar_cambio_plan", "sub_aplicar_cambio_plan", "cob_registrar_promesa_saldo", "cob_opciones_promesa",
+    "sub_listar_planes", "sub_cotizar_inscripcion", "sub_confirmar_inscripcion", "sub_inscribir",
 }
 
 
@@ -48,8 +49,9 @@ def catalogo() -> Mapping[str, ActionInfo]:
 @pytest.mark.parametrize("pack_id", sorted(PUBLICADOS))
 def test_el_pack_publica_su_procedimiento_y_pasa_el_linter(pack_id: str, catalogo) -> None:
     procs = de_pack.cargar(pack_id)
-    assert [p.id for p in procs] == [PUBLICADOS[pack_id]]
-    assert lint(procs[0], catalogo) == []
+    assert sorted(p.id for p in procs) == sorted(PUBLICADOS[pack_id])
+    for proc in procs:
+        assert lint(proc, catalogo) == []
 
 
 def test_todos_los_json_de_packs_pasan_el_linter(catalogo) -> None:
@@ -85,8 +87,10 @@ def test_cada_pack_registra_procedimiento_y_resolvers() -> None:
     from pack_subscriptions.procedimientos import registrar as reg_subs
 
     from core.mcp.host import MCPHost
+    from core.tools.core_skill import register_core_skills
 
     host = MCPHost()
+    register_core_skills(host)  # como en producción: las `sub_*` del core se registran antes que los packs
     for pack_id, registrar in (
         ("pack_calendar", reg_calendar), ("pack_subscriptions", reg_subs), ("pack_cobranza", reg_cobranza),
     ):
@@ -96,10 +100,15 @@ def test_cada_pack_registra_procedimiento_y_resolvers() -> None:
         registrar(host, pack_id)
         host.end_activation()
     assert host.get_resumen("cob_registrar_promesa_saldo") is not None
-    assert {p.id for lista in host.get_procedures().values() for p in lista} == set(PUBLICADOS.values())
+    assert host.get_resumen("sub_confirmar_inscripcion") is not None
+    assert {p.id for lista in host.get_procedures().values() for p in lista} == {
+        i for ids in PUBLICADOS.values() for i in ids
+    }
     for nombre in (
         "pack_calendar.horario_ofrecido", "pack_calendar.tipo_de_cita",
-        "pack_subscriptions.plan_destino", "pack_cobranza.fecha_de_promesa",
+        "pack_subscriptions.plan_destino", "pack_subscriptions.plan_a_contratar",
+        "pack_subscriptions.codigo_de_promocion", "pack_subscriptions.metodo_de_pago",
+        "pack_subscriptions.tipo_de_negocio", "pack_subscriptions.nombre_de_negocio", "pack_cobranza.fecha_de_promesa",
     ):
         assert host.get_resolver(nombre) is not None, nombre
 

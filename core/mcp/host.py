@@ -153,7 +153,7 @@ class MCPHost:
     def register_procedures(self, procedures: list[Procedure]) -> None:
         """Registra los procedimientos que publica el plugin que se activa (ADR-0113 §1).
 
-        El dueño del id (`pack_commerce.contratar_plan`) debe ser el plugin. Un procedimiento
+        El dueño del id (`pack_subscriptions.contratar_plan`) debe ser el plugin. Un procedimiento
         ajeno o con un id repetido no se registra (log), y el plugin sigue vivo: un
         procedimiento mal escrito no puede dejar sin tools a todos los negocios del proceso.
         El linter completo (acciones del binario) corre en CI y, en runtime, al usarlo
@@ -206,7 +206,9 @@ class MCPHost:
         crudos. Solo para una tool que el mismo plugin ya registró; una por acción."""
         plugin_id = self._active_plugin
         tool = self._tools.get(accion)
-        if tool is None or tool.plugin_id != plugin_id or accion in self._resumenes:
+        # Una tool del core (`sub_*`, ADR-0106) también puede tener resumen del pack que la despacha: el pack
+        # lee su estado; el kernel solo lo usa si ese pack está permitido en el turno.
+        if tool is None or tool.plugin_id not in (plugin_id, "core") or accion in self._resumenes:
             raise PluginError(plugin_id, f"Resumen inválido o duplicado: {accion}")
         self._resumenes[accion] = (fn, plugin_id)
 
