@@ -201,15 +201,15 @@ def por_debajo_del_precio(plan_id: str, monto: Any) -> bool:
     return not pagado.is_finite() or pagado < Decimal(plan.price_cop)
 
 
-def _detalle_de_descuento(payload: dict[str, Any]) -> dict[str, Any]:
-    """Precio de lista, descuento y neto cobrado de un período pagado con descuento, para la auditoría."""
+def _detalle_de_descuento(payload: dict[str, Any], *, del_vendedor: bool = False) -> dict[str, Any]:
+    """Precio de lista y neto cobrado de un período pagado con descuento, para la auditoría. La foto de la
+    promoción (etiqueta, tipo, valor, id) es del vendedor: solo va a SU auditoría, no a la del negocio comprador."""
     if payload.get("monto_bruto") is None:
         return {}
-    return {
-        "monto_bruto": payload.get("monto_bruto"),
-        "descuento": payload.get("descuento"),
-        "monto_cobrado": payload.get("monto"),
-    }
+    detalle = {"monto_bruto": payload.get("monto_bruto"), "monto_cobrado": payload.get("monto")}
+    if del_vendedor:
+        detalle["descuento"] = payload.get("descuento")
+    return detalle
 
 
 async def registrar_monto_distinto(
@@ -414,7 +414,12 @@ async def on_subscription_charge_paid(**payload: Any) -> None:
             "charge_id": payload.get("charge_id"),
             "subscription_id": str(subscription_id),
         },
-        output_data={"resultado": resultado.resultado, "negocio": slug, "plan": plan_id, **_detalle_de_descuento(payload)},
+        output_data={
+            "resultado": resultado.resultado,
+            "negocio": slug,
+            "plan": plan_id,
+            **_detalle_de_descuento(payload, del_vendedor=True),
+        },
     )
     log.info(
         "cobro_plataforma_asistente",

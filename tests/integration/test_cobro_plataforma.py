@@ -636,6 +636,10 @@ async def test_un_periodo_pagado_con_descuento_no_es_monto_distinto_y_registra_l
     assert (await _suscripcion_de(esc.negocio)).status == "active"
     [auditada] = await _auditoria(esc.vendedor, "cobro_plataforma_aplicado")
     assert (auditada.output["monto_bruto"], auditada.output["monto_cobrado"]) == ("600000.00", "300000.00")
+    assert auditada.output["descuento"]["etiqueta"] == "Lanzamiento"
+    # La foto de la promoción es del vendedor: la auditoría del negocio comprador no la lleva.
+    [del_negocio] = await _auditoria(esc.negocio, "cobro_plataforma_aplicado")
+    assert "descuento" not in del_negocio.output and del_negocio.output["monto_cobrado"] == "300000.00"
     assert not [p for p in await _pagos(esc.negocio) if p.status == "monto_distinto"]
     assert not [a for a in alertas if a["severity"] == "critical"]
 
