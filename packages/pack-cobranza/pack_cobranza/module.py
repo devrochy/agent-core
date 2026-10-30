@@ -139,6 +139,7 @@ class CobranzaModule(BaseModule):
 
         from sqlalchemy import select
 
+        from core.access.devices import degradar_por_cambio_de_rol, invalidar_cuenta
         from core.db.models import Admin
         from core.db.session import get_session
         from core.shared.tenant import tenant_scope
@@ -149,18 +150,25 @@ class CobranzaModule(BaseModule):
         async with tenant_scope(tid):
             async with get_session() as session:
                 existe = (await session.execute(select(Gestor).where(Gestor.tenant_id == tid, Gestor.admin_id == aid))).scalar_one_or_none()
-                if existe is not None:
-                    return
-                admin = (await session.execute(select(Admin).where(Admin.id == aid))).scalar_one_or_none()
-                session.add(
-                    Gestor(
-                        tenant_id=tid,
-                        admin_id=aid,
-                        nombre=(admin.username or admin.email) if admin else "Gestor",
-                        correo=admin.email if admin else None,
+                if existe is None:
+                    admin = (await session.execute(select(Admin).where(Admin.id == aid))).scalar_one_or_none()
+                    session.add(
+                        Gestor(
+                            tenant_id=tid,
+                            admin_id=aid,
+                            nombre=(admin.username or admin.email) if admin else "Gestor",
+                            correo=admin.email if admin else None,
+                        )
                     )
-                )
-        log.info("cobranza_gestor_creado", tenant_id=str(tid), admin_id=str(aid))
+                # Pasa a la política de campo (más estricta): sus equipos que entraron solo porque la política
+                # de colaborador era abierta vuelven a pendiente (ADR-0174, HU-ACC-06). Idempotente.
+                bajados = await degradar_por_cambio_de_rol(session, tid, aid, "gestor")
+        if existe is None:
+            log.info("cobranza_gestor_creado", tenant_id=str(tid), admin_id=str(aid))
+        # El rol cambió: la caché de la cuenta se invalida siempre, y la de los equipos que bajaron, ya con el commit.
+        await invalidar_cuenta(tid, aid, bajados)
+        if bajados:
+            log.info("access_equipos_degradados", tenant_id=str(tid), admin_id=str(aid), equipos=len(bajados))
 
     async def seed_data(self, tenant_id: Any, data: dict[str, Any]) -> list[str]:
         """Datos de ejemplo de la cartera (ADR-0083): carteras, caja, gestor y clientes con
