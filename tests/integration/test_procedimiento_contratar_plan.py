@@ -124,11 +124,14 @@ async def test_recorrido_completo_cotiza_pide_datos_confirma_con_boton_e_inscrib
         guion = _Guion(
             [
                 ("sub_confirmar_inscripcion", {"plan_code": "PREMIUM", "codigo_promocion": CODIGO, "monto_a_pagar": 80000}),
+                # Otro plan con el total confirmado: el motor ata los argumentos a la tarea y lo niega.
+                ("sub_inscribir", {"plan_code": "OTRO", "codigo_promocion": CODIGO, "monto_a_pagar": 80000, "customer_data": {}}),
                 ("sub_inscribir", {"plan_code": "PREMIUM", "codigo_promocion": CODIGO, "monto_a_pagar": 80000, "customer_data": {}}),
                 "Listo, quedaste inscrito.",
             ]
         )
         await _turno(conv, guion, monkeypatch, "Confirmar")
+        assert "El valor de plan_code no coincide con el dato vigente" in guion.vistos[-1]
         [sub] = await _inscripciones(tid, conv.customer_id)
         assert sub.estado == "pendiente_pago" and sub.customer_id == conv.customer_id
         tarea, _ = await _tarea(conv, PROC)
@@ -147,3 +150,21 @@ async def test_las_tools_de_inscripcion_solo_se_ofrecen_con_el_motor_activo(pack
         {"sub_inscribir", "sub_cotizar_inscripcion", "sub_confirmar_inscripcion", "sub_listar_planes"} & t
         for t in guion.tools
     )
+
+
+async def test_sub_inscribir_sin_recorrido_en_foco_no_inscribe(packs_registrados, monkeypatch) -> None:  # noqa: F811
+    tid = await _negocio(["pack_subscriptions"])
+    await _banderas(tid, True)
+    try:
+        await _plan(tid, "PREMIUM", "100000")
+        conv = await _conversacion(tid)
+        guion = _Guion(
+            [
+                ("sub_inscribir", {"plan_code": "PREMIUM", "monto_a_pagar": 100000, "customer_data": {"nombre": "Ana"}}),
+                "No pude inscribirte todavía.",
+            ]
+        )
+        await _turno(conv, guion, monkeypatch, "inscríbeme al premium")
+        assert await _inscripciones(tid, conv.customer_id) == []
+    finally:
+        await _banderas(tid, False)

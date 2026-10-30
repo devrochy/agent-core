@@ -113,6 +113,27 @@ def test_cada_pack_registra_procedimiento_y_resolvers() -> None:
         assert host.get_resolver(nombre) is not None, nombre
 
 
+def test_solo_el_pack_dueno_registra_el_resumen_de_una_tool_del_core() -> None:
+    """Auditor PR-3: relajar `register_resumen` para tools del core no deja que otro pack reclame el de `sub_*`."""
+    from pack_subscriptions.procedimientos import resumen_de_inscripcion
+
+    from core.mcp.host import MCPHost
+    from core.shared.exceptions import PluginError
+    from core.tools.core_skill import register_core_skills
+
+    host = MCPHost()
+    register_core_skills(host)
+    host.begin_activation("pack_cobranza")
+    with pytest.raises(PluginError):
+        host.register_resumen("sub_confirmar_inscripcion", resumen_de_inscripcion)
+    host.end_activation()
+    assert host.get_resumen("sub_confirmar_inscripcion") is None
+    host.begin_activation("pack_subscriptions")
+    host.register_resumen("sub_confirmar_inscripcion", resumen_de_inscripcion)
+    host.end_activation()
+    assert host.get_resumen("sub_confirmar_inscripcion") is not None
+
+
 # ------------------------------------------------------------------ sin cambio con banderas apagadas
 
 

@@ -6,3 +6,4 @@
 - El verificador de montos conoce `monto_a_pagar` y `precio_nuevo` como dinero.
 - La plantilla «Suscripciones» incluye el procedimiento; los playbooks `planes` y `suscripciones` dejan de decir que el plan es un producto de commerce. Los escenarios de QA apuntan al id nuevo.
 - Queda igual hasta el PR-4: el procedimiento `pack_commerce.contratar_plan`, la plantilla «Ventas» y su pregunta `que_vendes` (panel y APK la envían; se quitan juntos), y los datos de prueba de planes en commerce.
+- El motor gobierna las acciones del core de una etapa `risk: high` (`sub_inscribir`): sin tarea en foco se niegan, solo corren en su etapa y sus argumentos (plan, código, monto, datos del cliente) se atan a los datos de la tarea, sin pedir un segundo botón. `register_resumen` de una tool del core solo lo acepta el pack dueño de su prefijo (`TOOLS_DEL_CORE_POR_PACK`).

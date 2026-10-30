@@ -41,6 +41,9 @@ from core.shared.logger import get_logger
 
 log = get_logger(__name__)
 
+# Tools del core que despacha un pack: prefijo → pack dueño. Solo ese pack puede registrar su resumen de confirmación.
+TOOLS_DEL_CORE_POR_PACK = {"sub_": "pack_subscriptions"}
+
 
 class MCPHost:
     def __init__(self) -> None:
@@ -203,12 +206,20 @@ class MCPHost:
 
         Cuando el motor pide confirmar esa acción, el cliente ve lo que devuelve `fn` (leído del
         estado del pack, p. ej. el total vigente de la cotización) en vez de los argumentos
-        crudos. Solo para una tool que el mismo plugin ya registró; una por acción."""
+        crudos. Solo para una tool que el mismo plugin ya registró, o una del core que ese pack despacha
+        (`TOOLS_DEL_CORE_POR_PACK`); una por acción."""
         plugin_id = self._active_plugin
         tool = self._tools.get(accion)
         # Una tool del core (`sub_*`, ADR-0106) también puede tener resumen del pack que la despacha: el pack
-        # lee su estado; el kernel solo lo usa si ese pack está permitido en el turno.
-        if tool is None or tool.plugin_id not in (plugin_id, "core") or accion in self._resumenes:
+        # lee su estado; el kernel solo lo usa si ese pack está permitido en el turno. Solo el pack dueño del
+        # prefijo: otro pack no puede reclamar el resumen de una tool del core que no es suya.
+        propia = tool is not None and tool.plugin_id == plugin_id
+        del_core = (
+            tool is not None
+            and tool.plugin_id == "core"
+            and any(accion.startswith(pref) and plugin_id == dueno for pref, dueno in TOOLS_DEL_CORE_POR_PACK.items())
+        )
+        if not (propia or del_core) or accion in self._resumenes:
             raise PluginError(plugin_id, f"Resumen inválido o duplicado: {accion}")
         self._resumenes[accion] = (fn, plugin_id)
 
