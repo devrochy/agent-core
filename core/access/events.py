@@ -7,6 +7,7 @@ El `detalle` nunca debe llevar contraseñas ni tokens; el `device_id` completo n
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Any
 
@@ -127,8 +128,15 @@ async def registrar_evento_unico(
     """Como `registrar_evento`, pero un evento igual (negocio, cuenta, equipo, tipo y canal) dentro de la
     ventana no se repite: devuelve `None`. La tabla es append-only, así que las repeticiones calladas se
     anotan como `repeticiones_previas` en el siguiente evento que sí se escribe."""
+    equipo = kw.get("device_id")
     clave = ":".join(
-        str(kw.get(k) or "-") for k in ("tenant_id", "admin_id", "device_id", "tipo", "canal")
+        [
+            str(kw["tenant_id"]),
+            str(kw.get("admin_id") or "-"),
+            hashlib.sha256(equipo.encode()).hexdigest()[:16] if equipo else "-",  # como en `sesion`: no va en claro
+            str(kw["tipo"]),
+            str(kw.get("canal") or "-"),
+        ]
     )
     emitir, suprimidos = await _abrir_ventana(clave, ventana_s)
     if not emitir:
@@ -174,6 +182,8 @@ async def registrar_fallo_de_login(
         destinos = [
             (tid, rol) for tid, _nombre, rol in await admin_tenants(admin_id) if rol != "global"
         ]
+        # Si hay que truncar, los negocios de los que es dueña van primero (donde más importa el aviso).
+        destinos.sort(key=lambda d: d[1] != "owner")
         if tenant_id is not None:
             destinos = [d for d in destinos if d[0] == tenant_id]
         if len(destinos) > MAX_NEGOCIOS_POR_FALLO:
@@ -195,6 +205,7 @@ async def registrar_fallo_de_login(
                             request_id=request_id,
                         )
         return len(destinos)
-    except Exception:
-        log.warning("login_fallido_evento_error", canal=canal, exc_info=True)
+    except Exception as exc:
+        # Sin `exc_info`: el traceback de SQLAlchemy lleva los parámetros, y entre ellos el identificador.
+        log.warning("login_fallido_evento_error", canal=canal, error=type(exc).__name__)
         return 0

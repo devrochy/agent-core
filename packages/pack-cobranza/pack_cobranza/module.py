@@ -139,7 +139,7 @@ class CobranzaModule(BaseModule):
 
         from sqlalchemy import select
 
-        from core.access.devices import degradar_por_cambio_de_rol
+        from core.access.devices import degradar_por_cambio_de_rol, invalidar_cuenta
         from core.db.models import Admin
         from core.db.session import get_session
         from core.shared.tenant import tenant_scope
@@ -165,8 +165,10 @@ class CobranzaModule(BaseModule):
                 bajados = await degradar_por_cambio_de_rol(session, tid, aid, "gestor")
         if existe is None:
             log.info("cobranza_gestor_creado", tenant_id=str(tid), admin_id=str(aid))
+        # El rol cambió: la caché de la cuenta se invalida siempre, y la de los equipos que bajaron, ya con el commit.
+        await invalidar_cuenta(tid, aid, bajados)
         if bajados:
-            log.info("access_equipos_degradados", tenant_id=str(tid), admin_id=str(aid), equipos=bajados)
+            log.info("access_equipos_degradados", tenant_id=str(tid), admin_id=str(aid), equipos=len(bajados))
 
     async def seed_data(self, tenant_id: Any, data: dict[str, Any]) -> list[str]:
         """Datos de ejemplo de la cartera (ADR-0083): carteras, caja, gestor y clientes con

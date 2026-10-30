@@ -236,13 +236,14 @@ async def _equipos_vigentes(session: Any, tenant_id: uuid.UUID, admin_id: uuid.U
 
 async def degradar_por_cambio_de_rol(
     session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID, rol_nuevo: str
-) -> int:
+) -> list[tuple[uuid.UUID, str | None]]:
     """La cuenta pasó a un rol más estricto (p. ej. colaborador → gestor): los equipos que entraron solo
     porque la política anterior era abierta (`politica_abierta`) vuelven a `pendiente` si la del rol nuevo
     es restringida. Los aprobados por una persona (alta manual, aprobación, migrados) se respetan.
-    Devuelve cuántos equipos bajaron. Invalida la caché de vigencia para que el corte llegue en < 60 s."""
+    Devuelve `(fila, device_id)` de cada equipo que bajó. El llamador debe llamar a `invalidar_cuenta`
+    **después** del commit: invalidar antes dejaría que otra petición recachee el estado anterior."""
     if rol_nuevo not in policy.ROLES or (await policy.leer(session, tenant_id))[rol_nuevo] != policy.RESTRINGIDO:
-        return 0
+        return []
     filas = (
         (
             await session.execute(
@@ -258,8 +259,6 @@ async def degradar_por_cambio_de_rol(
         .scalars()
         .all()
     )
-    from core.access.sesion import invalidar
-
     for fila in filas:
         fila.estado, fila.aprobado_at, fila.aprobado_por = PENDIENTE, None, None
         registrar_evento(
@@ -273,8 +272,19 @@ async def degradar_por_cambio_de_rol(
             canal="panel_apk",
             detalle={"por": "cambio_de_rol", "rol": rol_nuevo},
         )
-        await invalidar(tenant_id, admin_id, fila.id, device_id=fila.device_id)
-    return len(filas)
+    return [(f.id, f.device_id) for f in filas]
+
+
+async def invalidar_cuenta(
+    tenant_id: uuid.UUID, admin_id: uuid.UUID, equipos: list[tuple[uuid.UUID, str | None]]
+) -> None:
+    """Saca de la caché de vigencia la cuenta (todos sus roles) y los equipos dados. Tras el commit."""
+    from core.access.sesion import invalidar
+
+    await invalidar(tenant_id, admin_id, *(row for row, _ in equipos))
+    for _, device_id in equipos:
+        if device_id:
+            await invalidar(tenant_id, admin_id, device_id=device_id)
 
 
 def _denegar(code: str, estado: str, politica: str, fila: AccountDevice | None = None) -> Decision:

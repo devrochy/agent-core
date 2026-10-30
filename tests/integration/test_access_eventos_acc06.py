@@ -211,6 +211,20 @@ async def test_login_por_negocio_deja_rastro_solo_en_ese_negocio(app_client) -> 
     assert await _eventos(otro, "login_fallido") == []
 
 
+async def test_login_unificado_con_tenant_solo_avisa_a_ese_negocio(app_client) -> None:
+    tid, email, slug = await _negocio("ev-uni-tenant", con_pack=True)
+    otro, _, _ = await _negocio("ev-uni-otro", con_pack=True)
+    await _miembro(otro, await _owner_id(tid))
+
+    r = await app_client.post(
+        f"{PACK}/auth/login", json={"tenant": slug, "usuario": email, "password": "incorrecta"}
+    )
+
+    assert r.status_code == 401
+    assert len(await _eventos(tid, "login_fallido")) == 1
+    assert await _eventos(otro, "login_fallido") == []
+
+
 async def test_login_v1_fallido_deja_evento_del_negocio_sin_cuenta(app_client) -> None:
     tid, _, slug = await _negocio("ev-v1", con_pack=True)
 
@@ -222,7 +236,7 @@ async def test_login_v1_fallido_deja_evento_del_negocio_sin_cuenta(app_client) -
         assert r.status_code == 401
 
     [ev] = await _eventos(tid, "login_fallido")
-    assert ev.canal == "campo_v1" and ev.admin_id is None and ev.detalle == {"codigo": "DEV-XYZ"}
+    assert ev.canal == "campo_v1" and ev.admin_id is None and ev.detalle is None  # nada de lo que escribió
 
 
 # ------------------------------------------------------------------ límites de equipos
@@ -258,7 +272,7 @@ async def test_device_session_tiene_rate_limit(app_client) -> None:
 
 
 async def test_al_volverse_gestor_sus_equipos_de_politica_abierta_bajan_a_pendiente(app_client) -> None:
-    from core.access.devices import degradar_por_cambio_de_rol
+    from core.access.devices import degradar_por_cambio_de_rol, invalidar_cuenta
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -288,8 +302,9 @@ async def test_al_volverse_gestor_sus_equipos_de_politica_abierta_bajan_a_pendie
     async with tenant_scope(tid):
         async with get_session() as session:
             bajados = await degradar_por_cambio_de_rol(session, tid, admin_id, "gestor")
+    await invalidar_cuenta(tid, admin_id, bajados)
 
-    assert bajados == 1
+    assert len(bajados) == 1
     estados = {f.device_id: f.estado for f in await _filas(tid, admin_id)}
     assert estados == {"EQ-ABIERTO": "pendiente", "EQ-APROBADO": "activo"}
     assert "dispositivo_pendiente" in await _tipos(tid)

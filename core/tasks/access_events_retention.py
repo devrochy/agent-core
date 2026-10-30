@@ -35,29 +35,33 @@ async def retener_eventos_de_acceso(ahora: datetime | None = None) -> dict[str, 
     negocios = 0
     for tenant_id in tenant_ids:
         tocado = False
-        async with tenant_scope(tenant_id):
-            while True:
-                async with get_session() as session:
-                    ids = (
-                        await session.execute(
-                            select(AccessEvent.id)
-                            .where(
-                                AccessEvent.tenant_id == tenant_id,
-                                AccessEvent.deleted_at.is_(None),
-                                AccessEvent.occurred_at < corte,
+        try:
+            async with tenant_scope(tenant_id):
+                while True:
+                    async with get_session() as session:
+                        ids = (
+                            await session.execute(
+                                select(AccessEvent.id)
+                                .where(
+                                    AccessEvent.tenant_id == tenant_id,
+                                    AccessEvent.deleted_at.is_(None),
+                                    AccessEvent.occurred_at < corte,
+                                )
+                                .limit(LOTE)
                             )
-                            .limit(LOTE)
+                        ).scalars().all()
+                        if not ids:
+                            break
+                        await session.execute(
+                            update(AccessEvent)
+                            .where(AccessEvent.tenant_id == tenant_id, AccessEvent.id.in_(ids))
+                            .values(deleted_at=datetime.now(UTC))
                         )
-                    ).scalars().all()
-                    if not ids:
-                        break
-                    await session.execute(
-                        update(AccessEvent)
-                        .where(AccessEvent.tenant_id == tenant_id, AccessEvent.id.in_(ids))
-                        .values(deleted_at=datetime.now(UTC))
-                    )
-                dadas_de_baja += len(ids)
-                tocado = True
+                    dadas_de_baja += len(ids)
+                    tocado = True
+        except Exception:
+            # Un negocio que falla (un lock, por ejemplo) no frena la retención de los demás.
+            log.warning("access_events_retention_negocio_fallo", tenant_id=str(tenant_id), exc_info=True)
         negocios += int(tocado)
 
     if dadas_de_baja:

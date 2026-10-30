@@ -103,7 +103,6 @@ async def login(request: Request) -> JSONResponse:
                     tipo="login_fallido",
                     canal="campo_v1",
                     ip=request.client.host if request.client else None,
-                    detalle={"codigo": codigo[:40]},
                 )
                 return JSONResponse({"error": "credenciales inválidas"}, status_code=401)
             token = issue_token(

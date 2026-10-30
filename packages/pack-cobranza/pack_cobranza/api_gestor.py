@@ -458,7 +458,10 @@ async def login(request: Request) -> JSONResponse:
         bloqueado = await register_failure("campo", identificador, ip)
         from core.access.events import registrar_fallo_de_login
 
-        await registrar_fallo_de_login(usuario, ip, canal="campo", bloqueado=bloqueado)
+        # Con `tenant` el intento apuntaba a ese negocio: el rastro no avisa a los demás.
+        await registrar_fallo_de_login(
+            usuario, ip, canal="campo", bloqueado=bloqueado, tenant_id=await _tenant_id_por_ref(ref) if ref else None
+        )
         return JSONResponse({"error": "credenciales inválidas"}, status_code=401)
     await register_success("campo", identificador, ip)
 
