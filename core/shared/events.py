@@ -58,8 +58,9 @@ ON_SUBSCRIPTION_CHARGE_REMINDER = "subscription.charge_reminder"
 ON_SUBSCRIPTION_PAUSED = "subscription.paused"
 # HU-SUB-06: suscripción activada (alta o cambio de plan) y fin de la prueba de Free
 # (oferta de un plan pago). payload: subscription_id, customer_id, concepto, estado,
-# referencia (el pedido; None si no hubo pedido), cambio_de_plan y variant_id (la línea del
-# pedido). En un negocio vendedor (ADR-0121) dispara el alta automática del comprador.
+# referencia (el número público de la inscripción, `SUB-0001`), cambio_de_plan, plan_id (el plan del
+# catálogo de suscripciones) y numero_publico. En un negocio vendedor (ADR-0121) dispara el alta
+# automática del comprador.
 ON_SUBSCRIPTION_ACTIVATED = "subscription.activated"
 # HU-SH-07 (ADR-0125): el master aprobó un alta en revisión; el consumidor la corre en el
 # worker. payload: referencia (del alta en el vendedor que emite).
@@ -79,7 +80,7 @@ ON_SEGMENT_SEND_BATCH = "crm.segment_send.batch"
 # - `subscription.charge_paid`: el proveedor de suscripciones marcó pagado el cargo de un
 #   período (en el negocio vendedor). Si la suscripción es la de un negocio aprovisionado, el
 #   core aplica ese período a su `tenant_subscriptions`. payload: charge_id, subscription_id,
-#   customer_id, periodo, periodo_inicio, periodo_fin, dia_ancla, monto, moneda, variant_id,
+#   customer_id, periodo, periodo_inicio, periodo_fin, dia_ancla, monto, moneda, plan_id,
 #   provider_reference, pago_duplicado.
 ON_SUBSCRIPTION_CHARGE_PAID = "subscription.charge_paid"
 # - `platform.period_paid`: un período del plan del negocio se pagó por el panel (link de la

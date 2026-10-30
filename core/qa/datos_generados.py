@@ -122,7 +122,7 @@ MODULOS: dict[str, Modulo] = {
         "suscripciones",
         "Suscripciones",
         "pack_subscriptions:suscripciones",
-        (("pack_commerce", "planes"), ("pack_subscriptions", "suscripciones")),
+        (("pack_subscriptions", "planes"), ("pack_subscriptions", "suscripciones")),
     ),
 }
 
@@ -686,7 +686,7 @@ async def _generar_modulo_suscripciones(
     modulo: Modulo,
     formas: list[tuple[str, BaseModule, FormaDeDatos]],
 ) -> dict[str, Any]:
-    """Planes en Comercio y, con su snapshot, clientes/cargos en Suscripciones."""
+    """Planes de prueba y, con su snapshot, clientes/cargos, los dos en Suscripciones."""
     (pack_planes_id, pack_planes, forma_planes), (pack_subs_id, pack_subs, forma_subs) = formas
     agente, agent_id = await _agente_del_modulo(tenant_id, modulo)
     negocio = await _negocio(tenant_id)
@@ -709,9 +709,9 @@ async def _generar_modulo_suscripciones(
             tenant_id, forma_planes.modo, generado_planes.datos, contexto
         )
         planes = tuple(
-            PlanParaPrueba(variant_id=r.ref, plan=dict(r.metadata["plan"]))
+            PlanParaPrueba(plan_id=r.ref, plan=dict(r.metadata["plan"]))
             for r in creados_planes
-            if r.kind == "variante" and r.metadata and r.metadata.get("plan")
+            if r.kind == "plan" and r.metadata and r.metadata.get("plan")
         )
         if not planes:
             raise ErrorDatosDePrueba(

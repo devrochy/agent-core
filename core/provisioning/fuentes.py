@@ -1,10 +1,10 @@
 """Contrato de los datos de un alta y registro de fuentes (HU-SH-03, ADR-0121 § 3.4).
 
 El core no lee tablas de los packs. Un pack que vende planes de la plataforma (hoy
-`pack_commerce`) registra una `FuenteDeAltas`: dada la referencia de SU pedido, devuelve
-los `DatosDeAlta`. Mismo patrón que el catálogo de planes (ADR-0111). Los datos son del
-pedido que arma el servidor, no del texto del LLM: el vertical es un id de preset validado
-en el checkout.
+`pack_subscriptions`, con sus inscripciones) registra una `FuenteDeAltas`: dada la referencia
+pública de SU inscripción (`SUB-0001`), devuelve los `DatosDeAlta`. Los datos son de la
+inscripción que arma el servidor, no del texto del LLM: el vertical es un id de preset validado
+al inscribir.
 
 Este módulo es lo único de `core.provisioning` que un pack puede importar.
 """
@@ -17,7 +17,7 @@ from typing import Protocol, TypedDict, runtime_checkable
 
 
 class DatosDeAlta(TypedDict, total=False):
-    """Lo que el consumidor necesita del pedido para dar de alta el negocio."""
+    """Lo que el consumidor necesita de la inscripción para dar de alta el negocio."""
 
     plan: str | None  # id del plan de la plataforma (core/billing/plans.py); None = la línea no vende uno
     vertical: str | None  # id de preset (core/presets) elegido en el checkout
@@ -25,8 +25,8 @@ class DatosDeAlta(TypedDict, total=False):
     email: str | None  # correo del owner
     telefono: str | None
     nombre: str | None  # nombre de la persona que compró
-    customer_id: str | None  # cliente del pedido: el consumidor lo coteja con el del evento
-    pagado: bool  # el pedido cubre el plan de la línea (Free nace pagado, D-16)
+    customer_id: str | None  # cliente de la inscripción: el consumidor lo coteja con el del evento
+    pagado: bool  # la inscripción cubre su plan (Free nace pagada, D-16)
     origen: str | None  # SPEC-43: 'agente' (chat) o 'panel' (operador); 'panel' pasa por revisión humana
 
 
@@ -36,50 +36,25 @@ class FuenteDeAltas(Protocol):
 
     provider_id: str
 
-    async def datos_de_alta(
-        self, referencia: str, *, variant_id: str | None = None
-    ) -> DatosDeAlta | None:
-        """Datos del pedido `referencia` del negocio actual (`tenant_scope`), o None si no
-        existe todavía. `variant_id` elige la línea de un pedido con varios planes."""
+    async def datos_de_alta(self, referencia: str) -> DatosDeAlta | None:
+        """Datos de la inscripción `referencia` del negocio actual (`tenant_scope`), o None si no
+        existe todavía."""
         ...
 
 
-async def plan_de_la_variante(fuente: FuenteDeAltas | None, variant_id: str | None) -> str | None:
-    """Plan de la plataforma que vende una variante del vendedor (HU-SH-04, ADR-0123).
+async def plan_plataforma_de(fuentes: list[FuenteDeAltas], *, plan_id: str | None = None) -> str | None:
+    """Plan de la plataforma que vende un plan del catálogo, preguntando a las fuentes del negocio (SPEC-43).
 
-    Operación opcional de la fuente (`plan_de_variante`): sirve para un cambio de plan o un
-    cargo de período, que no traen un pedido. None si la fuente no la implementa, si la
-    variante no vende un plan de la plataforma o si el plan no existe en el catálogo."""
-    from core.billing.plans import get_plan
-
-    if fuente is None or not variant_id:
-        return None
-    metodo = getattr(fuente, "plan_de_variante", None)
-    if metodo is None:
-        return None
-    plan_id = str(await metodo(str(variant_id)) or "").strip().lower()
-    return plan_id if plan_id and get_plan(plan_id) is not None else None
-
-
-async def plan_plataforma_de(
-    fuentes: list[FuenteDeAltas], *, variant_id: str | None = None, plan_id: str | None = None
-) -> str | None:
-    """Plan de la plataforma que vende una línea, preguntando a todas las fuentes del negocio (SPEC-43).
-
-    Con `plan_id` (el plan del catálogo de suscripciones de la inscripción) se usa la operación opcional
-    `plan_de_inscripcion`; con `variant_id`, la de commerce (`plan_de_variante`). La primera fuente que
-    responde con un plan de la plataforma que existe gana. None si ninguna lo conoce."""
+    Usa la operación opcional `plan_de_inscripcion` de la fuente: sirve para un cambio de plan o un cargo
+    de período, que no traen una referencia. La primera fuente que responde con un plan de la plataforma que
+    existe gana. None si ninguna lo conoce."""
     from core.billing.plans import get_plan
 
     for fuente in fuentes:
-        metodo, clave = (
-            (getattr(fuente, "plan_de_inscripcion", None), plan_id)
-            if plan_id
-            else (getattr(fuente, "plan_de_variante", None), variant_id)
-        )
-        if metodo is None or not clave:
+        metodo = getattr(fuente, "plan_de_inscripcion", None)
+        if metodo is None or not plan_id:
             continue
-        candidato = str(await metodo(str(clave)) or "").strip().lower()
+        candidato = str(await metodo(str(plan_id)) or "").strip().lower()
         if candidato and get_plan(candidato) is not None:
             return candidato
     return None
@@ -100,9 +75,9 @@ class FuentesDeAltasRegistry:
         return sorted(self._fuentes)
 
     async def del_negocio(self, tenant_id: uuid.UUID) -> list[FuenteDeAltas]:
-        """Fuentes de los packs habilitados en el AgentSpec del negocio, por id. Con SPEC-43 puede haber
-        más de una (commerce con sus pedidos y suscripciones con sus inscripciones): quien consulta
-        pregunta a cada una hasta que una conozca la referencia."""
+        """Fuentes de los packs habilitados en el AgentSpec del negocio, por id. Puede haber más de una
+        (un segundo proveedor de suscripciones): quien consulta pregunta a cada una hasta que una conozca
+        la referencia."""
         from core.agents.spec import enabled_packs, load_active_spec
         from core.shared.tenant import tenant_scope
 
@@ -119,4 +94,4 @@ class FuentesDeAltasRegistry:
 
 fuentes_de_alta = FuentesDeAltasRegistry()
 
-__all__ = ["DatosDeAlta", "FuenteDeAltas", "FuentesDeAltasRegistry", "fuentes_de_alta", "plan_de_la_variante", "plan_plataforma_de"]
+__all__ = ["DatosDeAlta", "FuenteDeAltas", "FuentesDeAltasRegistry", "fuentes_de_alta", "plan_plataforma_de"]

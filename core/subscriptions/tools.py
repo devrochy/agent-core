@@ -22,7 +22,6 @@ from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.subscriptions import (
-    InscripcionCapability,
     PlanSnapshot,
     SubscriptionCapability,
     SubscriptionError,
@@ -379,24 +378,12 @@ class SubscriptionSkill(BaseSkill):
         catálogo del negocio. El proveedor decide: upgrade → cargo por la diferencia
         prorrateada (el plan cambia al pagarlo), downgrade → programado al próximo período.
         """
-        from core.subscriptions import plan_catalog_registry
-
         cap = await _capability(ctx)
         sub = await _suscripcion_del_cliente(ctx)
         if sub is None:
             return {"encontrado": False, "mensaje": "No tenés una suscripción activa."}
-        codigo = str(arguments.get("plan_code") or "").strip()
-        if not codigo:
-            raise SubscriptionError("Falta el código del plan nuevo.", code="plan_invalido")
-        tenant_id = get_current_tenant_id()
-        catalogo = await plan_catalog_registry.para_negocio(tenant_id) if tenant_id else None
-        encontrado = await catalogo.plan_por_codigo(codigo) if catalogo else None
-        if encontrado is None:
-            raise SubscriptionError(
-                f"No encontré el plan {codigo} en el catálogo del negocio.", code="plan_no_encontrado"
-            )
-        variant_id, plan = encontrado
-        vista = await cap.change_plan(uuid.UUID(sub["subscription_id"]), variant_id=variant_id, plan=plan)
+        plan_id, plan = await plan_del_catalogo(cap, str(arguments.get("plan_code") or ""))
+        vista = await cap.change_plan(uuid.UUID(sub["subscription_id"]), plan_id=plan_id, plan=plan)
         resultado: dict[str, Any] = {"encontrado": True, **vista}
         cargo = vista.get("cargo_cambio") or {}
         if cargo.get("link"):
@@ -501,11 +488,11 @@ class SubscriptionSkill(BaseSkill):
         monto = arguments.get("monto_a_pagar")
         if isinstance(monto, bool) or not isinstance(monto, int | float | str):
             raise SubscriptionError("Falta el monto_a_pagar de la cotización.", code="monto_distinto")
-        cap, sub, variant_id, plan = await _cambio_cotizable(ctx, str(arguments.get("plan_code") or ""))
+        cap, sub, plan_id, plan = await _cambio_cotizable(ctx, str(arguments.get("plan_code") or ""))
         codigo = _codigo_de_promocion(arguments.get("codigo_promocion"))
         extra = {"codigo_promocion": codigo} if codigo else {}
         vista = await cap.change_plan(  # type: ignore[call-arg]
-            uuid.UUID(sub["subscription_id"]), variant_id=variant_id, plan=plan, monto_esperado=monto, **extra
+            uuid.UUID(sub["subscription_id"]), plan_id=plan_id, plan=plan, monto_esperado=monto, **extra
         )
         cargo = vista.get("cargo_cambio") or {}
         resultado: dict[str, Any] = {
@@ -531,7 +518,7 @@ class SubscriptionSkill(BaseSkill):
 
 
 async def _cambio_cotizable(ctx: ToolContext, plan_code: str) -> tuple[Any, SubscriptionView, str, PlanSnapshot]:
-    """(proveedor, suscripción vigente, variant_id, plan) o `SubscriptionError`. Todo camino
+    """(proveedor, suscripción vigente, plan_id, plan) o `SubscriptionError`. Todo camino
     sin efecto termina en error: la tarea del procedimiento solo avanza con un resultado real."""
     cap = await _capability(ctx)
     if not soporta_cotizacion(cap):
@@ -539,8 +526,8 @@ async def _cambio_cotizable(ctx: ToolContext, plan_code: str) -> tuple[Any, Subs
     sub = await _suscripcion_del_cliente(ctx)
     if sub is None:
         raise SubscriptionError("El cliente no tiene una suscripción activa.", code="sin_suscripcion")
-    variant_id, plan = await plan_del_catalogo(plan_code)
-    return cap, sub, variant_id, plan
+    plan_id, plan = await plan_del_catalogo(cap, plan_code)
+    return cap, sub, plan_id, plan
 
 
 def _codigo_de_promocion(valor: Any) -> str | None:
@@ -552,11 +539,11 @@ async def cotizacion_del_cliente(ctx: ToolContext, plan_code: str, codigo_promoc
     """Cotización del cambio de la suscripción del cliente de la conversación al plan `plan_code`
     (sin efectos). La usan `sub_cotizar_cambio_plan` y el resolver `plan_destino` del
     procedimiento, así los dos dicen lo mismo. Lanza `SubscriptionError`."""
-    cap, sub, variant_id, plan = await _cambio_cotizable(ctx, plan_code)
+    cap, sub, plan_id, plan = await _cambio_cotizable(ctx, plan_code)
     cotizacion = await cotizar_cambio(
         cap,
         uuid.UUID(sub["subscription_id"]),
-        variant_id=variant_id,
+        plan_id=plan_id,
         plan=plan,
         codigo_promocion=_codigo_de_promocion(codigo_promocion),
     )
@@ -578,11 +565,9 @@ SOLO_PROCEDIMIENTO = frozenset(
 CAMPOS_DEL_CLIENTE = ("nombre", "email", "telefono", "documento", "negocio", "vertical")
 
 
-async def _inscripcion(ctx: ToolContext) -> InscripcionCapability:
-    cap = await _capability(ctx)
-    if not isinstance(cap, InscripcionCapability):
-        raise SubscriptionError("Este proveedor de suscripciones no inscribe en planes.", code="sin_inscripcion")
-    return cap
+async def _inscripcion(ctx: ToolContext) -> SubscriptionCapability:
+    """El proveedor del negocio. Planes e inscripción son parte del contrato v2 (ADR-0177)."""
+    return await _capability(ctx)
 
 
 def _plan_para_el_modelo(plan: PlanSnapshot) -> dict[str, Any]:
@@ -640,17 +625,14 @@ async def _token_de_terminos_aceptados(ctx: ToolContext) -> str | None:
     return terminos.token if terminos is not None else None
 
 
-async def plan_del_catalogo(codigo: str) -> tuple[str, PlanSnapshot]:
-    """(variant_id, snapshot) del plan por SKU en el catálogo del negocio (ADR-0111), o error."""
-    from core.subscriptions import plan_catalog_registry
-
+async def plan_del_catalogo(cap: SubscriptionCapability, codigo: str) -> tuple[str, PlanSnapshot]:
+    """(plan_id, snapshot) del plan por código en el catálogo del proveedor del negocio (ADR-0111, ADR-0177)."""
     codigo = codigo.strip()[:100]
     if not codigo:
         raise SubscriptionError("Falta el código del plan nuevo.", code="plan_invalido")
-    tenant_id = get_current_tenant_id()
-    catalogo = await plan_catalog_registry.para_negocio(tenant_id) if tenant_id else None
-    encontrado = await catalogo.plan_por_codigo(codigo) if catalogo else None
-    if encontrado is None:
+    plan = await cap.plan_por_codigo(codigo)
+    plan_id = str((plan or {}).get("plan_id") or "")
+    if plan is None or not plan_id:
         # Sin repetir el código: lo escribió el modelo (y puede venir del mensaje del cliente).
         raise SubscriptionError("Ese plan no está en el catálogo del negocio.", code="plan_no_encontrado")
-    return encontrado
+    return plan_id, plan

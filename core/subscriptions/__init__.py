@@ -1,9 +1,11 @@
-"""Capacidad de suscripciones del core — contrato único v1 (HU-SUB-01, ADR-0106).
+"""Capacidad de suscripciones del core — contrato v2 (HU-SUB-01, ADR-0106; v2 en ADR-0177).
 
 Un proveedor (`pack_subscriptions` hoy; `pack_cobranza` con HU-SUB-15) registra
-una `SubscriptionCapability` con las 8 operaciones del contrato. El core
-despacha las tools `sub_*` al proveedor del negocio y commerce consume el
-registro para activar la suscripción al pagarse un pedido.
+una `SubscriptionCapability`: el catálogo de planes y la inscripción (`listar_planes`,
+`plan_por_codigo`, `cotizar_inscripcion`, `inscribir`) y el ciclo de vida de la suscripción
+(`get`, `list_for_customer`, `pause`, `resume`, `cancel`, `change_plan`, `charge_link`). El core
+despacha las tools `sub_*` al proveedor del negocio. Commerce ya no vende planes (HU-COM-17):
+no activa suscripciones ni registra un catálogo.
 
 Selección del proveedor: `capability_for_tenant` resuelve entre los proveedores
 habilitados para el tenant (packs de su AgentSpec); dos habilitados sin elección
@@ -83,7 +85,7 @@ class SubscriptionView(TypedDict, total=False):
     trial_termina: str | None
     cargos: list[dict[str, Any]]
     # HU-SUB-07 (ADR-0111)
-    referencia: str | None  # pedido que la creó
+    referencia: str | None  # número público de la inscripción (`SUB-0001`)
     cambio_programado: dict[str, Any] | None  # downgrade al próximo período
     cambio: str  # resultado de change_plan: inmediato | pendiente_pago | programado
     cargo_cambio: dict[str, Any] | None  # cargo de la diferencia (monto, link, referencia)
@@ -105,15 +107,6 @@ class ChargeLink(TypedDict, total=False):
 class SubscriptionCapability(Protocol):
     provider_id: str
 
-    async def activate(
-        self,
-        *,
-        customer_id: uuid.UUID,
-        variant_id: str,
-        plan: PlanSnapshot,
-        reference: str = "",
-    ) -> SubscriptionView: ...
-
     async def get(self, subscription_id: uuid.UUID) -> SubscriptionView: ...
 
     async def list_for_customer(self, customer_id: uuid.UUID) -> list[SubscriptionView]: ...
@@ -134,22 +127,13 @@ class SubscriptionCapability(Protocol):
         self,
         subscription_id: uuid.UUID,
         *,
-        variant_id: str,
+        plan_id: str,
         plan: PlanSnapshot,
     ) -> SubscriptionView: ...
 
     async def charge_link(self, subscription_id: uuid.UUID, *, period: str = "") -> ChargeLink: ...
 
-
-@runtime_checkable
-class InscripcionCapability(Protocol):
-    """Operaciones de PLANES e INSCRIPCIÓN del contrato v2 (SPEC-43, ADR-0177).
-
-    En PR-2 son operaciones opcionales (como `permite_varias`): `activate` y el registry de
-    catálogo conviven hasta que commerce deje de vender planes (HU-COM-17); entonces estas
-    cuatro pasan al Protocol principal y `activate` desaparece. Quien las llama pregunta con
-    `isinstance(cap, InscripcionCapability)`."""
-
+    # ---- planes e inscripción (SPEC-43, ADR-0177)
     async def listar_planes(self, *, solo_activos: bool = True) -> list[PlanSnapshot]: ...
 
     async def plan_por_codigo(self, codigo: str) -> PlanSnapshot | None: ...
@@ -192,7 +176,7 @@ class SubscriptionRegistry:
     def capability_for(self, enabled: set[str] | None) -> SubscriptionCapability | None:
         """Primera capacidad de un proveedor habilitado (o cualquiera si `enabled` es None).
 
-        Compatibilidad con el consumo de commerce previo al ADR-0106.
+        Compatibilidad con el consumo previo al ADR-0106.
         """
         for pid, cap in self._caps.items():
             if enabled is None or pid in enabled:
@@ -335,45 +319,6 @@ async def estado_proveedor(tenant_id: uuid.UUID) -> EstadoProveedor:
     return {**base, "efectivo": cap.provider_id}
 
 
-# ------------------------------------------------- catálogo de planes (HU-SUB-07, ADR-0111)
-@runtime_checkable
-class PlanCatalog(Protocol):
-    """Catálogo de planes de un pack (commerce): el precio de un plan nunca sale del LLM."""
-
-    provider_id: str
-
-    async def plan_por_codigo(self, codigo: str) -> tuple[str, PlanSnapshot] | None:
-        """(variant_id, snapshot) del plan por SKU o `variant_id`, o None si no existe."""
-        ...
-
-
-@dataclass
-class PlanCatalogRegistry:
-    _catalogos: dict[str, PlanCatalog] = field(default_factory=dict)
-
-    def register(self, provider_id: str, catalogo: PlanCatalog) -> None:
-        self._catalogos[provider_id] = catalogo
-
-    def unregister(self, provider_id: str) -> None:
-        self._catalogos.pop(provider_id, None)
-
-    async def para_negocio(self, tenant_id: uuid.UUID) -> PlanCatalog | None:
-        """Catálogo de un pack habilitado en el AgentSpec del negocio (el primero)."""
-        from core.agents.spec import enabled_packs, load_active_spec
-        from core.shared.tenant import tenant_scope
-
-        async with tenant_scope(tenant_id):
-            spec = await load_active_spec(tenant_id)
-        packs = enabled_packs(spec)
-        for pid in sorted(self._catalogos):
-            if pid in packs:
-                return self._catalogos[pid]
-        return None
-
-
-plan_catalog_registry = PlanCatalogRegistry()
-
-
 async def permite_varias(capability: SubscriptionCapability) -> bool:
     """¿El proveedor permite varias suscripciones por cliente? Operación opcional del
     contrato (ADR-0111): si no la implementa, no las permite."""
@@ -427,7 +372,7 @@ async def cotizar_cambio(
     capability: SubscriptionCapability,
     subscription_id: uuid.UUID,
     *,
-    variant_id: str,
+    plan_id: str,
     plan: PlanSnapshot,
     codigo_promocion: str | None = None,
 ) -> dict[str, Any]:
@@ -441,4 +386,4 @@ async def cotizar_cambio(
             "Este proveedor de suscripciones no cotiza cambios de plan.", code="sin_cotizacion"
         )
     extra = {"codigo_promocion": codigo_promocion} if codigo_promocion else {}
-    return dict(await metodo(subscription_id, variant_id=variant_id, plan=plan, **extra))
+    return dict(await metodo(subscription_id, plan_id=plan_id, plan=plan, **extra))

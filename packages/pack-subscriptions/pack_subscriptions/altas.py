@@ -4,8 +4,8 @@ Cuando un negocio vendedor activa la suscripción de un plan de la plataforma, e
 el negocio del comprador. Con SPEC-43 la inscripción vive en este pack: la referencia pública es
 el `numero_publico` (`SUB-0001`), el plan de la plataforma sale del plan del catálogo y los datos
 del comprador son los `datos_alta` que el servidor guardó al inscribir (nunca texto del LLM). Se
-registra en `core.provisioning.fuentes` junto a la de commerce: el core pregunta a cada una hasta
-que una conoce la referencia.
+registra en `core.provisioning.fuentes`: el core pregunta a cada fuente hasta que una conoce la
+referencia.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ class DatosDeAltaDeLaInscripcion:
             ).scalar_one_or_none()
         return str(plan or "").strip().lower() or None
 
-    async def datos_de_alta(self, referencia: str, *, variant_id: str | None = None) -> DatosDeAlta | None:
+    async def datos_de_alta(self, referencia: str) -> DatosDeAlta | None:
         tenant_id = get_current_tenant_id()
         referencia = (referencia or "").strip()
         if tenant_id is None or not referencia:

@@ -52,9 +52,9 @@ class FormaDeDatos:
 
 @dataclass(frozen=True)
 class PlanParaPrueba:
-    """Un plan vendible que sembró Comercio para el lote de datos de prueba."""
+    """Un plan del catálogo de Suscripciones que sembró el lote de datos de prueba."""
 
-    variant_id: uuid.UUID
+    plan_id: uuid.UUID
     plan: Mapping[str, Any]
 
 
@@ -65,7 +65,7 @@ class ContextoDeNegocio:
     moneda: str
     zona_horaria: str
     sufijo: str  # corto y único por lote: SKUs y nombres que no chocan con los del negocio
-    # Planes que sembró Comercio para el mismo lote (los usa Suscripciones para sus clientes).
+    # Planes que sembró Suscripciones para el mismo lote (los usa para inscribir a sus clientes).
     planes: tuple[PlanParaPrueba, ...] = ()
 
 
@@ -76,7 +76,7 @@ class RegistroSembrado:
     kind: str
     ref: uuid.UUID
     # Datos que el pack necesita devolver al core para encadenar otra siembra (p. ej. el snapshot
-    # del plan creado en Comercio para que Suscripciones arme sus clientes).
+    # del plan creado para que la siguiente forma arme sus clientes).
     metadata: Mapping[str, Any] | None = None
 
 
@@ -86,9 +86,9 @@ class EscenarioNoDisponible(Exception):
 
 @dataclass(frozen=True)
 class PlanDeEscenario:
-    """Un plan que sembró Comercio, con el snapshot que arma el servidor (nunca el LLM)."""
+    """Un plan que sembró Suscripciones, con el snapshot que arma el servidor (nunca el LLM)."""
 
-    variant_id: uuid.UUID
+    plan_id: uuid.UUID
     plan: PlanSnapshot
 
 
@@ -107,7 +107,7 @@ class EntradaDeEscenario:
 
     - `sufijo`: corto y único por caso; hace únicas las claves de idempotencia y los nombres.
     - `clientes`: los clientes ficticios que creó el core (sin teléfono).
-    - `planes`: los planes de Comercio para `pack_subscriptions`.
+    - `planes`: los planes de prueba que sembró `pack_subscriptions` para el escenario de suscripciones.
     - `autor_admin_id`: el dueño de prueba, para lo que se registra «a nombre de» alguien.
     """
 

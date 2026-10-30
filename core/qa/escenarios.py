@@ -284,7 +284,7 @@ async def _suscripciones(ctx: Contexto) -> Resultado:
 
     _pack("pack_subscriptions")
     activada = await _activar_suscripciones(ctx)
-    planes = await sembrar_en_pack("pack_commerce", "planes-de-suscripcion", entrada(ctx))
+    planes = await sembrar_en_pack("pack_subscriptions", "planes-de-suscripcion", entrada(ctx))
     cid, _activa, _canary = await conexion_web(ctx.tenant_id)
     clientes: list[ClienteDeEscenario] = []
     for nombre in ("Diana Castaño", "Felipe Ocampo", "Mariana Londoño", "Tomás Arango"):

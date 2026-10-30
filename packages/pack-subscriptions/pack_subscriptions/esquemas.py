@@ -26,7 +26,7 @@ class SuscripcionItem(BaseModel):
     id: uuid.UUID
     cliente: ClienteRef
     plan: str
-    variante_id: uuid.UUID | None = None
+    plan_id: uuid.UUID | None = None
     estado: str  # pendiente_pago | trialing | activa | pausada | vencida | cancelada
     motivo_pausa: str | None = None  # mora | cliente
     periodicidad: str  # mensual | trimestral | anual

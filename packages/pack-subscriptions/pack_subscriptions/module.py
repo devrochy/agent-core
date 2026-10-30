@@ -2,10 +2,8 @@
 
 SPEC-43: el pack es dueño del catálogo de planes y de la inscripción (`planes.py`,
 `inscripcion.py`): un plan de pago nace `pendiente_pago` y se activa con `payment.confirmed` de su
-cargo (`sub-<cargo>`) o con la confirmación manual del panel. Camino viejo (hasta HU-COM-17):
-cuando un pedido de commerce con un plan se paga, commerce entrega un snapshot y este pack
-crea/activa la `Subscription` a través del registry del core (`activate`) — sin importar commerce
-(invariante nº5). También escucha `payment.confirmed` para marcar los cargos pagados y expone la API
+cargo (`sub-<cargo>`) o con la confirmación manual del panel. Commerce ya no vende planes
+(HU-COM-17): este pack no importa ni lee nada de él (invariante nº5). También escucha `payment.confirmed` para marcar los cargos pagados y expone la API
 admin de planes e inscripción.
 """
 
@@ -33,7 +31,6 @@ from pack_subscriptions import (
 from pack_subscriptions.admin_api import router as subscriptions_admin_api_router
 from pack_subscriptions.capability import (
     SubscriptionCapabilityImpl,
-    crear_suscripcion_para,
     reactivar_por_pago,
 )
 from pack_subscriptions.config import SubscriptionConfig
@@ -50,11 +47,6 @@ PLUGIN_ID = "pack_subscriptions"
 
 _PAUSAR = re.compile(r"suscripci[oó]n\s+(?:qued\w*\s+)?pausad\w*|paus\w+\s+(?:tu\s+)?suscripci", re.IGNORECASE)
 _CANCELAR = re.compile(r"suscripci[oó]n\s+(?:qued\w*\s+)?(?:cancel\w*|anulad\w*)|cancel\w+\s+(?:tu\s+)?suscripci", re.IGNORECASE)
-
-
-# `crear_suscripcion_para` vive en capability.py (proveedor del contrato v1,
-# ADR-0106); se re-exporta para la API admin y los tests que la importan de acá.
-__all__ = ["crear_suscripcion_para"]
 
 
 class SubscriptionsModule(BaseModule):
@@ -112,16 +104,18 @@ class SubscriptionsModule(BaseModule):
         return await seed_planes(tenant_id, data)
 
     async def sembrar_escenario(self, tenant_id: uuid.UUID, escenario: str, entrada: Any) -> Any:
-        """Suscripciones activa, por vencer y vencida con cargos y pagos (HU-QA-13)."""
+        """Planes de prueba y suscripciones activa, por vencer y vencida con cargos y pagos (HU-QA-13)."""
         from core.qa.contrato_datos import EscenarioNoDisponible
-        from pack_subscriptions.escenarios import sembrar
+        from pack_subscriptions.escenarios import planes_de_suscripcion, sembrar
 
-        if escenario != "suscripciones":
-            raise EscenarioNoDisponible(f"Suscripciones no tiene el escenario {escenario}.")
-        return await sembrar(tenant_id, entrada)
+        if escenario == "planes-de-suscripcion":
+            return await planes_de_suscripcion(tenant_id, entrada)
+        if escenario == "suscripciones":
+            return await sembrar(tenant_id, entrada)
+        raise EscenarioNoDisponible(f"Suscripciones no tiene el escenario {escenario}.")
 
     def formas_de_datos_de_prueba(self) -> list[FormaDeDatos]:
-        """Clientes y suscripciones de ejemplo (HU-QA-10, modo `suscripciones`)."""
+        """Planes, clientes y suscripciones de ejemplo (HU-QA-10, modos `planes` y `suscripciones`)."""
         from pack_subscriptions.datos_de_prueba import formas
 
         return formas()
@@ -266,7 +260,7 @@ async def _emitir_cargo_pagado(
     session, cargo: SubscriptionCharge, sub: Subscription, provider_reference: str, *, duplicado: bool  # type: ignore[no-untyped-def]
 ) -> None:
     """`subscription.charge_paid` por el outbox, en la misma transacción que el cargo pagado
-    (HU-SH-04, ADR-0123). Trae el período con sus dos bordes y la variante: si la
+    (HU-SH-04, ADR-0123). Trae el período con sus dos bordes y el plan: si la
     suscripción es la de un negocio aprovisionado por un vendedor, el core aplica ese período
     al plan del negocio (fuente única). Para el resto de los negocios no hace nada."""
     from core.events.outbox import emit_domain
@@ -290,8 +284,7 @@ async def _emitir_cargo_pagado(
             "dia_ancla": sub.dia_ancla,
             "monto": str(cargo.monto),
             "moneda": sub.moneda,
-            "variant_id": str(sub.variante_id) if sub.variante_id else None,
-            "plan_id": str(sub.plan_id) if sub.plan_id else None,
+            "plan_id": str(sub.plan_id),
             "provider_reference": provider_reference,
             "pago_duplicado": duplicado,
         },

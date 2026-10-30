@@ -26,18 +26,9 @@ class SubscriptionConfig(BasePluginConfig):
         description="Cómo se cobra el período: 'link' (link de pago si hay pasarela) o 'manual'.",
     )
     moneda: str = Field(default="COP", description="Moneda por defecto de los planes.")
-    # Obsoleto (SPEC-43): periodicidad y prueba viven en cada plan del catálogo. Se conservan solo
-    # para el camino viejo de commerce (`activate`) y se retiran con HU-COM-17.
-    periodicidad: Literal["mensual", "trimestral", "anual"] = Field(
-        default="mensual",
-        description="Obsoleto: la periodicidad ahora es de cada plan del catálogo.",
-    )
-    trial_dias: int = Field(
-        default=30,
-        ge=0,
-        le=365,
-        description="Obsoleto: los días de prueba ahora son de cada plan del catálogo (solo $0, D-16).",
-    )
+    # La periodicidad y los días de prueba viven en cada plan del catálogo (SPEC-43); los campos
+    # `periodicidad` y `trial_dias` de la config se retiraron con HU-COM-17 (una config ya guardada con
+    # ellos sigue cargando: Pydantic ignora las claves extra).
     # ---------------------------------------------------------------- inscripción (SPEC-43)
     campos_de_inscripcion: list[str] = Field(
         default_factory=lambda: ["nombre", "email", "telefono"],

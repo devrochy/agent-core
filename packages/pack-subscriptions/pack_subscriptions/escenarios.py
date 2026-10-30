@@ -1,7 +1,9 @@
-"""Escenario «Suscripciones» de los datos de prueba (HU-QA-13, adenda de ADR-0135 §8).
+"""Escenarios de Suscripciones de los datos de prueba (HU-QA-13, adenda de ADR-0135 §8).
 
-Sobre los planes que sembró Comercio (el core los pasa como `PlanSnapshot`: este pack no lee el
-catálogo) y los clientes que creó el core, deja cuatro suscripciones: una activa al día y pagada,
+- `planes-de-suscripcion`: dos planes nuevos en el catálogo del pack (con el sufijo del caso en el
+  código) y su snapshot, que el core le pasa al escenario `suscripciones`. El contenido sale de
+  `presets/escenarios.json`.
+- `suscripciones`: sobre esos planes y los clientes que creó el core, deja cuatro suscripciones: una activa al día y pagada,
 una por vencer con su cargo pendiente en dos días, una vencida con un cargo de hace diez días sin
 pagar y una anual pagada. Usa las funciones del pack (`crear_suscripcion_para`,
 `registrar_pago_externo`); los estados «por vencer» y «vencida» se fijan con sus cargos, como los
@@ -20,7 +22,13 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from core.db.session import get_session
-from core.qa.contrato_datos import EntradaDeEscenario, EscenarioNoDisponible, ResumenDeEscenario
+from core.qa.contrato_datos import (
+    ContextoDeNegocio,
+    EntradaDeEscenario,
+    EscenarioNoDisponible,
+    PlanDeEscenario,
+    ResumenDeEscenario,
+)
 from core.shared.tenant import get_current_tenant_id
 from pack_subscriptions.models import Subscription, SubscriptionCharge
 from pack_subscriptions.periodos import etiqueta_periodo, sumar_periodo
@@ -67,9 +75,7 @@ async def sembrar(tenant_id: uuid.UUID, entrada: EntradaDeEscenario) -> ResumenD
     pagos = cargos = 0
     for n, ((indice, estado, dias), cliente) in enumerate(zip(CASOS, entrada.clientes, strict=False)):
         plan = entrada.planes[indice]
-        sub = await crear_suscripcion_para(
-            customer_id=cliente.customer_id, variante_id=plan.variant_id, plan=dict(plan.plan), reference="admin-manual"
-        )
+        sub = await crear_suscripcion_para(customer_id=cliente.customer_id, plan_id=plan.plan_id)
         if dias is None:
             inicio = sub.periodo_actual_inicio or ahora
             await capacidad.registrar_pago_externo(
@@ -89,4 +95,28 @@ async def sembrar(tenant_id: uuid.UUID, entrada: EntradaDeEscenario) -> ResumenD
     return ResumenDeEscenario(
         conteos={"suscripciones": len(CASOS), "pagos": pagos, "cargos_pendientes": cargos},
         detalle=lineas,
+    )
+
+
+async def planes_de_suscripcion(tenant_id: uuid.UUID, entrada: EntradaDeEscenario) -> ResumenDeEscenario:
+    from core.presets import load_fragment
+    from pack_subscriptions.datos_de_prueba import PlanesDePrueba
+    from pack_subscriptions.datos_de_prueba import sembrar as sembrar_datos
+
+    if get_current_tenant_id() != tenant_id:
+        raise PermissionError("escenario fuera del tenant_scope del negocio")
+    planes = PlanesDePrueba.model_validate(dict(load_fragment("pack_subscriptions", "escenarios").seed))
+    contexto = ContextoDeNegocio(moneda=entrada.moneda, zona_horaria=entrada.zona_horaria, sufijo=entrada.sufijo)
+    registros = await sembrar_datos(tenant_id, "planes", planes, contexto)
+    salida = [
+        PlanDeEscenario(plan_id=r.ref, plan=dict(r.metadata["plan"]))  # type: ignore[arg-type,index]
+        for r in registros
+        if r.kind == "plan" and r.metadata and r.metadata.get("plan")
+    ]
+    if len(salida) < 2:
+        raise EscenarioNoDisponible("No se pudieron crear los planes de prueba.")
+    return ResumenDeEscenario(
+        conteos={"planes": len(salida)},
+        detalle=["Planes " + " y ".join(f"{p.plan['nombre']} ({p.plan['periodicidad']})" for p in salida)],
+        planes=salida,
     )

@@ -1,0 +1,24 @@
+{
+  "seed": {
+    "planes": [
+      {
+        "codigo": "PLAN-FREE",
+        "nombre": "Plan Free",
+        "descripcion": "Plan de entrada sin costo. Reemplázalo por tus planes reales.",
+        "precio": 0,
+        "periodicidad": "mensual",
+        "trial_dias": 30,
+        "orden": 0
+      },
+      {
+        "codigo": "PLAN-MENSUAL",
+        "nombre": "Plan mensual",
+        "descripcion": "Plan pago de ejemplo: se cobra desde el primer día (D-16).",
+        "precio": 100000,
+        "periodicidad": "mensual",
+        "trial_dias": 0,
+        "orden": 1
+      }
+    ]
+  }
+}

@@ -17,7 +17,7 @@ import uuid
 from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from core.api.deps import Principal, require
@@ -42,11 +42,11 @@ router = APIRouter(prefix="/api/v1/pack/pack_subscriptions", tags=["pack · susc
 
 
 class CrearSuscripcionBody(BaseModel):
-    """Con `plan_codigo` se inscribe al cliente en un plan del catálogo (SPEC-43). Los campos de plan
-    libre (`nombre`, `precio`, ...) son el camino anterior, que se retira con commerce sin planes (PR-4)."""
+    """Inscribe a un `Customer` en un plan del catálogo (SPEC-43). El plan libre (nombre, precio,
+    periodicidad, variante de commerce) del contrato v1 se retiró con HU-COM-17."""
 
     customer_id: uuid.UUID = Field(..., description="Customer del core (pivote multi-pack).")
-    plan_codigo: str | None = Field(default=None, max_length=40, description="Código del plan del catálogo.")
+    plan_codigo: str = Field(..., max_length=40, description="Código del plan del catálogo.")
     datos_alta: dict[str, str] | None = Field(
         default=None, description="Datos del cliente para el alta (nombre, email, teléfono, negocio, vertical)."
     )
@@ -56,12 +56,6 @@ class CrearSuscripcionBody(BaseModel):
         max_length=40,
         description="Código de una promoción de plan: el primer cobro sale con descuento (HU-SUB-33).",
     )
-    variant_id: uuid.UUID | None = Field(default=None, description="Camino anterior: variante de commerce.")
-    nombre: str | None = Field(default=None, description="Camino anterior: nombre del plan.")
-    precio: float = Field(default=0, ge=0, le=999_999_999_999, allow_inf_nan=False, description="Valor del período.")
-    moneda: str = Field(default="COP")
-    periodicidad: str = Field(default="mensual")
-    trial_dias: int = Field(default=0, ge=0, le=365, description="Días de prueba (0 = sin prueba).")
 
 
 class SuscripcionOut(BaseModel):
@@ -114,45 +108,12 @@ async def crear_suscripcion_manual(
     # colaborador de solo lectura no puede hacerlo.
     principal: Annotated[Principal, Depends(require("pack_subscriptions:suscripciones", write=True))],
 ) -> SuscripcionOut:
-    """Inscribe a un `Customer` en un plan del catálogo (o, camino anterior, crea la suscripción de un plan libre).
+    """Inscribe a un `Customer` en un plan del catálogo.
 
-    Con `plan_codigo`: un plan de $0 nace activa (o en prueba); uno de pago nace `pendiente_pago` con su
-    cobro y su link (o las instrucciones de transferencia). Repetir la petición devuelve la misma inscripción.
+    Un plan de $0 nace activa (o en prueba); uno de pago nace `pendiente_pago` con su cobro y su link (o
+    las instrucciones de transferencia). Repetir la petición devuelve la misma inscripción.
     """
-    if body.plan_codigo:
-        return await _inscribir_desde_panel(body, principal)
-    if body.codigo_promocion:
-        raise ApiError(422, "promo_requiere_plan", "El código de promoción solo aplica al inscribir en un plan (`plan_codigo`).")
-    if not body.nombre:
-        raise ApiError(422, "plan_requerido", "Indica el plan (`plan_codigo`) en el que se inscribe el cliente.")
-    from pack_subscriptions.module import (
-        crear_suscripcion_para,  # import perezoso: evita ciclo module↔admin_api
-    )
-
-    if body.precio > 0 and body.trial_dias > 0:
-        raise HTTPException(
-            status_code=422,
-            detail="Solo el plan Free ($0) tiene días de prueba (D-16).",
-        )
-    plan = {
-        "nombre": body.nombre,
-        "precio": body.precio,
-        "moneda": body.moneda,
-        "periodicidad": body.periodicidad,
-        "trial_dias": body.trial_dias,
-    }
-    sub = await crear_suscripcion_para(
-        customer_id=body.customer_id,
-        variante_id=body.variant_id,
-        plan=plan,
-        reference="admin-manual",
-    )
-    return SuscripcionOut(
-        creada=sub.estado in ("trialing", "activa"),
-        suscripcion_id=sub.id,
-        plan=sub.concepto,
-        estado=sub.estado,
-    )
+    return await _inscribir_desde_panel(body, principal)
 
 
 async def _inscribir_desde_panel(body: CrearSuscripcionBody, principal: Principal) -> SuscripcionOut:
@@ -644,7 +605,7 @@ async def listar_suscripciones(
     principal: Annotated[Principal, Depends(require(SECCION))],
     params: Annotated[PageParams, Depends(page_params)],
     estado: Annotated[EstadoSub | None, Query()] = None,
-    variante_id: Annotated[uuid.UUID | None, Query(description="Plan (variante de commerce).")] = None,
+    plan_id: Annotated[uuid.UUID | None, Query(description="Plan del catálogo.")] = None,
     periodicidad: Annotated[Periodicidad | None, Query()] = None,
     con_mora: Annotated[bool, Query(description="Solo con algún cargo vencido sin pagar.")] = False,
     q: Annotated[str | None, Query(max_length=100, description="Nombre o teléfono del cliente, o plan.")] = None,
@@ -659,7 +620,7 @@ async def listar_suscripciones(
             _tenant(principal),
             params,
             estado=estado,
-            variante_id=variante_id,
+            plan_id=plan_id,
             periodicidad=periodicidad,
             con_mora=con_mora,
             q=q,

@@ -130,18 +130,14 @@ async def capacidad_del_vendedor(vendedor: uuid.UUID) -> Any:
     return await capability_del_negocio(vendedor)
 
 
-async def plan_del_cargo(vendedor: uuid.UUID, variant_id: Any, plan_id: Any = None) -> str | None:
-    """Plan de la plataforma de la línea de la suscripción (bajo el scope del vendedor): el plan del
-    catálogo de suscripciones (`plan_id`, SPEC-43) o la variante de commerce. None si no vende uno."""
+async def plan_del_cargo(vendedor: uuid.UUID, plan_id: Any) -> str | None:
+    """Plan de la plataforma del plan del catálogo de la suscripción (`plan_id`, SPEC-43), bajo el
+    scope del vendedor. None si no vende uno."""
     from core.provisioning.fuentes import fuentes_de_alta, plan_plataforma_de
 
     # Un fallo al leer el catálogo se propaga: el outbox reintenta (no es «sin plan»).
     fuentes = await fuentes_de_alta.del_negocio(vendedor)
-    return await plan_plataforma_de(
-        fuentes,
-        variant_id=str(variant_id) if variant_id else None,
-        plan_id=str(plan_id) if plan_id else None,
-    )
+    return await plan_plataforma_de(fuentes, plan_id=str(plan_id) if plan_id else None)
 
 
 async def canal_preferido(negocio: uuid.UUID) -> tuple[str, VinculoAsistente | None]:
@@ -349,7 +345,7 @@ async def on_subscription_charge_paid(**payload: Any) -> None:
         log.error("cobro_plataforma_cargo_sin_periodo", tenant_id=str(vendedor), charge_id=payload.get("charge_id"))
         return
     periodo = Periodo(inicio=inicio, fin=fin, referencia=referencia_del_periodo(slug, inicio))
-    plan_id = await plan_del_cargo(vendedor, payload.get("variant_id"), payload.get("plan_id"))
+    plan_id = await plan_del_cargo(vendedor, payload.get("plan_id"))
     if plan_id is None:
         actual = await get_active_subscription(negocio)
         plan_id = actual.plan_id if actual is not None else None
