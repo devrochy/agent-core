@@ -83,7 +83,7 @@ async def test_preparar_mis_datos_crea_negocio_cuentas_y_datos(app_client, tenan
 
     async with tenant_scope(tid):
         async with get_session() as session:
-            assert (await session.execute(select(func.count()).select_from(Product).where(Product.tenant_id == tid))).scalar_one() == 5  # 4 productos y el plan
+            assert (await session.execute(select(func.count()).select_from(Product).where(Product.tenant_id == tid))).scalar_one() == 4
             assert (await session.execute(select(func.count()).select_from(AppointmentType).where(AppointmentType.tenant_id == tid))).scalar_one() == 2
             assert (await session.execute(select(func.count()).select_from(Appointment).where(Appointment.tenant_id == tid))).scalar_one() == 2
             cartera = (await session.execute(select(Cartera).where(Cartera.tenant_id == tid))).scalar_one()

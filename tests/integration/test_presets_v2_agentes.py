@@ -175,7 +175,7 @@ async def test_instala_agentes_reglas_y_release_candidata_sin_activarla() -> Non
     general = await _contenido(tid, "general")
     ventas = await _contenido(tid, "ventas")
     agenda = await _contenido(tid, "agenda")
-    assert {p["id"] for p in ventas["procedures"]} == {"pack_commerce.tomar_pedido", "pack_commerce.contratar_plan"}
+    assert {p["id"] for p in ventas["procedures"]} == {"pack_commerce.tomar_pedido"}
     assert {p["id"] for p in agenda["procedures"]} == {"pack_calendar.agendar_cita"}
     assert all(p["version"].startswith("^") for p in ventas["procedures"])
     assert ventas["model"] == general["model"] and ventas["memory"] == general["memory"]

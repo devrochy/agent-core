@@ -14,7 +14,7 @@ from decimal import Decimal
 
 import pytest
 from _api_helpers import api_headers, uniq
-from _subs_helpers import nueva_sub
+from _subs_helpers import nueva_sub, plan_por_defecto
 from sqlalchemy import select
 
 pytestmark = [
@@ -239,7 +239,9 @@ async def test_clientes_agrupa_planes_deuda_y_ultimo_periodo_pagado(app_client) 
     tid = await _negocio()
     e = await _escenario(tid)
     ahora = datetime.now(UTC)
-    otra = await _sub(tid, e["ana"], concepto="Plan Extra", valor="30000")
+    otra = await _sub(
+        tid, e["ana"], concepto="Plan Extra", valor="30000", plan_id=await plan_por_defecto(tid, codigo="PLAN-EXTRA")
+    )
     await _cargo(tid, otra, vence=ahora - timedelta(days=40), estado="pagado", periodo="2026-09")
     h = await api_headers(app_client, tid)
 
@@ -503,16 +505,16 @@ async def test_la_linea_de_tiempo_del_cliente_trae_alta_cobros_y_baja(app_client
 
 
 async def test_ids_de_otro_negocio_en_los_filtros_no_traen_nada(app_client) -> None:
-    """`variante_id`, `cliente_id` y `suscripcion_id` ajenos no abren filas ni cuelan métricas."""
+    """`plan_id`, `cliente_id` y `suscripcion_id` ajenos no abren filas ni cuelan métricas."""
     a, b = await _negocio(), await _negocio()
     e = await _escenario(a)
-    variante = uuid.uuid4()
-    await _sub(a, await _cliente(a, "Con variante"), concepto="Plan X", variante_id=variante)
+    plan = await plan_por_defecto(a, codigo="PLAN-X")
+    await _sub(a, await _cliente(a, "Con plan"), concepto="Plan X", plan_id=plan)
     # Negocio B con su propia data: la de A no se mezcla en lo suyo.
     await _sub(b, await _cliente(b, "Zoe"), concepto="Plan Z", valor="1000")
     hb = await api_headers(app_client, b)
 
-    assert (await app_client.get(f"{BASE}/suscripciones?variante_id={variante}", headers=hb)).json()["total"] == 0
+    assert (await app_client.get(f"{BASE}/suscripciones?plan_id={plan}", headers=hb)).json()["total"] == 0
     assert (await app_client.get(f"{BASE}/suscripciones?cliente_id={e['ana']}", headers=hb)).json()["total"] == 0
     assert (await app_client.get(f"{BASE}/cargos?suscripcion_id={e['s_ana']}", headers=hb)).json()["total"] == 0
     assert (await app_client.get(f"{BASE}/suscripciones?q=Ana", headers=hb)).json()["total"] == 0

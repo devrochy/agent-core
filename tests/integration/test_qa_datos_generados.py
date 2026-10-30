@@ -323,9 +323,9 @@ async def test_suscripciones_usa_los_planes_que_nombra_su_plantilla(app_client, 
     agente = await _agente(tid, "suscripciones", ["pack_subscriptions.cambiar_plan"])
     h = await api_headers(app_client, tid)
     planes = {
-        "products": [
-            {"name": "Plan mensual", "variants": [{"price": 90000, "attributes": {"periodicidad": "mensual"}}]},
-            {"name": "Plan anual", "variants": [{"price": 900000, "attributes": {"periodicidad": "anual", "trial_dias": 7}}]},
+        "planes": [
+            {"name": "Plan libre", "price": 0, "periodicidad": "mensual", "trial_dias": 7},
+            {"name": "Plan anual", "price": 900000, "periodicidad": "anual", "trial_dias": 7},
         ]
     }
     _proveedor(monkeypatch, ProveedorGuionado(json.dumps(planes)))
@@ -334,14 +334,15 @@ async def test_suscripciones_usa_los_planes_que_nombra_su_plantilla(app_client, 
     assert estado["disponible"] is True and estado["forma"]["modo"] == "planes", estado
     r = await app_client.post(f"{_BASE}/{agente}/datos-de-prueba", headers=h)
     assert r.status_code == 201, r.text
-    assert r.json()["origen"] == "llm" and r.json()["conteos"]["variante"] == 2
+    assert r.json()["origen"] == "llm" and r.json()["conteos"]["plan"] == 2
     filas = await _sql(
         tid,
-        "select v.billing_period, v.trial_days from pack_commerce_product_variants v "
-        "where v.tenant_id = :t and v.sku like 'PRUEBA-%' order by v.price",
+        "select p.periodicidad, p.trial_dias from pack_subscriptions_plans p "
+        "where p.tenant_id = :t and p.codigo like 'PRUEBA-%' order by p.precio",
         t=tid,
     )
-    assert filas == [("mensual", 0), ("anual", 7)]
+    # D-16: solo el plan de precio 0 conserva la prueba; la del plan de pago se ignora.
+    assert filas == [("mensual", 7), ("anual", 0)]
 
 
 # ---------------------------------------------------------------- por módulo (ajuste HU-QA-10)
@@ -409,9 +410,9 @@ async def test_modulo_suscripciones_crea_planes_y_clientes(app_client, monkeypat
     )
     h = await api_headers(app_client, tid)
     planes = {
-        "products": [
-            {"name": "Plan mensual", "variants": [{"price": 90000, "attributes": {"periodicidad": "mensual"}}]},
-            {"name": "Plan anual", "variants": [{"price": 900000, "attributes": {"periodicidad": "anual"}}]},
+        "planes": [
+            {"name": "Plan mensual", "price": 90000, "periodicidad": "mensual"},
+            {"name": "Plan anual", "price": 900000, "periodicidad": "anual"},
         ]
     }
     clientes = {
@@ -439,7 +440,7 @@ async def test_modulo_suscripciones_crea_planes_y_clientes(app_client, monkeypat
     r = await app_client.post(f"{_MODULOS}/suscripciones", headers=h)
     assert r.status_code == 201, r.text
     conteos = r.json()["conteos"]
-    assert conteos["variante"] == 2
+    assert conteos["plan"] == 2
     assert conteos["cliente"] == 4 and conteos["suscripcion"] == 4 and conteos["cargo"] == 4
     filas = await _sql(
         tid,
