@@ -35,9 +35,9 @@ pytestmark = [
     ),
 ]
 
-PLAN = "pack_commerce.contratar_plan"
+PLAN = "pack_subscriptions.contratar_plan"
 CITA = "pack_calendar.agendar_cita"
-PACKS = ["pack_commerce", "pack_calendar"]
+PACKS = ["pack_commerce", "pack_subscriptions", "pack_calendar"]
 HORAS = '{"mon": "09:00-18:00", "tue": "09:00-18:00", "wed": "09:00-18:00", "thu": "09:00-18:00", "fri": "09:00-18:00", "sat": "09:00-18:00", "sun": "09:00-18:00"}'
 
 
@@ -131,7 +131,7 @@ async def _especialista(tid: uuid.UUID, cid: uuid.UUID, key: str, proc: str, too
         agente = await versiones.crear_agente(tid, key=key, kind="specialist", name=key.title())
         borrador = await versiones.obtener_borrador(tid, agente.id)
         contenido = dict(borrador.content)
-        contenido["procedures"] = [{"id": proc, "version": "^1.0"}]
+        contenido["procedures"] = [{"id": proc, "version": "^2.0" if proc == PLAN else "^1.0"}]
         contenido["tools"] = [{"tool": t, "enabled": True} for t in sorted(tools)]
         await versiones.guardar_borrador(tid, agente.id, contenido, borrador.lock_version, catalogo=catalogo)
         await versiones.publicar(tid, agente.id, catalogo=catalogo)
@@ -278,7 +278,7 @@ async def _modo(tid: uuid.UUID, modo: str) -> None:
 async def _con_dos_especialistas(modo: str, reglas: list[dict[str, Any]] | None = None) -> tuple[uuid.UUID, uuid.UUID, dict[str, uuid.UUID]]:
     """Negocio con Ventas (por defecto) y Agenda publicados y su release; `reglas` en el KernelSpec."""
     tid, cid = await _negocio()
-    await _especialista(tid, cid, "ventas", PLAN, {"informar_plan", "consultar_inventario"}, defecto=True)
+    await _especialista(tid, cid, "ventas", PLAN, {"consultar_inventario"}, defecto=True)
     await _especialista(tid, cid, "agenda", CITA, {"list_appointment_types", "check_availability"}, defecto=False)
     if reglas is not None:
         await _reglas_del_coordinador(tid, reglas)
@@ -411,7 +411,7 @@ async def test_el_build_rechaza_una_regla_a_un_agente_que_no_esta(_ruteo: None) 
     from core.releases.build import ErrorDelBuild
 
     tid, cid = await _negocio()
-    await _especialista(tid, cid, "ventas", PLAN, {"informar_plan"}, defecto=True)
+    await _especialista(tid, cid, "ventas", PLAN, {"consultar_inventario"}, defecto=True)
     await _reglas_del_coordinador(tid, [{"id": "mora", "when": {"channel": "whatsapp"}, "agent": "cobranza"}])
     with pytest.raises(ErrorDelBuild) as error:
         await _publicar_release(tid, cid)
@@ -564,7 +564,8 @@ EJEMPLOS_VENTAS_SOLVERSHUB = [
 
 
 async def _ejemplos_de_ventas(tid: uuid.UUID, ejemplos: list[str]) -> None:
-    """Versión nueva de Ventas con `overrides.examples` en `contratar_plan` (lo que hace el editor)."""
+    """Versión nueva de Suscripciones con `overrides.examples` en `contratar_plan` (lo que hace el editor).
+    Desde SPEC-43 `contratar_plan` es de `pack_subscriptions` y lo atiende el agente Suscripciones."""
     from core.agents import versiones
     from core.kernel.procedures import catalogo_de_acciones
     from core.shared.tenant import tenant_scope
@@ -572,7 +573,7 @@ async def _ejemplos_de_ventas(tid: uuid.UUID, ejemplos: list[str]) -> None:
     ((aid, contenido),) = await _sql(
         tid,
         "select a.id, v.content from agents a join agent_versions v on v.tenant_id = a.tenant_id and v.agent_id = a.id "
-        "where a.key = 'ventas' order by v.version desc limit 1",
+        "where a.key = 'suscripciones' order by v.version desc limit 1",
     )
     nuevo = dict(contenido)
     nuevo["procedures"] = [
@@ -591,9 +592,10 @@ async def _ruta(tid: uuid.UUID, cid: uuid.UUID, monkeypatch: Any, texto: str) ->
 async def test_dogfooding_solvershub_ventas_agenda_y_suscripciones(_ruteo: None, monkeypatch: Any) -> None:
     """HU-AOS-22: el negocio con el preset `suscripciones` v2 y las frases propias de Ventas.
     En sombra atiende el General y se registra la ruta; en activo «quiero agendar una demo» va a
-    Agenda, «quiero contratar Premium» a Ventas, «cambiar mi plan» a Suscripciones y un saludo
-    al General. «cuánto cuesta el plan basic» se iba a Suscripciones (disparador de
-    cambiar_plan) hasta publicar las frases de Ventas."""
+    Agenda, «quiero contratar Premium» y «cuánto cuesta el plan basic» a Suscripciones (que desde
+    SPEC-43 vende los planes con `contratar_plan`), «cambiar mi plan» a Suscripciones por su regla
+    y un saludo al General. «cuánto cuesta el plan basic» caía en el disparador de cambiar_plan
+    hasta publicar las frases de `contratar_plan`."""
     from core.releases.promocion import promover
     from core.shared.tenant import tenant_scope
 
@@ -615,14 +617,14 @@ async def test_dogfooding_solvershub_ventas_agenda_y_suscripciones(_ruteo: None,
     d = await _ruta(tid, cid, monkeypatch, "cuánto cuesta el plan basic")
     assert d["route_source"] == "trigger" and d["active_instance_id"] == str(inst["suscripciones"])
 
-    # Con las frases de Ventas publicadas y su release promovida.
+    # Con las frases de `contratar_plan` publicadas y su release promovida.
     await _ejemplos_de_ventas(tid, EJEMPLOS_VENTAS_SOLVERSHUB)
     await _publicar_release(tid, cid)
     esperados = [
         (DEMO, "agenda", "rule", "preset_agenda_palabras"),
-        ("quiero contratar Premium", "ventas", "trigger", None),
+        ("quiero contratar Premium", "suscripciones", "trigger", None),
         ("cambiar mi plan", "suscripciones", "rule", "preset_suscripciones_mi_plan"),
-        ("cuánto cuesta el plan basic", "ventas", "trigger", None),
+        ("cuánto cuesta el plan basic", "suscripciones", "trigger", None),
         ("hola, buenas tardes", "general", "default", None),
     ]
     for texto, agente, fuente, regla in esperados:

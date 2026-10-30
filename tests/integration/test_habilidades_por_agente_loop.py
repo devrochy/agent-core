@@ -6,7 +6,7 @@ Negocio `aos_runtime = v3` con el motor de procedimientos (`aos_procedures`), `p
 - **El General ve lo mismo que sin release** (B3 del arquitecto): con la release del General por
   defecto, las tools ofrecidas (incluidas las puertas) y el enum de `iniciar_procedimiento` son
   los mismos que en una conversación sin release; los procedimientos abiertos `0.0.0` no entran.
-- **Cada especialista ve lo suyo:** con Ventas (`contratar_plan ^1.0`) por defecto el enum es solo
+- **Cada especialista ve lo suyo:** con Ventas (`contratar_plan ^2.0`) por defecto el enum es solo
   `contratar_plan` y no hay tools de la agenda; con Agenda (`agendar_cita ^1.0`), al revés. Un
   `iniciar_procedimiento` ajeno se rechaza y una tool de otro pack no corre.
 - **Cambio de release sin escalar:** una tarea abierta de `contratar_plan 1.2.0` sigue
@@ -33,11 +33,11 @@ pytestmark = [
     ),
 ]
 
-PLAN = "pack_commerce.contratar_plan"
+PLAN = "pack_subscriptions.contratar_plan"
 CITA = "pack_calendar.agendar_cita"
-PACKS = ["pack_commerce", "pack_calendar"]
+PACKS = ["pack_commerce", "pack_subscriptions", "pack_calendar"]
 DE_AGENDA = {"list_appointment_types", "check_availability", "find_next_available", "create_calendar_event"}
-DE_VENTAS = {"consultar_inventario", "informar_plan", "cotizar_plan", "confirmar_cotizacion", "crear_pedido"}
+DE_VENTAS = {"consultar_inventario", "confirmar_cotizacion", "crear_pedido"}
 HORAS = '{"mon": "09:00-18:00", "tue": "09:00-18:00", "wed": "09:00-18:00", "thu": "09:00-18:00", "fri": "09:00-18:00", "sat": "09:00-18:00", "sun": "09:00-18:00"}'
 
 
@@ -131,7 +131,7 @@ async def _especialista(tid: uuid.UUID, cid: uuid.UUID, key: str, proc: str, too
         agente = await versiones.crear_agente(tid, key=key, kind="specialist", name=key.title())
         borrador = await versiones.obtener_borrador(tid, agente.id)
         contenido = dict(borrador.content)
-        contenido["procedures"] = [{"id": proc, "version": "^1.0"}]
+        contenido["procedures"] = [{"id": proc, "version": "^2.0" if proc == PLAN else "^1.0"}]
         contenido["tools"] = [{"tool": t, "enabled": True} for t in sorted(tools)]
         await versiones.guardar_borrador(tid, agente.id, contenido, borrador.lock_version, catalogo=catalogo)
         await versiones.publicar(tid, agente.id, catalogo=catalogo)
@@ -277,7 +277,9 @@ async def test_el_general_con_release_ve_lo_mismo_que_sin_release(_ruteo: None, 
     assert manifest["schema"] == "release/2"
     (general,) = [c for c in manifest["components"] if c["agent_key"] == "general"]
     # El General DECLARA los publicados de los packs habilitados (rango ^M.0, resuelto en el build).
-    assert {p["id"] for p in general["procedures"] if p["version"] != "0.0.0"} == {PLAN, CITA, "pack_commerce.tomar_pedido"}
+    assert {p["id"] for p in general["procedures"] if p["version"] != "0.0.0"} == {
+        PLAN, CITA, "pack_commerce.tomar_pedido", "pack_subscriptions.cambiar_plan",
+    }
 
     sin_release = await _conversacion(tid, None)
     con_release = await _conversacion(tid, cid)
@@ -294,7 +296,7 @@ async def test_el_general_con_release_ve_lo_mismo_que_sin_release(_ruteo: None, 
 # ---------------------------------------------------------------- especialistas: cada uno lo suyo
 async def test_cada_especialista_ve_solo_lo_suyo(_ruteo: None, monkeypatch: Any) -> None:
     tid, cid = await _negocio()
-    ventas = await _especialista(tid, cid, "ventas", PLAN, {"informar_plan", "consultar_inventario"}, defecto=True)
+    ventas = await _especialista(tid, cid, "ventas", PLAN, {"consultar_inventario"}, defecto=True)
     agenda = await _especialista(tid, cid, "agenda", CITA, {"list_appointment_types", "check_availability"}, defecto=False)
     rid = await _publicar_release(tid, cid)
 
@@ -308,7 +310,7 @@ async def test_cada_especialista_ve_solo_lo_suyo(_ruteo: None, monkeypatch: Any)
     assert g.enums[0] == [PLAN]
     assert not (set(g.tools[0]) & DE_AGENDA)
     assert {"escalate_to_human", "iniciar_procedimiento"} <= set(g.tools[0])  # core y comandos siguen
-    assert "informar_plan" in g.tools[0]
+    assert "consultar_inventario" in g.tools[0]
     assert len(g.resultados) == 2 and all("error" in r.lower() or "no " in r.lower() for r in g.resultados)
     assert await _tareas(tid, conv) == []
 
@@ -333,7 +335,7 @@ async def test_una_tarea_publicada_sigue_al_cambiar_de_release(_ruteo: None) -> 
     from core.shared.tenant import tenant_scope
 
     tid, cid = await _negocio()
-    await _especialista(tid, cid, "ventas", PLAN, {"informar_plan"}, defecto=True)
+    await _especialista(tid, cid, "ventas", PLAN, {"consultar_inventario"}, defecto=True)
     uno = await _publicar_release(tid, cid)
     conv = await _conversacion(tid, cid)
     t0 = datetime.now(UTC) - timedelta(days=2)
@@ -370,7 +372,7 @@ async def test_una_tarea_publicada_sigue_al_cambiar_de_release(_ruteo: None) -> 
 async def test_la_release_de_otro_negocio_no_cambia_lo_que_ve_este(_ruteo: None, monkeypatch: Any) -> None:
     a, cid_a = await _negocio()
     b, cid_b = await _negocio()
-    await _especialista(a, cid_a, "ventas", PLAN, {"informar_plan"}, defecto=True)
+    await _especialista(a, cid_a, "ventas", PLAN, {"consultar_inventario"}, defecto=True)
     rid_a = await _publicar_release(a, cid_a)
     rid_b = await _publicar_release(b, cid_b)
 

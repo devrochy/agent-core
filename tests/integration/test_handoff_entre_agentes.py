@@ -77,8 +77,8 @@ async def _equipo(modo: str, enlaces: list[tuple[str, str]] | None) -> tuple[uui
 
     tid, cid = await _negocio()
     agentes = {
-        "ventas": await _especialista(tid, cid, "ventas", PLAN, {"informar_plan"}, defecto=True),
-        "soporte": await _especialista(tid, cid, "soporte", PLAN, {"informar_plan"}, defecto=False),
+        "ventas": await _especialista(tid, cid, "ventas", PLAN, {"consultar_inventario"}, defecto=True),
+        "soporte": await _especialista(tid, cid, "soporte", PLAN, {"consultar_inventario"}, defecto=False),
         "agenda": await _especialista(tid, cid, "agenda", CITA, {"list_appointment_types"}, defecto=False),
     }
     if enlaces is not None:

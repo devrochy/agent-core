@@ -17696,7 +17696,7 @@
           "pack · suscripciones"
         ],
         "summary": "Crear Suscripcion Manual",
-        "description": "Inscribe a un `Customer` en un plan del catálogo (o, camino anterior, crea la suscripción de un plan libre).\n\nCon `plan_codigo`: un plan de $0 nace activa (o en prueba); uno de pago nace `pendiente_pago` con su\ncobro y su link (o las instrucciones de transferencia). Repetir la petición devuelve la misma inscripción.",
+        "description": "Inscribe a un `Customer` en un plan del catálogo.\n\nUn plan de $0 nace activa (o en prueba); uno de pago nace `pendiente_pago` con su cobro y su link (o\nlas instrucciones de transferencia). Repetir la petición devuelve la misma inscripción.",
         "operationId": "crear_suscripcion_manual_api_v1_pack_pack_subscriptions_suscripciones_post",
         "parameters": [
           {
@@ -17798,7 +17798,7 @@
             }
           },
           {
-            "name": "variante_id",
+            "name": "plan_id",
             "in": "query",
             "required": false,
             "schema": {
@@ -17811,10 +17811,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Plan (variante de commerce).",
-              "title": "Variante Id"
+              "description": "Plan del catálogo.",
+              "title": "Plan Id"
             },
-            "description": "Plan (variante de commerce)."
+            "description": "Plan del catálogo."
           },
           {
             "name": "periodicidad",
@@ -44310,15 +44310,8 @@
             "description": "Customer del core (pivote multi-pack)."
           },
           "plan_codigo": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 40
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
+            "maxLength": 40,
             "title": "Plan Codigo",
             "description": "Código del plan del catálogo."
           },
@@ -44358,65 +44351,15 @@
             ],
             "title": "Codigo Promocion",
             "description": "Código de una promoción de plan: el primer cobro sale con descuento (HU-SUB-33)."
-          },
-          "variant_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Variant Id",
-            "description": "Camino anterior: variante de commerce."
-          },
-          "nombre": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Nombre",
-            "description": "Camino anterior: nombre del plan."
-          },
-          "precio": {
-            "type": "number",
-            "maximum": 999999999999.0,
-            "minimum": 0.0,
-            "title": "Precio",
-            "description": "Valor del período.",
-            "default": 0
-          },
-          "moneda": {
-            "type": "string",
-            "title": "Moneda",
-            "default": "COP"
-          },
-          "periodicidad": {
-            "type": "string",
-            "title": "Periodicidad",
-            "default": "mensual"
-          },
-          "trial_dias": {
-            "type": "integer",
-            "maximum": 365.0,
-            "minimum": 0.0,
-            "title": "Trial Dias",
-            "description": "Días de prueba (0 = sin prueba).",
-            "default": 0
           }
         },
         "type": "object",
         "required": [
-          "customer_id"
+          "customer_id",
+          "plan_codigo"
         ],
         "title": "CrearSuscripcionBody",
-        "description": "Con `plan_codigo` se inscribe al cliente en un plan del catálogo (SPEC-43). Los campos de plan\nlibre (`nombre`, `precio`, ...) son el camino anterior, que se retira con commerce sin planes (PR-4)."
+        "description": "Inscribe a un `Customer` en un plan del catálogo (SPEC-43). El plan libre (nombre, precio,\nperiodicidad, variante de commerce) del contrato v1 se retiró con HU-COM-17."
       },
       "CreditIn": {
         "properties": {
@@ -49771,28 +49714,6 @@
             },
             "type": "array",
             "title": "Line Items"
-          },
-          "plan_activation_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Plan Activation Status"
-          },
-          "plan_activation_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Plan Activation Error"
           }
         },
         "type": "object",
@@ -51902,36 +51823,6 @@
             "minimum": 0.0,
             "title": "Stock",
             "default": 0
-          },
-          "billing_period": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "mensual",
-                  "trimestral",
-                  "anual",
-                  ""
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Billing Period"
-          },
-          "trial_days": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "maximum": 365.0,
-                "minimum": 0.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Trial Days"
           },
           "image_url": {
             "anyOf": [
@@ -56917,28 +56808,6 @@
           "active": {
             "type": "boolean",
             "title": "Active"
-          },
-          "billing_period": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Billing Period"
-          },
-          "trial_days": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Trial Days"
           }
         },
         "type": "object",
@@ -68456,7 +68325,7 @@
             "type": "string",
             "title": "Plan"
           },
-          "variante_id": {
+          "plan_id": {
             "anyOf": [
               {
                 "type": "string",
@@ -68466,7 +68335,7 @@
                 "type": "null"
               }
             ],
-            "title": "Variante Id"
+            "title": "Plan Id"
           },
           "estado": {
             "type": "string",
@@ -68636,7 +68505,7 @@
             "type": "string",
             "title": "Plan"
           },
-          "variante_id": {
+          "plan_id": {
             "anyOf": [
               {
                 "type": "string",
@@ -68646,7 +68515,7 @@
                 "type": "null"
               }
             ],
-            "title": "Variante Id"
+            "title": "Plan Id"
           },
           "estado": {
             "type": "string",

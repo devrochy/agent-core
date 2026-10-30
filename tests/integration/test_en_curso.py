@@ -30,7 +30,7 @@ pytestmark = [
     ),
 ]
 
-PLAN = "pack_commerce.contratar_plan"
+PLAN = "pack_subscriptions.contratar_plan"
 PEDIDO = "pack_commerce.tomar_pedido"
 
 
@@ -105,10 +105,10 @@ async def _escenario() -> dict[str, Any]:
     # La tarea que el motor cerró como `escalated` justo antes de escalar.
     pedido = await _iniciar(tid, conv, PEDIDO, "1.1.0", "armar")
     await _registrar(tid, conv, pedido, "escalated", reason="action_error")
-    plan = await _iniciar(tid, conv, PLAN, "1.3.0", "elegir_plan")
-    await _registrar(tid, conv, plan, "slot_set", actor="llm", slot="full_name", value="Ana Pérez", source="llm", data_class="pii")
+    plan = await _iniciar(tid, conv, PLAN, "2.0.0", "elegir_plan")
+    await _registrar(tid, conv, plan, "slot_set", actor="llm", slot="nombre", value="Ana Pérez", source="llm", data_class="pii")
     await _registrar(tid, conv, plan, "slot_set", actor="llm", slot="email", value="ana@correo.co", source="llm", data_class="pii")
-    await _registrar(tid, conv, plan, "slot_set", actor="kernel", slot="quote_id", value="WOMPI-REF-4821", source="llm", data_class="payment")
+    await _registrar(tid, conv, plan, "slot_set", actor="kernel", slot="link", value="WOMPI-REF-4821", source="llm", data_class="payment")
     return {"tid": tid, "cid": cid, "conv": conv, "plan": plan, "pedido": pedido}
 
 
@@ -122,10 +122,10 @@ async def test_en_curso_dice_que_falta_e_incluye_la_tarea_escalada(app_client) -
     plan, pedido = d["tasks"]
     assert plan["task_id"] == str(e["plan"]) and plan["in_focus"] and plan["title"]
     assert {x["name"]: x["value"] for x in plan["data"]} == {
-        "full_name": "Ana Pérez", "email": "ana@correo.co", "quote_id": "•••",  # pago: siempre oculto
+        "nombre": "Ana Pérez", "email": "ana@correo.co", "link": "•••",  # pago: siempre oculto
     }
     faltan = {x["name"] for x in plan["missing"]}
-    assert faltan == {"variant_id"} and plan["missing_reason"] is None
+    assert faltan == {"plan_code"} and plan["missing_reason"] is None
     assert all(x["label"] for x in plan["missing"])
     assert pedido["task_id"] == str(e["pedido"]) and pedido["status"] == "escalated" and pedido["status_reason"] == "action_error"
 

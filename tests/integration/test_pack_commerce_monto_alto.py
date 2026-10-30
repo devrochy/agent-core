@@ -1,7 +1,7 @@
-"""HU-COM-02: umbral por tipo de producto en `crear_pedido`.
+"""HU-COM-02: umbral de monto alto en `crear_pedido`.
 
-Un plan recurrente (variante con `billing_period`) no escala por monto alto
-por defecto; un pedido one-shot con el mismo total sí.
+Con commerce sin planes (HU-COM-17) ya no hay una excepción para planes recurrentes:
+todo pedido de $1.8M escala a humano con el umbral por defecto.
 """
 
 from __future__ import annotations
@@ -35,16 +35,14 @@ def ctx():
     )
 
 
-async def _quote_con_variante(session, *, total: float, billing_period: str | None, customer_id):
+async def _quote_con_variante(session, *, total: float, customer_id):
     from pack_commerce.models import Product, ProductVariant, Quote, QuoteItem
 
     sku = f"PLAN-{uuid.uuid4().hex[:6]}"
     product = Product(tenant_id=T1, name=f"Plan {sku}")
     session.add(product)
     await session.flush()
-    variant = ProductVariant(
-        tenant_id=T1, product_id=product.id, sku=sku, price=total, billing_period=billing_period
-    )
+    variant = ProductVariant(tenant_id=T1, product_id=product.id, sku=sku, price=total)
     session.add(variant)
     await session.flush()
     quote = Quote(
@@ -82,30 +80,14 @@ async def _crear_pedido(quote_id: str, ctx):
         )
 
 
-async def test_plan_de_1_8m_no_escala_por_defecto(ctx) -> None:
+async def test_un_pedido_de_1_8m_escala_por_defecto(ctx) -> None:
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(T1):
         async with get_session() as session:
             quote = await _quote_con_variante(
-                session, total=1_800_000.0, billing_period="mensual", customer_id=ctx.customer_id
-            )
-            quote_id = str(quote.id)
-
-    result = await _crear_pedido(quote_id, ctx)
-    assert result.get("status") == "confirmed", result
-    assert "escalate" not in result
-
-
-async def test_oneshot_de_1_8m_si_escala(ctx) -> None:
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(T1):
-        async with get_session() as session:
-            quote = await _quote_con_variante(
-                session, total=1_800_000.0, billing_period=None, customer_id=ctx.customer_id
+                session, total=1_800_000.0, customer_id=ctx.customer_id
             )
             quote_id = str(quote.id)
 

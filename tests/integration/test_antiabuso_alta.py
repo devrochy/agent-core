@@ -10,13 +10,15 @@ Gherkin de la HU:
 - Interruptor: con el alta pausada por el master, las altas nuevas quedan en revisión.
 - Límites de tasa: más de N pedidos de alta por hora desde un mismo origen se frenan.
 
+Desde SPEC-43 (HU-COM-17) el alta nace de una inscripción de `pack_subscriptions` (`inscribir`), no de un
+pedido de commerce: los helpers arman inscripciones y el antiabuso del core es el mismo.
+
 Además: aislamiento entre negocios de las tablas nuevas, la API de Plataforma solo para el
 master y solo sobre vendedores, y la aprobación de un alta en revisión.
 """
 
 from __future__ import annotations
 
-import itertools
 import os
 import uuid
 from collections.abc import Callable, Iterator
@@ -24,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from _alta_helpers import aceptar_terminos, publicar_documentos
+from _alta_helpers import plan_del_catalogo, publicar_documentos, suscripcion_de_plan
 from _api_helpers import api_headers, uniq
 from sqlalchemy import select, update
 
@@ -35,9 +37,6 @@ pytestmark = [
         reason="tests de integración: requiere AGENT_CORE_INTEGRATION=1 y el stack local",
     ),
 ]
-
-_SEQ = itertools.count(1)
-
 
 # ------------------------------------------------------------------ fixtures
 @pytest.fixture
@@ -123,77 +122,66 @@ async def _conversacion(tid: uuid.UUID, cliente: uuid.UUID) -> uuid.UUID:
             ).scalar_one()
 
 
-async def _cotizacion(
-    tid: uuid.UUID, cliente: uuid.UUID, *, plan: str = "free", precio: int = 0, extra: int = 0
-) -> str:
-    from pack_commerce.models import Product, ProductVariant, Quote, QuoteItem
+async def _codigo_de_plan(tid: uuid.UUID, *, plan: str = "free", precio: int = 0) -> str:
+    """Código de un plan nuevo del catálogo del vendedor que vende el plan `plan` de la plataforma."""
+    from pack_subscriptions.planes import obtener
 
-    from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
+    plan_id = await plan_del_catalogo(tid, plan=plan, precio=precio)
     async with tenant_scope(tid):
-        async with get_session() as s:
-            producto = Product(tenant_id=tid, name=f"Plan {plan} {uuid.uuid4().hex[:4]}")
-            s.add(producto)
-            await s.flush()
-            variante = ProductVariant(
-                tenant_id=tid, product_id=producto.id, sku=f"PLAN-{uuid.uuid4().hex[:8]}", price=precio,
-                billing_period="mensual", trial_days=30 if precio == 0 else 0,
-                attributes={"periodicidad": "mensual", "precio_de_plan": plan},
-            )
-            s.add(variante)
-            await s.flush()
-            cotizacion = Quote(
-                tenant_id=tid, conversation_id=uuid.uuid4(), customer_id=cliente,
-                subtotal=precio + extra, discount=0, total=precio + extra, status="aceptada",
-            )
-            s.add(cotizacion)
-            await s.flush()
-            s.add(QuoteItem(tenant_id=tid, quote_id=cotizacion.id, variant_id=variante.id, quantity=1, unit_price=precio))
-            if extra:
-                # Un producto pago en la misma cotización: el Free sigue siendo un Free.
-                otro = Product(tenant_id=tid, name=f"Extra {uuid.uuid4().hex[:4]}")
-                s.add(otro)
-                await s.flush()
-                variante_extra = ProductVariant(
-                    tenant_id=tid, product_id=otro.id, sku=f"X-{uuid.uuid4().hex[:8]}", price=extra
-                )
-                s.add(variante_extra)
-                await s.flush()
-                s.add(QuoteItem(tenant_id=tid, quote_id=cotizacion.id, variant_id=variante_extra.id, quantity=1, unit_price=extra))
-            return str(cotizacion.id)
+        return (await obtener(plan_id)).codigo
 
 
 def _datos(**extra: Any) -> dict[str, Any]:
     datos = {
-        "full_name": "Ana Pérez",
-        "id_document": f"{10**9 + uuid.uuid4().int % 10**9}",
-        "phone": f"+57 31{uuid.uuid4().int % 10**8:08d}",
+        "nombre": "Ana Pérez",
+        "documento": f"{10**9 + uuid.uuid4().int % 10**9}",
+        "telefono": f"+57 31{uuid.uuid4().int % 10**8:08d}",
         "email": f"{uniq('owner')}@correo-prueba.co",
-        "business_name": "Pizzería Roma",
+        "negocio": "Pizzería Roma",
     }
     datos.update(extra)
     return datos
 
 
 async def _pedir(
-    tid: uuid.UUID, cliente: uuid.UUID, datos: dict[str, Any], *, plan: str = "free", precio: int = 0, extra: int = 0
+    tid: uuid.UUID,
+    cliente: uuid.UUID,
+    datos: dict[str, Any],
+    *,
+    plan: str = "free",
+    precio: int = 0,
+    codigo: str | None = None,
 ) -> dict[str, Any]:
-    """`crear_pedido` de un plan, como lo llama el asistente."""
-    from pack_commerce.skills import OrderSkill
+    """`inscribir` en un plan, como lo llama el asistente (`sub_inscribir`): el cliente, la conversación y el
+    canal salen del contexto; el modelo solo manda los datos y el token de los términos.
 
-    from core.mcp.types import ToolContext
+    Un rechazo del negocio vuelve como `{"status": <código>, **datos}` (con `acepta_terminos` = el token)."""
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl
+
     from core.shared.tenant import tenant_scope
+    from core.subscriptions import SubscriptionError
 
-    quote = await _cotizacion(tid, cliente, plan=plan, precio=precio, extra=extra)
-    ctx = ToolContext(
-        conversation_id=await _conversacion(tid, cliente), customer_id=cliente,
-        idempotency_key=f"t:{uuid.uuid4().hex[:8]}", channel="whatsapp",
-    )
-    async with tenant_scope(tid):
-        return await OrderSkill().crear_pedido(
-            {"quote_id": quote, "payment_method": "transferencia", "customer_data": datos}, ctx
-        )
+    datos = dict(datos)
+    token = datos.pop("acepta_terminos", None)
+    codigo = codigo or await _codigo_de_plan(tid, plan=plan, precio=precio)
+    terminos = {
+        "acepta_terminos": token,
+        "conversation_id": str(await _conversacion(tid, cliente)),
+        "canal": "whatsapp",
+    }
+    try:
+        async with tenant_scope(tid):
+            vista = await SubscriptionCapabilityImpl().inscribir(
+                customer_id=cliente, plan_code=codigo, datos_alta=datos, origen="agente", terminos=terminos
+            )
+    except SubscriptionError as error:
+        resultado = {"status": error.code, **error.data}
+        if "token" in error.data:
+            resultado["acepta_terminos"] = error.data["token"]
+        return resultado
+    return {"status": "confirmed", "public_order_number": vista["numero_publico"], **vista}
 
 
 async def _mensaje(tid: uuid.UUID, cliente: uuid.UUID, texto: str, *, direccion: str = "inbound", **campos: Any) -> uuid.UUID:
@@ -225,12 +213,13 @@ async def _respuesta_con_enlaces(tid: uuid.UUID, cliente: uuid.UUID, **campos: A
 async def _pedir_aceptando(tid: uuid.UUID, cliente: uuid.UUID, datos: dict[str, Any], **kw: Any) -> dict[str, Any]:
     """Primero los términos pendientes; los enlaces salen al cliente, el cliente responde que
     acepta (un mensaje suyo posterior) y se vuelve a pedir con el token."""
-    primero = await _pedir(tid, cliente, datos, **kw)
+    codigo = kw.pop("codigo", None) or await _codigo_de_plan(tid, **kw)
+    primero = await _pedir(tid, cliente, datos, codigo=codigo)
     if primero.get("status") != "terminos_pendientes":
         return primero
     await _respuesta_con_enlaces(tid, cliente)
     await _mensaje_del_cliente(tid, cliente)
-    return await _pedir(tid, cliente, {**datos, "acepta_terminos": primero["acepta_terminos"]}, **kw)
+    return await _pedir(tid, cliente, {**datos, "acepta_terminos": primero["acepta_terminos"]}, codigo=codigo)
 
 
 async def _entregar_aprobacion(tid: uuid.UUID, referencia: str) -> Any:
@@ -301,43 +290,11 @@ async def _pedido_activado(
     senales: list[str] | None = None,
     cliente: uuid.UUID | None = None,
 ) -> str:
-    """Pedido pagado armado a mano (sin la tool) + su registro de alta; emite el evento."""
-    from pack_commerce.models import Order, OrderItem, Product, ProductVariant
-    from pack_commerce.planes import activar_planes_del_pedido
-
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    seq = next(_SEQ) + 700
-    cliente = cliente or uuid.uuid4()
-    async with tenant_scope(tid):
-        async with get_session() as s:
-            producto = Product(tenant_id=tid, name=f"Plan {plan}")
-            s.add(producto)
-            await s.flush()
-            variante = ProductVariant(
-                tenant_id=tid, product_id=producto.id, sku=f"PLAN-{seq}-{uuid.uuid4().hex[:4]}", price=precio,
-                billing_period="mensual", trial_days=30 if precio == 0 else 0,
-                attributes={"periodicidad": "mensual", "precio_de_plan": plan},
-            )
-            s.add(variante)
-            await s.flush()
-            order = Order(
-                tenant_id=tid, conversation_id=uuid.uuid4(), customer_id=cliente, status="abierto",
-                payment_status="pagado", payment_method="pago_en_linea", delivery_method="recoger_en_tienda",
-                total=precio, idempotency_key=str(uuid.uuid4()), order_seq=seq,
-                public_order_number=f"SH-{seq:04d}", delivery_full_name="Ana Pérez",
-                datos_alta={"email": email or f"{uniq('owner')}@correo-prueba.co", "negocio": "Acme"},
-            )
-            s.add(order)
-            await s.flush()
-            s.add(OrderItem(tenant_id=tid, order_id=order.id, variant_id=variante.id, quantity=1, unit_price=precio))
-            await s.flush()
-            assert await activar_planes_del_pedido(s, order) == 1
-            referencia = order.public_order_number
-    await aceptar_terminos(
-        tid, referencia, customer_id=cliente, gratis=precio == 0, telefono=telefono,
-        documento=documento, senales=senales, con_aceptacion=aceptar,
+    """Inscripción activa armada a mano (sin la tool) + su registro de alta; emite el evento."""
+    referencia, _ = await suscripcion_de_plan(
+        tid, plan=plan, precio=precio, customer_id=cliente or uuid.uuid4(),
+        datos_alta={"email": email or f"{uniq('owner')}@correo-prueba.co", "negocio": "Acme"},
+        aceptar=aceptar, telefono=telefono, documento=documento, senales=senales,
     )
     return referencia
 
@@ -528,70 +485,62 @@ async def test_un_mensaje_que_llega_antes_de_enviar_los_enlaces_no_acepta(vended
 
 
 @pytest.mark.aislamiento
-async def test_el_hint_pide_repetir_solo_si_los_enlaces_ya_salieron(vendedores, silencio) -> None:
-    """Mientras el cliente no recibió los enlaces, ningún «sí» los acepta: el `hint` pide
-    compartirlos y no repetir la llamada. Antes decía siempre «si ya aceptó, repite ahora» y el
-    modelo repetía en vano en el mismo turno (canary de comercial, 2026-10-10)."""
+async def test_la_respuesta_dice_si_los_enlaces_ya_salieron(vendedores, silencio) -> None:
+    """Mientras el cliente no recibió los enlaces, ningún «sí» los acepta: `enlaces_enviados` es falso y
+    el asistente debe compartirlos, no repetir la llamada. Con los enlaces ya enviados, es verdadero y
+    la llamada siguiente (con el token) puede aceptar (canary de comercial, 2026-10-10)."""
     vendedor = await _vendedor()
     vendedores(vendedor)
     await publicar_documentos(vendedor)
     cliente = await _cliente(vendedor)
     datos = _datos()
+    codigo = await _codigo_de_plan(vendedor)
 
     await _mensaje_del_cliente(vendedor, cliente, "Sí, acepto los términos, la privacidad y el DPA.")
-    primero = await _pedir(vendedor, cliente, datos)
+    primero = await _pedir(vendedor, cliente, datos, codigo=codigo)
     assert primero["status"] == "terminos_pendientes"
-    assert "no repitas crear_pedido" in primero["hint"]
-    repetido = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": primero["acepta_terminos"]})
-    assert "no repitas crear_pedido" in repetido["hint"]
+    assert primero["enlaces_enviados"] is False
+    repetido = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": primero["acepta_terminos"]}, codigo=codigo)
+    assert repetido["status"] == "terminos_pendientes" and repetido["enlaces_enviados"] is False
 
     await _respuesta_con_enlaces(vendedor, cliente, status="failed")  # no salió: no cuenta
-    assert "no repitas crear_pedido" in (await _pedir(vendedor, cliente, datos))["hint"]
+    assert (await _pedir(vendedor, cliente, datos, codigo=codigo))["enlaces_enviados"] is False
 
     await _respuesta_con_enlaces(vendedor, cliente)
     await _mensaje_del_cliente(vendedor, cliente)
-    tras_enviar = await _pedir(vendedor, cliente, datos)
+    tras_enviar = await _pedir(vendedor, cliente, datos, codigo=codigo)
     assert tras_enviar["status"] == "terminos_pendientes"
-    assert "repite crear_pedido ahora" in tras_enviar["hint"]
-    aceptado = await _pedir(vendedor, cliente, {**datos, "acepta_terminos": tras_enviar["acepta_terminos"]})
+    assert tras_enviar["enlaces_enviados"] is True
+    aceptado = await _pedir(
+        vendedor, cliente, {**datos, "acepta_terminos": tras_enviar["acepta_terminos"]}, codigo=codigo
+    )
     assert aceptado["status"] == "confirmed", aceptado
 
 
 @pytest.mark.aislamiento
-async def test_la_aceptacion_es_por_pedido(vendedores, silencio) -> None:
-    """Al crear el pedido se borra el marcador: otro pedido de un plan en la misma conversación
-    vuelve a mostrar los enlaces y pide un «sí» nuevo."""
+async def test_la_aceptacion_es_por_inscripcion(vendedores, silencio) -> None:
+    """Al inscribir se borra el marcador: otra inscripción (otro plan, que reemplaza a la pendiente) en la
+    misma conversación vuelve a mostrar los enlaces y pide un «sí» nuevo."""
     vendedor = await _vendedor()
     vendedores(vendedor)
     await publicar_documentos(vendedor)
     cliente = await _cliente(vendedor)
     datos = _datos()
-    primero = await _pedir_aceptando(vendedor, cliente, datos)
+    primero = await _pedir_aceptando(vendedor, cliente, datos, plan="basic", precio=150_000)
     assert primero["status"] == "confirmed", primero
 
-    otro_plan = {**datos, "acepta_terminos": (await _pedir(vendedor, cliente, datos, plan="basic", precio=150_000))["acepta_terminos"]}
-    await _mensaje_del_cliente(vendedor, cliente, "y quiero también el Basic")
-    sin_enlaces = await _pedir(vendedor, cliente, otro_plan, plan="basic", precio=150_000)
+    codigo = await _codigo_de_plan(vendedor, plan="premium", precio=200_000)
+    otro_plan = {**datos, "acepta_terminos": (await _pedir(vendedor, cliente, datos, codigo=codigo))["acepta_terminos"]}
+    await _mensaje_del_cliente(vendedor, cliente, "y quiero también el Premium")
+    sin_enlaces = await _pedir(vendedor, cliente, otro_plan, codigo=codigo)
     assert sin_enlaces["status"] == "terminos_pendientes"
 
     await _respuesta_con_enlaces(vendedor, cliente)
     acepta = await _mensaje_del_cliente(vendedor, cliente)
-    segundo = await _pedir(vendedor, cliente, otro_plan, plan="basic", precio=150_000)
+    segundo = await _pedir(vendedor, cliente, otro_plan, codigo=codigo)
     assert segundo["status"] == "confirmed", segundo
     registro = await _pedido_de_alta(vendedor, segundo["public_order_number"])
     assert registro.aceptacion["mensaje_id"] == str(acepta)
-
-
-async def test_un_free_con_un_producto_pago_al_lado_sigue_siendo_un_free(vendedores, silencio) -> None:
-    vendedor = await _vendedor()
-    vendedores(vendedor)
-    await publicar_documentos(vendedor)
-    datos = _datos()
-    mixto = await _pedir_aceptando(vendedor, await _cliente(vendedor), datos, extra=50_000)
-    assert mixto["status"] == "confirmed", mixto
-    assert (await _pedido_de_alta(vendedor, mixto["public_order_number"])).gratis is True
-    otra_vez = await _pedir_aceptando(vendedor, await _cliente(vendedor), _datos(id_document=datos["id_document"]))
-    assert otra_vez["status"] == "free_no_disponible"
 
 
 async def test_sin_documentos_publicados_el_alta_va_a_revision(vendedores, silencio) -> None:
@@ -623,12 +572,11 @@ async def test_un_documento_o_telefono_con_free_en_12_meses_no_saca_otro(vendedo
 
     # Otro número de WhatsApp, mismo documento (con otro formato): Free no.
     otro = await _cliente(vendedor)
-    mismo_doc = _datos(id_document=f"{int(datos['id_document']):,}".replace(",", "."))
+    mismo_doc = _datos(documento=f"{int(datos['documento']):,}".replace(",", "."))
     rechazo = await _pedir_aceptando(vendedor, otro, mismo_doc)
     assert rechazo["status"] == "free_no_disponible"
-    assert "plan pago" in rechazo["hint"]
     # Mismo teléfono del checkout, otro documento: tampoco.
-    rechazo_tel = await _pedir_aceptando(vendedor, await _cliente(vendedor), _datos(phone=datos["phone"]))
+    rechazo_tel = await _pedir_aceptando(vendedor, await _cliente(vendedor), _datos(telefono=datos["telefono"]))
     assert rechazo_tel["status"] == "free_no_disponible"
     # Un plan pago sí.
     pago = await _pedir_aceptando(vendedor, otro, mismo_doc, plan="basic", precio=150_000)
@@ -827,9 +775,9 @@ async def test_las_tablas_del_antiabuso_no_se_ven_desde_otro_negocio(vendedores,
 
 @pytest.mark.aislamiento
 async def test_el_token_de_terminos_de_un_negocio_no_vale_en_otro(vendedores, silencio) -> None:
-    """`acepta_terminos` está en el schema de `crear_pedido` (ADR-0129): un token que el
+    """`acepta_terminos` está en el schema de `sub_inscribir` (ADR-0129): un token que el
     modelo trae de la conversación de otro vendedor no acepta nada ni crea el pedido."""
-    from pack_commerce.models import Order
+    from pack_subscriptions.models import Subscription
 
     from core.db.models import PedidoDeAlta
     from core.db.session import get_session
@@ -852,7 +800,7 @@ async def test_el_token_de_terminos_de_un_negocio_no_vale_en_otro(vendedores, si
     assert resultado["acepta_terminos"] != token
     async with tenant_scope(otro):
         async with get_session() as s:
-            assert (await s.execute(select(Order).where(Order.customer_id == ajeno))).all() == []
+            assert (await s.execute(select(Subscription).where(Subscription.customer_id == ajeno))).all() == []
             assert (await s.execute(select(PedidoDeAlta).where(PedidoDeAlta.customer_id == ajeno))).all() == []
     # Control: con su propio token, los enlaces enviados y un mensaje suyo después, el mismo
     # cliente sí compra (la aceptación vale solo después del envío de los enlaces, #406).

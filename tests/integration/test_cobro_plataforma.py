@@ -20,7 +20,6 @@ Wompi para una cuenta compartida (riesgo R-05). Wompi y Meta van con dobles: sin
 from __future__ import annotations
 
 import hashlib
-import itertools
 import os
 import uuid
 from collections.abc import Callable, Iterator
@@ -29,7 +28,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from _alta_helpers import aceptar_terminos
+from _alta_helpers import plan_del_catalogo, suscripcion_de_plan
 from _api_helpers import api_headers, uniq
 from sqlalchemy import func, select
 
@@ -41,7 +40,6 @@ pytestmark = [
     ),
 ]
 
-_SEQ = itertools.count(1)
 _SECRETO_DE_EVENTOS = "secreto-de-eventos-de-prueba"
 # Monto firmado por Wompi en el webhook: el del link de cada plan.
 _CENTAVOS = {"basic": 20_000_000, "premium": 60_000_000}
@@ -227,67 +225,48 @@ async def _cliente_con_whatsapp(tid: uuid.UUID) -> uuid.UUID:
 
 
 async def _variante(tid: uuid.UUID, plan: str, precio: int) -> uuid.UUID:
-    from pack_commerce.models import Product, ProductVariant
-
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(tid):
-        async with get_session() as s:
-            producto = Product(tenant_id=tid, name=f"Plan {plan.title()}", description="Plan", has_variants=False)
-            s.add(producto)
-            await s.flush()
-            variante = ProductVariant(
-                tenant_id=tid,
-                product_id=producto.id,
-                sku=f"PLAN-{plan.upper()}-{next(_SEQ) + 500}",
-                price=precio,
-                billing_period="mensual",
-                trial_days=30 if precio == 0 else 0,
-                attributes={"periodicidad": "mensual", "precio_de_plan": plan},
-            )
-            s.add(variante)
-            await s.flush()
-            return variante.id
+    """Plan del catálogo de `pack_subscriptions` que vende el plan `plan` de la plataforma."""
+    return await plan_del_catalogo(tid, plan=plan, precio=precio)
 
 
 async def _pedido(
-    tid: uuid.UUID, variante_id: uuid.UUID, precio: int, cliente: uuid.UUID, datos_alta: dict[str, Any]
+    tid: uuid.UUID, plan_id: uuid.UUID, precio: int, cliente: uuid.UUID, datos_alta: dict[str, Any]
 ) -> str:
-    """Pedido pagado del plan; activarlo emite `subscription.activated`."""
-    from pack_commerce.models import Order, OrderItem
-    from pack_commerce.planes import activar_planes_del_pedido
+    """Inscripción activa en el plan; activarla emite `subscription.activated`. Devuelve su referencia."""
+    referencia, _ = await suscripcion_de_plan(
+        tid, plan_id=plan_id, precio=precio, customer_id=cliente, datos_alta=datos_alta
+    )
+    return referencia
+
+
+async def _inscribir_y_pagar(esc: Escenario, plan_id: uuid.UUID) -> None:
+    """El cliente del negocio (Free, vigente o vencida) contrata un plan de pago: `inscribir` lo trata como
+    un cambio sobre la misma suscripción (D-SPEC-43-3) y el webhook del pago lo aplica."""
+    from pack_subscriptions.capability import SubscriptionCapabilityImpl
+    from pack_subscriptions.models import SubscriptionCharge
+    from pack_subscriptions.module import SubscriptionsModule
+    from pack_subscriptions.planes import obtener
 
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
-    seq = next(_SEQ) + 500
-    async with tenant_scope(tid):
+    async with tenant_scope(esc.vendedor):
+        codigo = (await obtener(plan_id)).codigo
+        vista = await SubscriptionCapabilityImpl().inscribir(
+            customer_id=esc.cliente, plan_code=codigo, datos_alta={"email": "otro@correo-prueba.co"}, origen="panel"
+        )
+        assert vista["inscripcion"] == "cambio_de_plan", vista
         async with get_session() as s:
-            order = Order(
-                tenant_id=tid,
-                conversation_id=uuid.uuid4(),
-                customer_id=cliente,
-                status="abierto",
-                payment_status="pagado",
-                payment_method="pago_en_linea",
-                delivery_method="recoger_en_tienda",
-                total=precio,
-                idempotency_key=str(uuid.uuid4()),
-                order_seq=seq,
-                public_order_number=f"SH-{seq:04d}",
-                delivery_full_name="Ana Pérez",
-                datos_alta=datos_alta,
-            )
-            s.add(order)
-            await s.flush()
-            s.add(OrderItem(tenant_id=tid, order_id=order.id, variant_id=variante_id, quantity=1, unit_price=precio))
-            await s.flush()
-            assert await activar_planes_del_pedido(s, order) == 1
-            referencia = order.public_order_number
-    # HU-SH-07: como `crear_pedido`, el pedido lleva la aceptación de los términos.
-    await aceptar_terminos(tid, referencia, customer_id=cliente, gratis=precio == 0)
-    return referencia
+            cargo = (
+                await s.execute(
+                    select(SubscriptionCharge).where(
+                        SubscriptionCharge.subscription_id == esc.subscription_id,
+                        SubscriptionCharge.tipo == "cambio_plan",
+                        SubscriptionCharge.estado == "pendiente",
+                    )
+                )
+            ).scalar_one()
+        await SubscriptionsModule()._on_payment_confirmed(f"sub-{cargo.id}", "wompi", "pl-cambio", float(cargo.monto))
 
 
 async def _eventos(tid: uuid.UUID, topic: str) -> list[Any]:
@@ -931,11 +910,10 @@ async def test_free_que_compra_un_plan_pago_cambia_de_plan_y_aplica_el_preset(ve
     assert alta["preset"]["estado"] == "pendiente"  # ningún preset cabe en Free
 
     premium = await _variante(esc.vendedor, "premium", 600_000)
-    pedido = await _pedido(esc.vendedor, premium, 600_000, esc.cliente, {"email": "otro@correo-prueba.co"})
-    [evento] = [e for e in await _eventos(esc.vendedor, "subscription.activated") if e.payload["referencia"] == pedido]
-    assert evento.payload["cambio_de_plan"] is True
+    await _inscribir_y_pagar(esc, premium)
+    [evento] = [e for e in await _eventos(esc.vendedor, "subscription.activated") if e.payload["cambio_de_plan"]]
     assert evento.payload["subscription_id"] == str(esc.subscription_id)
-    await _entregar(esc.vendedor, "subscription.activated", on_subscription_activated, referencia=pedido)
+    await _entregar(esc.vendedor, "subscription.activated", on_subscription_activated, cambio_de_plan=True)
 
     negocio = await _suscripcion_de(esc.negocio)
     sub_v = await _suscripcion_del_vendedor(esc)
@@ -975,7 +953,7 @@ async def test_free_que_compra_un_plan_pago_cambia_de_plan_y_aplica_el_preset(ve
     assert len(await _auditoria(esc.negocio, "plan_cambiado_por_el_asistente")) == 1
 
     # Idempotente: el mismo evento otra vez no mueve el período ni reaplica el preset.
-    await _entregar(esc.vendedor, "subscription.activated", on_subscription_activated, referencia=pedido)
+    await _entregar(esc.vendedor, "subscription.activated", on_subscription_activated, cambio_de_plan=True)
     assert (await _suscripcion_de(esc.negocio)).period_end == negocio.period_end
     assert len([p for p in await _pagos(esc.negocio) if p.status == "aprobado"]) == 1
 
@@ -1010,10 +988,10 @@ async def test_free_vencido_que_compra_un_plan_pago_sigue_con_su_negocio(vendedo
     assert await is_tenant_operational(esc.negocio) is False
 
     basic = await _variante(esc.vendedor, "basic", 200_000)
-    pedido = await _pedido(esc.vendedor, basic, 200_000, esc.cliente, {"email": "otro@correo-prueba.co"})
-    [evento] = [e for e in await _eventos(esc.vendedor, "subscription.activated") if e.payload["referencia"] == pedido]
+    await _inscribir_y_pagar(esc, basic)
+    [evento] = [e for e in await _eventos(esc.vendedor, "subscription.activated") if e.payload["cambio_de_plan"]]
     assert evento.payload["subscription_id"] == str(esc.subscription_id)  # la misma suscripción
-    await _entregar(esc.vendedor, "subscription.activated", on_subscription_activated, referencia=pedido)
+    await _entregar(esc.vendedor, "subscription.activated", on_subscription_activated, cambio_de_plan=True)
     negocio = await _suscripcion_de(esc.negocio)
     assert (negocio.plan_id, negocio.status) == ("basic", "active")
     assert await is_tenant_operational(esc.negocio) is True
@@ -1030,10 +1008,10 @@ async def test_cambio_de_plan_con_sub_cambiar_plan_cambia_el_plan_del_negocio(ve
     esc = await _negocio_aprovisionado(vendedores, plan="free", precio=0)
     premium = await _variante(esc.vendedor, "premium", 600_000)
     async with tenant_scope(esc.vendedor):
+        from pack_subscriptions.planes import obtener, snapshot
+
         vista = await SubscriptionCapabilityImpl().change_plan(
-            esc.subscription_id,
-            variant_id=str(premium),
-            plan={"plan_code": "PLAN-PREMIUM", "nombre": "Plan Premium", "precio": 600_000, "moneda": "COP", "periodicidad": "mensual"},
+            esc.subscription_id, plan_id=str(premium), plan=snapshot(await obtener(premium))
         )
     assert vista["cambio"] == "pendiente_pago"
     from pack_subscriptions.models import SubscriptionCharge
@@ -1051,7 +1029,7 @@ async def test_cambio_de_plan_con_sub_cambiar_plan_cambia_el_plan_del_negocio(ve
             ).scalar_one()
         await SubscriptionsModule()._on_payment_confirmed(f"sub-{cargo.id}", "wompi", "pl-cambio", 600_000.0)
     eventos = [e for e in await _eventos(esc.vendedor, "subscription.activated") if e.payload.get("cambio_de_plan")]
-    assert eventos and eventos[-1].payload["referencia"] is None
+    assert eventos and eventos[-1].payload["referencia"] == esc.referencia
     await _entregar(esc.vendedor, "subscription.activated", on_subscription_activated, cambio_de_plan=True)
     negocio = await _suscripcion_de(esc.negocio)
     assert (negocio.plan_id, negocio.status) == ("premium", "active")
@@ -1076,7 +1054,7 @@ async def test_un_cargo_de_otro_vendedor_no_toca_el_negocio(vendedores, correos,
         "periodo_inicio": antes.period_end.isoformat(),
         "periodo_fin": (antes.period_end + timedelta(days=31)).isoformat(),
         "monto": "600000",
-        "variant_id": None,
+        "plan_id": None,
     }
     async with tenant_scope(otro):
         await on_subscription_charge_paid(**falso)
@@ -1342,21 +1320,22 @@ async def test_recompra_despues_de_cancelar_va_a_revision(vendedores, correos, a
 async def test_un_plan_activado_por_menos_que_su_precio_no_se_aplica(vendedores, correos, alertas) -> None:
     """Una suscripción del vendedor activada a mano con otro precio (p. ej. Premium a $1) no
     sube el plan del negocio ni extiende su período: queda `monto_distinto` y se alerta."""
-    from pack_subscriptions.capability import crear_suscripcion_para
+    from pack_subscriptions.capability import _emitir_activada
+    from pack_subscriptions.models import Subscription
 
     from core.billing.canales import on_subscription_charge_paid
+    from core.db.session import get_session
     from core.provisioning.consumer import on_subscription_activated
     from core.shared.tenant import tenant_scope
 
     esc = await _negocio_aprovisionado(vendedores, plan="free", precio=0)
     premium = await _variante(esc.vendedor, "premium", 600_000)
+    # La suscripción del cliente pasa a Premium «a mano» con un valor de período de $1.
     async with tenant_scope(esc.vendedor):
-        await crear_suscripcion_para(
-            customer_id=esc.cliente,
-            variante_id=premium,
-            plan={"nombre": "Plan Premium", "precio": 1, "moneda": "COP", "periodicidad": "mensual"},
-            reference="admin-manual",
-        )
+        async with get_session() as s:
+            sub = await s.get(Subscription, esc.subscription_id)
+            sub.plan_id, sub.valor_periodo, sub.concepto = premium, 1, "Plan Premium"
+            await _emitir_activada(s, sub, cambio=True, charge_id=uuid.uuid4())
     await _entregar(esc.vendedor, "subscription.activated", on_subscription_activated, cambio_de_plan=True)
     negocio = await _suscripcion_de(esc.negocio)
     assert (negocio.plan_id, negocio.status) == ("free", "trialing")
@@ -1373,7 +1352,7 @@ async def test_un_plan_activado_por_menos_que_su_precio_no_se_aplica(vendedores,
             periodo_inicio=antes.period_end.isoformat(),
             periodo_fin=(antes.period_end + timedelta(days=31)).isoformat(),
             monto="1",
-            variant_id=str(premium),
+            plan_id=str(premium),
         )
     assert (await _suscripcion_de(esc.negocio)).period_end == antes.period_end
 
