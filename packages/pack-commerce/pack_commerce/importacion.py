@@ -1,9 +1,10 @@
-"""Importar productos y planes que el dueño ya tiene desde un CSV (HU-QA-12, ADR-0180).
+"""Importar productos que el dueño ya tiene desde un CSV (HU-QA-12, ADR-0180).
 
-Dos plantillas sobre el catálogo, una por forma de datos del agente:
+Una plantilla sobre el catálogo:
 - `productos` (forma `catalogo`): SKU, nombre, precio, categoría, descripción y stock.
-- `planes` (forma `planes`): SKU, nombre, precio, periodicidad, días de prueba y descripción; son
-  productos de la categoría «Planes» (D-16).
+
+Importar planes por CSV ya no está en Comercio: los planes son de pack_subscriptions (SPEC-43) y
+su importación queda para una HU aparte.
 
 La clave es el SKU, que es único por negocio. Un SKU de un producto vivo ya existe y no se toca; el de
 un producto eliminado a mano es un error de la fila (no se resucita lo que el negocio borró). Los
@@ -15,7 +16,7 @@ from __future__ import annotations
 
 import uuid
 from decimal import Decimal
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
@@ -32,7 +33,6 @@ from core.qa.contrato_importacion import (
     numero,
 )
 from core.shared.tenant import tenant_scope
-from pack_commerce.datos_de_prueba import CATEGORIA_PLANES
 from pack_commerce.models import Product, ProductVariant
 
 CATEGORIA_SIN_CLASIFICAR = "Sin categoría"
@@ -84,24 +84,6 @@ class ProductoImportado(_ConSku):
         return [p[:80] for p in ruta[:3]] or [CATEGORIA_SIN_CLASIFICAR]
 
 
-class PlanImportado(_ConSku):
-    periodicidad: Literal["mensual", "anual"]
-    dias_de_prueba: Annotated[int, Field(ge=0, le=60)] = 0
-
-    @field_validator("periodicidad", mode="before")
-    @classmethod
-    def _periodicidad_valida(cls, valor: Any) -> Any:
-        texto = str(valor or "").strip().lower()
-        return {"mes": "mensual", "mensual": "mensual", "año": "anual", "ano": "anual", "anual": "anual"}.get(
-            texto, texto
-        )
-
-    @field_validator("dias_de_prueba", mode="before")
-    @classmethod
-    def _prueba_valida(cls, valor: Any) -> int:
-        return 0 if valor in (None, "") else entero(valor)
-
-
 def plantillas() -> list[PlantillaDeImportacion]:
     return [
         PlantillaDeImportacion(
@@ -132,34 +114,6 @@ def plantillas() -> list[PlantillaDeImportacion]:
             clave=lambda fila: fila.sku,
             ayuda="Un producto por fila, con una sola presentación. Si el SKU ya existe en tu catálogo, esa fila se omite.",
         ),
-        PlantillaDeImportacion(
-            id="planes",
-            titulo="Planes",
-            modo="planes",
-            columnas=(
-                ColumnaDeImportacion("sku", "Código del plan; no se repite en tu catálogo.", obligatoria=True),
-                ColumnaDeImportacion("nombre", "Nombre del plan.", obligatoria=True),
-                ColumnaDeImportacion("precio", "Precio por periodo en la moneda del negocio.", obligatoria=True),
-                ColumnaDeImportacion("periodicidad", "mensual o anual.", obligatoria=True),
-                ColumnaDeImportacion("dias_de_prueba", "Días de prueba gratis, de 0 a 60 (opcional)."),
-                ColumnaDeImportacion("descripcion", "Qué incluye (opcional)."),
-            ),
-            ejemplos=(
-                {
-                    "sku": "PLAN-BASICO",
-                    "nombre": "Plan Básico",
-                    "precio": "49000",
-                    "periodicidad": "mensual",
-                    "dias_de_prueba": "7",
-                    "descripcion": "2 cortes al mes",
-                },
-                {"sku": "PLAN-ANUAL", "nombre": "Plan Anual", "precio": "490000", "periodicidad": "anual"},
-            ),
-            esquema=PlanImportado,
-            columna_clave="sku",
-            clave=lambda fila: fila.sku,
-            ayuda="Un plan por fila. Si el SKU ya existe en tu catálogo, esa fila se omite.",
-        ),
     ]
 
 
@@ -183,18 +137,9 @@ def _a_seed(plantilla_id: str, filas: list[_ConSku]) -> dict[str, Any]:
     productos = []
     rutas: list[list[str]] = []
     for fila in filas:
-        if isinstance(fila, PlanImportado):
-            ruta = [CATEGORIA_PLANES]
-            variante: dict[str, Any] = {
-                "sku": fila.sku,
-                "price": float(fila.precio),
-                "stock": 0,
-                "attributes": {"periodicidad": fila.periodicidad, "trial_dias": fila.dias_de_prueba},
-            }
-        else:
-            assert isinstance(fila, ProductoImportado)
-            ruta = fila.ruta_de_categoria()
-            variante = {"sku": fila.sku, "price": float(fila.precio), "stock": fila.stock, "attributes": {}}
+        assert isinstance(fila, ProductoImportado)
+        ruta = fila.ruta_de_categoria()
+        variante: dict[str, Any] = {"sku": fila.sku, "price": float(fila.precio), "stock": fila.stock, "attributes": {}}
         if ruta not in rutas:
             rutas.append(ruta)
         productos.append(

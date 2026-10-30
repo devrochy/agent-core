@@ -1,7 +1,4 @@
 {
-  "variant_id": "Plan",
-  "business_name": "Nombre del negocio",
-  "vertical": "Tipo de negocio",
   "full_name": "Nombre completo",
   "id_document": "Documento",
   "email": "Correo",

@@ -136,10 +136,6 @@ class ProductVariant(TenantMixin, Base):
     sku: Mapped[str] = mapped_column(Text)
     attributes: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"talla": "M"} | {} si sin atributos
     price: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
-    # Recurrencia del plan (ADR-0083, #153): None = producto one-shot (sin suscripción).
-    billing_period: Mapped[str | None] = mapped_column(Text, default=None)  # "mensual"|"anual"
-    trial_days: Mapped[int | None] = mapped_column(Integer, default=None)
-    entitlements: Mapped[dict | None] = mapped_column(JSONB, default=None)  # límites del plan
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -266,12 +262,6 @@ class Order(TenantMixin, Base):
     delivery_city: Mapped[str | None] = mapped_column(Text, default=None)
     status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     status_reason: Mapped[str | None] = mapped_column(Text, default=None)
-    # HU-SUB-09: activación del plan del pedido (NULL si no lleva planes).
-    plan_activation_status: Mapped[str | None] = mapped_column(Text, default=None)  # pendiente|activada
-    plan_activation_error: Mapped[str | None] = mapped_column(Text, default=None)
-    # HU-SH-03 (ADR-0121): datos del checkout de un plan para dar de alta el servicio
-    # ({"email", "telefono", "negocio", "vertical"}); NULL si el pedido no lleva planes.
-    datos_alta: Mapped[dict | None] = mapped_column(JSONB, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

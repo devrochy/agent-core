@@ -10,7 +10,6 @@
         "crear_lead",
         "consultar_inventario",
         "recomendar_producto",
-        "informar_plan",
         "calificar_lead",
         "actualizar_lead"
       ]

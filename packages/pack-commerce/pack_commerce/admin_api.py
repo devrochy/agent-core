@@ -135,8 +135,6 @@ class VariantOut(BaseModel):
     price: float
     stock: int
     active: bool
-    billing_period: str | None = None  # plan recurrente (HU-SUB-09)
-    trial_days: int | None = None
 
 
 class ProductOut(BaseModel):
@@ -162,13 +160,10 @@ class ProductSave(BaseModel):
     # conoce los aliados (la APK) no los borra al editar.
     ally_id: uuid.UUID | None = None
     sku: str = ""
-    # Precio, stock y días de prueba nunca negativos (422 con el campo marcado). Topes: lo que
+    # Precio y stock nunca negativos (422 con el campo marcado). Topes: lo que
     # cabe en la columna (`Numeric(12, 2)`, `Integer`) para no terminar en un 500 de la base.
     price: float = Field(default=0, ge=0, le=9_999_999_999, allow_inf_nan=False)
     stock: int = Field(default=0, ge=0, le=1_000_000_000)
-    # HU-SUB-09: plan recurrente. None = no cambia; "" = no es recurrente.
-    billing_period: Literal["mensual", "trimestral", "anual", ""] | None = None
-    trial_days: int | None = Field(default=None, ge=0, le=365)
     # HU-CRM-01: None = no cambia; "" = quita la foto.
     image_url: str | None = Field(default=None, max_length=IMAGE_URL_MAX)
     # HU-CRM-05: clave de la foto subida (controlador único). None = no cambia; "" = quita.
@@ -178,20 +173,6 @@ class ProductSave(BaseModel):
     @classmethod
     def _solo_https(cls, valor: str | None) -> str | None:
         return _image_url_valida(valor)
-
-
-async def _validar_plan(tenant_id: uuid.UUID | None, payload: ProductSave, ya_recurrente: bool) -> None:
-    """Un plan recurrente necesita un proveedor de suscripciones (HU-SUB-09) y solo
-    un plan de $0 tiene prueba (D-16)."""
-    if payload.trial_days and payload.price > 0:
-        raise ApiError.bad_request("Solo el plan Free ($0) tiene días de prueba (D-16).", "prueba_en_plan_pago")
-    if not payload.billing_period or ya_recurrente or tenant_id is None:
-        return
-    from core.subscriptions import estado_proveedor
-
-    estado = await estado_proveedor(tenant_id)
-    if estado["estado"] == "sin_proveedor":
-        raise ApiError.bad_request(estado["mensaje"], "sin_proveedor_de_suscripciones")
 
 
 def _key_producto_valida(key: str, slug: str | None) -> bool:
@@ -285,8 +266,6 @@ async def list_products(
                         price=float(v.price or 0),
                         stock=inv_by_variant.get(v.id, 0),
                         active=v.active,
-                        billing_period=v.billing_period,
-                        trial_days=v.trial_days,
                     )
                     for v in product_variants
                 ],
@@ -344,16 +323,11 @@ async def save_product(
                 .scalars()
                 .first()
             )
-            await _validar_plan(tenant_id, payload, bool(variant and variant.billing_period))
             if variant is not None:
                 if payload.sku:
                     variant.sku = payload.sku
                 if payload.price:
                     variant.price = payload.price
-                if payload.billing_period is not None:
-                    variant.billing_period = payload.billing_period or None
-                if payload.trial_days is not None:
-                    variant.trial_days = payload.trial_days or None
                 inventory = (
                     await session.execute(
                         select(Inventory).where(
@@ -367,7 +341,6 @@ async def save_product(
                 else:
                     inventory.stock_quantity = payload.stock
         else:
-            await _validar_plan(tenant_id, payload, ya_recurrente=False)
             nueva_key = payload.image_key or None
             if nueva_key is not None and not _key_producto_valida(nueva_key, slug):
                 raise ApiError.bad_request("La foto subida no es válida.", "image_key_invalida")
@@ -385,8 +358,6 @@ async def save_product(
                 product_id=product.id,
                 sku=payload.sku or f"SKU-{product.id.hex[:8]}",
                 price=payload.price,
-                billing_period=payload.billing_period or None,
-                trial_days=payload.trial_days or None,
             )
             session.add(variant)
             await session.flush()
@@ -1067,9 +1038,6 @@ class OrderOut(BaseModel):
     delivery_address: str | None
     created_at: datetime | None
     line_items: list[OrderLine]
-    # HU-SUB-09: activación del plan (None si el pedido no lleva planes).
-    plan_activation_status: str | None = None
-    plan_activation_error: str | None = None
 
 
 class OrderStatusUpdate(BaseModel):
@@ -1139,8 +1107,6 @@ async def list_orders(
             delivery_address=o.delivery_address,
             created_at=o.created_at,
             line_items=items_by_order.get(str(o.id), []),
-            plan_activation_status=o.plan_activation_status,
-            plan_activation_error=o.plan_activation_error,
         )
         for o in orders
     ]

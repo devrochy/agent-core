@@ -2,12 +2,12 @@
 
 - `clientes-y-pedidos`: un lead por cliente (estado e interés), pedidos pendiente, pagado y
   cancelado sobre el catálogo de «Preparar mis datos» y una promoción.
-- `planes-de-suscripcion`: dos planes nuevos (con el sufijo del caso en el SKU) y su snapshot,
-  que el core le pasa a Suscripciones.
+
+El escenario `planes-de-suscripcion` es de pack_subscriptions (SPEC-43).
 
 El contenido sale de `presets/escenarios.json`. Determinista y aditivo: cada caso usa claves de
 idempotencia con su sufijo. Nada se cobra ni se envía: los pedidos no llevan link de pago y el
-estado «pagado» se escribe en la columna, sin emitir `order.paid` (que activaría planes).
+estado «pagado» se escribe en la columna, sin emitir `order.paid`.
 Los leads no llevan conversación, así que el seguimiento automático (`jobs.py`) no les escribe.
 """
 
@@ -22,14 +22,12 @@ from sqlalchemy import select, text
 
 from core.db.session import get_session
 from core.qa.contrato_datos import (
-    ContextoDeNegocio,
     EntradaDeEscenario,
     EscenarioNoDisponible,
-    PlanDeEscenario,
     ResumenDeEscenario,
 )
 from core.shared.tenant import get_current_tenant_id
-from pack_commerce.models import Lead, Order, OrderItem, Product, ProductVariant, Promotion
+from pack_commerce.models import Lead, Order, OrderItem, ProductVariant, Promotion
 
 
 def _contenido() -> dict[str, Any]:
@@ -131,44 +129,7 @@ async def clientes_y_pedidos(tenant_id: uuid.UUID, entrada: EntradaDeEscenario) 
     )
 
 
-async def planes_de_suscripcion(tenant_id: uuid.UUID, entrada: EntradaDeEscenario) -> ResumenDeEscenario:
-    from pack_commerce.datos_de_prueba import PlanesDePrueba, sembrar
-    from pack_commerce.planes import snapshot_de_plan
-
-    if get_current_tenant_id() != tenant_id:
-        raise PermissionError("escenario fuera del tenant_scope del negocio")
-    planes = PlanesDePrueba.model_validate(_contenido()["planes"])
-    contexto = ContextoDeNegocio(moneda=entrada.moneda, zona_horaria=entrada.zona_horaria, sufijo=entrada.sufijo)
-    registros = await sembrar(tenant_id, "planes", planes, contexto)
-    ids = [r.ref for r in registros if r.kind == "variante"]
-    async with get_session() as session:
-        filas = (
-            await session.execute(
-                select(ProductVariant, Product.name)
-                .join(Product, (Product.tenant_id == ProductVariant.tenant_id) & (Product.id == ProductVariant.product_id))
-                .where(ProductVariant.tenant_id == tenant_id, ProductVariant.id.in_(ids))
-                .order_by(ProductVariant.sku)
-            )
-        ).all()
-    salida: list[PlanDeEscenario] = []
-    for variante, nombre in filas:
-        plan, _ignorada = snapshot_de_plan(
-            sku=variante.sku, nombre=nombre, precio=variante.price, periodicidad=variante.billing_period or "mensual",
-            trial_days=variante.trial_days,
-        )
-        salida.append(PlanDeEscenario(variant_id=variante.id, plan=plan))
-    if len(salida) < 2:
-        raise EscenarioNoDisponible("No se pudieron crear los planes de prueba.")
-    return ResumenDeEscenario(
-        conteos={"planes": len(salida)},
-        detalle=["Planes " + " y ".join(f"{p.plan['nombre']} ({p.plan['periodicidad']})" for p in salida)],
-        planes=salida,
-    )
-
-
 async def sembrar_escenario(tenant_id: uuid.UUID, escenario: str, entrada: EntradaDeEscenario) -> ResumenDeEscenario:
     if escenario == "clientes-y-pedidos":
         return await clientes_y_pedidos(tenant_id, entrada)
-    if escenario == "planes-de-suscripcion":
-        return await planes_de_suscripcion(tenant_id, entrada)
     raise EscenarioNoDisponible(f"Comercio no tiene el escenario {escenario}.")

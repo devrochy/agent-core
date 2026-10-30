@@ -13,7 +13,6 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import UTC, datetime
-from functools import lru_cache
 from typing import Any
 
 from sqlalchemy import or_, select, text
@@ -25,18 +24,8 @@ from core.db.session import get_owned, get_session
 from core.kernel.oferta import solo_con_motor_activo
 from core.mcp.types import BaseSkill, MCPTool, Referencia, RegistroCreado, ToolContext
 from core.memory import entity as entity_memory
-from core.provisioning.antiabuso import (
-    FreeNoDisponible,
-    LimiteDeAltas,
-    PedidoPreparado,
-    TerminosPendientes,
-    cerrar_aceptacion,
-    preparar_pedido_de_alta,
-    registrar_pedido_de_alta,
-)
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
-from core.shared.texto_seguro import contiene_url
 from pack_commerce.datos import A_LEGADO, ACCION_POR_ENTREGA
 from pack_commerce.fotos import url_foto
 from pack_commerce.models import (
@@ -52,11 +41,6 @@ from pack_commerce.models import (
     PromotionRedemption,
     Quote,
     QuoteItem,
-)
-from pack_commerce.planes import (
-    activar_planes_del_pedido,
-    estado_pago_inicial,
-    segundo_plan_bloqueado,
 )
 
 CUSTOMER_SEGMENTS = ("nuevo", "ocasional", "frecuente", "fiel", "inactivo")
@@ -87,57 +71,9 @@ def _float(value: Any) -> float:
     return float(value or 0)
 
 
-def _monto_alto_threshold(config: Any, es_plan: bool) -> float | None:
-    """Umbral de escalamiento por monto (HU-COM-02).
-
-    Para planes recurrentes usa `monto_alto_planes_threshold`; `None` ahí
-    significa "un plan nunca escala por monto alto" (el cobro ya va por el
-    snapshot del servidor). Para pedidos normales, `monto_alto_threshold`.
-    """
-    if es_plan:
-        return getattr(config, "monto_alto_planes_threshold", None)
+def _monto_alto_threshold(config: Any) -> float:
+    """Umbral de escalamiento por monto alto (HU-COM-02): `monto_alto_threshold` del negocio."""
     return getattr(config, "monto_alto_threshold", 1_000_000) or 1_000_000
-
-
-async def _incluye_un_free(session, variant_ids: list) -> bool:  # type: ignore[no-untyped-def]
-    """True si alguna línea es un plan gratis: el plan de la plataforma de la variante
-    (`precio_de_plan`) es Free, o el plan cuesta 0. No sale del total de la cotización: un
-    Free junto a un producto pago sigue siendo un Free (HU-SH-07, ADR-0125)."""
-    from core.billing.plans import get_plan
-    from pack_commerce.precios_de_plan import ATRIBUTO
-
-    if not variant_ids:
-        return False
-    variantes = (
-        await session.execute(
-            select(ProductVariant).where(
-                ProductVariant.tenant_id == get_current_tenant_id(),
-                ProductVariant.id.in_(variant_ids),
-                ProductVariant.billing_period.is_not(None),
-            )
-        )
-    ).scalars().all()
-    for variante in variantes:
-        plan = get_plan(str((variante.attributes or {}).get(ATRIBUTO) or "").strip().lower())
-        if (plan is not None and plan.is_free) or _float(variante.price) == 0:
-            return True
-    return False
-
-
-async def _es_pedido_de_plan(session, variant_ids: list) -> bool:  # type: ignore[no-untyped-def]
-    """True si alguna variante del pedido es un plan recurrente (billing_period)."""
-    if not variant_ids:
-        return False
-    row = (
-        await session.execute(
-            select(ProductVariant.id).where(
-                ProductVariant.tenant_id == get_current_tenant_id(),
-                ProductVariant.id.in_(variant_ids),
-                ProductVariant.billing_period.is_not(None),
-            ).limit(1)
-        )
-    ).first()
-    return row is not None
 
 
 def _money(value: Any, symbol: str = "$") -> str:
@@ -527,52 +463,24 @@ async def _get_variant_with_stock(variant_id_or_sku) -> dict[str, Any] | None:  
         "variant": variant,
         "product": product,
         "stock": inventory.stock_quantity if inventory else 0,
-        # Un plan recurrente es un servicio: no tiene inventario (SUB-12).
-        "sin_inventario": _es_plan_variante(variant),
         "price": _float(variant.price),
     }
 
 
-# Campos del checkout que puede pedir un negocio (= `config._CAMPOS_VALIDOS`, en orden estable).
-CAMPOS_DE_CHECKOUT = (
-    "full_name", "id_document", "phone", "email", "business_name", "vertical", "address", "municipality", "city",
-)
+# Métodos de pago que se confirman después (comprobante manual o webhook de pack-payments).
+METODOS_DIFERIDOS = ("transferencia", "pago_en_linea")
 
 
-async def _plan_por_referencia(referencia: str) -> tuple[ProductVariant, Product] | None:
-    """Variante de PLAN activa del negocio por uuid o SKU exacto (HU-AOS-07)."""
-    valor = referencia.strip()
-    if not valor:
-        return None
-    variant_id = _parse_uuid(valor)
-    condicion = ProductVariant.id == variant_id if variant_id is not None else ProductVariant.sku == valor
-    async with get_session() as session:
-        fila = (
-            await session.execute(
-                select(ProductVariant, Product)
-                .join(Product, Product.id == ProductVariant.product_id)
-                .where(
-                    condicion,
-                    ProductVariant.tenant_id == get_current_tenant_id(),
-                    Product.tenant_id == get_current_tenant_id(),
-                    Product.deleted_at.is_(None),
-                    ProductVariant.active.is_(True),
-                    ProductVariant.billing_period.isnot(None),
-                )
-                .limit(1)
-            )
-        ).first()
-    return (fila[0], fila[1]) if fila is not None else None
+def _estado_pago_inicial(payment_method: str) -> str:
+    """Estado de pago con el que nace un pedido: diferido si hay que confirmar el pago; la
+    contraentrega se da por pagada al entregar."""
+    return "pendiente" if payment_method in METODOS_DIFERIDOS else "pagado"
 
 
-def _es_plan_variante(variant: ProductVariant) -> bool:
-    """Plan recurrente (`billing_period`): se vende sin stock ni descuento de inventario.
+async def _motor_activo_seguro() -> bool:
+    from core.kernel.oferta import motor_activo
 
-    Antes un plan con stock 0 salía "no disponible" y `generar_cotizacion` lo rechazaba
-    ("No hay stock suficiente"): el asistente no podía vender planes por conversación
-    (visto con los journeys de HU-SUB-12; el catálogo de `solvershub` tiene stock 0).
-    """
-    return bool(variant.billing_period)
+    return await motor_activo() is True
 
 
 def _normalizar_prefijo(prefijo: str) -> str:
@@ -583,26 +491,19 @@ def _normalizar_prefijo(prefijo: str) -> str:
     return texto
 
 
-def _campos_requeridos(config, es_plan: bool, delivery_method: str) -> list[str]:
-    """Campos que exige el checkout según tipo de producto y de entrega (D-SPEC-09-2).
+def _campos_requeridos(config, delivery_method: str) -> list[str]:
+    """Campos que exige el checkout según el tipo de entrega (D-SPEC-09-2).
 
-    Los planes (producto recurrente) usan la lista `plan` (sin dirección) y el
-    retiro en tienda la lista `recoger_en_tienda`; el resto, la de `domicilio`.
+    El retiro en tienda usa la lista `recoger_en_tienda`; el resto, la de `domicilio`.
     """
     campos = getattr(config, "checkout_fields", None) or {}
-    if es_plan:
-        # Un plan nunca pide dirección, aunque la config guardada del negocio sea anterior
-        # a la clave `plan` (antes caía en la lista de domicilio).
-        return list(campos.get("plan") or ["full_name", "id_document"])
     if delivery_method in campos:
         return list(campos[delivery_method])
     return list(campos.get("domicilio", ["full_name", "id_document", "address", "municipality", "city"]))
 
 
-def _accion_de_datos(es_plan: bool, delivery_method: str) -> str:
+def _accion_de_datos(delivery_method: str) -> str:
     """Acción de la política de datos que corresponde a este pedido (misma regla que `_campos_requeridos`)."""
-    if es_plan:
-        return ACCION_POR_ENTREGA["plan"]
     return ACCION_POR_ENTREGA.get(delivery_method, ACCION_POR_ENTREGA["domicilio"])
 
 
@@ -623,140 +524,8 @@ def _validar_checkout(campos_requeridos: list[str], data: dict[str, Any]) -> tup
     return (not missing, missing)
 
 
-# ------------------------------------------------------------------ alta frenada (HU-SH-07)
-def _respuesta_del_alta_frenada(frenado: Any) -> dict[str, Any]:
-    """Respuesta de `crear_pedido` cuando el core frena el pedido de un plan de la plataforma
-    (ADR-0125). El comportamiento completo vive en el playbook de ventas del vendedor; el
-    `hint` solo dice el siguiente paso, como el resto de las respuestas de esta tool."""
-    if isinstance(frenado, TerminosPendientes):
-        if frenado.enlaces_enviados:
-            hint = (
-                "Si el último mensaje del cliente ya acepta los documentos, repite crear_pedido "
-                "ahora con el mismo quote_id, los mismos datos y customer_data.acepta_terminos. "
-                "Si no, comparte los enlaces y espera su respuesta."
-            )
-        else:
-            # El cliente todavía no recibió los enlaces: ninguna respuesta suya los acepta
-            # (canary de comercial, 2026-10-10: el modelo repetía la llamada en el mismo turno).
-            hint = (
-                "El cliente todavía no recibió estos enlaces: compártelos y pregúntale si los "
-                "acepta. Un «sí» anterior no los acepta: no repitas crear_pedido en este turno."
-            )
-        return {
-            "status": "terminos_pendientes",
-            "error": "Falta que el cliente acepte los términos, el aviso de privacidad y el DPA.",
-            "documentos": frenado.documentos,
-            "acepta_terminos": frenado.token,
-            # El token es el mismo en cada respuesta de esta conversación: en el turno en que
-            # el cliente acepta, el modelo lo recupera llamando sin él (ADR-0125, adenda).
-            "hint": hint,
-        }
-    if isinstance(frenado, FreeNoDisponible):
-        return {
-            "status": "free_no_disponible",
-            "error": "La prueba gratis ya se usó con estos datos en los últimos 12 meses.",
-            "hint": "No crees otro pedido Free: ofrécele un plan pago.",
-        }
-    if isinstance(frenado, LimiteDeAltas):
-        return {
-            "status": "limite_de_altas",
-            "error": "Se alcanzó el límite de pedidos de planes por ahora.",
-            "hint": "Puede intentarlo de nuevo en una hora.",
-        }
-    return {"error": "No se pudo crear el pedido del plan."}
-
-
-async def _motor_activo_seguro() -> bool:
-    from core.kernel.oferta import motor_activo
-
-    return await motor_activo() is True
-
-
-async def _token_de_terminos_aceptados(context: ToolContext) -> str | None:
-    """Con el motor de procedimientos (adenda 2026-10-13 de ADR-0125): el cliente aceptó los
-    términos con el «Sí, confirmo» del resumen que los traía (`resumen_de_cotizacion`), así que
-    `confirmar_cotizacion` devuelve el token de esa aceptación; el procedimiento lo guarda
-    (`acepta_terminos`) y el kernel lo liga a `crear_pedido.customer_data`. El pedido sigue
-    validando el token y el mensaje del cliente posterior a los enlaces (`preparar_pedido_de_alta`).
-    Sin la bandera, sin vendedor o sin los tres documentos, None: nada cambia."""
-    from core.kernel.oferta import motor_activo
-    from core.provisioning.antiabuso import terminos_del_resumen
-
-    if await motor_activo() is not True:
-        return None
-    terminos = await terminos_del_resumen(context.conversation_id, anotar=False)
-    return terminos.token if terminos is not None else None
-
-
-# ------------------------------------------------------------------ datos del alta (HU-SH-03)
+# ------------------------------------------------------------------ texto
 _ESPACIOS = re.compile(r"\s+")
-
-
-@lru_cache(maxsize=1)
-def _presets() -> tuple[tuple[str, str], ...]:
-    """(id, nombre) de los presets del core (ADR-0110). Son archivos del release, no datos de
-    un negocio: se leen una vez por proceso."""
-    from core.presets import list_presets
-
-    return tuple((p.id, p.nombre) for p in list_presets())
-
-
-def _verticales() -> list[dict[str, str]]:
-    """Tipos de negocio que acepta el checkout: los presets del core."""
-    from core.presets import PresetError
-
-    try:
-        return [{"id": pid, "nombre": nombre} for pid, nombre in _presets()]
-    except PresetError:
-        log.warning("verticales_no_disponibles", exc_info=True)
-        return []
-
-
-def _vertical_invalido(valor: Any) -> dict[str, Any] | None:
-    """Rechazo de un `vertical` que no es un preset, con las opciones; None si es válido o
-    no vino (solo es obligatorio si el negocio lo pide en `checkout_fields`). Así el tipo de
-    negocio llega al pedido como dato de una lista, no como texto libre (ADR-0121)."""
-    texto = str(valor or "").strip()
-    if not texto:
-        return None
-    opciones = _verticales()
-    if texto in {o["id"] for o in opciones}:
-        return None
-    return {
-        "status": "dato_invalido",
-        "error": "Tipo de negocio no válido.",
-        "field": "vertical",
-        "opciones": opciones,
-        "hint": "Pregúntale al cliente qué tipo de negocio tiene y usa el id de una de las opciones.",
-    }
-
-
-def _estado_del_plan(order: Any) -> dict[str, str]:
-    """Estado de un pedido de PLAN en códigos fijos (el modelo los redacta), o {} si el pedido
-    no es de un plan. `activo`: la suscripción del plan quedó activada (`plan_activation_status
-    = activada`) y el acceso llega al correo que el cliente dio al contratar; `activando`: pagado
-    y con la activación pendiente; `pendiente_de_pago`: el plan espera el pago."""
-    activacion = getattr(order, "plan_activation_status", None)
-    if activacion is None and getattr(order, "datos_alta", None) is None:
-        return {}
-    if activacion == "activada":
-        return {"estado_plan": "activo", "acceso": "enviado_al_correo_del_alta"}
-    if activacion == "pendiente" or getattr(order, "payment_status", None) == "pagado":
-        return {"estado_plan": "activando"}
-    return {"estado_plan": "pendiente_de_pago"}
-
-
-def _datos_alta(customer_data: dict[str, Any]) -> dict[str, str] | None:
-    """Lo que el alta del servicio de un plan necesita del checkout (ADR-0121): se guarda
-    en el pedido; el perfil del cliente solo se toca con su consentimiento (D17)."""
-    datos = {
-        "email": str(customer_data.get("email") or "").strip().lower()[:254],
-        "telefono": _ESPACIOS.sub(" ", str(customer_data.get("phone") or "")).strip()[:40],
-        "negocio": _ESPACIOS.sub(" ", str(customer_data.get("business_name") or "")).strip()[:120],
-        "vertical": str(customer_data.get("vertical") or "").strip(),
-    }
-    limpios = {clave: valor for clave, valor in datos.items() if valor}
-    return limpios or None
 
 
 # ------------------------------------------------------------------ LEADS
@@ -1035,7 +804,7 @@ class CatalogSkill(BaseSkill):
                 name="consultar_inventario",
                 description=(
                     "Consulta precios y disponibilidad reales de los productos del menú. "
-                    "Acepta búsqueda libre: pasá solo la palabra clave (ej: 'basic', no 'plan basic'). "
+                    "Acepta búsqueda libre: pasá solo la palabra clave (ej: 'pizza', no 'pizza grande'). "
                     "Úsala SIEMPRE antes de afirmar cualquier precio, stock o disponibilidad. "
                     "Si devuelve `recommendations` en vez de `matches`, es que no encontró el "
                     "producto: decíselo al cliente y ofrecele esas opciones. Nunca inventes precios."
@@ -1065,66 +834,7 @@ class CatalogSkill(BaseSkill):
                 },
                 handler=self.recomendar_producto,
             ),
-            MCPTool(
-                name="informar_plan",
-                description=(
-                    "Informa un PLAN o servicio recurrente por SKU o variante: precio, "
-                    "periodicidad, días de prueba y límites del plan (ADR-0083/#153). "
-                    "Úsala cuando el cliente pregunte por un plan/suscripción y tengas el "
-                    "SKU o variant_id (de consultar_inventario). Los montos SIEMPRE salen de aquí."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "sku": {"type": "string", "description": "SKU del plan, ej. 'PLAN-BASIC'"},
-                        "variant_id": {"type": "string", "description": "variant_id del plan"},
-                    },
-                },
-                handler=self.informar_plan,
-            ),
         ]
-
-    async def informar_plan(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        """Detalle del plan (recurrencia) por SKU o variant_id (#153)."""
-        sku = str(arguments.get("sku", "")).strip()
-        variant_id = _parse_uuid(str(arguments.get("variant_id", "")))
-
-        async with get_session() as session:
-            stmt = (
-                select(ProductVariant, Product)
-                .join(Product, Product.id == ProductVariant.product_id)
-                .where(
-                    ProductVariant.tenant_id == get_current_tenant_id(),
-                    ProductVariant.active.is_(True),
-                    Product.deleted_at.is_(None),
-                )
-            )
-            if variant_id is not None:
-                stmt = stmt.where(ProductVariant.id == variant_id)
-            elif sku:
-                stmt = stmt.where(ProductVariant.sku == sku)
-            else:
-                return {"error": "sku_o_variant_requeridos"}
-            row = (await session.execute(stmt.limit(1))).first()
-        if row is None:
-            return {"encontrado": False, "mensaje": "No encontré ese plan. Pasá el SKU o variant_id de consultar_inventario."}
-        variant, product = row[0], row[1]
-        plan = {
-            "encontrado": True,
-            "product_id": str(product.id),
-            "variant_id": str(variant.id),
-            "sku": variant.sku,
-            "name": product.name,
-            "price": _float(variant.price),
-            "price_label": _money(variant.price),
-            "billing_period": variant.billing_period,
-            "trial_days": variant.trial_days,
-            "entitlements": variant.entitlements or {},
-            "description": product.description or "",
-        }
-        if not variant.billing_period:
-            plan["aviso"] = "Este producto no tiene recurrencia configurada (one-shot)."
-        return plan
 
     # ------------------------------------------------------------ handlers
     async def consultar_inventario(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
@@ -1132,8 +842,8 @@ class CatalogSkill(BaseSkill):
         sku = str(arguments.get("sku", "")).strip()
 
         # Búsqueda por lenguaje natural: se tokeniza la frase y se matchea CUALQUIER
-        # token contra nombre, descripción o SKU. Así "plan basic" encuentra el
-        # producto "Basic" (antes `%plan basic%` no matcheaba nada).
+        # token contra nombre, descripción o SKU. Así "pizza grande" encuentra el
+        # producto "Grande" (antes `%pizza grande%` no matcheaba nada).
         tokens = [
             token
             for token in re.split(r"[\s,]+", query.lower())
@@ -1149,12 +859,9 @@ class CatalogSkill(BaseSkill):
                 "attributes": variant.attributes or {},
                 "price": _float(variant.price),
                 "price_label": _money(variant.price),
-                "disponible": _es_plan_variante(variant) or bool(inventory and inventory.stock_quantity > 0),
-                "stock": None if _es_plan_variante(variant) else (inventory.stock_quantity if inventory else 0),
+                "disponible": bool(inventory and inventory.stock_quantity > 0),
+                "stock": inventory.stock_quantity if inventory else 0,
                 "description": product.description or "",
-                "billing_period": variant.billing_period,  # recurrencia del plan (#153)
-                "trial_days": variant.trial_days,
-                "entitlements": variant.entitlements,
             }
             # `tiene_foto` solo cuando hay foto: sin ella, el resultado queda igual que antes de
             # HU-CRM-01 (las grabaciones de los journeys en replay lo comparan). Mismo criterio que
@@ -1219,7 +926,7 @@ class CatalogSkill(BaseSkill):
                     ProductVariant.active.is_(True),
                     ProductVariant.tenant_id == get_current_tenant_id(),
                     Product.deleted_at.is_(None),
-                    or_(Inventory.stock_quantity > 0, ProductVariant.billing_period.isnot(None)),
+                    Inventory.stock_quantity > 0,
                 )
                 .order_by(Product.name)
                 .limit(5)
@@ -1267,7 +974,7 @@ class CatalogSkill(BaseSkill):
                         Product.category_id.in_(complements),
                         Product.id != product.id,
                         ProductVariant.active.is_(True),
-                        or_(Inventory.stock_quantity > 0, ProductVariant.billing_period.isnot(None)),
+                        Inventory.stock_quantity > 0,
                         ProductVariant.tenant_id == get_current_tenant_id(),
                         Product.deleted_at.is_(None),
                     )
@@ -1335,28 +1042,6 @@ class OrderSkill(BaseSkill):
                 },
                 handler=self.generar_cotizacion,
             ),
-            # Solo la ofrece el motor de procedimientos, en la etapa `cotizar` de
-            # `pack_commerce.contratar_plan` (HU-AOS-07): ninguna sección de flow.json la nombra y
-            # su predicado la apaga sin `tenants.aos_procedures`.
-            MCPTool(
-                name="cotizar_plan",
-                description=(
-                    "Cotiza UN plan (una unidad) con el precio real del sistema y devuelve el "
-                    "quote_id, el total y los datos que el negocio pide para contratarlo. El "
-                    "variant_id es el del plan que eligió el cliente."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "variant_id": {"type": "string", "description": "variant_id del plan elegido"},
-                    },
-                    "required": ["variant_id"],
-                },
-                handler=self.cotizar_plan,
-                # Ni se ofrece ni se ejecuta sin el motor activo, aunque un flujo del negocio la
-                # nombre (`core/kernel/oferta.py`, HU-AOS-08).
-                connection_predicate=solo_con_motor_activo(),
-            ),
             MCPTool(
                 name="aplicar_promocion",
                 description=(
@@ -1412,18 +1097,14 @@ class OrderSkill(BaseSkill):
                         "delivery_method": {
                             "type": "string",
                             "enum": ["domicilio", "recoger_en_tienda"],
-                            "description": (
-                                "Cómo recibe el pedido. No aplica a planes o suscripciones (son un "
-                                "servicio): en ese caso omitilo y no se lo preguntes al cliente."
-                            ),
+                            "description": "Cómo recibe el pedido.",
                         },
                         "customer_data": {
                             "type": "object",
                             "description": (
                                 "Datos de quien recibe el pedido. Los campos obligatorios dependen "
                                 "del tipo de pedido (la tool responde faltan_datos_cliente con la "
-                                "lista exacta): domicilio pide dirección, retiro en tienda y planes "
-                                "no."
+                                "lista exacta): domicilio pide dirección, retiro en tienda no."
                             ),
                             "properties": {
                                 "full_name": {"type": "string"},
@@ -1433,17 +1114,6 @@ class OrderSkill(BaseSkill):
                                 "city": {"type": "string"},
                                 "phone": {"type": "string"},
                                 "email": {"type": "string"},
-                                # Solo los usan los planes (ADR-0121, ADR-0125, ADR-0129). La
-                                # tool los valida; sin enum para no cambiar con los presets.
-                                "business_name": {"type": "string", "description": "Nombre del negocio (planes)."},
-                                "vertical": {
-                                    "type": "string",
-                                    "description": "Tipo de negocio (planes): id de opciones_vertical.",
-                                },
-                                "acepta_terminos": {
-                                    "type": "string",
-                                    "description": "Token de terminos_pendientes, si el cliente aceptó.",
-                                },
                             },
                         },
                         "guardar_datos_cliente": {
@@ -1533,7 +1203,7 @@ class OrderSkill(BaseSkill):
                 handler=self.confirmar_pago_pedido,
             ),
             # Solo la ofrece el motor de procedimientos, en la etapa `esperar_pago` de
-            # `contratar_plan` y `tomar_pedido` (HU-AOS-07, cierre por pago): ninguna sección de
+            # `tomar_pedido` (HU-AOS-07, cierre por pago): ninguna sección de
             # flow.json la nombra y su predicado la apaga sin `tenants.aos_procedures`.
             MCPTool(
                 name="verificar_pago_pedido",
@@ -1576,7 +1246,7 @@ class OrderSkill(BaseSkill):
             data = await _get_variant_with_stock(variant_ref)
             if data is None or not data["variant"].active:
                 return {"error": "Uno de los productos solicitados no está disponible."}
-            if not data["sin_inventario"] and data["stock"] < quantity:
+            if data["stock"] < quantity:
                 return {
                     "error": f"No hay stock suficiente de {data['product'].name} "
                              f"(disponible: {data['stock']})."
@@ -1633,32 +1303,6 @@ class OrderSkill(BaseSkill):
             "total": round(subtotal, 2),
             "moneda": getattr(config, "currency_code", "COP") or "COP",
         }
-
-    async def cotizar_plan(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        """Cotización de un plan (HU-AOS-07): la misma de `generar_cotizacion` con una unidad, más
-        lo que el procedimiento `contratar_plan` necesita para pedir los datos ANTES de confirmar:
-        si hay que cobrar (`requiere_pago`) y qué campos pide el checkout del negocio para planes
-        (`pide_<campo>`, de `checkout_fields`)."""
-        variante = await _plan_por_referencia(str(arguments.get("variant_id", "")))
-        if variante is None:
-            return {"error": "No encontré ese plan. Usa el variant_id de un plan del catálogo."}
-        variant, product = variante
-        resultado = await self.generar_cotizacion(
-            {"items": [{"variant_id": str(variant.id), "quantity": 1}]}, context
-        )
-        if resultado.get("error"):
-            return resultado
-        campos = _campos_requeridos(await _plugin_config(), True, "")
-        resultado.update(
-            {
-                "variant_id": str(variant.id),
-                "plan": product.name,
-                "periodicidad": variant.billing_period,
-                "requiere_pago": _float(resultado.get("total")) > 0,
-                **{f"pide_{campo}": campo in campos for campo in CAMPOS_DE_CHECKOUT},
-            }
-        )
-        return resultado
 
     async def aplicar_promocion(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         quote_id = str(arguments.get("quote_id", ""))
@@ -1815,9 +1459,6 @@ class OrderSkill(BaseSkill):
             total = _float(quote.total)
 
         resultado: dict[str, Any] = {"quote_id": quote_id, "status": "aceptada", "total": round(total, 2)}
-        token = await _token_de_terminos_aceptados(context)
-        if token is not None:
-            resultado["acepta_terminos"] = token
         return resultado
 
     @staticmethod
@@ -1931,30 +1572,17 @@ class OrderSkill(BaseSkill):
             if not items:
                 return {"error": "La cotización no tiene productos."}
 
-            es_plan = await _es_pedido_de_plan(session, [i.variant_id for i in items])
             if not delivery_method:
-                if not es_plan:
-                    return {"error": "Falta el método de entrega: 'domicilio' o 'recoger_en_tienda'."}
-                # Un plan es un servicio: no se pregunta cómo se entrega (journeys HU-SUB-12).
-                delivery_method = "recoger_en_tienda"
-            if es_plan and _float(quote.total) > 0:
-                bloqueo = await segundo_plan_bloqueado(context.customer_id, [i.variant_id for i in items])
-                if bloqueo:
-                    return bloqueo
-            threshold = _monto_alto_threshold(config, es_plan)
-            if threshold is not None and _float(quote.total) > threshold:
+                return {"error": "Falta el método de entrega: 'domicilio' o 'recoger_en_tienda'."}
+            threshold = _monto_alto_threshold(config)
+            if _float(quote.total) > threshold:
                 return {
                     "error": "El total supera el monto máximo permitido y requiere aprobación humana.",
                     "escalate": True,
                 }
 
-            # Free (D-16, HU-SUB-06): un pedido de planes en $0 no se cobra, así que
-            # el mínimo del pago en línea no aplica.
-            es_gratis = es_plan and _float(quote.total) == 0
-            # Para el antiabuso, Free es el plan, no el total (ADR-0125).
-            incluye_free = es_plan and await _incluye_un_free(session, [i.variant_id for i in items])
             min_online = await self._minimo_pago_en_linea(config)
-            if not es_gratis and payment_method == "pago_en_linea" and _float(quote.total) < min_online:
+            if payment_method == "pago_en_linea" and _float(quote.total) < min_online:
                 # Incidente real (tenant yopoldo, 2026-09-12): un pedido de
                 # $54.000 con pago_en_linea nunca iba a poder completarse (el
                 # mínimo de la pasarela era $150.000, el del sandbox; hoy se
@@ -1978,10 +1606,10 @@ class OrderSkill(BaseSkill):
                     "hint": "Ofrecele transferencia o contraentrega en su lugar.",
                 }
 
-        requeridos = _campos_requeridos(config, es_plan, delivery_method)
+        requeridos = _campos_requeridos(config, delivery_method)
         # Política de datos del cliente (HU-CRM-13): el ajuste del dueño sube o baja campos de la
         # lista de fábrica; sin ajustes la lista sale igual que entró.
-        accion_datos = _accion_de_datos(es_plan, delivery_method)
+        accion_datos = _accion_de_datos(delivery_method)
         requeridos_del_modulo = list(requeridos)
         try:
             requeridos = await requeridos_efectivos(accion_datos, requeridos, A_LEGADO)
@@ -1999,51 +1627,7 @@ class OrderSkill(BaseSkill):
             sobre = await _sobre_faltan_datos(accion_datos, customer_data, requeridos_del_modulo)
             if sobre is not None:
                 faltan["faltan_datos"] = sobre
-            if "vertical" in missing:
-                # El tipo de negocio va en customer_data.vertical como el id de una opción
-                # (ADR-0121): las opciones van en la respuesta, no en el schema de la tool.
-                faltan["opciones_vertical"] = _verticales()
             return faltan
-        if es_plan and customer_data.get("business_name"):
-            # El nombre del negocio va en correos y avisos: un enlace ahí sirve para phishing.
-            if contiene_url(customer_data.get("business_name")):
-                if "business_name" in requeridos:
-                    return {
-                        "status": "dato_invalido",
-                        "error": "El nombre del negocio no puede llevar enlaces ni dominios.",
-                        "field": "business_name",
-                        "hint": "Pídele al cliente el nombre de su negocio, sin enlaces.",
-                    }
-                customer_data = {k: v for k, v in customer_data.items() if k != "business_name"}
-        if es_plan and customer_data.get("vertical"):
-            # El tipo de negocio es un id de preset (ADR-0121). Si el negocio lo pide y no es
-            # de la lista, se rechaza con las opciones; si no lo pide, un valor que no sirve
-            # se descarta y el pedido sigue (la tool es la misma para todos los negocios).
-            rechazo_vertical = _vertical_invalido(customer_data.get("vertical"))
-            if rechazo_vertical is not None:
-                if "vertical" in requeridos:
-                    return rechazo_vertical
-                customer_data = {k: v for k, v in customer_data.items() if k != "vertical"}
-
-        # HU-SH-07 (ADR-0125): en un negocio que vende planes de la plataforma, el pedido de
-        # un plan pasa por los controles del alta: términos aceptados en su versión vigente,
-        # cupo por hora desde el mismo origen y un Free por persona. El core decide; si no es
-        # un vendedor, no hace nada.
-        pedido_de_alta = None
-        if es_plan:
-            preparado = await preparar_pedido_de_alta(
-                customer_id=context.customer_id,
-                conversation_id=context.conversation_id,
-                canal=context.channel,
-                telefono=customer_data.get("phone"),
-                documento=customer_data.get("id_document"),
-                gratis=incluye_free,
-                acepta_terminos=customer_data.get("acepta_terminos"),
-            )
-            if preparado is not None and not isinstance(preparado, PedidoPreparado):
-                return _respuesta_del_alta_frenada(preparado)
-            pedido_de_alta = preparado
-
         # Guardar datos de entrega en la memoria de entidad del core (Capa 2)
         # SOLO con consentimiento (Ley 1581, D17): sin él, el pedido se crea
         # igual pero nada queda en el perfil para la próxima compra.
@@ -2083,20 +1667,14 @@ class OrderSkill(BaseSkill):
                 delivery_address=customer_data.get("address"),
                 delivery_municipality=customer_data.get("municipality"),
                 delivery_city=customer_data.get("city"),
-                # HU-SH-03: datos del alta del servicio que vende el plan (ADR-0121).
-                datos_alta=_datos_alta(customer_data) if es_plan else None,
                 status="abierto",
                 # transferencia/pago_en_linea se confirman después (comprobante manual o
-                # webhook de pack-payments); contraentrega de un producto se da por pagado
-                # al entregar, la de un plan espera el pago real; Free no se cobra (D-16).
-                payment_status=estado_pago_inicial(payment_method, es_plan, quote.total),
+                # webhook de pack-payments); contraentrega se da por pagado al entregar.
+                payment_status=_estado_pago_inicial(payment_method),
             )
             session.add(order)
             await session.flush()
             await _avisar_pedido_nuevo(session, order)
-            if pedido_de_alta is not None:
-                # Misma transacción que el pedido: sin pedido no queda la aceptación.
-                registrar_pedido_de_alta(session, pedido_de_alta, referencia=order.public_order_number)
             for item in items:
                 session.add(
                     OrderItem(
@@ -2118,11 +1696,6 @@ class OrderSkill(BaseSkill):
             )
             order_id = str(order.id)
             public_order_number = order.public_order_number
-            if es_plan and order.payment_status == "pagado":
-                # Free: no hay pago que espere `payment.confirmed`; la suscripción se
-                # activa ya, en `trialing` (HU-SUB-06).
-                await session.flush()
-                await activar_planes_del_pedido(session, order)
 
             if quote.applied_promotion_id is not None:
                 promo = await get_owned(
@@ -2137,11 +1710,6 @@ class OrderSkill(BaseSkill):
                         )
                     )
 
-        if pedido_de_alta is not None:
-            # El pedido ya se guardó con su aceptación: es por pedido (ADR-0125), otro pedido
-            # en esta conversación vuelve a pedirla.
-            await cerrar_aceptacion(pedido_de_alta)
-
         result: dict[str, Any] = {
             "order_id": order_id,
             "status": "confirmed",
@@ -2151,10 +1719,6 @@ class OrderSkill(BaseSkill):
             "delivery_method": delivery_method,
             "entregado_en": f"{customer_data.get('address')}, {customer_data.get('municipality')}, {customer_data.get('city')}",
         }
-        if es_plan:
-            # Un plan no se entrega: sin "None, None, None" ni método de entrega en la respuesta.
-            result.pop("entregado_en")
-            result.pop("delivery_method")
         if payment_method == "transferencia":
             transfer_block = await _transfer_safe_append()
             template = getattr(config, "order_confirmed_transfer_message", "") or ""
@@ -2233,35 +1797,15 @@ class OrderSkill(BaseSkill):
                 data = await _get_variant_with_stock(variant_ref)
                 if data is None or not data["variant"].active:
                     return {"error": "Uno de los productos no está disponible."}
-                if not data["sin_inventario"] and data["stock"] < quantity:
+                if data["stock"] < quantity:
                     return {"error": f"No hay stock suficiente de {data['product'].name}."}
                 additions.append((data["variant"], quantity, data["price"]))
                 add_total += data["price"] * quantity
 
-            # Un plan va en su propio pedido: sumarle líneas a un Free (que nace pagado) dejaría
-            # cosas sin cobrar en un pedido "pagado", y el alta automática confía en ese
-            # estado (HU-SH-03, revisión del PR #345).
-            lineas = (
-                await session.execute(
-                    select(OrderItem.variant_id).where(
-                        OrderItem.tenant_id == get_current_tenant_id(),
-                        OrderItem.order_id == order.id,
-                    )
-                )
-            ).scalars().all()
-            if await _es_pedido_de_plan(session, list(lineas)) or await _es_pedido_de_plan(
-                session, [v.id for v, _q, _p in additions]
-            ):
-                return {
-                    "error": "Un plan va en su propio pedido: no se le agregan productos ni se agrega a otro pedido.",
-                    "hint": "Crea una cotización nueva con lo que el cliente quiere sumar.",
-                }
-
             new_total = _float(order.total) + add_total
             config = await _plugin_config()
-            es_plan = await _es_pedido_de_plan(session, [v.id for v, _q, _p in additions])
-            threshold = _monto_alto_threshold(config, es_plan)
-            if threshold is not None and new_total > threshold:
+            threshold = _monto_alto_threshold(config)
+            if new_total > threshold:
                 return {
                     "error": "El total supera el monto máximo permitido y requiere aprobación humana.",
                     "escalate": True,
@@ -2379,10 +1923,9 @@ class OrderSkill(BaseSkill):
             if order is None:
                 return {"error": "Pedido no encontrado."}
             estado, numero = order.payment_status, order.public_order_number
-            del_plan = _estado_del_plan(order)
         if estado == "pagado":
             # Un valor fijo del enum del dato: nunca un booleano que un `false` pudiera "llenar".
-            return {"order_id": order_id, "public_order_number": numero, "pago_confirmado": "confirmado", **del_plan}
+            return {"order_id": order_id, "public_order_number": numero, "pago_confirmado": "confirmado"}
         if estado == "rechazado":
             return {
                 "error": "pago_rechazado",
@@ -2462,20 +2005,11 @@ class OrderSkill(BaseSkill):
             by_id = {v.id: p for v, p in item_details}
 
         status_labels = getattr(config, "order_status_visible", {}) or {}
-        del_plan = _estado_del_plan(order)
-        # Un pedido de plan no se prepara ni se entrega (smoke de test 2026-10-20: «tu pedido
-        # está en preparación» sobre un plan ya activo): va el estado del plan, sin entrega.
-        envio: dict[str, Any] = (
-            {} if del_plan else {
-                "status": status_labels.get(order.status, order.status),
-                "delivery_method": "domicilio" if order.delivery_method == "domicilio" else "recoger en tienda",
-            }
-        )
         return {
             "found": True,
             "public_order_number": order.public_order_number,
-            **envio,
-            **del_plan,
+            "status": status_labels.get(order.status, order.status),
+            "delivery_method": "domicilio" if order.delivery_method == "domicilio" else "recoger en tienda",
             "payment_status": "pagado" if order.payment_status == "pagado" else "pendiente de pago",
             "items": [
                 {
@@ -2499,8 +2033,8 @@ class OrderSkill(BaseSkill):
                 )
             )
         ).scalar_one_or_none()
-        if variant is None or _es_plan_variante(variant):
-            return  # variante ajena al negocio, o un plan: no se toca inventario
+        if variant is None:
+            return  # variante ajena al negocio: no se toca inventario
         inventory = (
             await session.execute(
                 select(Inventory).where(
