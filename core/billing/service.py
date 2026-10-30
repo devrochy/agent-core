@@ -338,6 +338,7 @@ async def registrar_periodo_pagado(
     periodo: Periodo,
     dia_ancla: int | None = None,
     provider: str = "asistente",
+    monto: Decimal | float | int | str | None = None,
 ) -> PagoDePeriodo:
     """Período pagado por el ASISTENTE de un negocio vendedor: el primero del alta automática
     (ADR-0121) o el de un cambio de Free a un plan pago (ADR-0123). La referencia del período
@@ -353,4 +354,5 @@ async def registrar_periodo_pagado(
         provider_reference=periodo.referencia,
         plan_en_el_acto=True,
         dia_ancla=dia_ancla,
+        monto=monto,
     )

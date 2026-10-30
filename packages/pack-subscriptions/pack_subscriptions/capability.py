@@ -82,7 +82,12 @@ def _view(
         "proximo_cargo": sub.proximo_cargo.isoformat() if sub.proximo_cargo else None,
         "trial_termina": sub.trial_termina.isoformat() if sub.trial_termina else None,
         "cargos": [
-            {"periodo": c.periodo, "monto": float(c.monto or 0), "estado": c.estado}
+            {
+                "periodo": c.periodo,
+                "monto": float(c.monto or 0),
+                "monto_bruto": float(c.monto_bruto) if c.monto_bruto is not None else None,
+                "estado": c.estado,
+            }
             for c in (cargos or [])
         ],
         "referencia": sub.numero_publico or sub.referencia_origen,

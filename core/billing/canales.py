@@ -201,6 +201,17 @@ def por_debajo_del_precio(plan_id: str, monto: Any) -> bool:
     return not pagado.is_finite() or pagado < Decimal(plan.price_cop)
 
 
+def _detalle_de_descuento(payload: dict[str, Any], *, del_vendedor: bool = False) -> dict[str, Any]:
+    """Precio de lista y neto cobrado de un período pagado con descuento, para la auditoría. La foto de la
+    promoción (etiqueta, tipo, valor, id) es del vendedor: solo va a SU auditoría, no a la del negocio comprador."""
+    if payload.get("monto_bruto") is None:
+        return {}
+    detalle = {"monto_bruto": payload.get("monto_bruto"), "monto_cobrado": payload.get("monto")}
+    if del_vendedor:
+        detalle["descuento"] = payload.get("descuento")
+    return detalle
+
+
 async def registrar_monto_distinto(
     negocio: uuid.UUID,
     periodo: Periodo,
@@ -356,9 +367,11 @@ async def on_subscription_charge_paid(**payload: Any) -> None:
     if plan_id is None:
         log.error("cobro_plataforma_sin_plan", tenant_id=str(vendedor), referencia=periodo.referencia)
         return
-    if por_debajo_del_precio(plan_id, payload.get("monto")):
+    bruto = payload.get("monto_bruto")
+    if por_debajo_del_precio(plan_id, payload.get("monto") if bruto is None else bruto):
         # Un cargo por menos que el plan (p. ej. una suscripción creada a mano con otro precio)
-        # no paga ese plan: no se aplica y se alerta.
+        # no paga ese plan: no se aplica y se alerta. Con descuento se compara el precio de lista
+        # (`monto_bruto`); `monto` es el neto y es lo que se registra como cobrado (SPEC-43, HU-SUB-36).
         await registrar_monto_distinto(
             negocio,
             periodo,
@@ -386,7 +399,11 @@ async def on_subscription_charge_paid(**payload: Any) -> None:
             actor=ACTOR,
             action="cobro_plataforma_aplicado",
             input_data={"referencia": periodo.referencia, "canal": CANAL_ASISTENTE},
-            output_data={"resultado": resultado.resultado, "plan": plan_id},
+            output_data={
+                "resultado": resultado.resultado,
+                "plan": plan_id,
+                **_detalle_de_descuento(payload),
+            },
         )
     await record_audit(
         actor=ACTOR,
@@ -397,7 +414,12 @@ async def on_subscription_charge_paid(**payload: Any) -> None:
             "charge_id": payload.get("charge_id"),
             "subscription_id": str(subscription_id),
         },
-        output_data={"resultado": resultado.resultado, "negocio": slug, "plan": plan_id},
+        output_data={
+            "resultado": resultado.resultado,
+            "negocio": slug,
+            "plan": plan_id,
+            **_detalle_de_descuento(payload, del_vendedor=True),
+        },
     )
     log.info(
         "cobro_plataforma_asistente",
