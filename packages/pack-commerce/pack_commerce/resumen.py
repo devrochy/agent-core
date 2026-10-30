@@ -86,7 +86,7 @@ async def kpis(tenant_id: uuid.UUID, p: PeriodoResumen) -> list[Kpi]:
                 "Pedidos",
                 await pedidos(p.desde, p.hasta),
                 previo=await pedidos(p.previo_desde, p.previo_hasta),
-                hint="Últimos 7 días",
+                hint=f"Últimos {p.dias} días",
                 destino=Destino("comercio.pedidos"),
             ),
             Kpi(

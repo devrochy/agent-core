@@ -75,7 +75,7 @@ async def kpis(tenant_id: uuid.UUID, p: PeriodoResumen) -> list[Kpi]:
                 "Citas agendadas",
                 await contar(a.created_at >= p.desde, a.created_at < p.hasta),
                 previo=await contar(a.created_at >= p.previo_desde, a.created_at < p.previo_hasta),
-                hint="Creadas en los últimos 7 días",
+                hint=f"Creadas en los últimos {p.dias} días",
                 destino=Destino("calendario.citas"),
             ),
             Kpi(
