@@ -9,12 +9,14 @@ y `turn_outcomes`, está en `tests/integration/test_kernel_ingress.py`.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from core.kernel import ingress
+from core.orchestrator.escalation import within_business_hours
 
 CERRADO = {"tz": "UTC", "ranges": [{"day": d, "from": "00:00", "to": "00:00"} for d in range(7)]}
 
@@ -194,7 +196,13 @@ async def test_fuera_de_horario_con_mensaje_responde_siempre_sin_antirrebote(
     assert avisos_tomados == [], "el camino configurado no toca la llave"
 
 
-async def test_dentro_de_horario_no_avisa(efectos, avisos_tomados) -> None:
+async def test_dentro_de_horario_no_avisa(monkeypatch, efectos, avisos_tomados) -> None:
+    # Reloj fijo a mediodía: la franja "00:00"-"23:59" deja afuera el último minuto del día (el fin
+    # es exclusivo), así que con la hora real el test fallaba cada día a las 23:59 UTC.
+    mediodia = datetime(2026, 1, 5, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(
+        ingress, "within_business_hours", lambda horario: within_business_hours(horario, now=mediodia)
+    )
     abierto = {"tz": "UTC", "ranges": [{"day": d, "from": "00:00", "to": "23:59"} for d in range(7)]}
     ajustes = _ajustes(escalation_config={"business_hours": abierto})
     assert await ingress.politicas_de_entrada(_conv(), _cliente(), ajustes, "hola") is False
