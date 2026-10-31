@@ -29,6 +29,7 @@
   "pack_subscriptions": {
     "0.1.0": "87aa22f9adc1769c2cfaab4ed71cbbd3ce1b5f4e9aba52db445ed2d0679baf4f",
     "0.2.0": "096a46978c8de730e0412c9fd3da757dd55ed1a9def154ff3cce56d05e4b5a0e",
-    "0.3.0": "e7e05b4c62e953185349cb7e74c3bfb326588ed6ab0feef68f1ff3fd7891e580"
+    "0.3.0": "e7e05b4c62e953185349cb7e74c3bfb326588ed6ab0feef68f1ff3fd7891e580",
+    "0.4.0": "e97628e92c18abdb16d3429e2e578bb171aaf96161c862cb1a2a288f30b50101"
   }
 }

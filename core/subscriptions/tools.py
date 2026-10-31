@@ -22,6 +22,7 @@ from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.subscriptions import (
+    InscripcionCapability,
     PlanSnapshot,
     SubscriptionCapability,
     SubscriptionError,
@@ -194,6 +195,10 @@ class SubscriptionSkill(BaseSkill):
                     "type": "object",
                     "properties": {
                         "plan_code": {"type": "string", "description": "SKU del plan nuevo (p. ej. PLAN-PREMIUM)."},
+                        "codigo_promocion": {
+                            "type": "string",
+                            "description": "Código de promoción que dio el cliente (solo si lo dio).",
+                        },
                     },
                     "required": ["plan_code"],
                 },
@@ -215,11 +220,113 @@ class SubscriptionSkill(BaseSkill):
                             "type": "number",
                             "description": "monto_a_pagar de la cotización (0 si el cambio no cobra hoy).",
                         },
+                        "codigo_promocion": {
+                            "type": "string",
+                            "description": "El mismo código que se usó al cotizar (si hubo).",
+                        },
                     },
                     "required": ["plan_code", "monto_a_pagar"],
                 },
                 handler=self.aplicar_cambio_plan,
                 connection_predicate=solo_con_motor_activo(predicate),
+            ),
+            *self._tools_de_inscripcion(solo_con_motor_activo(predicate)),
+        ]
+
+    def _tools_de_inscripcion(self, predicate: Callable[[set[str]], Awaitable[bool]]) -> list[MCPTool]:
+        """Inscribir a un cliente en un plan (SPEC-43, HU-SUB-29/34). Solo las ofrece el motor de procedimientos
+        (`contratar_plan`): el precio, el cliente y la periodicidad los pone el servidor, nunca el modelo."""
+        codigo = {"type": "string", "description": "SKU del plan, tal cual lo devolvió sub_listar_planes."}
+        promo = {"type": "string", "description": "Código de promoción que dijo el cliente (opcional)."}
+        return [
+            MCPTool(
+                name="sub_listar_planes",
+                description=(
+                    "Lista los planes activos del negocio con su precio y periodicidad, o el detalle de uno "
+                    "si pasás plan_code. No crea nada."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {"plan_code": {"type": "string", "description": "SKU de un plan (opcional)."}},
+                    "required": [],
+                },
+                handler=self.listar_planes,
+                connection_predicate=predicate,
+                solo_lectura=True,
+            ),
+            MCPTool(
+                name="sub_cotizar_inscripcion",
+                description=(
+                    "Cotiza inscribir al cliente en un plan, sin crear nada: precio de lista, descuento de la "
+                    "promoción si dio un código, total del primer cargo, precio del período siguiente, prueba, "
+                    "si requiere pago y qué datos faltan pedirle."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {"plan_code": codigo, "codigo_promocion": promo},
+                    "required": ["plan_code"],
+                },
+                handler=self.cotizar_inscripcion,
+                connection_predicate=predicate,
+            ),
+            MCPTool(
+                name="sub_confirmar_inscripcion",
+                description=(
+                    "Registra que el cliente confirmó el resumen de la inscripción (plan, descuento y total). "
+                    "Úsala SOLO cuando dijo que sí al total final. Pasá el monto_a_pagar EXACTO de "
+                    "sub_cotizar_inscripcion: el servidor lo recalcula y, si no coincide, no confirma."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "plan_code": codigo,
+                        "codigo_promocion": promo,
+                        "monto_a_pagar": {"type": "number", "description": "Total del primer cargo de la cotización."},
+                    },
+                    "required": ["plan_code", "monto_a_pagar"],
+                },
+                handler=self.confirmar_inscripcion,
+                connection_predicate=predicate,
+            ),
+            MCPTool(
+                name="sub_inscribir",
+                description=(
+                    "Inscribe al cliente de la conversación en el plan, ya confirmado. El cliente, el precio y la "
+                    "periodicidad los pone el sistema: pasá solo el SKU, los datos que dio y el monto_a_pagar "
+                    "de la cotización. Con pago en línea devuelve el link de pago."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "plan_code": codigo,
+                        "codigo_promocion": promo,
+                        "monto_a_pagar": {"type": "number", "description": "Total del primer cargo de la cotización."},
+                        "payment_method": {
+                            "type": "string",
+                            "enum": ["pago_en_linea", "transferencia"],
+                            "description": "Cómo paga el cliente. Con un plan gratis no aplica.",
+                        },
+                        "customer_data": {
+                            "type": "object",
+                            "description": "Datos que dio el cliente (los que pidió sub_cotizar_inscripcion).",
+                            "properties": {
+                                "nombre": {"type": "string"},
+                                "email": {"type": "string"},
+                                "telefono": {"type": "string"},
+                                "documento": {"type": "string"},
+                                "negocio": {"type": "string", "description": "Nombre del negocio."},
+                                "vertical": {"type": "string", "description": "Tipo de negocio."},
+                                "acepta_terminos": {
+                                    "type": "string",
+                                    "description": "Token de terminos_pendientes, si el cliente aceptó.",
+                                },
+                            },
+                        },
+                    },
+                    "required": ["plan_code", "monto_a_pagar", "customer_data"],
+                },
+                handler=self.inscribir,
+                connection_predicate=predicate,
             ),
         ]
 
@@ -306,9 +413,87 @@ class SubscriptionSkill(BaseSkill):
             )
         return resultado
 
+    # ------------------------------------------------- inscripción (SPEC-43, HU-SUB-29/34)
+    async def listar_planes(self, arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+        cap = await _inscripcion(ctx)
+        codigo = str(arguments.get("plan_code") or "").strip()
+        if codigo:
+            plan = await cap.plan_por_codigo(codigo)
+            if plan is None:
+                raise SubscriptionError("Ese plan no existe o no está disponible.", code="plan_no_encontrado")
+            return {"encontrado": True, "plan": _plan_para_el_modelo(plan)}
+        planes = await cap.listar_planes(solo_activos=True)
+        return {"encontrado": bool(planes), "planes": [_plan_para_el_modelo(p) for p in planes]}
+
+    async def cotizar_inscripcion(self, arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+        return await cotizacion_de_inscripcion(ctx, str(arguments.get("plan_code") or ""), arguments.get("codigo_promocion"))
+
+    async def confirmar_inscripcion(self, arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+        """Gate determinístico antes de inscribir: recalcula la cotización en el servidor y compara el monto
+        que el cliente confirmó. Devuelve el token de aceptación de términos del resumen (si lo hubo)."""
+        cotizacion = await cotizacion_de_inscripcion(
+            ctx, str(arguments.get("plan_code") or ""), arguments.get("codigo_promocion")
+        )
+        if not _mismo_monto(arguments.get("monto_a_pagar"), cotizacion["total_primer_cargo"]):
+            raise SubscriptionError("El monto confirmado no coincide con el del sistema.", code="monto_distinto")
+        resultado: dict[str, Any] = {
+            "plan_code": cotizacion["plan_code"],
+            "confirmada": True,
+            "total_primer_cargo": cotizacion["total_primer_cargo"],
+            "monto_a_pagar": cotizacion["total_primer_cargo"],
+        }
+        token = await _token_de_terminos_aceptados(ctx)
+        if token is not None:
+            resultado["acepta_terminos"] = token
+        return resultado
+
+    async def inscribir(self, arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+        """El cliente sale de `ToolContext`, el monto de la cotización del servidor y la periodicidad del plan:
+        el modelo solo manda el SKU, los datos y el monto que el cliente confirmó (se compara, no se usa)."""
+        cap = await _inscripcion(ctx)
+        monto = arguments.get("monto_a_pagar")
+        if isinstance(monto, bool) or not isinstance(monto, int | float | str):
+            raise SubscriptionError("Falta el monto_a_pagar de la cotización.", code="monto_distinto")
+        datos = arguments.get("customer_data")
+        datos = dict(datos) if isinstance(datos, dict) else {}
+        acepta = datos.pop("acepta_terminos", None)
+        terminos = {"acepta_terminos": acepta, "conversation_id": str(ctx.conversation_id), "canal": ctx.channel}
+        vista = await cap.inscribir(
+            customer_id=ctx.customer_id,
+            plan_code=str(arguments.get("plan_code") or ""),
+            datos_alta={k: v for k, v in datos.items() if v not in (None, "")},
+            origen="agente",
+            metodo_pago=str(arguments.get("payment_method") or "pago_en_linea"),
+            terminos=terminos,
+            codigo_promocion=arguments.get("codigo_promocion"),
+            monto_esperado=monto,
+        )
+        cargo = vista.get("cargo_inscripcion") or {}
+        resultado: dict[str, Any] = {
+            "subscription_id": vista.get("subscription_id"),
+            "numero_publico": vista.get("numero_publico"),
+            "plan": vista.get("plan"),
+            "estado": vista.get("estado"),
+            "inscripcion": vista.get("inscripcion"),
+            "monto_a_pagar": float(cargo.get("monto") or 0),
+            "link": cargo.get("link") or None,
+        }
+        if cargo.get("instrucciones_transferencia"):
+            resultado["instrucciones_transferencia"] = cargo["instrucciones_transferencia"]
+        if cargo.get("link"):
+            from core.events.core_handlers import format_amount
+
+            resultado["_safe_append"] = (
+                f"💳 Para activar {vista.get('plan') or 'tu plan'} pagás "
+                f"{format_amount(cargo.get('monto'), vista.get('moneda'))} aquí: {cargo['link']}"
+            )
+        return resultado
+
     # ------------------------------------------------- procedimiento `cambiar_plan` (HU-AOS-08)
     async def cotizar_cambio_plan(self, arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-        return await cotizacion_del_cliente(ctx, str(arguments.get("plan_code") or ""))
+        return await cotizacion_del_cliente(
+            ctx, str(arguments.get("plan_code") or ""), arguments.get("codigo_promocion")
+        )
 
     async def aplicar_cambio_plan(self, arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         """El monto confirmado se compara con el del servidor dentro de `change_plan` (misma
@@ -317,8 +502,10 @@ class SubscriptionSkill(BaseSkill):
         if isinstance(monto, bool) or not isinstance(monto, int | float | str):
             raise SubscriptionError("Falta el monto_a_pagar de la cotización.", code="monto_distinto")
         cap, sub, variant_id, plan = await _cambio_cotizable(ctx, str(arguments.get("plan_code") or ""))
+        codigo = _codigo_de_promocion(arguments.get("codigo_promocion"))
+        extra = {"codigo_promocion": codigo} if codigo else {}
         vista = await cap.change_plan(  # type: ignore[call-arg]
-            uuid.UUID(sub["subscription_id"]), variant_id=variant_id, plan=plan, monto_esperado=monto
+            uuid.UUID(sub["subscription_id"]), variant_id=variant_id, plan=plan, monto_esperado=monto, **extra
         )
         cargo = vista.get("cargo_cambio") or {}
         resultado: dict[str, Any] = {
@@ -356,17 +543,101 @@ async def _cambio_cotizable(ctx: ToolContext, plan_code: str) -> tuple[Any, Subs
     return cap, sub, variant_id, plan
 
 
-async def cotizacion_del_cliente(ctx: ToolContext, plan_code: str) -> dict[str, Any]:
+def _codigo_de_promocion(valor: Any) -> str | None:
+    """El código que dijo el cliente, recortado; vacío es «no trajo código»."""
+    return valor.strip()[:100] if isinstance(valor, str) and valor.strip() else None
+
+
+async def cotizacion_del_cliente(ctx: ToolContext, plan_code: str, codigo_promocion: Any = None) -> dict[str, Any]:
     """Cotización del cambio de la suscripción del cliente de la conversación al plan `plan_code`
     (sin efectos). La usan `sub_cotizar_cambio_plan` y el resolver `plan_destino` del
     procedimiento, así los dos dicen lo mismo. Lanza `SubscriptionError`."""
     cap, sub, variant_id, plan = await _cambio_cotizable(ctx, plan_code)
-    cotizacion = await cotizar_cambio(cap, uuid.UUID(sub["subscription_id"]), variant_id=variant_id, plan=plan)
+    cotizacion = await cotizar_cambio(
+        cap,
+        uuid.UUID(sub["subscription_id"]),
+        variant_id=variant_id,
+        plan=plan,
+        codigo_promocion=_codigo_de_promocion(codigo_promocion),
+    )
     return {"plan_code": str(plan.get("plan_code") or plan_code.strip()), **cotizacion}
 
 
 # Tools que solo ofrece el motor de procedimientos (no son `always_available`).
-SOLO_PROCEDIMIENTO = frozenset({"sub_cotizar_cambio_plan", "sub_aplicar_cambio_plan"})
+SOLO_PROCEDIMIENTO = frozenset(
+    {
+        "sub_cotizar_cambio_plan",
+        "sub_aplicar_cambio_plan",
+        "sub_listar_planes",
+        "sub_cotizar_inscripcion",
+        "sub_confirmar_inscripcion",
+        "sub_inscribir",
+    }
+)
+
+CAMPOS_DEL_CLIENTE = ("nombre", "email", "telefono", "documento", "negocio", "vertical")
+
+
+async def _inscripcion(ctx: ToolContext) -> InscripcionCapability:
+    cap = await _capability(ctx)
+    if not isinstance(cap, InscripcionCapability):
+        raise SubscriptionError("Este proveedor de suscripciones no inscribe en planes.", code="sin_inscripcion")
+    return cap
+
+
+def _plan_para_el_modelo(plan: PlanSnapshot) -> dict[str, Any]:
+    """Lo que el modelo puede citar de un plan: sin ids internos."""
+    return {
+        "plan_code": plan.get("plan_code"),
+        "nombre": plan.get("nombre"),
+        "descripcion": plan.get("descripcion") or "",
+        "precio": plan.get("precio"),
+        "moneda": plan.get("moneda"),
+        "periodicidad": plan.get("periodicidad"),
+        "trial_dias": plan.get("trial_dias"),
+        "entitlements": plan.get("entitlements") or {},
+    }
+
+
+def _mismo_monto(confirmado: Any, del_servidor: Any) -> bool:
+    from decimal import Decimal, InvalidOperation
+
+    if isinstance(confirmado, bool) or confirmado is None:
+        return False
+    try:
+        return Decimal(str(confirmado)).quantize(Decimal("0.01")) == Decimal(str(del_servidor)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        return False
+
+
+async def cotizacion_de_inscripcion(ctx: ToolContext, plan_code: str, codigo_promocion: Any = None) -> dict[str, Any]:
+    """Cotización de inscribir al cliente de la conversación (sin efectos). La usan `sub_cotizar_inscripcion`,
+    `sub_confirmar_inscripcion` y los resolvers del procedimiento: todos dicen lo mismo. Agrega `monto_a_pagar`
+    (el dato que el cliente confirma) y un `pide_<campo>` por cada dato que el negocio exige."""
+    cap = await _inscripcion(ctx)
+    codigo = str(plan_code or "").strip()[:100]
+    if not codigo:
+        raise SubscriptionError("Falta el código del plan.", code="plan_invalido")
+    texto = str(codigo_promocion).strip() if isinstance(codigo_promocion, str) and codigo_promocion.strip() else None
+    cotizacion = dict(await cap.cotizar_inscripcion(codigo, texto, customer_id=ctx.customer_id))
+    pedidos = set(cotizacion.get("datos_requeridos") or [])
+    cotizacion["monto_a_pagar"] = cotizacion.get("total_primer_cargo")
+    for campo in CAMPOS_DEL_CLIENTE:
+        cotizacion[f"pide_{campo}"] = campo in pedidos
+    return cotizacion
+
+
+async def _token_de_terminos_aceptados(ctx: ToolContext) -> str | None:
+    """Con el motor de procedimientos: el cliente aceptó los términos con el «Sí, confirmo» del resumen que los
+    traía, así que `sub_confirmar_inscripcion` devuelve el token de esa aceptación (ADR-0125). Sin la bandera, sin
+    vendedor o sin los tres documentos, None: nada cambia."""
+    from core.kernel.oferta import motor_activo
+    from core.provisioning.antiabuso import terminos_del_resumen
+
+    if await motor_activo() is not True:
+        return None
+    terminos = await terminos_del_resumen(ctx.conversation_id, anotar=False)
+    return terminos.token if terminos is not None else None
 
 
 async def plan_del_catalogo(codigo: str) -> tuple[str, PlanSnapshot]:

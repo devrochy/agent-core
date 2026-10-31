@@ -1,0 +1,14 @@
+{
+  "plan_code": "Plan",
+  "codigo_promocion": "Código de promoción",
+  "monto_a_pagar": "Total del primer cargo",
+  "negocio": "Nombre del negocio",
+  "vertical": "Tipo de negocio",
+  "nombre": "Nombre completo",
+  "documento": "Documento",
+  "email": "Correo",
+  "telefono": "Teléfono",
+  "payment_method": "Forma de pago",
+  "payment_method.pago_en_linea": "Pago en línea",
+  "payment_method.transferencia": "Transferencia"
+}

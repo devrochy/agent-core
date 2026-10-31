@@ -155,7 +155,7 @@ class InscripcionCapability(Protocol):
     async def plan_por_codigo(self, codigo: str) -> PlanSnapshot | None: ...
 
     async def cotizar_inscripcion(
-        self, plan_code: str, codigo_promocion: str | None = None
+        self, plan_code: str, codigo_promocion: str | None = None, *, customer_id: uuid.UUID | None = None
     ) -> dict[str, Any]: ...
 
     async def inscribir(
@@ -424,13 +424,21 @@ def soporta_cotizacion(capability: SubscriptionCapability) -> bool:
 
 
 async def cotizar_cambio(
-    capability: SubscriptionCapability, subscription_id: uuid.UUID, *, variant_id: str, plan: PlanSnapshot
+    capability: SubscriptionCapability,
+    subscription_id: uuid.UUID,
+    *,
+    variant_id: str,
+    plan: PlanSnapshot,
+    codigo_promocion: str | None = None,
 ) -> dict[str, Any]:
     """Lo que haría `change_plan` con ese plan, sin efectos: `{cambio, monto_a_pagar,
-    precio_nuevo, …}`. Lanza `SubscriptionError` (los mismos rechazos que `change_plan`)."""
+    precio_nuevo, …}`. Lanza `SubscriptionError` (los mismos rechazos que `change_plan`).
+    `codigo_promocion` (HU-SUB-34) solo viaja si el cliente trajo uno: un proveedor sin promociones
+    no lo recibe."""
     metodo = getattr(capability, "cotizar_cambio", None)
     if not callable(metodo):
         raise SubscriptionError(
             "Este proveedor de suscripciones no cotiza cambios de plan.", code="sin_cotizacion"
         )
-    return dict(await metodo(subscription_id, variant_id=variant_id, plan=plan))
+    extra = {"codigo_promocion": codigo_promocion} if codigo_promocion else {}
+    return dict(await metodo(subscription_id, variant_id=variant_id, plan=plan, **extra))

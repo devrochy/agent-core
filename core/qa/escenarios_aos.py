@@ -33,7 +33,7 @@ from core.qa.escenarios import (
 from core.shared.audit import record_audit
 
 COMERCIO = "pack_commerce"
-CONTRATAR_PLAN = ("pack_commerce.contratar_plan", "1.3.0")
+CONTRATAR_PLAN = ("pack_subscriptions.contratar_plan", "2.0.0")
 TOMAR_PEDIDO = ("pack_commerce.tomar_pedido", "1.1.0")
 
 
@@ -416,9 +416,9 @@ async def escalacion_en_curso(ctx: Contexto) -> Resultado:
             procedure_version=CONTRATAR_PLAN[1], stage="elegir_plan", actor="kernel", owner_instance_id=chat.ventas.instancia,
         )
         for slot, valor, clase, actor, origen in (
-            ("full_name", "Mateo Salazar", "pii", "llm", "llm"),
+            ("nombre", "Mateo Salazar", "pii", "llm", "llm"),
             ("email", "mateo.salazar@ejemplo.test", "pii", "llm", "llm"),
-            ("payment_reference", "QA-PAGO-77310459", "payment", "tool", "action:cotizar_plan"),
+            ("monto_a_pagar", "150000", "payment", "tool", "action:sub_cotizar_inscripcion"),
         ):
             await state.registrar(
                 s, tenant_id=ctx.tenant_id, conversation_id=conv.id, task_id=plan.id, tipo="slot_set",
@@ -427,7 +427,7 @@ async def escalacion_en_curso(ctx: Contexto) -> Resultado:
     return Resultado(
         detalle=[
             f"Conversación de «Mateo Salazar · {ctx.sufijo}» escalada y pendiente",
-            "«Contratar un plan» en «elegir plan» con nombre, correo y una referencia de pago; falta el plan",
+            "«Contratar un plan» en «elegir plan» con nombre, correo y el valor cotizado; falta el plan",
             "«Tomar pedido» cerrado al pasar a una persona, con una acción fallida",
         ],
         conteos={"conversaciones": 1, "escalaciones": 1, "tareas": 2},

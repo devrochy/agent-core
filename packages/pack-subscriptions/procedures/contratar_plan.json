@@ -1,0 +1,263 @@
+{
+  "contract": "procedure/1",
+  "id": "pack_subscriptions.contratar_plan",
+  "version": "2.0.0",
+  "title": "Contratar un plan",
+  "triggers": {
+    "description": "El cliente quiere comprar, contratar o pagar un plan o suscripción del negocio.",
+    "examples": [
+      "quiero el plan premium",
+      "cómo pago el básico",
+      "lo quiero contratar",
+      "quiero suscribirme",
+      "mándame el link para pagar el plan"
+    ]
+  },
+  "slots": {
+    "plan_code": {
+      "type": "string",
+      "required": true,
+      "resolver": "pack_subscriptions.plan_a_contratar"
+    },
+    "codigo_promocion": {
+      "type": "string",
+      "dataClass": "public",
+      "resolver": "pack_subscriptions.codigo_de_promocion"
+    },
+    "monto_a_pagar": {
+      "type": "number",
+      "setBy": "action:sub_cotizar_inscripcion"
+    },
+    "requiere_pago": {
+      "type": "boolean",
+      "setBy": "action:sub_cotizar_inscripcion"
+    },
+    "pide_negocio": {
+      "type": "boolean",
+      "setBy": "action:sub_cotizar_inscripcion"
+    },
+    "pide_vertical": {
+      "type": "boolean",
+      "setBy": "action:sub_cotizar_inscripcion"
+    },
+    "pide_nombre": {
+      "type": "boolean",
+      "setBy": "action:sub_cotizar_inscripcion"
+    },
+    "pide_documento": {
+      "type": "boolean",
+      "setBy": "action:sub_cotizar_inscripcion"
+    },
+    "pide_email": {
+      "type": "boolean",
+      "setBy": "action:sub_cotizar_inscripcion"
+    },
+    "pide_telefono": {
+      "type": "boolean",
+      "setBy": "action:sub_cotizar_inscripcion"
+    },
+    "negocio": {
+      "type": "string",
+      "requiredWhen": {
+        "slot": "pide_negocio",
+        "equals": true
+      },
+      "dataClass": "public",
+      "resolver": "pack_subscriptions.nombre_de_negocio"
+    },
+    "vertical": {
+      "type": "string",
+      "requiredWhen": {
+        "slot": "pide_vertical",
+        "equals": true
+      },
+      "dataClass": "public",
+      "resolver": "pack_subscriptions.tipo_de_negocio"
+    },
+    "nombre": {
+      "type": "string",
+      "requiredWhen": {
+        "slot": "pide_nombre",
+        "equals": true
+      },
+      "dataClass": "pii"
+    },
+    "documento": {
+      "type": "string",
+      "requiredWhen": {
+        "slot": "pide_documento",
+        "equals": true
+      },
+      "dataClass": "pii"
+    },
+    "email": {
+      "type": "string",
+      "requiredWhen": {
+        "slot": "pide_email",
+        "equals": true
+      },
+      "dataClass": "pii",
+      "format": "email"
+    },
+    "telefono": {
+      "type": "string",
+      "requiredWhen": {
+        "slot": "pide_telefono",
+        "equals": true
+      },
+      "dataClass": "pii",
+      "format": "phone"
+    },
+    "payment_method": {
+      "enum": [
+        "pago_en_linea",
+        "transferencia"
+      ],
+      "requiredWhen": {
+        "slot": "requiere_pago",
+        "equals": true
+      },
+      "resolver": "pack_subscriptions.metodo_de_pago"
+    },
+    "acepta_terminos": {
+      "type": "string",
+      "setBy": "action:sub_confirmar_inscripcion"
+    },
+    "subscription_id": {
+      "type": "string",
+      "setBy": "action:sub_inscribir"
+    },
+    "link": {
+      "type": "string",
+      "format": "uri",
+      "setBy": "action:sub_inscribir",
+      "requiredWhen": {
+        "slot": "payment_method",
+        "equals": "pago_en_linea"
+      }
+    }
+  },
+  "stages": [
+    {
+      "id": "elegir_plan",
+      "goal": "Que el cliente elija un plan con precios reales del catálogo.",
+      "actions": [
+        "sub_listar_planes"
+      ],
+      "exitWhen": {
+        "slots": [
+          "plan_code"
+        ]
+      }
+    },
+    {
+      "id": "cotizar",
+      "goal": "Cotizar el plan elegido con el precio del servidor y, si el cliente da un código de promoción, con su descuento.",
+      "actions": [
+        "sub_cotizar_inscripcion",
+        "sub_listar_planes"
+      ],
+      "exitWhen": {
+        "slots": [
+          "monto_a_pagar"
+        ]
+      }
+    },
+    {
+      "id": "datos",
+      "goal": "Pedir en un solo mensaje, como lista numerada, los datos que el negocio exige para el plan; si el cliente da una parte, pedir solo lo que falta.",
+      "actions": [
+        "sub_listar_planes"
+      ],
+      "exitWhen": {
+        "slots": [
+          "negocio",
+          "vertical",
+          "nombre",
+          "documento",
+          "email",
+          "telefono",
+          "payment_method"
+        ]
+      }
+    },
+    {
+      "id": "confirmar",
+      "goal": "Mostrar el resumen único del servidor (plan, descuento, total del primer cargo, datos del cliente y, si el negocio los exige, los documentos que acepta) y pedir la confirmación explícita del cliente.",
+      "actions": [
+        "sub_confirmar_inscripcion"
+      ],
+      "confirmation": "interactive_button",
+      "exitWhen": {
+        "action": "sub_confirmar_inscripcion",
+        "ok": true
+      }
+    },
+    {
+      "id": "pagar",
+      "goal": "Inscribir al cliente y, si paga en línea, enviar el link de pago.",
+      "risk": "high",
+      "actions": [
+        "sub_inscribir",
+        "sub_link_pago"
+      ],
+      "exitWhen": {
+        "slots": [
+          "subscription_id",
+          "link"
+        ]
+      }
+    },
+    {
+      "id": "esperar_pago",
+      "goal": "El link ya salió: esperar a que el pago se confirme y la suscripción se active. Si el cliente pide el link o venció, reenviarlo; si dice que ya pagó, consultar la suscripción. Con transferencia o sin cobro la etapa no aplica.",
+      "actions": [
+        "sub_link_pago",
+        "sub_consultar"
+      ]
+    }
+  ],
+  "completion": {
+    "events": [
+      "pack_subscriptions.subscription.activated"
+    ],
+    "returnControl": true
+  },
+  "recovery": {
+    "actionError": "explicar"
+  },
+  "claims": [
+    {
+      "kind": "amount",
+      "mustMatch": [
+        "action:sub_cotizar_inscripcion.total_primer_cargo",
+        "action:sub_cotizar_inscripcion.precio_lista",
+        "action:sub_cotizar_inscripcion.precio_periodo_siguiente",
+        "action:sub_confirmar_inscripcion.total_primer_cargo"
+      ]
+    },
+    {
+      "kind": "link",
+      "mustMatch": [
+        "slot:link"
+      ]
+    },
+    {
+      "kind": "status",
+      "phrases": [
+        "inscripción creada",
+        "quedaste inscrito",
+        "quedó registrada tu inscripción",
+        "suscripción creada",
+        "inscripción registrada"
+      ],
+      "requires": "slot:subscription_id"
+    }
+  ],
+  "evals": [
+    "contratar-premium-mensual",
+    "contratar-con-promocion",
+    "contratar-free-sin-link",
+    "contratar-transferencia"
+  ]
+}

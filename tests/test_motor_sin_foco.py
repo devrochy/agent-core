@@ -107,6 +107,7 @@ def test_las_puertas_de_los_procedimientos_publicados() -> None:
         PLAN: {"confirmar_cotizacion"},
         PEDIDO: {"confirmar_cotizacion"},
         "pack_subscriptions.cambiar_plan": {"sub_aplicar_cambio_plan"},
+        "pack_subscriptions.contratar_plan": {"sub_confirmar_inscripcion"},
     }
 
 

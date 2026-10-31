@@ -219,16 +219,16 @@ async def test_escalacion_en_curso(app_client: Any, preparado: dict[str, Any]) -
     cuerpo_en_curso = r.json()
     assert cuerpo_en_curso["escalation"]["status"] == "pendiente", cuerpo_en_curso
     tareas = {t["procedure_id"]: t for t in cuerpo_en_curso["tasks"]}
-    plan = tareas["pack_commerce.contratar_plan"]
+    plan = tareas["pack_subscriptions.contratar_plan"]
     assert plan["status"] == "active" and plan["stage"] == "elegir_plan" and plan["in_focus"], plan
     datos = {d["name"]: d for d in plan["data"]}
-    assert {"full_name", "email", "payment_reference"} <= set(datos), datos
-    assert datos["payment_reference"]["value"] == "•••"
-    assert [m["name"] for m in plan["missing"]] == ["variant_id"], plan["missing"]
+    assert {"nombre", "email", "monto_a_pagar"} <= set(datos), datos
+    assert datos["monto_a_pagar"]["value"] == "•••"
+    assert [m["name"] for m in plan["missing"]] == ["plan_code"], plan["missing"]
     pedido = tareas["pack_commerce.tomar_pedido"]
     assert pedido["status"] == "escalated" and pedido["last_action"]["ok"] is False, pedido
     versiones = dict(await _sql(p["tid"], "select procedure_id, procedure_version from conversation_tasks where conversation_id = :c", c=conv))
-    assert versiones["pack_commerce.contratar_plan"] == "1.3.0"
+    assert versiones["pack_subscriptions.contratar_plan"] == "2.0.0"
     esc = await app_client.get("/api/v1/admin/escalations", headers=p["panel"])
     assert conv in esc.text, esc.text
 

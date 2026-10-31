@@ -1193,10 +1193,12 @@ class SubscriptionCapabilityImpl:
         plan = await planes.por_codigo(codigo)
         return planes.snapshot(plan) if plan is not None else None
 
-    async def cotizar_inscripcion(self, plan_code: str, codigo_promocion: str | None = None) -> dict[str, Any]:
+    async def cotizar_inscripcion(
+        self, plan_code: str, codigo_promocion: str | None = None, *, customer_id: uuid.UUID | None = None
+    ) -> dict[str, Any]:
         from pack_subscriptions import inscripcion
 
-        return await inscripcion.cotizar(plan_code, codigo_promocion)
+        return await inscripcion.cotizar(plan_code, codigo_promocion, customer_id=customer_id)
 
     async def inscribir(
         self,

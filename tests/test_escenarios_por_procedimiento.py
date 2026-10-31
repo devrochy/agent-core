@@ -16,6 +16,7 @@ RAIZ = Path(__file__).resolve().parents[1]
 MINIMO = 2
 # Procedimiento → escenarios que tiene hoy (2026-10-25).
 PENDIENTES = {
+    "pack_subscriptions.contratar_plan": 0,  # SPEC-43: los escenarios se graban con LLM real y OK del dueño
     "pack_subscriptions.cambiar_plan": 0,
     "pack_cobranza.promesa_de_pago": 0,
     "pack_commerce.tomar_pedido": 1,
