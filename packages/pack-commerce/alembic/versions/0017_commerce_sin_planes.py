@@ -25,8 +25,8 @@ Las tablas ya tienen `tenant_id` y RLS forzada (`crm_0005`); aquí no se crean t
 al dueño de la tabla, así que las actualizaciones masivas (sin `app.tenant_id`) apagan RLS un momento
 y la restauran de inmediato (mismo patrón de `pack_subscriptions_0010`).
 
-Revision ID: crm_0015
-Revises: crm_0014
+Revision ID: crm_0017
+Revises: crm_0016
 Create Date: 2026-10-30
 """
 
@@ -34,8 +34,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "crm_0015"
-down_revision = "crm_0014"
+revision = "crm_0017"
+down_revision = "crm_0016"
 branch_labels = None
 depends_on = None
 
@@ -63,7 +63,7 @@ def upgrade() -> None:
     # 1. Productos cuyas variantes son todas planes (con al menos una): se calculan ANTES de desactivar.
     op.execute(
         f"""
-        create temporary table _crm_0015_productos_plan on commit drop as
+        create temporary table _crm_0017_productos_plan on commit drop as
         select p.id, p.tenant_id from {PRODUCTS} p
         where p.deleted_at is null
           and exists (select 1 from {VARIANTS} v where v.tenant_id = p.tenant_id and v.product_id = p.id
@@ -79,7 +79,7 @@ def upgrade() -> None:
         where pr.active
           and (
             pr.variant_id in (select v.id from {VARIANTS} v where v.tenant_id = pr.tenant_id and v.billing_period is not null)
-            or pr.product_id in (select t.id from _crm_0015_productos_plan t where t.tenant_id = pr.tenant_id)
+            or pr.product_id in (select t.id from _crm_0017_productos_plan t where t.tenant_id = pr.tenant_id)
           )
         """
     )
@@ -87,7 +87,7 @@ def upgrade() -> None:
     op.execute(f"update {VARIANTS} set active = false where billing_period is not null and active")
     op.execute(
         f"update {PRODUCTS} p set deleted_at = now(), updated_at = now() "
-        f"where (p.tenant_id, p.id) in (select tenant_id, id from _crm_0015_productos_plan)"
+        f"where (p.tenant_id, p.id) in (select tenant_id, id from _crm_0017_productos_plan)"
     )
     _restaurar_rls()
 
