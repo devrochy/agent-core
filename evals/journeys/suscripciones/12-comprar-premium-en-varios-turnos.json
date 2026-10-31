@@ -1,12 +1,12 @@
 {
   "nombre": "comprar-premium-en-varios-turnos",
-  "descripcion": "Compra del Premium repartida en turnos (cotización, confirmación del total, datos y pago): el modelo reusa el quote_id de las referencias vigentes, no genera otra cotización y cierra con una sola (incidente en test, 2026-10-10, ADR-0130).",
+  "descripcion": "Compra del Premium repartida en turnos (elegir y cotizar, datos, confirmación del resumen y pago) por contratar_plan: la cotización la arma el servidor una sola vez (sub_cotizar_inscripcion), el resumen confirma ese mismo total y la inscripción nace pendiente de pago con una sola cuenta de cobro (incidente en test, 2026-10-10, ADR-0130).",
   "pasos": [
     {
-      "nota": "pide la cotización del Premium",
-      "usuario": "Hola, soy Ana. Me interesa el Plan Premium, ¿me armás la cotización?",
-      "hasta_herramienta": "generar_cotizacion",
-      "insistir": "Sí, armame la cotización del Plan Premium.",
+      "nota": "pide el Premium: el asistente lo cotiza con el servidor",
+      "usuario": "Hola, soy Ana. Me interesa el Plan Premium, ¿cuánto cuesta y cómo lo contrato?",
+      "hasta_herramienta": "sub_cotizar_inscripcion",
+      "insistir": "Sí, quiero contratar el Plan Premium.",
       "max_turnos": 3,
       "espera": {
         "texto_contiene_alguno": [
@@ -16,83 +16,76 @@
       }
     },
     {
-      "nota": "confirma el total en otro turno: confirmar_cotizacion con el id real, sin otra cotización",
-      "usuario": "Sí, confirmo ese total. Lo quiero pagar en línea.",
-      "hasta_herramienta": "confirmar_cotizacion",
-      "insistir": "Sí, confirmo la cotización del Plan Premium por ese total.",
+      "nota": "da sus datos en otro turno; el asistente no vuelve a elegir plan y pide confirmar el resumen",
+      "usuario": "Mis datos: Ana Gómez, cédula 1012345678, celular 3001234567, correo ana+{cliente.id}@example.com. Lo quiero pagar en línea.",
+      "hasta_herramienta": "sub_confirmar_inscripcion",
+      "insistir": "Sí, esos son mis datos. Seguí con el Plan Premium.",
       "max_turnos": 3,
       "espera": {
-        "sin_herramientas": [
-          "generar_cotizacion"
+        "texto_contiene_alguno": [
+          "600.000",
+          "600,000"
         ]
       }
     },
     {
-      "nota": "la cotización quedó aceptada y es la única",
-      "verifica": {
-        "tabla": "pack_commerce_quotes",
-        "donde": {
-          "customer_id": "{cliente.id}"
-        },
-        "filas": 1,
-        "espera": {
-          "status": "aceptada",
-          "total": 600000
-        }
-      }
-    },
-    {
-      "nota": "da sus datos en otro turno: pedido y link sobre la misma cotización",
-      "usuario": "Mis datos: Ana Gómez, cédula 1012345678, celular 3001234567, correo ana+{cliente.id}@example.com.",
-      "hasta_herramienta": "confirmar_pago_pedido",
-      "insistir": "Sí, creá el pedido del Plan Premium con esos datos y pasame el link de pago.",
+      "nota": "confirma el total del resumen: se inscribe y sale el link",
+      "usuario": "Sí, confirmo.",
+      "hasta_herramienta": "sub_inscribir",
+      "insistir": "Sí, confirmo el Plan Premium por ese total. Pasame el link de pago.",
       "max_turnos": 3,
       "espera": {
-        "sin_herramientas": [
-          "generar_cotizacion"
-        ],
         "texto_contiene": [
           "https://pagos.simulados/"
         ]
       }
     },
     {
-      "nota": "una sola cotización, convertida en el pedido",
+      "nota": "una sola inscripción, pendiente de pago por el Premium",
       "verifica": {
-        "tabla": "pack_commerce_quotes",
+        "tabla": "pack_subscriptions_subscriptions",
         "donde": {
           "customer_id": "{cliente.id}"
         },
         "filas": 1,
         "espera": {
-          "status": "convertida"
-        }
+          "estado": "pendiente_pago",
+          "valor_periodo": 600000
+        },
+        "guardar_como": "suscripcion"
       }
     },
     {
-      "nota": "pedido pendiente por el total del Premium",
+      "nota": "un solo cargo, por el total del Premium",
       "verifica": {
-        "tabla": "pack_commerce_orders",
+        "tabla": "pack_subscriptions_charges",
         "donde": {
-          "customer_id": "{cliente.id}"
+          "subscription_id": "{suscripcion.id}"
         },
         "filas": 1,
         "espera": {
-          "payment_status": "pendiente",
-          "total": 600000
+          "estado": "pendiente",
+          "monto": 600000,
+          "referencia": {
+            "$no_nulo": true
+          }
         },
-        "guardar_como": "pedido"
+        "guardar_como": "cargo"
       }
     },
     {
       "nota": "la pasarela confirma el pago",
       "evento": "payment.confirmed",
       "datos": {
-        "reference": "{pedido.public_order_number}",
+        "reference": "{cargo.referencia}",
         "provider": "simulado",
-        "provider_reference": "sim-{pedido.public_order_number}",
+        "provider_reference": "sim-{cargo.referencia}",
         "amount": 600000
       }
+    },
+    {
+      "nota": "el worker entrega los eventos",
+      "outbox": "despachar"
     },
     {
       "nota": "suscripción Premium activa",

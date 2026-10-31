@@ -1,6 +1,6 @@
 {
   "nombre": "simulado-comprar-free",
-  "descripcion": "Cliente simulado (HU-ARCH-28) que quiere el Plan Free: se valida el estado final (pedido pagado sin link y suscripción en prueba), no el texto exacto.",
+  "descripcion": "Cliente simulado (HU-ARCH-28) que quiere el Plan Free: se valida el estado final (suscripción en prueba y sin link de pago), no el texto exacto.",
   "pasos": [
     {
       "nota": "el cliente simulado conversa hasta activar el Free",
@@ -10,7 +10,7 @@
           "nombre": "Ana Gómez",
           "cedula": "1012345678",
           "celular": "3001234567",
-          "correo": "ana.gomez@example.com"
+          "correo": "ana+{cliente.id}@example.com"
         },
         "max_turnos": 8
       },
@@ -18,31 +18,6 @@
         "objetivo",
         "tope"
       ]
-    },
-    {
-      "nota": "el pedido nace pagado",
-      "verifica": {
-        "tabla": "pack_commerce_orders",
-        "donde": {
-          "customer_id": "{cliente.id}"
-        },
-        "filas": 1,
-        "espera": {
-          "payment_status": "pagado",
-          "total": 0
-        },
-        "guardar_como": "pedido"
-      }
-    },
-    {
-      "nota": "sin link de pago para un plan gratis",
-      "verifica": {
-        "tabla": "pack_payments_transactions",
-        "donde": {
-          "reference": "{pedido.public_order_number}"
-        },
-        "filas": 0
-      }
     },
     {
       "nota": "suscripción en prueba",
@@ -58,7 +33,19 @@
           "trial_termina": {
             "$no_nulo": true
           }
-        }
+        },
+        "guardar_como": "suscripcion"
+      }
+    },
+    {
+      "nota": "sin cargo pendiente por cobrar para un plan gratis",
+      "verifica": {
+        "tabla": "pack_subscriptions_charges",
+        "donde": {
+          "subscription_id": "{suscripcion.id}",
+          "estado": "pendiente"
+        },
+        "filas": 0
       }
     }
   ]
