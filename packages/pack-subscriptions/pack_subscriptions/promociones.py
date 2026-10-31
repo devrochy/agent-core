@@ -36,6 +36,7 @@ from typing import Any
 
 from opentelemetry import metrics
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.exc import IntegrityError
 
 from core.db.session import get_session
@@ -43,19 +44,22 @@ from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.subscriptions import SubscriptionError
 from pack_subscriptions.models import (
+    CANJE_AGOTADO,
     CANJE_CONFIRMADO,
     CANJE_LIBERADO,
     CANJE_RESERVADO,
+    CANJE_TERMINADO,
     Canje,
     Plan,
     Promocion,
+    Subscription,
     SubscriptionCharge,
 )
 
 log = get_logger(__name__)
 
-# Hasta que llegue HU-SUB-35 (descuento de N períodos) la API solo acepta promociones de un período.
-MAX_PERIODOS_HABILITADOS = 1
+# HU-SUB-35: la API acepta de 1 a 12 períodos (el monto fijo solo con 1: lo valida `validar`).
+MAX_PERIODOS_HABILITADOS = 12
 MAX_VALOR = Decimal("999999999999.99")
 MAX_CANJES_TOPE = 1_000_000
 _FORMA_CODIGO = re.compile(r"[a-z0-9][a-z0-9_-]{2,39}")
@@ -65,6 +69,9 @@ _INTENTOS_ANONIMOS = 120
 
 _meter = metrics.get_meter("agent-core")
 _canjes_total = _meter.create_counter("promo_canjes_total", description="Canjes de promociones por estado")
+_consumidos_total = _meter.create_counter(
+    "descuento_periodos_consumidos_total", description="Períodos de descuento consumidos al generar cargos"
+)
 _descuento_total = _meter.create_counter(
     "promo_descuento_otorgado_total", description="Descuento de promociones cobrado (canjes confirmados)"
 )
@@ -548,13 +555,17 @@ def huella_de(*, documento: str | None, telefono_canal: str | None, telefono_dat
 
 
 # ----------------------------------------------------------------------------- ciclo del canje
-def aplicar_al_cargo(cargo: SubscriptionCharge, evaluacion: Evaluacion) -> None:
-    """Pone en el cargo el descuento: `monto` es el NETO que se cobra, `monto_bruto` el de lista."""
+def aplicar_al_cargo(cargo: SubscriptionCharge, evaluacion: Evaluacion, *, consume: bool = True) -> None:
+    """Pone en el cargo el descuento: `monto` es el NETO que se cobra, `monto_bruto` el de lista.
+
+    `consume`: este cobro es el período 1 del descuento (inscripción, o contratar desde un plan gratuito).
+    En un upgrade el descuento recae sobre la diferencia prorrateada y NO consume período: los N empiezan en el
+    siguiente cargo completo (HU-SUB-35)."""
     cargo.monto = evaluacion.neto
     cargo.monto_bruto = evaluacion.bruto
     cargo.descuento = evaluacion.fotografia()
-    cargo.periodo_n = 1
-    cargo.consume_periodo = True
+    cargo.periodo_n = 1 if consume else None
+    cargo.consume_periodo = consume
 
 
 def promocion_del_cargo(cargo: SubscriptionCharge) -> str | None:
@@ -675,8 +686,12 @@ async def liberar_por_cargos(session, cargos: list[SubscriptionCharge]) -> int: 
     return len(canjes)
 
 
-async def confirmar_por_cargo(session, cargo: SubscriptionCharge) -> bool:  # type: ignore[no-untyped-def]
-    """El cargo con descuento se pagó y aplicó: su canje `reservado` pasa a `confirmado`. Idempotente."""
+async def confirmar_por_cargo(session, cargo: SubscriptionCharge, sub: Subscription | None = None) -> bool:  # type: ignore[no-untyped-def]
+    """El cargo con descuento se pagó y aplicó: su canje `reservado` pasa a `confirmado`. Idempotente.
+
+    Con `sub` (la suscripción bloqueada), además deja el descuento vigente en ella: quedan `N − 1` períodos si
+    este cobro consumió el primero (inscripción, desde un plan gratuito) o `N` si fue la diferencia de un upgrade.
+    Sin períodos por delante (descuento de uno), el canje queda `agotado` y la suscripción sin descuento."""
     if cargo.canje_id is None:
         return False
     confirmado = (
@@ -694,7 +709,193 @@ async def confirmar_por_cargo(session, cargo: SubscriptionCharge) -> bool:  # ty
     if cargo.monto_bruto is not None:
         _descuento_total.add(float(Decimal(cargo.monto_bruto) - Decimal(cargo.monto)))
     log.info("subs_canje_confirmado", canje_id=str(cargo.canje_id), charge_id=str(cargo.id))
+    if sub is not None:
+        await _otorgar_a_suscripcion(session, sub, cargo)
     return True
+
+
+def _snapshot_vigente(foto: dict[str, Any], canje_id: uuid.UUID) -> dict[str, Any]:
+    return {
+        "promocion_id": foto["promocion_id"],
+        "canje_id": str(canje_id),
+        "etiqueta": foto.get("etiqueta"),
+        "tipo": foto["tipo"],
+        "valor": foto["valor"],
+        "periodos_total": int(foto["periodos_total"]),
+    }
+
+
+async def _cerrar_canje(session, canje_id: uuid.UUID, estado: str) -> bool:  # type: ignore[no-untyped-def]
+    """Pasa el canje `confirmado` a un estado terminal (`agotado`/`terminado`). Condicional e idempotente."""
+    cerrado = (
+        await session.execute(
+            update(Canje)
+            .where(Canje.tenant_id == _tenant(), Canje.id == canje_id, Canje.estado == CANJE_CONFIRMADO)
+            .values(estado=estado)
+            .returning(Canje.id)
+            .execution_options(synchronize_session=False)
+        )
+    ).scalar_one_or_none()
+    if cerrado is not None:
+        _canjes_total.add(1, {"estado": estado})
+    return cerrado is not None
+
+
+def _limpiar_descuento(sub: Subscription) -> None:
+    sub.promocion_id = None
+    sub.descuento = None
+    sub.descuento_periodos_restantes = None
+
+
+async def _otorgar_a_suscripcion(session, sub: Subscription, cargo: SubscriptionCharge) -> None:  # type: ignore[no-untyped-def]
+    foto = cargo.descuento or {}
+    total = int(foto.get("periodos_total") or 1)
+    restantes = total - (1 if cargo.consume_periodo else 0)
+    if restantes <= 0:
+        _limpiar_descuento(sub)
+        await _cerrar_canje(session, cargo.canje_id, CANJE_AGOTADO)
+        log.info("subs_descuento_agotado", subscription_id=str(sub.id), canje_id=str(cargo.canje_id))
+        return
+    sub.promocion_id = uuid.UUID(foto["promocion_id"])
+    sub.descuento = _snapshot_vigente(foto, cargo.canje_id)
+    sub.descuento_periodos_restantes = restantes
+    await session.flush()
+    log.info(
+        "subs_descuento_otorgado",
+        subscription_id=str(sub.id),
+        canje_id=str(cargo.canje_id),
+        periodos_total=total,
+        restantes=restantes,
+    )
+
+
+async def terminar_descuento(session, sub: Subscription, *, motivo: str) -> bool:  # type: ignore[no-untyped-def]
+    """El descuento vigente de la suscripción acaba antes de tiempo (cancelación o cualquier cambio de plan):
+    el canje queda `terminado` y la suscripción sin descuento. Sigue contando para el límite por cliente."""
+    if sub.promocion_id is None:
+        return False
+    canje_id = uuid.UUID((sub.descuento or {})["canje_id"])
+    restantes = sub.descuento_periodos_restantes
+    _limpiar_descuento(sub)
+    await _cerrar_canje(session, canje_id, CANJE_TERMINADO)
+    await session.flush()
+    log.info(
+        "subs_descuento_terminado",
+        subscription_id=str(sub.id),
+        canje_id=str(canje_id),
+        motivo=motivo,
+        restantes=restantes,
+    )
+    return True
+
+
+async def aplicar_descuento_vigente(session, sub: Subscription, cargo: SubscriptionCharge) -> bool:  # type: ignore[no-untyped-def]
+    """Si la suscripción tiene descuento vigente, lo pone en el cargo de período recién creado (a precio de
+    lista) y consume UN período, en la MISMA transacción: el único `uq_pack_subscriptions_charges_periodo`
+    impide un segundo cargo del período, así que no se consume dos veces. La suscripción debe venir bloqueada.
+
+    Devuelve True si descontó. El agotamiento del último período deja el canje `agotado`."""
+    if sub.promocion_id is None or not sub.descuento_periodos_restantes:
+        return False
+    d = sub.descuento or {}
+    bruto = Decimal(sub.valor_periodo or 0)
+    try:
+        descuento, neto = calcular(bruto, d["tipo"], Decimal(d["valor"]), sub.moneda)
+    except SubscriptionError:
+        # El precio de la suscripción ya no admite el descuento (no debería pasar: cambiar de plan lo termina).
+        log.warning("subs_descuento_no_aplicable", subscription_id=str(sub.id), canje_id=d.get("canje_id"))
+        return False
+    total = int(d["periodos_total"])
+    restantes = int(sub.descuento_periodos_restantes)
+    cargo.monto = neto
+    cargo.monto_bruto = bruto
+    cargo.descuento = {
+        "promocion_id": d["promocion_id"],
+        "etiqueta": d.get("etiqueta"),
+        "tipo": d["tipo"],
+        "valor": d["valor"],
+        "periodos_total": total,
+        "descuento": str(descuento),
+    }
+    cargo.canje_id = uuid.UUID(d["canje_id"])
+    cargo.periodo_n = total - restantes + 1
+    cargo.consume_periodo = True
+    if restantes - 1 <= 0:
+        canje_id = cargo.canje_id
+        _limpiar_descuento(sub)
+        await _cerrar_canje(session, canje_id, CANJE_AGOTADO)
+        log.info("subs_descuento_agotado", subscription_id=str(sub.id), canje_id=str(canje_id))
+    else:
+        sub.descuento_periodos_restantes = restantes - 1
+    _consumidos_total.add(1)
+    log.info(
+        "subs_descuento_consumido",
+        subscription_id=str(sub.id),
+        periodo_n=cargo.periodo_n,
+        restantes=restantes - 1,
+    )
+    return True
+
+
+async def descuentos_inconsistentes(session) -> list[uuid.UUID]:  # type: ignore[no-untyped-def]
+    """Suscripciones con descuento vigente cuyo `restantes` no es `periodos_total − cargos no anulados del canje
+    que consumen período` (HU-SUB-35, invariante). El cron diario las loguea; no corrige nada solo."""
+    tenant = _tenant()
+    consumidos = (
+        select(SubscriptionCharge.canje_id, func.count().label("n"))
+        .where(
+            SubscriptionCharge.tenant_id == tenant,
+            SubscriptionCharge.consume_periodo.is_(True),
+            SubscriptionCharge.estado != "anulado",
+            SubscriptionCharge.canje_id.isnot(None),
+            SubscriptionCharge.deleted_at.is_(None),
+        )
+        .group_by(SubscriptionCharge.canje_id)
+        .subquery()
+    )
+    filas = (
+        await session.execute(
+            select(Subscription.id, Subscription.descuento, Subscription.descuento_periodos_restantes, consumidos.c.n)
+            .select_from(Subscription)
+            .outerjoin(
+                consumidos,
+                consumidos.c.canje_id == func.cast(Subscription.descuento["canje_id"].astext, UUID(as_uuid=True)),
+            )
+            .where(
+                Subscription.tenant_id == tenant,
+                Subscription.promocion_id.isnot(None),
+                Subscription.deleted_at.is_(None),
+            )
+        )
+    ).all()
+    malas = []
+    for sub_id, descuento, restantes, n in filas:
+        total = int((descuento or {}).get("periodos_total") or 0)
+        if int(restantes or 0) != total - int(n or 0):
+            malas.append(sub_id)
+    return malas
+
+
+async def resumen_de_descuentos(session) -> tuple[int, Decimal]:  # type: ignore[no-untyped-def]
+    """`(suscripciones con descuento, descuento mensual vigente en la moneda del negocio)` para los gauges."""
+    filas = (
+        await session.execute(
+            select(Subscription.valor_periodo, Subscription.descuento).where(
+                Subscription.tenant_id == _tenant(),
+                Subscription.promocion_id.isnot(None),
+                Subscription.estado == "activa",
+                Subscription.deleted_at.is_(None),
+            )
+        )
+    ).all()
+    total = Decimal(0)
+    for valor, d in filas:
+        try:
+            descuento, _ = calcular(Decimal(valor or 0), (d or {})["tipo"], Decimal(d["valor"]), "COP")
+        except SubscriptionError:
+            continue
+        total += descuento
+    return len(filas), total
 
 
 async def contar_reservados_antiguos(session, *, dias: int) -> int:  # type: ignore[no-untyped-def]

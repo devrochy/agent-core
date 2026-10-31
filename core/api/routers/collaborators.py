@@ -23,6 +23,7 @@ from core.admin.collaborators_service import (
     grant_permission,
     link_tenant,
     pack_collaborator_roles,
+    perfiles_de_pack,
     reset_password,
     resolve_tenant_id,
     revoke_permission,
@@ -33,12 +34,13 @@ from core.admin.collaborators_service import (
 )
 from core.admin.permissions import acceso_y_origen
 from core.almacenamiento import abrir, resolver_avatar
-from core.api.deps import Principal, require
+from core.api.deps import Principal, es_owner_o_master, require
 from core.api.errors import ApiError
 from core.api.plan_limits import plan_limit_error, plan_limit_responses
 from core.billing.enforcement import QuotaExceeded
 from core.db.models import Admin, AdminPermission, Tenant, TenantUser
 from core.db.session import get_session
+from core.mcp.types import PackProfile
 
 router = APIRouter(prefix="/admin/collaborators", tags=["admin · colaboradores"])
 
@@ -68,6 +70,8 @@ class CollaboratorItem(BaseModel):
     is_platform_master: bool
     permissions: list[PermissionItem]
     links: list[TenantLink]
+    pack_profiles: list[PackProfile] = []
+    """Perfiles que los packs tienen de la cuenta (ADR-0176): p. ej. el gestor de cobranza."""
 
 
 class PackRole(BaseModel):
@@ -189,6 +193,19 @@ async def list_collaborators(
     for admin_id, role, slug, name in links:
         links_by.setdefault(admin_id, []).append(TenantLink(role=role, slug=slug, name=name))
 
+    perfiles: dict[uuid.UUID, list[PackProfile]] = {}
+    if tid is not None and not (is_master and todos):
+        detalle_total = es_owner_o_master(principal)
+
+        def ver_detalle(pack_id: str) -> bool:
+            # Owner/master, o quien tiene acceso a alguna sección del pack (el pack mismo o una sub-sección).
+            return detalle_total or any(
+                acceso and (seccion == pack_id or seccion.startswith(f"{pack_id}:"))
+                for seccion, acceso in principal.permissions.items()
+            )
+
+        perfiles = await perfiles_de_pack(tid, admin_ids, ver_detalle=ver_detalle)
+
     return [
         CollaboratorItem(
             id=a.id,
@@ -205,6 +222,7 @@ async def list_collaborators(
                 perms_by.get(a.id, []), key=lambda p: (p.section, p.scope)
             ),
             links=links_by.get(a.id, []),
+            pack_profiles=perfiles.get(a.id, []),
         )
         for a in admins
     ]

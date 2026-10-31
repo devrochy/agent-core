@@ -554,7 +554,7 @@ async def test_preset_suscripciones_v2_con_ruteo_activo_de_punta_a_punta(_ruteo:
 # ---------------------------------------------------------------- dogfooding de solvershub (HU-AOS-22)
 # Frases propias de Ventas que solvershub publica desde el editor (runbook de solvershub-comercial,
 # `runbooks/agent-os-especialistas-solvershub.md`): nombres de sus planes y preguntas de precio.
-EJEMPLOS_VENTAS_SOLVERSHUB = [
+EJEMPLOS_PLANES_SOLVERSHUB = [
     "cuánto cuesta el plan basic",
     "quiero contratar premium",
     "qué precio tiene el plan empresarial",
@@ -563,8 +563,13 @@ EJEMPLOS_VENTAS_SOLVERSHUB = [
 ]
 
 
-async def _ejemplos_de_ventas(tid: uuid.UUID, ejemplos: list[str]) -> None:
-    """Versión nueva de Ventas con `overrides.examples` en `contratar_plan` (lo que hace el editor)."""
+def _id_de(procedimiento: Any) -> str:
+    return str(procedimiento["id"] if isinstance(procedimiento, dict) else procedimiento)
+
+
+async def _ejemplos_de_planes(tid: uuid.UUID, ejemplos: list[str]) -> None:
+    """Versión nueva de Suscripciones con `overrides.examples` en su `contratar_plan` (lo que hace el editor).
+    SPEC-43: los planes se venden desde Suscripciones, no desde Ventas."""
     from core.agents import versiones
     from core.kernel.procedures import catalogo_de_acciones
     from core.shared.tenant import tenant_scope
@@ -572,14 +577,26 @@ async def _ejemplos_de_ventas(tid: uuid.UUID, ejemplos: list[str]) -> None:
     ((aid, contenido),) = await _sql(
         tid,
         "select a.id, v.content from agents a join agent_versions v on v.tenant_id = a.tenant_id and v.agent_id = a.id "
-        "where a.key = 'ventas' order by v.version desc limit 1",
+        "where a.key = 'suscripciones' order by v.version desc limit 1",
     )
     nuevo = dict(contenido)
     nuevo["procedures"] = [
-        {**p, "overrides": {"examples": ejemplos}} if p["id"] == PLAN else p for p in nuevo["procedures"]
+        {**p, "overrides": {"examples": ejemplos}} if p["id"] == "pack_subscriptions.contratar_plan" else p
+        for p in nuevo["procedures"]
     ]
     async with tenant_scope(tid):
         await versiones.publicar(tid, aid, catalogo=catalogo_de_acciones(_modules()), contenido=nuevo)
+    # Nadie vende planes desde commerce (PR-4 retira su `contratar_plan`): sin él, no compite con el de Suscripciones.
+    filas = await _sql(
+        tid,
+        "select distinct on (a.id) a.id, v.content from agents a join agent_versions v "
+        "on v.tenant_id = a.tenant_id and v.agent_id = a.id order by a.id, v.version desc",
+    )
+    for agente_id, vcontenido in filas:
+        if any(_id_de(p) == PLAN for p in vcontenido.get("procedures", [])):
+            sin_plan = {**vcontenido, "procedures": [p for p in vcontenido["procedures"] if _id_de(p) != PLAN]}
+            async with tenant_scope(tid):
+                await versiones.publicar(tid, agente_id, catalogo=catalogo_de_acciones(_modules()), contenido=sin_plan)
 
 
 async def _ruta(tid: uuid.UUID, cid: uuid.UUID, monkeypatch: Any, texto: str) -> dict[str, Any]:
@@ -593,7 +610,8 @@ async def test_dogfooding_solvershub_ventas_agenda_y_suscripciones(_ruteo: None,
     En sombra atiende el General y se registra la ruta; en activo «quiero agendar una demo» va a
     Agenda, «quiero contratar Premium» a Ventas, «cambiar mi plan» a Suscripciones y un saludo
     al General. «cuánto cuesta el plan basic» se iba a Suscripciones (disparador de
-    cambiar_plan) hasta publicar las frases de Ventas."""
+    cambiar_plan) hasta que Suscripciones también contrata planes (SPEC-43): entonces queda sin dueño
+    claro y atiende el General hasta publicar las frases de Ventas."""
     from core.releases.promocion import promover
     from core.shared.tenant import tenant_scope
 
@@ -610,24 +628,25 @@ async def test_dogfooding_solvershub_ventas_agenda_y_suscripciones(_ruteo: None,
     assert d["route_source"] == "default" and d["active_instance_id"] == str(inst["general"])
     assert d["shadow_route"]["agent_key"] == "agenda" and d["shadow_route"]["rule_id"] == "preset_agenda_palabras"
 
-    # Activo, sin las frases de Ventas: la pregunta de precio cae en Suscripciones por el disparador.
+    # Activo, sin las frases de Ventas: la pregunta de precio ya no tiene un dueño claro (SPEC-43: Suscripciones
+    # también contrata planes, así que el disparador de `cambiar_plan` deja de ganar con holgura) y atiende el General.
     await _modo(tid, "active")
     d = await _ruta(tid, cid, monkeypatch, "cuánto cuesta el plan basic")
-    assert d["route_source"] == "trigger" and d["active_instance_id"] == str(inst["suscripciones"])
+    assert d["route_source"] == "default" and d["active_instance_id"] == str(inst["general"])
 
-    # Con las frases de Ventas publicadas y su release promovida.
-    await _ejemplos_de_ventas(tid, EJEMPLOS_VENTAS_SOLVERSHUB)
+    # Con las frases de planes de Suscripciones publicadas y su release promovida.
+    await _ejemplos_de_planes(tid, EJEMPLOS_PLANES_SOLVERSHUB)
     await _publicar_release(tid, cid)
     esperados = [
         (DEMO, "agenda", "rule", "preset_agenda_palabras"),
-        ("quiero contratar Premium", "ventas", "trigger", None),
+        ("quiero contratar Premium", "suscripciones", "trigger", None),
         ("cambiar mi plan", "suscripciones", "rule", "preset_suscripciones_mi_plan"),
-        ("cuánto cuesta el plan basic", "ventas", "trigger", None),
+        ("cuánto cuesta el plan basic", "suscripciones", "trigger", None),
         ("hola, buenas tardes", "general", "default", None),
     ]
     for texto, agente, fuente, regla in esperados:
         d = await _ruta(tid, cid, monkeypatch, texto)
-        assert (d["route_source"], d["rule_id"]) == (fuente, regla), texto
+        assert (d["route_source"], d["rule_id"]) == (fuente, regla), (texto, d["candidates"])
         assert d["active_instance_id"] == str(inst[agente]), texto
 
 

@@ -14,6 +14,8 @@ from core.subscriptions import subscription_registry
 NOMBRES = {"sub_consultar", "sub_link_pago", "sub_pausar", "sub_cancelar", "sub_cambiar_plan"}
 # Las del procedimiento `cambiar_plan` (HU-AOS-08): mismo predicado, pero no `always_available`.
 NOMBRES |= {"sub_cotizar_cambio_plan", "sub_aplicar_cambio_plan"}
+# SPEC-43 (HU-SUB-29): las de inscripción, también solo del procedimiento `contratar_plan`.
+NOMBRES |= {"sub_listar_planes", "sub_cotizar_inscripcion", "sub_confirmar_inscripcion", "sub_inscribir"}
 
 
 class _FakeCap:
@@ -61,7 +63,7 @@ def _ctx(customer_id: uuid.UUID | None = None) -> SimpleNamespace:
     )
 
 
-def test_las_cinco_tools_estan_en_el_core() -> None:
+def test_las_tools_estan_en_el_core() -> None:
     skill = tools_mod.SubscriptionSkill()
     herramientas = {t.name for t in skill.get_tools()}
     assert herramientas == NOMBRES

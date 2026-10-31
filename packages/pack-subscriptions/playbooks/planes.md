@@ -1,17 +1,24 @@
-# Planes (productos con recurrencia en commerce)
+# Planes (pack_subscriptions)
 
-Los planes son **productos del catálogo de commerce** (variante con
-`billing_period`, `trial_days` y `entitlements`). La información de planes la
-da el asistente con las tools de commerce (`consultar_inventario` /
-`informar_plan`), NO con tools de este pack.
+Los planes y la inscripción viven en este pack. El precio, la periodicidad y el
+cliente los pone el servidor: tú solo mandas el código del plan, los datos que
+pide el procedimiento y si el cliente aceptó los términos.
 
-## Cómo se contrata (una sola vía)
-1. El cliente elige el plan → el asistente lo informa con commerce (`consultar_inventario`/`informar_plan`).
-2. Se arma cotización → pedido → link de pago (commerce + payments).
-3. Al **pagarse el pedido**, la suscripción se activa automáticamente (hook del core).
+## Informar planes
+- Para listar los planes o dar el detalle de uno, usa `sub_listar_planes` (con
+  `plan_code` para uno solo). Nunca des un precio que esa tool no devolvió.
+- Si el cliente trae un código de promoción, mándalo en `codigo_promocion` al
+  cotizar; el descuento y el total los calcula el servidor.
 
-Este pack solo **gestiona** la suscripción resultante (`sub_*`) y cobra los períodos siguientes (`sub_link_pago`).
+## Cómo se contrata (una sola vía: procedimiento `contratar_plan`)
+1. El cliente elige el plan → `sub_cotizar_inscripcion` devuelve el total real.
+2. Se le muestra el resumen y se espera su confirmación → `sub_confirmar_inscripcion`.
+3. Se inscribe con `sub_inscribir` (lleva la aceptación de los términos).
+4. Si el plan cobra, se comparte el link con `sub_link_pago`; la suscripción se activa
+   cuando el pago se confirma.
 
 ## Reglas
-- Nunca afirmar que una suscripción "se activó" sin que un pedido se haya pagado.
-- Si el cliente pregunta por precios de planes, usar las tools de commerce (nunca inventar montos).
+- Nunca afirmar que una suscripción «se activó» sin que la tool lo haya confirmado.
+- Un plan gratuito no pide pago: la inscripción queda activa al inscribir.
+- Si el cliente ya tiene una suscripción y pide otro plan, es un cambio de plan
+  (`sub_cotizar_cambio_plan`), no una inscripción nueva.

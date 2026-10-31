@@ -59,7 +59,7 @@ class Issue:
 
 # ------------------------------------------------------------------ forma
 _PISTAS: dict[str, str] = {
-    "id": "se espera <dueño>.<nombre> en minúsculas, p. ej. pack_commerce.contratar_plan",
+    "id": "se espera <dueño>.<nombre> en minúsculas, p. ej. pack_subscriptions.contratar_plan",
     "version": "se espera una versión X.Y.Z",
     "setBy": "se espera action:<acción>, interactive:<prefijo>: o content:<location|image|document|audio>",
     "interactivePayloadPrefix": "se espera un prefijo terminado en dos puntos, p. ej. plan:",

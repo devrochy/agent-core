@@ -570,6 +570,13 @@ def acciones_de_puerta(proc: Procedure) -> frozenset[str]:
     return frozenset(a for stage in proc.stages for a in stage.actions if requiere_confirmacion(stage, a))
 
 
+def acciones_de_riesgo_alto(proc: Procedure) -> frozenset[str]:
+    """Las acciones de las etapas `risk: high`: las que crean algo (una inscripción, un cobro). Si son del core
+    no tienen dueño pack que las ligue, así que el motor las gobierna igual que a una puerta sin pedir otro sí:
+    exigen foco y etapa, y sus argumentos se atan a los datos de la tarea."""
+    return frozenset(a for stage in proc.stages if stage.risk == "high" for a in stage.actions)
+
+
 def hash_args(args: Mapping[str, Any] | None) -> str:
     """Hash de los argumentos canónicos: la confirmación de una acción vale para ESOS args."""
     canon = json.dumps(args or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)

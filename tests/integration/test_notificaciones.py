@@ -493,3 +493,25 @@ async def test_lead_y_pedido_nuevos_aparecen_en_el_feed_por_su_seccion(app_clien
     assert await claves(owner_email) == ["commerce.lead_nuevo", "commerce.pedido_nuevo"]
     assert await claves(con_leads) == ["commerce.lead_nuevo"]
     assert await claves(sin_acceso) == []
+
+
+async def test_lead_nuevo_apunta_al_cliente_para_abrir_su_ficha(app_client) -> None:
+    """HU-CRM-20: el destino del aviso es el id del CLIENTE (la ficha se abre por cliente);
+    el id del lead viaja en `data` y sin cliente el destino sigue siendo el lead."""
+    from pack_commerce.skills import _avisar_lead_nuevo
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid, _owner, owner_email = await _tenant_con_owner(uniq("nt-cli"))
+    lead_id, cliente_id, lead_huerfano = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            await _avisar_lead_nuevo(session, lead_id, cliente_id)
+            await _avisar_lead_nuevo(session, lead_huerfano)
+
+    h = await api_headers(app_client, tid, email=owner_email, password=PW)
+    items = (await app_client.get(BASE, headers=h)).json()["items"]
+    destinos = {i["data"]["lead_id"]: i["target"] for i in items}
+    assert destinos[str(lead_id)] == {"entity": "cliente", "id": str(cliente_id), "section": "leads"}
+    assert destinos[str(lead_huerfano)]["entity"] == "lead"

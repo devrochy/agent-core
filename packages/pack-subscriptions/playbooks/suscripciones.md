@@ -11,10 +11,10 @@ calendario y cobranza usan como pivote — ADR-0056).
 - `vencida`: un cargo de período siguió impago pasados los días de gracia del negocio, o un plan Free
   terminó su prueba sin pasar a un plan pago. No genera cargos nuevos; al pagar, la suscripción vuelve a `activa`.
 
-## Ciclo de vida (planes como productos)
-- La suscripción se **habilita** cuando un pedido de un plan (producto de commerce
-  con `billing_period`) se **paga**. El snapshot del plan lo aporta commerce; este
-  pack no guarda catálogo.
+## Ciclo de vida
+- La suscripción nace al **inscribir** al cliente en un plan de este pack
+  (`sub_inscribir`). Con plan de pago queda `pendiente_pago` y se activa cuando se
+  confirma el primer cargo; con plan gratuito queda activa.
 - El admin puede crearla manualmente por API (`/api/v1/pack/pack_subscriptions/suscripciones`).
 - Los **períodos siguientes** se cobran con `sub_link_pago` o el cron `generar_cargos`
   → cargo `pendiente` → `payment.confirmed` lo marca `pagado` (referencia `sub-<cargo.id>`).

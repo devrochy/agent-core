@@ -20,11 +20,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from core.access import policy
 from core.access.events import registrar_evento, sufijo
+from core.admin.roles import rol_actua_como_master
 from core.db.models import AccountDevice, Admin, TenantUser
 from core.shared.logger import get_logger
 
@@ -32,6 +33,9 @@ log = get_logger(__name__)
 
 PENDIENTE, ACTIVO, BLOQUEADO = "pendiente", "activo", "bloqueado"
 ALCANCES: tuple[str, ...] = ("cuenta", "equipo")
+# Tope de equipos vigentes (pendientes, activos y bloqueados; no los dados de baja) por cuenta y negocio:
+# un token válido no puede llenar la tabla de filas inventadas (HU-ACC-06).
+MAX_EQUIPOS_POR_CUENTA = 10
 PLATAFORMAS: tuple[str, ...] = ("android", "ios")
 
 _UNICO_CUENTA = {
@@ -214,6 +218,75 @@ async def _reclamar_legacy(
     return fila
 
 
+async def _equipos_vigentes(session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> int:
+    return int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(AccountDevice)
+                .where(
+                    AccountDevice.tenant_id == tenant_id,
+                    AccountDevice.admin_id == admin_id,
+                    AccountDevice.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one()
+    )
+
+
+async def degradar_por_cambio_de_rol(
+    session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID, rol_nuevo: str
+) -> list[tuple[uuid.UUID, str | None]]:
+    """La cuenta pasó a un rol más estricto (p. ej. colaborador → gestor): los equipos que entraron solo
+    porque la política anterior era abierta (`politica_abierta`) vuelven a `pendiente` si la del rol nuevo
+    es restringida. Los aprobados por una persona (alta manual, aprobación, migrados) se respetan.
+    Devuelve `(fila, device_id)` de cada equipo que bajó. El llamador debe llamar a `invalidar_cuenta`
+    **después** del commit: invalidar antes dejaría que otra petición recachee el estado anterior."""
+    if rol_nuevo not in policy.ROLES or (await policy.leer(session, tenant_id))[rol_nuevo] != policy.RESTRINGIDO:
+        return []
+    filas = (
+        (
+            await session.execute(
+                select(AccountDevice).where(
+                    AccountDevice.tenant_id == tenant_id,
+                    AccountDevice.admin_id == admin_id,
+                    AccountDevice.estado == ACTIVO,
+                    AccountDevice.origen == "politica_abierta",
+                    AccountDevice.deleted_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for fila in filas:
+        fila.estado, fila.aprobado_at, fila.aprobado_por = PENDIENTE, None, None
+        registrar_evento(
+            session,
+            tenant_id=tenant_id,
+            tipo="dispositivo_pendiente",
+            admin_id=admin_id,
+            device_row_id=fila.id,
+            device_id=fila.device_id,
+            rol=rol_nuevo,
+            canal="panel_apk",
+            detalle={"por": "cambio_de_rol", "rol": rol_nuevo},
+        )
+    return [(f.id, f.device_id) for f in filas]
+
+
+async def invalidar_cuenta(
+    tenant_id: uuid.UUID, admin_id: uuid.UUID, equipos: list[tuple[uuid.UUID, str | None]]
+) -> None:
+    """Saca de la caché de vigencia la cuenta (todos sus roles) y los equipos dados. Tras el commit."""
+    from core.access.sesion import invalidar
+
+    await invalidar(tenant_id, admin_id, *(row for row, _ in equipos))
+    for _, device_id in equipos:
+        if device_id:
+            await invalidar(tenant_id, admin_id, device_id=device_id)
+
+
 def _denegar(code: str, estado: str, politica: str, fila: AccountDevice | None = None) -> Decision:
     return Decision(False, estado, politica, code, fila.id if fila is not None else None)
 
@@ -311,6 +384,16 @@ async def _evaluar(
             )
             return Decision(True, ACTIVO, politica, None, reclamada.id)
 
+        if await _equipos_vigentes(session, tenant_id, admin_id) >= MAX_EQUIPOS_POR_CUENTA:
+            log.warning(
+                "access_tope_equipos", tenant_id=str(tenant_id), admin_id=str(admin_id), tope=MAX_EQUIPOS_POR_CUENTA
+            )
+            raise AccesoError(
+                429,
+                "demasiados_equipos",
+                "Esta cuenta ya tiene demasiados equipos registrados. Pide a un administrador "
+                "que dé de baja los que no uses.",
+            )
         restringido = politica == policy.RESTRINGIDO
         fila, creada = await _crear(
             session,
@@ -369,7 +452,7 @@ async def rol_de_cuenta(session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID)
     admin_role = (
         await session.execute(select(Admin.role).where(Admin.id == admin_id))
     ).scalar_one_or_none()
-    if admin_role == "master":
+    if admin_role == "master" or rol_actua_como_master(admin_role):  # tester habilitado: como el master
         return "master"
     return (
         await session.execute(

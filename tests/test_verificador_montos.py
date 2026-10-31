@@ -179,3 +179,9 @@ def test_extract_monetary_values_de_la_cotizacion_de_un_plan_con_promocion():
     assert sorted(_extract_monetary_values(cotizacion)) == sorted(
         [100000.0, 20000.0, 80000.0, 100000.0, 80000.0, 100000.0]
     )
+
+
+def test_extract_monetary_values_de_lo_que_el_cliente_confirma():
+    """HU-SUB-29/34: `monto_a_pagar` (inscripción y cambio de plan) y `precio_nuevo` son montos del servidor."""
+    cotizacion = {"plan": "Premium", "monto_a_pagar": 80000.0, "precio_nuevo": 300000.0, "dias": 3}
+    assert sorted(_extract_monetary_values(cotizacion)) == [80000.0, 300000.0]

@@ -750,13 +750,19 @@ class ContextoMotor:
         if self.modo != "activo":
             return frozenset()
         fuente = self._de_la_release if self._de_la_release is not None else self.procedimientos
-        return frozenset().union(*(motor.acciones_de_puerta(p) for p in fuente.values()))
+        return frozenset().union(
+            *(motor.acciones_de_puerta(p) | (motor.acciones_de_riesgo_alto(p) & self._core) for p in fuente.values())
+        )
 
     def _liberadas(self, procedure_id: str | None) -> frozenset[str]:
         """Las puertas del procedimiento de una tarea sin gobierno (respaldo v2)."""
         fuente = self._de_la_release if self._de_la_release is not None else self.procedimientos
         proc = fuente.get(procedure_id) if procedure_id is not None else None
-        return motor.acciones_de_puerta(proc) if proc is not None else frozenset()
+        return (
+            motor.acciones_de_puerta(proc) | (motor.acciones_de_riesgo_alto(proc) & self._core)
+            if proc is not None
+            else frozenset()
+        )
 
     def _puertas_sin_foco(self) -> frozenset[str]:
         """Lo que no se ofrece sin foco: todas las puertas menos las del procedimiento de una tarea

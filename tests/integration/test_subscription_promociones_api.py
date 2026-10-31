@@ -71,7 +71,7 @@ async def test_crud_de_promociones_con_auditoria(app_client) -> None:
         ({"valor": 100}, "porcentaje_invalido"),
         ({"valor": 0.5}, "porcentaje_invalido"),
         ({"tipo_descuento": "monto", "valor": 5000, "periodos": 2}, "monto_un_periodo"),
-        ({"periodos": 3}, "periodos_no_disponibles"),
+        ({"periodos": 13}, "unprocessable"),  # le=12 en el esquema
         ({"codigo": "ab"}, "codigo_invalido"),
         ({"vigente_desde": "2026-12-01T00:00:00Z", "vigente_hasta": "2026-11-01T00:00:00Z"}, "vigencia_invalida"),
         ({"plan_id": str(uuid.uuid4())}, "plan_no_encontrado"),
