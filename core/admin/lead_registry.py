@@ -40,6 +40,11 @@ Relación con el cliente (HU-CRM-12, ADR-0179 decisión 4): un pack puede aporta
 módulo» (un `SELECT customer_id`); de ahí salen los iconos veraces de la columna Agentes y el
 filtro `agente=` de la lista. Sin `relacion` se conserva la heurística de las columnas.
 `ficha` y `detalle` quedan declaradas para HU-CRM-14 (ficha en el prompt y tool de historial).
+
+Contadores por opción (HU-CRM-17): un pack puede aportar `facet_query(clave)`, un `SELECT customer_id,
+valor` con el valor que cada cliente tiene para el filtro `clave` (a lo sumo una fila por cliente). El core
+lo agrupa en una sola consulta acotada a los clientes de la lista y devuelve cuántos hay por opción, sin
+conocer las tablas del pack. Los clientes sin fila cuentan como «sin valor».
 """
 
 from __future__ import annotations
@@ -54,6 +59,7 @@ from sqlalchemy import String, and_, cast, or_
 
 LeadResolver = Callable[[list[uuid.UUID]], Awaitable[dict[uuid.UUID, dict[str, Any]]]]
 LeadFilterQuery = Callable[[str, str], Awaitable[Any]]  # (clave, valor) -> Select[customer_id]
+LeadFacetQuery = Callable[[str], Awaitable[Any]]  # (clave) -> Select[customer_id, valor]
 
 Cursor = tuple[datetime, str, str]  # (at, source, id) del último evento de la página anterior
 
@@ -150,6 +156,7 @@ class LeadProvider:
     agent_name: str | None = None
     icon: str | None = None
     relacion: LeadRelacion | None = None
+    facet_query: LeadFacetQuery | None = None
 
 
 class LeadRegistry:
@@ -170,6 +177,7 @@ class LeadRegistry:
         agent_name: str | None = None,
         icon: str | None = None,
         relacion: LeadRelacion | None = None,
+        facet_query: LeadFacetQuery | None = None,
     ) -> None:
         """Idempotente: registrar dos veces el mismo pack reemplaza la entrada."""
         self._providers[plugin_id] = LeadProvider(
@@ -184,6 +192,7 @@ class LeadRegistry:
             agent_name,
             icon,
             relacion,
+            facet_query,
         )
 
     def providers_for(self, enabled: set[str] | None) -> list[LeadProvider]:
@@ -202,6 +211,17 @@ class LeadRegistry:
         for provider in self.providers_for(enabled):
             for filtro in provider.filters:
                 if filtro.key == key and provider.filter_query is not None:
+                    return provider, filtro
+        return None
+
+
+    def facet_for(self, enabled: set[str] | None, key: str) -> tuple[LeadProvider, LeadFilter] | None:
+        """El provider habilitado que declara el filtro `key` y sabe contar sus opciones, o `None`."""
+        for provider in self.providers_for(enabled):
+            if provider.facet_query is None:
+                continue
+            for filtro in provider.filters:
+                if filtro.key == key:
                     return provider, filtro
         return None
 

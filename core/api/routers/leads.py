@@ -46,6 +46,7 @@ from core.db.models import (
     Customer,
     CustomerNote,
     MemoryFact,
+    Message,
 )
 from core.db.session import get_session
 from core.geocoding import GeocodingError, geocodificar_inverso
@@ -134,14 +135,27 @@ class LeadRow(BaseModel):
     telefono: str | None = None
     bot_paused: bool = False
     alta: str
+    # Último mensaje de cualquiera de sus conversaciones (ISO 8601 con zona); `None` si no hay.
+    ultima_actividad: datetime | None = None
     extras: dict[str, Any]
     perfil: LeadPerfilOut
     agentes: list[str]
 
 
+class LeadFacetaOut(BaseModel):
+    """Cuántos clientes hay por opción de un filtro, con el resto de los filtros de la lista aplicados
+    (pero no el propio, para que las pestañas de un mismo filtro sumen contra el mismo total)."""
+
+    key: str
+    counts: dict[str, int]
+    sin_valor: int  # clientes de la lista que no tienen valor para este filtro (p. ej. sin lead de venta)
+    total: int
+
+
 class LeadsResponse(BaseModel):
     columns: list[LeadColumn]
     filters: list[LeadFilter] = Field(default_factory=list)
+    facetas: list[LeadFacetaOut] = Field(default_factory=list)
     agents: list[LeadAgentOut]
     items: list[LeadRow]
     total: int
@@ -468,6 +482,7 @@ async def _consulta(
     filtro: list[str] | None,
     customer_id: uuid.UUID | None = None,
     agente: str | None = None,
+    omitir: frozenset[str] = frozenset(),
 ) -> Select[Any]:
     query = select(Customer).where(
         Customer.tenant_id == tenant_id,
@@ -500,6 +515,8 @@ async def _consulta(
         provider, definicion = encontrado
         if value not in {v for v, _ in definicion.options}:
             raise ApiError.bad_request(f"Valor no válido para {key!r}.", code="filtro_invalido")
+        if key in omitir:  # ya validado; solo no se aplica (contadores de ese mismo filtro)
+            continue
         assert provider.filter_query is not None
         sub = await provider.filter_query(key, value)
         if sub is None:
@@ -517,6 +534,102 @@ async def _consulta(
         subs = [await relacion.con_datos(None) for relacion in propios]
         query = query.where(or_(*[Customer.id.in_(sub) for sub in subs]))
     return query
+
+
+Orden = Literal["alta", "actividad", "nombre", "nombre_desc"]
+
+OrdenQuery = Annotated[
+    Orden,
+    Query(
+        description="`alta` (por defecto, el más nuevo primero), `actividad` (último mensaje, el más reciente "
+        "primero; los clientes sin mensajes van al final), `nombre` o `nombre_desc`."
+    ),
+]
+
+FacetasQuery = Annotated[
+    list[str] | None,
+    Query(
+        description="Claves de `filters` de las que se quieren contadores por opción (se repite el parámetro). "
+        "Una clave que no declara ningún pack, o que no sabe contar, responde 400 `filtro_invalido`."
+    ),
+]
+
+
+def _ultima_actividad(tenant_id: uuid.UUID, customer_ids: list[uuid.UUID] | None = None) -> Select[Any]:
+    """`(customer_id, ultima)`: el último mensaje de cada cliente, por el índice de `messages`."""
+    query = (
+        select(Conversation.customer_id.label("customer_id"), func.max(Message.created_at).label("ultima"))
+        .join(Message, Message.conversation_id == Conversation.id)
+        .where(Conversation.tenant_id == tenant_id, Message.tenant_id == tenant_id)
+        .group_by(Conversation.customer_id)
+    )
+    if customer_ids is not None:
+        query = query.where(Conversation.customer_id.in_(customer_ids))
+    return query
+
+
+def _ordenar(query: Select[Any], orden: Orden, tenant_id: uuid.UUID) -> Select[Any]:
+    if orden == "actividad":
+        actividad = _ultima_actividad(tenant_id).subquery()
+        return query.outerjoin(actividad, actividad.c.customer_id == Customer.id).order_by(
+            actividad.c.ultima.desc().nulls_last(), Customer.created_at.desc(), Customer.id
+        )
+    if orden in ("nombre", "nombre_desc"):
+        nombre = func.lower(func.coalesce(Customer.name, ""))
+        return query.order_by(nombre.desc() if orden == "nombre_desc" else nombre.asc(), Customer.id)
+    return query.order_by(Customer.created_at.desc(), Customer.id)
+
+
+async def _facetas(
+    tenant_id: uuid.UUID,
+    *,
+    enabled: set[str],
+    claves: list[str],
+    q: str | None,
+    channel: str | None,
+    connection_id: uuid.UUID | None,
+    filtro: list[str] | None,
+    agente: str | None,
+) -> list[LeadFacetaOut]:
+    """Contadores por opción de cada filtro pedido: una consulta agrupada por clave."""
+    salida: list[LeadFacetaOut] = []
+    for clave in dict.fromkeys(claves):  # sin repetidas, en el orden pedido
+        encontrado = lead_registry.facet_for(enabled, clave)
+        if encontrado is None:
+            raise ApiError.bad_request(f"No hay contadores para {clave!r}.", code="filtro_invalido")
+        provider, definicion = encontrado
+        assert provider.facet_query is not None
+        pares = await provider.facet_query(clave)
+        if pares is None:
+            raise ApiError.bad_request(f"No hay contadores para {clave!r}.", code="filtro_invalido")
+        base = await _consulta(
+            tenant_id,
+            enabled=enabled,
+            q=q,
+            channel=channel,
+            connection_id=connection_id,
+            filtro=filtro,
+            agente=agente,
+            omitir=frozenset({clave}),
+        )
+        ids_base = select(base.subquery().c.id)
+        valores = pares.subquery()
+        opciones = [v for v, _ in definicion.options]
+        async with get_session() as session:
+            total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
+            filas = (
+                await session.execute(
+                    select(valores.c.valor, func.count(func.distinct(valores.c.customer_id)))
+                    .where(valores.c.customer_id.in_(ids_base), valores.c.valor.in_(opciones))
+                    .group_by(valores.c.valor)
+                )
+            ).all()
+        counts = {v: 0 for v in opciones}
+        counts.update({str(valor): int(n) for valor, n in filas})
+        salida.append(
+            LeadFacetaOut(key=clave, counts=counts, sin_valor=max(int(total) - sum(counts.values()), 0), total=int(total))
+        )
+    return salida
 
 
 async def _valores_de_packs(
@@ -611,6 +724,8 @@ async def list_leads(
     ] = None,
     filtro: FiltroQuery = None,
     agente: AgenteQuery = None,
+    orden: OrdenQuery = "alta",
+    facetas: FacetasQuery = None,
 ) -> LeadsResponse:
     tenant_id = principal.tenant_id
     enabled, providers = await _providers()
@@ -625,18 +740,38 @@ async def list_leads(
         customers = (
             (
                 await session.execute(
-                    query.order_by(Customer.created_at.desc(), Customer.id)
-                    .offset(params.offset)
-                    .limit(params.page_size)
+                    _ordenar(query, orden, tenant_id).offset(params.offset).limit(params.page_size)
                 )
             )
             .scalars()
             .all()
         )
 
-    pack_values = await _valores_de_packs(providers, [c.id for c in customers])
-    con_datos = await _con_datos_por_pack(providers, [c.id for c in customers])
+    ids_pagina = [c.id for c in customers]
+    pack_values = await _valores_de_packs(providers, ids_pagina)
+    con_datos = await _con_datos_por_pack(providers, ids_pagina)
     meta = _meta_de_agentes(providers, await _registros_de_agentes(tenant_id))
+    actividad: dict[uuid.UUID, datetime] = {}
+    if ids_pagina:
+        async with get_session() as session:
+            actividad = {
+                cid: ultima
+                for cid, ultima in (await session.execute(_ultima_actividad(tenant_id, ids_pagina))).all()
+            }
+    contadores = (
+        await _facetas(
+            tenant_id,
+            enabled=enabled,
+            claves=facetas,
+            q=q,
+            channel=channel,
+            connection_id=connection_id,
+            filtro=filtro,
+            agente=agente,
+        )
+        if facetas
+        else []
+    )
     items = []
     for cliente in customers:
         extras = pack_values.get(cliente.id, {})
@@ -649,6 +784,7 @@ async def list_leads(
                 telefono=perfil_cliente_.phone,
                 bot_paused=bool(cliente.bot_paused),
                 alta=cliente.created_at.strftime("%Y-%m-%d") if cliente.created_at else "—",
+                ultima_actividad=actividad.get(cliente.id),
                 extras=extras,
                 perfil=perfil_cliente_,
                 agentes=_agentes_de_la_fila(providers, extras, meta, cliente.id, con_datos),
@@ -657,6 +793,7 @@ async def list_leads(
     return LeadsResponse(
         columns=_columnas(providers),
         filters=_filtros_de(providers),
+        facetas=contadores,
         agents=meta,
         items=items,
         total=int(total),
