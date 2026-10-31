@@ -4,7 +4,7 @@
   "procedimientos": [
     "pack_subscriptions.contratar_plan"
   ],
-  "descripcion": "Gherkin 1 de HU-AOS-07 (contratar_plan): el cliente simulado compra el Premium mensual con pago en línea. El pedido tiene la variante y el total del servidor y el link cobra ese total. Para medir pass^4 en vivo (con OK del dueño).",
+  "descripcion": "Gherkin 1 de HU-AOS-07 (contratar_plan, SPEC-43): el cliente simulado compra el Premium mensual con pago en línea. La inscripción queda pendiente de pago por el total del servidor y el link cobra ese total. Para medir pass^4 en vivo (con OK del dueño).",
   "pasos": [
     {
       "nota": "el cliente simulado conversa hasta recibir el link",
@@ -24,41 +24,44 @@
       ]
     },
     {
-      "nota": "un pedido por el total del Premium mensual",
+      "nota": "una inscripción pendiente de pago por el Premium mensual",
       "verifica": {
-        "tabla": "pack_commerce_orders",
+        "tabla": "pack_subscriptions_subscriptions",
         "donde": {
           "customer_id": "{cliente.id}"
         },
         "filas": 1,
         "espera": {
-          "payment_status": "pendiente",
-          "total": 600000
+          "estado": "pendiente_pago",
+          "valor_periodo": 600000
         },
-        "guardar_como": "pedido"
+        "guardar_como": "suscripcion"
       }
     },
     {
-      "nota": "la línea es la variante mensual",
+      "nota": "el primer cargo por el total",
       "verifica": {
-        "tabla": "pack_commerce_order_items",
+        "tabla": "pack_subscriptions_charges",
         "donde": {
-          "order_id": "{pedido.id}"
+          "subscription_id": "{suscripcion.id}"
         },
         "filas": 1,
         "espera": {
-          "unit_price": 600000,
-          "quantity": 1
+          "estado": "pendiente",
+          "monto": 600000,
+          "referencia": {
+            "$no_nulo": true
+          }
         },
-        "orden": "id"
+        "guardar_como": "cargo"
       }
     },
     {
-      "nota": "el link cobra el total del pedido",
+      "nota": "el link cobra el total del cargo",
       "verifica": {
         "tabla": "pack_payments_transactions",
         "donde": {
-          "reference": "{pedido.public_order_number}"
+          "reference": "{cargo.referencia}"
         },
         "filas": 1,
         "espera": {

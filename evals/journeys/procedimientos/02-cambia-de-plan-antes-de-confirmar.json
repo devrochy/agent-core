@@ -4,7 +4,7 @@
   "procedimientos": [
     "pack_subscriptions.contratar_plan"
   ],
-  "descripcion": "Gherkin 3 de HU-AOS-07: el cliente pide el Premium mensual y, antes de confirmar el total, se cambia al anual. La cotización se recalcula y el pedido sale del anual (la mensual nunca se acepta).",
+  "descripcion": "Gherkin 3 de HU-AOS-07 (SPEC-43): el cliente pide el Premium mensual y, antes de confirmar el total, se cambia al anual. El resumen se recalcula y la inscripción sale del anual (el mensual nunca se inscribe).",
   "pasos": [
     {
       "nota": "primero el mensual, después cambia al anual",
@@ -24,27 +24,30 @@
       ]
     },
     {
-      "nota": "un solo pedido, por el anual",
+      "nota": "una sola inscripción, por el Premium anual",
       "verifica": {
-        "tabla": "pack_commerce_orders",
+        "tabla": "pack_subscriptions_subscriptions",
         "donde": {
           "customer_id": "{cliente.id}"
         },
         "filas": 1,
         "espera": {
-          "total": 6000000
-        }
+          "valor_periodo": 6000000
+        },
+        "guardar_como": "suscripcion"
       }
     },
     {
-      "nota": "ninguna cotización del mensual quedó aceptada",
+      "nota": "un solo cargo, por el total del anual",
       "verifica": {
-        "tabla": "pack_commerce_quotes",
+        "tabla": "pack_subscriptions_charges",
         "donde": {
-          "customer_id": "{cliente.id}",
-          "status": "aceptada"
+          "subscription_id": "{suscripcion.id}"
         },
-        "filas": 0
+        "filas": 1,
+        "espera": {
+          "monto": 6000000
+        }
       }
     }
   ]
