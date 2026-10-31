@@ -53,7 +53,7 @@ async def _proceso() -> None:
 async def _equipo() -> tuple[uuid.UUID, uuid.UUID, dict[str, uuid.UUID]]:
     tid, cid = await _negocio()
     agentes = {
-        "ventas": await _especialista(tid, cid, "ventas", PLAN, {"informar_plan"}, defecto=True),
+        "ventas": await _especialista(tid, cid, "ventas", PLAN, {"consultar_inventario"}, defecto=True),
         "agenda": await _especialista(tid, cid, "agenda", CITA, {"list_appointment_types"}, defecto=False),
     }
     await _publicar_release(tid, cid)

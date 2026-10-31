@@ -125,7 +125,7 @@ def test_plantillas_se_ofrecen_y_habilitan_sus_habilidades() -> None:
     assert set(vistas) == {"agenda", "cobranza", "suscripciones", "ventas"}
     ventas = vistas["ventas"]
     assert ventas.available and ventas.will_enable == () and ventas.missing_skills == ()
-    assert [s.id for s in ventas.superpowers] == ["pack_commerce.tomar_pedido", "pack_commerce.contratar_plan"]
+    assert [s.id for s in ventas.superpowers] == ["pack_commerce.tomar_pedido"]
     assert all(len(s.phrases) >= editor.MIN_FRASES for s in ventas.superpowers)
     agenda = vistas["agenda"]
     assert agenda.available and agenda.will_enable == ("pack_calendar",) and agenda.missing_skills == ()

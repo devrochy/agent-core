@@ -1,12 +1,12 @@
 {
   "nombre": "comprar-basic-y-pagar",
-  "descripcion": "Compra del Basic con pago en línea: link por el total del pedido, pago confirmado por la pasarela y suscripción activa sin prueba.",
+  "descripcion": "Compra del Basic con pago en línea por contratar_plan: la inscripción queda pendiente de pago con su link por el total del primer cargo, la pasarela confirma el pago y la suscripción queda activa sin prueba.",
   "pasos": [
     {
-      "nota": "pide el Basic con pago en línea",
-      "usuario": "Quiero el Plan Basic y pagarlo en línea. Mis datos: Ana Gómez, cédula 1012345678, celular 3001234567, correo ana.gomez@example.com.",
-      "hasta_herramienta": "confirmar_pago_pedido",
-      "insistir": "Sí, confirmo el Plan Basic con pago en línea. Pasame el link de pago.",
+      "nota": "pide el Basic con pago en línea; confirma el resumen y sale el link",
+      "usuario": "Quiero el Plan Basic y pagarlo en línea. Mis datos: Ana Gómez, cédula 1012345678, celular 3001234567, correo ana+{cliente.id}@example.com.",
+      "hasta_herramienta": "sub_inscribir",
+      "insistir": "Sí, confirmo. Pasame el link de pago.",
       "max_turnos": 4,
       "espera": {
         "texto_contiene": [
@@ -15,30 +15,44 @@
       }
     },
     {
-      "nota": "pedido pendiente con link",
+      "nota": "inscripción pendiente de pago por el valor del Basic",
       "verifica": {
-        "tabla": "pack_commerce_orders",
+        "tabla": "pack_subscriptions_subscriptions",
         "donde": {
           "customer_id": "{cliente.id}"
         },
         "filas": 1,
         "espera": {
-          "payment_status": "pendiente",
-          "total": 200000
+          "estado": "pendiente_pago",
+          "valor_periodo": 200000
         },
-        "guardar_como": "pedido"
-      },
-      "espera": {
-        "payment_status": "pendiente",
-        "total": 200000
+        "guardar_como": "suscripcion"
       }
     },
     {
-      "nota": "el link cobra el total del pedido, no un monto inventado",
+      "nota": "el primer cargo, con su referencia",
+      "verifica": {
+        "tabla": "pack_subscriptions_charges",
+        "donde": {
+          "subscription_id": "{suscripcion.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "pendiente",
+          "monto": 200000,
+          "referencia": {
+            "$no_nulo": true
+          }
+        },
+        "guardar_como": "cargo"
+      }
+    },
+    {
+      "nota": "el link cobra el total del cargo, no un monto inventado",
       "verifica": {
         "tabla": "pack_payments_transactions",
         "donde": {
-          "reference": "{pedido.public_order_number}"
+          "reference": "{cargo.referencia}"
         },
         "filas": 1,
         "espera": {
@@ -48,40 +62,21 @@
       }
     },
     {
-      "nota": "todavía no hay suscripción",
-      "verifica": {
-        "tabla": "pack_subscriptions_subscriptions",
-        "donde": {
-          "customer_id": "{cliente.id}"
-        },
-        "filas": 0
-      }
-    },
-    {
       "nota": "la pasarela confirma el pago",
       "evento": "payment.confirmed",
       "datos": {
-        "reference": "{pedido.public_order_number}",
+        "reference": "{cargo.referencia}",
         "provider": "simulado",
-        "provider_reference": "sim-{pedido.public_order_number}",
+        "provider_reference": "sim-{cargo.referencia}",
         "amount": 200000
       }
     },
     {
-      "nota": "pedido pagado",
-      "verifica": {
-        "tabla": "pack_commerce_orders",
-        "donde": {
-          "customer_id": "{cliente.id}"
-        },
-        "espera": {
-          "payment_status": "pagado",
-          "plan_activation_status": "activada"
-        }
-      }
+      "nota": "el worker entrega los eventos",
+      "outbox": "despachar"
     },
     {
-      "nota": "suscripción activa sin prueba",
+      "nota": "el pago activó la suscripción sin prueba",
       "verifica": {
         "tabla": "pack_subscriptions_subscriptions",
         "donde": {

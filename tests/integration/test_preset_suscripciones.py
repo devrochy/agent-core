@@ -1,10 +1,11 @@
-"""HU-SH-01 · preset `suscripciones`, precio desde core/billing y voz de marca, contra la BD real."""
+"""HU-SH-01 · preset `suscripciones` y voz de marca, contra la BD real.
+
+El precio del plan dejó de vivir en commerce (SPEC-43, HU-COM-17): la resiembra desde core/billing la cubre
+`test_subscription_planes_api`."""
 
 from __future__ import annotations
 
 import os
-import uuid
-from decimal import Decimal
 
 import pytest
 from _api_helpers import uniq
@@ -37,38 +38,6 @@ CATALOGO = {
         }
     ],
 }
-
-
-async def _variante(tid: uuid.UUID, sku: str):
-    from pack_commerce.models import ProductVariant
-
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(tid):
-        async with get_session() as s:
-            return (
-                await s.execute(select(ProductVariant).where(ProductVariant.tenant_id == tid, ProductVariant.sku == sku))
-            ).scalar_one()
-
-
-async def test_el_precio_del_plan_sale_de_billing_y_se_resincroniza(monkeypatch) -> None:
-    """Gherkin «Una fuente de precios»: cambiar Basic en plans.py cambia el producto."""
-    from pack_commerce.jobs import _sincronizar_precios_de_plan
-    from pack_commerce.seed import seed_catalog
-
-    import core.billing.plans as plans
-    from core.alta_negocio import onboard_tenant
-
-    tid, _ = await onboard_tenant(name="Agencia", slug=uniq("plan"), packs=["pack_commerce"])
-    await seed_catalog(tid, CATALOGO)
-    basic = plans.get_plan("basic")
-    assert basic is not None
-    assert Decimal((await _variante(tid, "PLAN-BASIC")).price) == Decimal(basic.price_cop)
-
-    monkeypatch.setitem(plans.PLANS_BY_ID, "basic", basic.__class__(**{**basic.__dict__, "price_cop": 250_000}))
-    assert await _sincronizar_precios_de_plan() >= 1
-    assert Decimal((await _variante(tid, "PLAN-BASIC")).price) == Decimal(250_000)
 
 
 async def test_preset_suscripciones_deja_el_proveedor_y_la_agenda_interna() -> None:

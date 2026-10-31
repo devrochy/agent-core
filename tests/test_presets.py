@@ -72,7 +72,8 @@ def test_fragmentos_reales_de_commerce_son_validos() -> None:
     for vertical in ("comercio", "restaurante", "suscripciones"):
         fragmento = load_fragment("pack_commerce", vertical, CRMConfig)
         CRMConfig.model_validate(fragmento.config)
-        assert fragmento.seed.get("products")
+        # El preset de suscripciones no siembra planes en commerce (HU-COM-17): los trae pack_subscriptions.
+        assert bool(fragmento.seed.get("products")) == (vertical != "suscripciones")
 
 
 def _plan(pid: str, orden: int, plugins: int | None) -> SimpleNamespace:
@@ -120,11 +121,8 @@ def test_preset_suscripciones_fija_su_proveedor_y_agenda_interna() -> None:
 
 
 def test_seed_de_suscripciones_respeta_d16() -> None:
-    """Solo el plan de $0 trae prueba en los datos de ejemplo (D-16)."""
-    from pack_commerce.config import CRMConfig
-
-    fragmento = load_fragment("pack_commerce", "suscripciones", CRMConfig)
-    for producto in fragmento.seed["products"]:
-        for variante in producto["variants"]:
-            prueba = variante["attributes"].get("trial_dias", 0)
-            assert prueba == 0 or variante["price"] == 0, variante["sku"]
+    """Solo el plan de $0 trae prueba en los datos de ejemplo (D-16): ahora viven en pack_subscriptions."""
+    fragmento = load_fragment("pack_subscriptions", "suscripciones")
+    assert fragmento.seed["planes"]
+    for plan in fragmento.seed["planes"]:
+        assert plan.get("trial_dias", 0) == 0 or plan["precio"] == 0, plan["codigo"]

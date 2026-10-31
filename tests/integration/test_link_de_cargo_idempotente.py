@@ -13,6 +13,7 @@ from decimal import Decimal
 
 import pytest
 from _api_helpers import uniq
+from _subs_helpers import plan_por_defecto
 from sqlalchemy import select
 
 pytestmark = [
@@ -96,9 +97,9 @@ async def test_sub_link_pago_reusa_el_link_que_genero_el_cron(proveedor) -> None
     from core.shared.tenant import tenant_scope
 
     tid = await _negocio()
-    plan = {"nombre": "Basic", "precio": 200000, "moneda": "COP", "periodicidad": "mensual", "trial_dias": 0}
+    plan_id = await plan_por_defecto(tid)  # Basic, $200.000 mensual
     async with tenant_scope(tid):
-        sub = await crear_suscripcion_para(customer_id=uuid.uuid4(), variante_id=uuid.uuid4(), plan=plan)
+        sub = await crear_suscripcion_para(customer_id=uuid.uuid4(), plan_id=plan_id)
     await _generar_cargos(datetime.now(UTC) + timedelta(days=29))
     async with tenant_scope(tid):
         async with get_session() as s:

@@ -1,6 +1,6 @@
 """Vencimiento de las tareas que esperan su evento de cierre (HU-AOS-07, cierre por pago).
 
-`contratar_plan` y `tomar_pedido` con pago en línea quedan en `esperar_pago` hasta que llega
+`tomar_pedido` con pago en línea queda en `esperar_pago` hasta que llega
 `order.paid` (o el cliente dice que pagó y `verificar_pago_pedido` lo confirma). Si el pago no
 llega y el cliente no vuelve a escribir (el episodio siguiente ya cancela lo inactivo, ADR-0114),
 la tarea no queda abierta para siempre: este cron cancela con motivo `espera_vencida` las tareas

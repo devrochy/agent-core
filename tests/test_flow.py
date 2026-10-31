@@ -180,12 +180,12 @@ async def test_seccion_propia_se_suma_y_no_reemplaza_a_los_packs(monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_override_explicito_de_una_seccion_de_pack(monkeypatch: pytest.MonkeyPatch) -> None:
-    propia = section("pedido", ["crear_pedido", "informar_plan"], pack="pack_commerce")
+    propia = section("pedido", ["crear_pedido", "consultar_inventario"], pack="pack_commerce")
     monkeypatch.setattr(flow_mod, "load_tenant_flow", lambda slug: [propia])
     flow = await resolve_flow(make_spec(["pack_commerce"]), slug="acme")
     assert flow is not None
     pedido = next(s for s in flow.sections if s.qualified_id == "pack_commerce:pedido")
-    assert pedido.tools == ["crear_pedido", "informar_plan"]
+    assert pedido.tools == ["crear_pedido", "consultar_inventario"]
 
 
 @pytest.mark.asyncio

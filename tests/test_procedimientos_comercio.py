@@ -7,7 +7,9 @@ Lo que corre contra el loop real y la base (Gherkin) está en
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -24,7 +26,12 @@ def _procs() -> dict[str, Procedure]:
 
 
 def _plan() -> Procedure:
-    return _procs()["pack_commerce.contratar_plan"]
+    """`contratar_plan` de commerce se retiró (SPEC-43, HU-COM-17): su última versión (1.3.0) queda como
+    fixture para que estas pruebas del motor (ligadura de argumentos, invalidación al cambiar un dato,
+    congelamiento tras un efecto de riesgo alto, cierre por pago) sigan ejerciendo un procedimiento de
+    ventas con cotización. Ya no lo publica el pack."""
+    ruta = Path(__file__).parent / "fixtures" / "procedures_congeladas" / "contratar_plan_comercio.json"
+    return Procedure.model_validate(json.loads(ruta.read_text(encoding="utf-8")))
 
 
 def _pedido() -> Procedure:
@@ -45,13 +52,13 @@ def _tarea(stage: str, slots: dict[str, Any], proc_id: str = "pack_commerce.cont
 # ---------------------------------------------------------------- archivos, linter y manifiesto
 
 
-def test_el_pack_publica_dos_procedimientos_validos_contra_el_binario() -> None:
+def test_el_pack_publica_un_procedimiento_valido_contra_el_binario() -> None:
     from core.kernel.procedures import catalogo_de_acciones, revisar
     from core.plugin_manager import plugin_manager
 
     catalogo = catalogo_de_acciones(plugin_manager.scan())
     crudos = de_pack.crudos("pack_commerce")
-    assert [c["id"] for c in crudos] == ["pack_commerce.contratar_plan", "pack_commerce.tomar_pedido"]
+    assert [c["id"] for c in crudos] == ["pack_commerce.tomar_pedido"]  # contratar_plan es de Suscripciones
     for crudo in crudos:
         assert revisar(crudo, catalogo) == [], crudo["id"]
     assert set(_procs()) == {c["id"] for c in crudos}
@@ -63,7 +70,7 @@ def test_el_manifiesto_congela_los_procedimientos_que_se_registran() -> None:
 
     modulos = {m.id: m for m in plugin_manager.scan()}
     comercio = manifiesto_de_pack(modulos["pack_commerce"])
-    assert comercio.version == "2.5.0"
+    assert comercio.version == "3.0.0"
     assert comercio.manifest["provides"]["procedures"] == de_pack.crudos("pack_commerce")
     assert manifiesto_de_pack(modulos["pack_payments"]).manifest["provides"]["procedures"] == []
 
@@ -87,24 +94,17 @@ def test_los_textos_nuevos_del_motor_estan_en_su_playbook() -> None:
 # ---------------------------------------------------------------- banderas apagadas
 
 
-def test_cotizar_plan_no_esta_en_el_flujo_ni_en_las_acciones_del_general() -> None:
-    """Con el pack habilitado hay flujo: el loop y el golden solo ofrecen lo que nombra el flujo
-    más las `always_available`. `cotizar_plan` no entra (ni en el General del lector tolerante)."""
-    from core.agents.flow import all_pack_ids, compose_flow, load_core_flow, load_pack_flows
-    from core.agents.tolerante import acciones_ofrecidas
-    from core.mcp.host import mcp_host
+def test_commerce_ya_no_tiene_las_acciones_de_plan() -> None:
+    """HU-COM-17: `informar_plan` y `cotizar_plan` se retiraron de Comercio (los planes son de
+    Suscripciones): ni son tools del pack ni las nombra su flujo."""
+    from pack_commerce.skills import CatalogSkill, OrderSkill
 
-    secciones = compose_flow(
-        load_core_flow(), load_pack_flows(["pack_commerce"]), [], all_defaults=load_pack_flows(all_pack_ids())
-    )
-    assert secciones
-    assert "cotizar_plan" not in {t for s in secciones for t in s.tools}
-    from pack_commerce.skills import OrderSkill
+    from core.agents.flow import load_pack_flows
 
-    candidatas = [t.name for t in OrderSkill().get_tools()]
-    assert "cotizar_plan" in candidatas
-    siempre = {t.name for t in mcp_host.get_tools() if t.always_available}
-    assert "cotizar_plan" not in acciones_ofrecidas(secciones, candidatas, siempre)
+    tools = {t.name for skill in (CatalogSkill(), OrderSkill()) for t in skill.get_tools()}
+    assert not tools & {"informar_plan", "cotizar_plan"}
+    secciones = load_pack_flows(["pack_commerce"])
+    assert not {t for s in secciones for t in s.tools} & {"informar_plan", "cotizar_plan"}
 
 
 # ---------------------------------------------------------------- ligadura de argumentos
@@ -313,9 +313,8 @@ def test_la_huella_del_resumen_cambia_con_el_total() -> None:
 # ---------------------------------------------------------------- cierre por pago (decisión del dueño 2026-10-11)
 
 
-@pytest.mark.parametrize("proc_id", ["pack_commerce.contratar_plan", "pack_commerce.tomar_pedido"])
-def test_se_completan_con_el_pago_y_esperan_en_su_ultima_etapa(proc_id: str) -> None:
-    proc = _procs()[proc_id]
+@pytest.mark.parametrize("proc", [_plan(), _procs()["pack_commerce.tomar_pedido"]], ids=["contratar_plan_fixture", "tomar_pedido"])
+def test_se_completan_con_el_pago_y_esperan_en_su_ultima_etapa(proc: Procedure) -> None:
     assert proc.completion is not None and proc.completion.events == ["pack_commerce.order.paid"]
     ultima = proc.stages[-1]
     assert ultima.id == "esperar_pago" and ultima.risk == "low"

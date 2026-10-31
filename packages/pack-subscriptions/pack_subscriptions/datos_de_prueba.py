@@ -1,13 +1,17 @@
-"""Datos de prueba de Suscripciones (ajuste de HU-QA-10).
+"""Datos de prueba de Suscripciones (HU-QA-10, ADR-0146; planes propios desde SPEC-43).
 
-La forma `suscripciones` crea clientes ficticios y los suscribe a los planes que Comercio
-sembró para el mismo lote (`ContextoDeNegocio.planes`, con el snapshot del plan). No lee el
-catálogo de Comercio (invariante 5) ni usa teléfonos o correos reales: los clientes nacen con
-canal `web` y un `external_id` del lote.
+Dos formas, las dos de este pack:
+- `planes`: planes del catálogo con periodicidad y días de prueba (D-16: solo $0 tiene prueba). Sin
+  habilidad propia: la usa la plantilla del agente que la nombra (`datos_de_prueba` en
+  `core/presets/plantillas/`). Los códigos llevan el sufijo del lote (`PRUEBA-<sufijo>-NN`), así nunca
+  chocan con los del negocio.
+- `suscripciones`: clientes ficticios inscritos en los planes que sembró la forma anterior para el mismo
+  lote (`ContextoDeNegocio.planes`, con el snapshot del plan). Los clientes nacen con canal `web` y un
+  `external_id` del lote; no usan teléfonos ni correos reales.
 
-Deja una mezcla útil para la pantalla: una suscripción activa y pagada, una por vencer con
-cargo pendiente, una vencida y una anual pagada (los casos se repiten si hay más clientes).
-Retirar es borrado lógico de cargos, suscripciones y clientes.
+Deja una mezcla útil para la pantalla: una suscripción activa y pagada, una por vencer con cargo
+pendiente, una vencida y una anual pagada (los casos se repiten si hay más clientes).
+Retirar es borrado lógico de cargos, suscripciones, clientes y planes (invariante 8).
 """
 
 from __future__ import annotations
@@ -15,15 +19,17 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select, update
 
 from core.db.models import Customer, utcnow
 from core.db.session import get_session
 from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
 from core.shared.tenant import tenant_scope
-from pack_subscriptions.models import Subscription, SubscriptionCharge
+from pack_subscriptions import planes as catalogo
+from pack_subscriptions.models import Plan, Subscription, SubscriptionCharge
 from pack_subscriptions.periodos import etiqueta_periodo, sumar_periodo
 
 # (índice de plan, estado, días hasta el vencimiento del cargo; None = al día y pagada)
@@ -37,6 +43,33 @@ _CASOS: tuple[tuple[int, str, int | None], ...] = (
 
 class _Estricto(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+
+class PlanDePrueba(_Estricto):
+    name: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=400, description="Qué incluye el plan.")
+    price: Decimal = Field(ge=0, le=100_000_000, description="Precio por período, sin decimales si es COP.")
+    periodicidad: Literal["mensual", "trimestral", "anual"]
+    trial_dias: int = Field(default=0, ge=0, le=60, description="Solo un plan de precio 0 tiene días de prueba.")
+
+    @model_validator(mode="after")
+    def _prueba_solo_en_free(self) -> PlanDePrueba:
+        # D-16: lo que el LLM invente de prueba en un plan de pago se ignora, no rompe el lote.
+        if self.price > 0:
+            self.trial_dias = 0
+        return self
+
+
+class PlanesDePrueba(_Estricto):
+    planes: Annotated[list[PlanDePrueba], Field(min_length=2, max_length=4)]
+
+
+RESPALDO_PLANES = {
+    "planes": [
+        {"name": "Plan Free", "description": "Plan de entrada sin costo.", "price": 0, "periodicidad": "mensual", "trial_dias": 30},
+        {"name": "Plan mensual", "description": "Plan de pago con cobro mensual.", "price": 100000, "periodicidad": "mensual"},
+    ]
+}
 
 
 class ClienteDeSuscripcionDePrueba(_Estricto):
@@ -59,6 +92,14 @@ def formas() -> list[FormaDeDatos]:
         ]
     }
     return [
+        FormaDeDatos(
+            modo="planes",
+            titulo="Planes",
+            habilidad=None,
+            prioridad=20,
+            esquema=PlanesDePrueba,
+            respaldo=RESPALDO_PLANES,
+        ),
         FormaDeDatos(
             modo="suscripciones",
             titulo="Suscripciones",
@@ -114,11 +155,38 @@ async def _cargo_pendiente(
         return cargo.id
 
 
+async def _sembrar_planes(
+    tenant_id: uuid.UUID, datos: PlanesDePrueba, contexto: ContextoDeNegocio
+) -> list[RegistroSembrado]:
+    registros: list[RegistroSembrado] = []
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            for n, p in enumerate(datos.planes, start=1):
+                plan = Plan(
+                    tenant_id=tenant_id,
+                    codigo=f"PRUEBA-{contexto.sufijo}-{n:02d}",
+                    nombre=p.name,
+                    descripcion=p.description,
+                    precio=p.price,
+                    moneda=contexto.moneda,
+                    periodicidad=p.periodicidad,
+                    trial_dias=p.trial_dias,
+                    orden=n,
+                )
+                session.add(plan)
+                await session.flush()
+                registros.append(RegistroSembrado(kind="plan", ref=plan.id, metadata={"plan": dict(catalogo.snapshot(plan))}))
+    return registros
+
+
 async def sembrar(
     tenant_id: uuid.UUID, modo: str, datos: BaseModel, contexto: ContextoDeNegocio
 ) -> list[RegistroSembrado]:
     from pack_subscriptions.capability import SubscriptionCapabilityImpl, crear_suscripcion_para
 
+    if modo == "planes":
+        assert isinstance(datos, PlanesDePrueba)
+        return await _sembrar_planes(tenant_id, datos, contexto)
     assert isinstance(datos, SuscripcionesDePrueba)
     if not contexto.planes:
         return []
@@ -131,12 +199,7 @@ async def sembrar(
             creados.append(RegistroSembrado(kind="cliente", ref=customer_id))
             indice_plan, estado, dias = _CASOS[n % len(_CASOS)]
             plan = contexto.planes[indice_plan % len(contexto.planes)]
-            sub = await crear_suscripcion_para(
-                customer_id=customer_id,
-                variante_id=plan.variant_id,
-                plan=dict(plan.plan),
-                reference=f"datos-prueba:{contexto.sufijo}:{n + 1}",
-            )
+            sub = await crear_suscripcion_para(customer_id=customer_id, plan_id=plan.plan_id)
             creados.append(RegistroSembrado(kind="suscripcion", ref=sub.id))
             if dias is None:
                 inicio = sub.periodo_actual_inicio or ahora
@@ -160,6 +223,7 @@ async def retirar(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> in
     cargos = [r.ref for r in registros if r.kind == "cargo"]
     suscripciones = [r.ref for r in registros if r.kind == "suscripcion"]
     clientes = [r.ref for r in registros if r.kind == "cliente"]
+    planes = [r.ref for r in registros if r.kind == "plan"]
     total = 0
     async with tenant_scope(tenant_id):
         async with get_session() as session:
@@ -185,6 +249,13 @@ async def retirar(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> in
                     .values(deleted_at=utcnow())
                 )
                 total += res.rowcount or 0  # type: ignore[attr-defined]
+            if planes:
+                res = await session.execute(
+                    update(Plan)
+                    .where(Plan.tenant_id == tenant_id, Plan.id.in_(planes), Plan.deleted_at.is_(None))
+                    .values(deleted_at=utcnow())
+                )
+                total += res.rowcount or 0  # type: ignore[attr-defined]
             if clientes:
                 res = await session.execute(
                     update(Customer)
@@ -199,4 +270,4 @@ async def retirar(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> in
     return total
 
 
-__all__ = ["SuscripcionesDePrueba", "formas", "retirar", "sembrar"]
+__all__ = ["PlanesDePrueba", "SuscripcionesDePrueba", "formas", "retirar", "sembrar"]

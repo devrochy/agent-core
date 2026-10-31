@@ -1,6 +1,6 @@
 {
   "nombre": "simulado-comprar-basic",
-  "descripcion": "Cliente simulado (HU-ARCH-28) que compra el Basic con pago en línea: el link cobra el total del pedido y, al confirmarse el pago, la suscripción queda activa sin prueba.",
+  "descripcion": "Cliente simulado (HU-ARCH-28) que compra el Basic con pago en línea: el link cobra el total del cargo de inscripción y, al confirmarse el pago, la suscripción queda activa sin prueba.",
   "pasos": [
     {
       "nota": "el cliente simulado conversa hasta recibir el link",
@@ -10,49 +10,90 @@
           "nombre": "Ana Gómez",
           "cedula": "1012345678",
           "celular": "3001234567",
-          "correo": "ana.gomez@example.com",
+          "correo": "ana+{cliente.id}@example.com",
           "medio_de_pago": "pago en línea"
         },
         "max_turnos": 8
       },
-      "espera_fin": ["objetivo", "tope"]
+      "espera_fin": [
+        "objetivo",
+        "tope"
+      ]
     },
     {
-      "nota": "pedido pendiente por el total",
+      "nota": "inscripción pendiente de pago",
       "verifica": {
-        "tabla": "pack_commerce_orders",
-        "donde": {"customer_id": "{cliente.id}"},
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
         "filas": 1,
-        "espera": {"payment_status": "pendiente", "total": 200000},
-        "guardar_como": "pedido"
+        "espera": {
+          "estado": "pendiente_pago",
+          "valor_periodo": 200000
+        },
+        "guardar_como": "suscripcion"
       }
     },
     {
-      "nota": "el link cobra el total del pedido",
+      "nota": "el primer cargo por el total",
+      "verifica": {
+        "tabla": "pack_subscriptions_charges",
+        "donde": {
+          "subscription_id": "{suscripcion.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "pendiente",
+          "monto": 200000,
+          "referencia": {
+            "$no_nulo": true
+          }
+        },
+        "guardar_como": "cargo"
+      }
+    },
+    {
+      "nota": "el link cobra el total del cargo",
       "verifica": {
         "tabla": "pack_payments_transactions",
-        "donde": {"reference": "{pedido.public_order_number}"},
+        "donde": {
+          "reference": "{cargo.referencia}"
+        },
         "filas": 1,
-        "espera": {"amount": 200000, "provider": "simulado"}
+        "espera": {
+          "amount": 200000,
+          "provider": "simulado"
+        }
       }
     },
     {
       "nota": "la pasarela confirma el pago",
       "evento": "payment.confirmed",
       "datos": {
-        "reference": "{pedido.public_order_number}",
+        "reference": "{cargo.referencia}",
         "provider": "simulado",
-        "provider_reference": "sim-{pedido.public_order_number}",
+        "provider_reference": "sim-{cargo.referencia}",
         "amount": 200000
       }
+    },
+    {
+      "nota": "el worker entrega los eventos",
+      "outbox": "despachar"
     },
     {
       "nota": "suscripción activa sin prueba",
       "verifica": {
         "tabla": "pack_subscriptions_subscriptions",
-        "donde": {"customer_id": "{cliente.id}"},
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
         "filas": 1,
-        "espera": {"estado": "activa", "valor_periodo": 200000, "trial_termina": null}
+        "espera": {
+          "estado": "activa",
+          "valor_periodo": 200000,
+          "trial_termina": null
+        }
       }
     }
   ]

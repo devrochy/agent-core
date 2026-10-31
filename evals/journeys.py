@@ -250,7 +250,7 @@ async def preparar_negocio(
         packs=list(definicion.get("packs", [])),
         preset=definicion.get("preset"),
         plan=definicion.get("plan", "premium"),
-        sembrar_ejemplos=not definicion.get("catalogo") and not replica,
+        sembrar_ejemplos=not definicion.get("catalogo") and not definicion.get("planes") and not replica,
         agentes_base=False,  # el journey monta su propio runtime (`encender_runtime_v3`), no el del alta
     )
     async with tenant_scope(tenant_id):
@@ -267,6 +267,12 @@ async def preparar_negocio(
         from pack_commerce.seed import seed_catalog  # el set declara su catálogo de commerce
 
         await seed_catalog(tenant_id, definicion["catalogo"])
+    if definicion.get("planes"):
+        from pack_subscriptions.seed import (
+            seed_planes,  # el set declara sus planes de suscripciones (SPEC-43)
+        )
+
+        await seed_planes(tenant_id, definicion["planes"])
     if definicion.get("vendedor"):
         _como_vendedor(tenant_id)
     await publicar_documentos_legales(tenant_id, definicion.get("documentos_legales") or [])
@@ -893,21 +899,33 @@ async def paso_accion(ctx: Contexto, paso: dict[str, Any], registro: list[str]) 
     accion = paso["accion"]
     datos = ctx.render(paso.get("datos", {}))
     if accion == "activar_suscripcion":
+        from pack_subscriptions.capability import crear_suscripcion_para
+        from pack_subscriptions.seed import seed_planes
+
         from core.shared.tenant import tenant_scope
         from core.subscriptions import capability_del_negocio
 
+        plan = datos["plan"]
+        codigo = str(plan.get("plan_code") or "")
         async with tenant_scope(ctx.tenant_id):
             cap = await capability_del_negocio(ctx.tenant_id)
             if cap is None:
                 raise FallaJourney("el negocio no tiene proveedor de suscripciones")
-            vista = await cap.activate(
-                customer_id=ctx.customer_id,
-                variant_id=str(datos.get("variant_id") or uuid.uuid4()),
-                plan=datos["plan"],
-                reference=str(datos.get("referencia", "journey")),
-            )
-        ctx.variables["suscripcion"] = dict(vista)
-        registro.append(f"    acción activar_suscripcion: {vista.get('estado')}")
+            # El plan sale del catálogo de suscripciones (SPEC-43); si el set no lo trae, se crea
+            # con el snapshot del paso (el mismo `plan` que antes se pasaba a `activate`).
+            if await cap.plan_por_codigo(codigo) is None:
+                await seed_planes(ctx.tenant_id, {"planes": [{
+                    "codigo": codigo, "nombre": plan.get("nombre") or codigo, "precio": plan.get("precio", 0),
+                    "moneda": plan.get("moneda") or "COP", "periodicidad": plan.get("periodicidad") or "mensual",
+                    "trial_dias": plan.get("trial_dias") or 0,
+                }]})
+            elegido = await cap.plan_por_codigo(codigo)
+            if elegido is None:
+                raise FallaJourney(f"no se pudo crear el plan {codigo!r}")
+            sub = await crear_suscripcion_para(customer_id=ctx.customer_id, plan_id=uuid.UUID(str(elegido["plan_id"])))
+            vista = await cap.get(sub.id)
+        ctx.variables["suscripcion"] = dict(vista or {})
+        registro.append(f"    acción activar_suscripcion: {(vista or {}).get('estado')}")
         return
     raise FallaJourney(f"acción desconocida: {accion!r}")
 

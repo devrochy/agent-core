@@ -45,11 +45,12 @@ _QUOTE_EN_PROMPT = re.compile(r"- cotizacion: quote_id=([0-9a-f-]{36})")
 
 # ------------------------------------------------------------------ negocio y datos
 async def _negocio(con_basic: bool = False) -> tuple[uuid.UUID, str]:
-    """Negocio propio con pack-commerce y un plan Premium; devuelve (tenant, variant_id).
+    """Negocio propio con pack-commerce y un producto «Plan Premium»; devuelve (tenant, variant_id).
 
-    Sin pack de suscripciones: comprar el Premium con el Basic pagado es un pedido nuevo,
-    no un cambio de plan (`sub_cambiar_plan`). Con `con_basic`, también el Plan Basic."""
-    from pack_commerce.models import Product, ProductVariant
+    Desde SPEC-43 los planes son de `pack_subscriptions`; aquí «PLAN-PREMIUM» y «PLAN-BASIC» son productos
+    normales de commerce (el incidente de ADR-0130 no depende de que fueran planes). Con `con_basic`,
+    también el Basic."""
+    from pack_commerce.models import Inventory, Product, ProductVariant
 
     from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
@@ -65,16 +66,19 @@ async def _negocio(con_basic: bool = False) -> tuple[uuid.UUID, str]:
             s.add(producto)
             await s.flush()
             variante = ProductVariant(
-                tenant_id=tid, product_id=producto.id, sku="PLAN-PREMIUM", price=PRECIO, billing_period="mensual"
+                tenant_id=tid, product_id=producto.id, sku="PLAN-PREMIUM", price=PRECIO
             )
             s.add(variante)
+            await s.flush()
+            s.add(Inventory(tenant_id=tid, variant_id=variante.id, stock_quantity=1000))  # ya no son planes: hay stock
             if con_basic:
                 basic = Product(tenant_id=tid, name="Plan Basic")
                 s.add(basic)
                 await s.flush()
-                s.add(ProductVariant(
-                    tenant_id=tid, product_id=basic.id, sku="PLAN-BASIC", price=PRECIO_BASIC, billing_period="mensual"
-                ))
+                var_basic = ProductVariant(tenant_id=tid, product_id=basic.id, sku="PLAN-BASIC", price=PRECIO_BASIC)
+                s.add(var_basic)
+                await s.flush()
+                s.add(Inventory(tenant_id=tid, variant_id=var_basic.id, stock_quantity=1000))
             await s.flush()
             return tid, str(variante.id)
 
@@ -346,7 +350,10 @@ class _Comprador:
         if "mis datos" in texto:
             quote_id = self._quote_id(system_blocks)
             self.ids_usados.append(quote_id)
-            return self._tool("crear_pedido", quote_id=quote_id, payment_method="transferencia", customer_data=DATOS)
+            return self._tool(
+                "crear_pedido", quote_id=quote_id, payment_method="transferencia", delivery_method="recoger_en_tienda",
+                customer_data=DATOS,
+            )
         return _Respuesta("end_turn", content="¿En qué más te ayudo?")
 
 

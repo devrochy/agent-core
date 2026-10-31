@@ -7,9 +7,8 @@ commerce (invariante nº5). Toda tabla lleva `tenant_id` (invariante nº1), RLS 
 borrado físico (`deleted_at`). `customer_id` es una referencia lógica al `Customer` del core;
 `plan_id` es FK compuesta `(tenant_id, plan_id)` al catálogo.
 
-Camino viejo (hasta HU-COM-17): `variante_id` y `referencia_origen` siguen mientras commerce
-active suscripciones con `activate`; `plan_id` y `numero_publico` son NULL-ables hasta la
-contracción `pack_subscriptions_0013`.
+Contrato v1 retirado (HU-COM-17): `variante_id` y `referencia_origen` desaparecieron con la
+contracción `pack_subscriptions_0013`; `plan_id` y `numero_publico` son NOT NULL.
 """
 
 from __future__ import annotations
@@ -105,10 +104,9 @@ class Subscription(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=_tenant_or_raise)
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica core
-    # SPEC-43: plan del catálogo (FK compuesta). NULL solo en el camino viejo de commerce (`activate`).
-    plan_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
-    variante_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)  # FK lógica commerce (camino viejo)
-    numero_publico: Mapped[str | None] = mapped_column(Text, default=None)  # `SUB-0001`, único por negocio
+    # SPEC-43: plan del catálogo (FK compuesta `(tenant_id, plan_id)`).
+    plan_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    numero_publico: Mapped[str] = mapped_column(Text, nullable=False)  # `SUB-0001`, único por negocio
     # Sin documento: solo alimenta la huella del antiabuso del core. {negocio, vertical, email, telefono, nombre}.
     # `none_as_null`: sin datos el valor es NULL de SQL, no el JSON `null` (que el CHECK de objeto rechaza).
     datos_alta: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), default=None)
@@ -122,8 +120,7 @@ class Subscription(Base):
     periodicidad: Mapped[str] = mapped_column(Text, nullable=False, default="mensual")  # mensual|trimestral|anual
     dia_ancla: Mapped[int | None] = mapped_column(SmallInteger)  # día del mes en que empezó
     motivo_pausa: Mapped[str | None] = mapped_column(Text)  # HU-SUB-05: "mora" si la pausó el cron
-    # HU-SUB-07 (ADR-0111): pedido que la creó (único por negocio) y downgrade programado.
-    referencia_origen: Mapped[str | None] = mapped_column(Text)
+    # HU-SUB-07 (ADR-0111): downgrade programado.
     cambio_programado: Mapped[dict | None] = mapped_column(JSONB)
     # HU-SUB-35 (migración 0012): descuento vigente. Las tres NULL o las tres con valor; al consumirse el
     # último período vuelven a NULL. `descuento` = {promocion_id, canje_id, etiqueta, tipo, valor, periodos_total}.

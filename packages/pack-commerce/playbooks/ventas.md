@@ -54,7 +54,7 @@ description: Reglas del proceso de venta
   (`confirmar_cotizacion`, `crear_pedido`, `confirmar_pago_pedido`), no solo la primera o la segunda.
 - El `quote_id` que pasás a `aplicar_promocion`, `confirmar_cotizacion` y `crear_pedido`
   es SIEMPRE un id que te devolvió `generar_cotizacion`, o el `quote_id` de la cotización
-  en "Referencias vigentes de esta conversación". Nunca uses un SKU, el nombre de un plan,
+  en "Referencias vigentes de esta conversación". Nunca uses un SKU, el nombre de un producto,
   el número de un pedido (p. ej. `OC-0001`) ni un id que armes vos.
 - Si "Referencias vigentes" ya trae una cotización con los productos y el total que el
   cliente está aceptando, seguí con esa: no llames `generar_cotizacion` otra vez. Generá una

@@ -6,7 +6,7 @@ de vida y de cobro vivía en `skills.py` (tools propias del pack); desde HU-SUB-
 skills al LLM.
 
 SPEC-43: el pack es dueño del catálogo de planes y de la inscripción (`inscripcion.py`, `planes.py`).
-`activate` (camino viejo de commerce) convive hasta HU-COM-17.
+El contrato v1 (`activate`, `variante_id`, `referencia_origen`) se retiró con HU-COM-17.
 
 Regla del contrato: `charge_link` nunca crea un período futuro.
 """
@@ -33,7 +33,7 @@ from core.subscriptions import (
 )
 from pack_subscriptions import promociones
 from pack_subscriptions.cargos import crear_cargo_de_periodo
-from pack_subscriptions.models import Subscription, SubscriptionCharge
+from pack_subscriptions.models import Plan, Subscription, SubscriptionCharge
 from pack_subscriptions.periodos import PERIODICIDADES, etiqueta_periodo, sumar_periodo
 
 log = get_logger(__name__)
@@ -71,9 +71,8 @@ def _view(
 ) -> SubscriptionView:
     return {
         "subscription_id": str(sub.id),
-        # Con inscripción (SPEC-43) el código es el del plan del catálogo; en el camino viejo, la variante.
-        "plan_code": plan_codigo or (str(sub.variante_id) if sub.variante_id else ""),
-        "plan_id": str(sub.plan_id) if sub.plan_id else None,
+        "plan_code": plan_codigo or "",
+        "plan_id": str(sub.plan_id),
         "numero_publico": sub.numero_publico,
         "plan": sub.concepto,
         "estado": sub.estado,
@@ -90,15 +89,13 @@ def _view(
             }
             for c in (cargos or [])
         ],
-        "referencia": sub.numero_publico or sub.referencia_origen,
+        "referencia": sub.numero_publico,
         "cambio_programado": sub.cambio_programado,
     }
 
 
 async def codigo_de_plan(session, sub: Subscription) -> str | None:  # type: ignore[no-untyped-def]
-    """Código (SKU) del plan del catálogo de la suscripción, o None si viene del camino viejo."""
-    if sub.plan_id is None:
-        return None
+    """Código (SKU) del plan del catálogo de la suscripción."""
     from pack_subscriptions.models import Plan
 
     return (
@@ -135,28 +132,17 @@ def _auditar(
         )
     )
 
-# Referencias que no vienen de un pedido: no se guardan como `referencia_origen`.
-_REFERENCIAS_INTERNAS = {"", "admin-manual", "journey"}
-
-
 def aplicar_plan(sub: Subscription, datos: dict[str, Any], ahora: datetime) -> None:
-    """Deja la suscripción en el plan `datos` ({"variante_id", "plan", "desde_cero"}).
+    """Deja la suscripción en el plan `datos` ({"plan_id", "plan", "desde_cero"}).
 
     `desde_cero` (venía de un plan de $0): arranca un período nuevo hoy. Si no, el
     período en curso sigue igual (upgrade a mitad de período o downgrade al corte).
     """
     plan = datos.get("plan") or {}
-    if datos.get("plan_id"):
-        # Plan del catálogo (SPEC-43): la suscripción apunta al plan; no hay variante de commerce.
-        try:
-            sub.plan_id = uuid.UUID(str(datos["plan_id"]))
-        except (ValueError, TypeError):
-            pass
-    else:
-        try:
-            sub.variante_id = uuid.UUID(str(datos.get("variante_id")))
-        except (ValueError, TypeError):
-            pass
+    try:
+        sub.plan_id = uuid.UUID(str(datos["plan_id"]))
+    except (KeyError, ValueError, TypeError):
+        pass
     sub.concepto = plan.get("nombre") or sub.concepto
     sub.valor_periodo = Decimal(str(plan.get("precio") or 0))
     sub.moneda = plan.get("moneda") or sub.moneda
@@ -197,147 +183,74 @@ def reactivar_por_pago(sub: Subscription, cargo: SubscriptionCharge, *, fin: dat
         sub.proximo_cargo = siguiente
 
 
-async def crear_suscripcion_para(
-    *, customer_id: uuid.UUID, variante_id: uuid.UUID | None, plan: dict[str, Any], reference: str = ""
-) -> Subscription:
-    """Crea/activa la suscripción de un `Customer` a un plan (idempotente por cliente).
+async def crear_suscripcion_para(*, customer_id: uuid.UUID, plan_id: uuid.UUID) -> Subscription:
+    """Alta directa de un `Customer` en un plan del catálogo, SIN cobro, link ni evento.
 
-    `plan` es el snapshot aportado por commerce/admin: nombre, precio, moneda,
-    periodicidad, trial_dias. Este pack NO guarda ni lee el catálogo.
-
-    HU-SUB-06 (D-16): solo un plan de $0 tiene prueba. Si el cliente ya tiene una
-    suscripción vigente a OTRO plan (p. ej. Free y compra Basic), se cambia a ese plan
-    y nace `activa` con el período en curso pagado; antes se devolvía la Free sin tocar.
-    Cada activación emite `subscription.activated` por el outbox.
+    Solo para los datos de prueba y los escenarios de QA (HU-QA-10 y HU-QA-13), que necesitan
+    suscripciones ya vivas. La inscripción real, con su cargo, su antiabuso y su alta automática, es
+    `inscripcion.inscribir`. D-16: solo un plan de $0 tiene prueba; uno de pago nace `activa` con el
+    período en curso pagado y el siguiente vence por calendario (HU-SUB-04).
     """
-    precio = Decimal(str(plan.get("precio") or 0))
-    trial_dias = int(plan.get("trial_dias") or 0) if precio == 0 else 0
-    referencia = reference.strip() if reference and reference.strip() not in _REFERENCIAS_INTERNAS else None
+    from pack_subscriptions.inscripcion import _siguiente_numero
+
     config = await _config()
+    now = datetime.now(UTC)
     async with get_session() as session:
-        if referencia:
-            # HU-SUB-07: el mismo pedido procesado dos veces no crea dos suscripciones.
-            previa = (
-                await session.execute(
-                    select(Subscription).where(
-                        Subscription.tenant_id == get_current_tenant_id(),
-                        Subscription.referencia_origen == referencia,
-                        # Un pedido con dos planes crea dos suscripciones (auditoría).
-                        Subscription.variante_id.is_(None) if variante_id is None else Subscription.variante_id == variante_id,
-                        Subscription.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if previa is not None:
-                return previa
-        estados = Subscription.estado.in_(_ESTADOS_VIGENTES)
-        if precio > 0:
-            # HU-SH-04 (ADR-0123): quien compra un plan pago después de que venció su Free
-            # sigue con SU suscripción (y con su negocio, si lo aprovisionó un vendedor):
-            # antes nacía otra suscripción y el alta automática creaba otro negocio.
-            estados = or_(estados, and_(Subscription.estado == "vencida", Subscription.valor_periodo == 0))
-        filtros = [
-            Subscription.tenant_id == get_current_tenant_id(),
-            Subscription.customer_id == customer_id,
-            estados,
-            Subscription.deleted_at.is_(None),
-        ]
-        if config.varias_por_cliente and variante_id is not None:
-            # Varias por cliente (ADR-0111): solo cuenta una vigente del MISMO plan.
-            filtros.append(Subscription.variante_id == variante_id)
-        existente = (
+        plan = (
             await session.execute(
-                select(Subscription)
-                .where(*filtros)
-                # Una vigente antes que una Free vencida.
-                .order_by((Subscription.estado == "vencida").asc(), Subscription.created_at.desc())
+                select(Plan).where(
+                    Plan.tenant_id == get_current_tenant_id(), Plan.id == plan_id, Plan.deleted_at.is_(None)
+                )
             )
-        ).scalars().first()
-        now = datetime.now(UTC)
-        periodicidad = _periodicidad(plan.get("periodicidad"), config.periodicidad)
-        if existente is not None:
-            otra_variante = (
-                variante_id is not None
-                and existente.variante_id is not None
-                and existente.variante_id != variante_id
-            )
-            if not otra_variante and Decimal(existente.valor_periodo or 0) == precio:
-                return existente  # mismo plan: idempotente
-            # Cambio de plan al comprar otro (Free → pago): activa con el período pagado. Cualquier cambio de
-            # plan termina el descuento vigente (HU-SUB-35).
-            await promociones.terminar_descuento(session, existente, motivo="cambio_de_plan")
-            existente.variante_id = variante_id
-            existente.concepto = plan.get("nombre") or existente.concepto
-            existente.valor_periodo = precio
-            existente.moneda = plan.get("moneda") or existente.moneda
-            existente.periodicidad = periodicidad
-            existente.estado = "trialing" if trial_dias else "activa"
-            existente.trial_termina = (now + timedelta(days=trial_dias)) if trial_dias else None
-            existente.dia_ancla = now.day
-            existente.periodo_actual_inicio = now
-            existente.proximo_cargo = existente.trial_termina or sumar_periodo(now, periodicidad, now.day)
-            existente.motivo_pausa = None
-            existente.cambio_programado = None
-            existente.referencia_origen = referencia or existente.referencia_origen
-            await session.flush()
-            await _emitir_activada(session, existente, referencia, cambio=True)
-            return existente
+        ).scalar_one_or_none()
+        if plan is None:
+            raise SubscriptionError("El plan no existe.", code="plan_no_encontrado")
+        precio = Decimal(plan.precio or 0)
+        trial_dias = int(plan.trial_dias or 0) if precio == 0 else 0
         trial_termina = (now + timedelta(days=trial_dias)) if trial_dias else None
         sub = Subscription(
             tenant_id=get_current_tenant_id(),
             customer_id=customer_id,
-            variante_id=variante_id,
-            concepto=plan.get("nombre") or "Plan",
+            plan_id=plan.id,
+            numero_publico=await _siguiente_numero(session, config.prefijo_numero),
+            origen="panel",
+            concepto=plan.nombre,
             estado="trialing" if trial_dias else "activa",
             valor_periodo=precio,
-            moneda=plan.get("moneda") or "COP",
-            periodicidad=periodicidad,
+            moneda=plan.moneda,
+            periodicidad=plan.periodicidad,
             dia_ancla=now.day,
             trial_termina=trial_termina,
             periodo_actual_inicio=now,
-            # Con prueba, el primer cargo es al terminarla; sin prueba, el período
-            # actual ya está pago (lo activó un pedido pagado) y el siguiente vence
-            # por calendario (HU-SUB-04).
-            proximo_cargo=trial_termina or sumar_periodo(now, periodicidad, now.day),
+            proximo_cargo=trial_termina or sumar_periodo(now, plan.periodicidad, now.day),
             fecha_alta=now,
-            referencia_origen=referencia,
         )
         session.add(sub)
         await session.flush()
-        await _emitir_activada(session, sub, referencia, cambio=False)
         return sub
 
 
 async def _emitir_activada(
     session,  # type: ignore[no-untyped-def]
     sub: Subscription,
-    referencia: str | None,
     *,
     cambio: bool,
     charge_id: uuid.UUID | None = None,
     monto_cobrado: Decimal | None = None,
 ) -> None:
-    """`subscription.activated` por el outbox. `referencia` es el pedido que la activó, o
-    None si no hubo pedido (activación manual, journeys, cargo de cambio de plan): así el
-    alta automática de un negocio (HU-SH-03, ADR-0121) no tiene que adivinar cuáles son
-    referencias internas. `variant_id` dice qué línea del pedido se activó.
+    """`subscription.activated` por el outbox. La referencia del evento es siempre el `numero_publico`
+    de la inscripción (la fuente de altas lee por ahí).
 
     `periodo_inicio`, `proximo_cargo` y `dia_ancla` (HU-SH-04, ADR-0123): el período en curso,
     para que el plan del negocio aprovisionado corte el período el mismo día.
 
-    SPEC-43: una suscripción con inscripción (`plan_id`) usa su `numero_publico` como referencia
-    (la fuente de altas lee por ahí) y la bandera `cambio_de_plan` decide si el alta sincroniza el
-    plan del negocio existente o crea uno. La clave de idempotencia distingue el alta del cambio:
-    el cambio A → B → A ya no choca con el dedupe porque lleva el cargo."""
+    La bandera `cambio_de_plan` decide si el alta sincroniza el plan del negocio existente o crea uno.
+    La clave de idempotencia distingue el alta del cambio: el cambio A → B → A no choca con el dedupe
+    porque lleva el cargo."""
     from core.events.outbox import emit_domain
     from core.shared.events import ON_SUBSCRIPTION_ACTIVATED
 
-    con_inscripcion = sub.plan_id is not None
-    if con_inscripcion:
-        referencia = sub.numero_publico or referencia
-        clave = f"sub_activated:{sub.id}:cambio:{charge_id}" if cambio else f"sub_activated:{sub.id}:alta"
-    else:
-        clave = f"sub_activated:{sub.id}:{sub.variante_id or sub.concepto}"
+    clave = f"sub_activated:{sub.id}:cambio:{charge_id}" if cambio else f"sub_activated:{sub.id}:alta"
     await emit_domain(
         session,
         tenant_id=sub.tenant_id,
@@ -351,10 +264,9 @@ async def _emitir_activada(
             "valor_periodo": str(sub.valor_periodo),
             "periodicidad": sub.periodicidad,
             "trial_termina": sub.trial_termina.isoformat() if sub.trial_termina else None,
-            "referencia": referencia,
+            "referencia": sub.numero_publico,
             "cambio_de_plan": cambio,
-            "variant_id": str(sub.variante_id) if sub.variante_id else None,
-            "plan_id": str(sub.plan_id) if sub.plan_id else None,
+            "plan_id": str(sub.plan_id),
             "numero_publico": sub.numero_publico,
             "monto_cobrado": str(monto_cobrado) if monto_cobrado is not None else None,
             "periodo_inicio": sub.periodo_actual_inicio.isoformat() if sub.periodo_actual_inicio else None,
@@ -373,7 +285,7 @@ async def _anular_cambios_pendientes(
 ) -> SubscriptionCharge | None:
     """Anula los cargos de cambio pendientes de la suscripción (su link deja de aplicar el
     plan: `_on_payment_confirmed` solo procesa cargos pendientes). Devuelve el que coincide
-    con `salvo` (variante, monto NETO) y con la misma promoción (`salvo_promocion`, None = sin promoción),
+    con `salvo` (plan, monto NETO) y con la misma promoción (`salvo_promocion`, None = sin promoción),
     que se conserva. Los anulados devuelven el cupo de su promoción (HU-SUB-33).
 
     Toma los cargos `FOR UPDATE`: el webhook de pago y el cron que anulan a la vez se serializan."""
@@ -396,7 +308,7 @@ async def _anular_cambios_pendientes(
         if (
             salvo
             and conservado is None
-            and (previo.cambio_plan or {}).get("variante_id") == salvo[0]
+            and (previo.cambio_plan or {}).get("plan_id") == salvo[0]
             and Decimal(previo.monto) == salvo[1]
             and promociones.promocion_del_cargo(previo) == salvo_promocion
         ):
@@ -466,7 +378,7 @@ class EvaluacionCambio:
 def evaluar_cambio(
     sub: Subscription,
     *,
-    variant_id: str,
+    plan_id: str,
     plan: PlanSnapshot,
     ahora: datetime,
     factor: Decimal | None = None,
@@ -481,9 +393,7 @@ def evaluar_cambio(
     from pack_subscriptions.prorrateo import diferencia_prorrateada
 
     nuevo = Decimal(str(plan.get("precio") or 0))
-    if (sub.variante_id is not None and str(sub.variante_id) == str(variant_id)) or (
-        getattr(sub, "plan_id", None) is not None and str(sub.plan_id) == str(variant_id)
-    ):
+    if str(sub.plan_id) == str(plan_id):
         raise SubscriptionError("El cliente ya tiene ese plan.", code="mismo_plan")
     # Auditoría HU-SUB-07: sin cambios desde una pausada o vencida (el período no
     # está vigente y la diferencia se calcularía mal); primero se reactiva. Excepción (SPEC-43,
@@ -597,7 +507,7 @@ def mismo_monto(calculado: Decimal, esperado: Decimal | float | str, moneda: str
 
 
 class SubscriptionCapabilityImpl:
-    """Proveedor de suscripciones del contrato v1 (las 8 operaciones)."""
+    """Proveedor de suscripciones del contrato v2 (ADR-0177)."""
 
     provider_id = PLUGIN_ID
 
@@ -627,24 +537,6 @@ class SubscriptionCapabilityImpl:
                 .limit(6)
             )
         ).scalars().all()
-
-    async def activate(
-        self,
-        *,
-        customer_id: uuid.UUID,
-        variant_id: str,
-        plan: PlanSnapshot,
-        reference: str = "",
-    ) -> SubscriptionView:
-        variante_id = None
-        try:
-            variante_id = uuid.UUID(str(variant_id))
-        except (ValueError, TypeError):
-            pass
-        sub = await crear_suscripcion_para(
-            customer_id=customer_id, variante_id=variante_id, plan=plan, reference=reference
-        )
-        return _view(sub)
 
     async def get(self, subscription_id: uuid.UUID) -> SubscriptionView:
         async with get_session() as session:
@@ -738,7 +630,7 @@ class SubscriptionCapabilityImpl:
         self,
         subscription_id: uuid.UUID,
         *,
-        variant_id: str,
+        plan_id: str,
         plan: PlanSnapshot,
         monto_esperado: Decimal | float | None = None,
         codigo_promocion: str | None = None,
@@ -763,10 +655,7 @@ class SubscriptionCapabilityImpl:
         Pagar un cambio de plan termina el descuento vigente (el canje viejo pasa a `terminado`).
         """
         ahora = datetime.now(UTC)
-        destino = {"variante_id": str(variant_id), "plan": dict(plan)}
-        if plan.get("plan_id"):
-            # Plan del catálogo (SPEC-43): `aplicar_plan` apunta la suscripción a `plan_id`, no a una variante.
-            destino["plan_id"] = str(plan["plan_id"])
+        destino = {"plan_id": str(plan_id), "plan": dict(plan)}
         codigo = promociones.normalizar_codigo(codigo_promocion)
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
@@ -775,12 +664,12 @@ class SubscriptionCapabilityImpl:
             # Con un código explícito el descuento sale del código; sin él, el período en curso conserva el factor
             # con que se pagó (HU-SUB-35).
             factor = None if codigo is not None else await factor_del_periodo(session, sub)
-            evaluacion = evaluar_cambio(sub, variant_id=variant_id, plan=plan, ahora=ahora, factor=factor)
+            evaluacion = evaluar_cambio(sub, plan_id=plan_id, plan=plan, ahora=ahora, factor=factor)
             promo = None
             consume = False
             if codigo is not None:
                 promo, consume = await self._evaluar_promocion_de_cambio(
-                    session, sub, evaluacion, variant_id, plan, codigo, ahora
+                    session, sub, evaluacion, plan_id, plan, codigo, ahora
                 )
             a_cobrar = promo.neto if promo is not None else evaluacion.monto
             if monto_esperado is not None and not mismo_monto(a_cobrar, monto_esperado, sub.moneda):
@@ -804,7 +693,7 @@ class SubscriptionCapabilityImpl:
             cargo = await _anular_cambios_pendientes(
                 session,
                 sub,
-                salvo=(str(variant_id), monto),
+                salvo=(str(plan_id), monto),
                 salvo_promocion=str(promo.promocion_id) if promo is not None else None,
             )
             if cargo is None:
@@ -863,7 +752,7 @@ class SubscriptionCapabilityImpl:
         return telefono, huella_
 
     async def _evaluar_promocion_de_cambio(
-        self, session, sub: Subscription, evaluacion, variant_id: str, plan: PlanSnapshot, codigo: str, ahora: datetime  # type: ignore[no-untyped-def]
+        self, session, sub: Subscription, evaluacion, plan_id: str, plan: PlanSnapshot, codigo: str, ahora: datetime  # type: ignore[no-untyped-def]
     ) -> tuple[promociones.Evaluacion, bool]:
         """Evalúa el código de un cambio de plan: `(evaluación, consume_periodo)`.
 
@@ -881,7 +770,7 @@ class SubscriptionCapabilityImpl:
                 code="promo_no_aplica_a_cambio",
             )
         try:
-            plan_id = uuid.UUID(str(plan.get("plan_id") or variant_id))
+            plan_uuid = uuid.UUID(str(plan_id))
         except ValueError as exc:
             raise SubscriptionError("El plan no está en el catálogo.", code="plan_no_encontrado") from exc
         _, huella_ = await self._huella_del_cliente(session, sub)
@@ -900,7 +789,7 @@ class SubscriptionCapabilityImpl:
         promo = await promociones.evaluar(
             session,
             codigo=codigo,
-            plan_id=plan_id,
+            plan_id=plan_uuid,
             precio=evaluacion.monto,
             moneda=moneda,
             customer_id=sub.customer_id,
@@ -916,7 +805,7 @@ class SubscriptionCapabilityImpl:
         self,
         subscription_id: uuid.UUID,
         *,
-        variant_id: str,
+        plan_id: str,
         plan: PlanSnapshot,
         codigo_promocion: str | None = None,
     ) -> dict[str, Any]:
@@ -930,10 +819,10 @@ class SubscriptionCapabilityImpl:
         async with get_session() as session:
             sub = await self._sub_vigente(session, subscription_id)
             factor = None if codigo is not None else await factor_del_periodo(session, sub)
-            evaluacion = evaluar_cambio(sub, variant_id=variant_id, plan=plan, ahora=ahora, factor=factor)
+            evaluacion = evaluar_cambio(sub, plan_id=plan_id, plan=plan, ahora=ahora, factor=factor)
             promo = None
             if codigo is not None:
-                promo, _ = await self._evaluar_promocion_de_cambio(session, sub, evaluacion, variant_id, plan, codigo, ahora)
+                promo, _ = await self._evaluar_promocion_de_cambio(session, sub, evaluacion, plan_id, plan, codigo, ahora)
             desde = (sub.proximo_cargo or ahora).isoformat() if evaluacion.cambio == "programado" else None
             reemplaza = None
             if sub.promocion_id is not None:

@@ -138,9 +138,7 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
             r"\b(?:qued[oó]|est[aá]|fue)\s+(?:ya\s+)?(?:armad|generad)a\s+(?:tu|la)\s+cotizaci[oó]n",
             re.IGNORECASE,
         ),
-        # `cotizar_plan` (HU-AOS-07) es la misma cotización con una unidad, la del procedimiento
-        # `contratar_plan`: "te armé la cotización" tras cotizar_plan es verdad (pass^4, 2026-10-18).
-        {"generar_cotizacion", "cotizar_plan"},
+        {"generar_cotizacion"},
     ),
     "cotizacion_aceptada": (
         re.compile(
@@ -210,7 +208,7 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
 # Afirmaciones que también respalda una URL devuelta por una tool del turno.
 _LINK_CON_URL = frozenset({"link_de_pago"})
 
-# Datos de contacto de los procedimientos del pack (`tomar_pedido`, `contratar_plan`): con el motor
+# Datos de contacto de los procedimientos del pack (`tomar_pedido`): con el motor
 # activo, "anoté tu dirección" lo respalda el dato fijado en este turno (`Afirmacion.datos`).
 _DATOS_DE_CONTACTO = frozenset(
     {"full_name", "id_document", "phone", "email", "address", "city", "municipality"}
@@ -1061,7 +1059,7 @@ async def order_update_status(request: Request, order_id: uuid.UUID, status: str
 class CRMModule(BaseModule):
     id = PLUGIN_ID
     name = "CRM"
-    version = "2.5.0"
+    version = "3.0.0"
     description = "Leads, catálogo (menú), promociones y pedidos para el negocio"
     display_name = "Comercio"
     category = "Ventas"
@@ -1102,7 +1100,7 @@ class CRMModule(BaseModule):
         return await seed_catalog(tenant_id, data)
 
     def formas_de_datos_de_prueba(self) -> list[FormaDeDatos]:
-        """Catálogo (agente de ventas) y planes (por plantilla), HU-QA-10."""
+        """Catálogo del agente de ventas (HU-QA-10). Los planes son del pack de Suscripciones."""
         from pack_commerce.datos_de_prueba import formas
 
         return formas()
@@ -1120,7 +1118,7 @@ class CRMModule(BaseModule):
         return await retirar(tenant_id, registros)
 
     def plantillas_de_importacion(self) -> list[PlantillaDeImportacion]:
-        """Importar productos y planes desde un CSV (HU-QA-12, ADR-0180)."""
+        """Importar productos desde un CSV (HU-QA-12, ADR-0180)."""
         from pack_commerce.importacion import plantillas
 
         return plantillas()
@@ -1139,7 +1137,7 @@ class CRMModule(BaseModule):
         return await importar(tenant_id, plantilla_id, filas, contexto, simular=simular)
 
     async def sembrar_escenario(self, tenant_id: uuid.UUID, escenario: str, entrada: Any) -> Any:
-        """Pedidos, leads, promoción y planes de los escenarios de datos de prueba (HU-QA-13)."""
+        """Pedidos, leads y promoción de los escenarios de datos de prueba (HU-QA-13)."""
         from pack_commerce.escenarios import sembrar_escenario
 
         return await sembrar_escenario(tenant_id, escenario, entrada)
@@ -1188,22 +1186,12 @@ class CRMModule(BaseModule):
         # La cotización en curso y el último pedido de la conversación, para el prompt
         # (ADR-0130): sin esto el modelo no ve el `quote_id` en el turno siguiente.
         host.register_referencias(referencias_vigentes)
-        # Catálogo de planes para el cambio de plan del core (HU-SUB-07, ADR-0111).
-        from core.subscriptions import plan_catalog_registry
-        from pack_commerce.planes import CatalogoDePlanes
-
-        plan_catalog_registry.register("pack_commerce", CatalogoDePlanes())
         # Cuentas de transferencia del negocio para los avisos de cobro de suscripciones
         # (HU-SUB-24, adenda de ADR-0067): una sola fuente, sin que suscripciones importe este pack.
         from core.payments.transferencia import transfer_registry
         from pack_commerce.transferencia import CuentasDeTransferenciaDelNegocio
 
         transfer_registry.register(PLUGIN_ID, CuentasDeTransferenciaDelNegocio())
-        # Datos del pedido para el alta automática de negocios (HU-SH-03, ADR-0121).
-        from core.provisioning.fuentes import fuentes_de_alta
-        from pack_commerce.altas import DatosDeAltaDelPedido
-
-        fuentes_de_alta.register("pack_commerce", DatosDeAltaDelPedido())
 
         # Vistas por descriptor (Fase D, Sprint 4): la del panel se sirve con HTML
         # genérico — cero plantillas/rutas propias del pack.
@@ -1340,7 +1328,7 @@ class CRMModule(BaseModule):
         datos: dict[str, Any],
     ) -> None:
         """Completa el lead del cliente con los datos de contacto de un recorrido de ESTE pack
-        (`contratar_plan`, `tomar_pedido`): con foco, `crear_lead`/`actualizar_lead` no se
+        (`tomar_pedido`): con foco, `crear_lead`/`actualizar_lead` no se
         ofrecen. Solo si el pack está habilitado para el negocio; nunca crea un lead."""
         from core.agents.spec import enabled_packs, load_active_spec
 
@@ -1402,6 +1390,11 @@ class CRMModule(BaseModule):
         # base para localizar el pedido.
         base_reference = reference.split("-r", 1)[0] if "-r" in reference else reference
 
+        # `sub-<cargo>` es un cobro de suscripción (pack de Suscripciones) y `sub-<tenant>-…` uno de
+        # la plataforma: nunca es un pedido de este pack. Se ignora sin alarma (HU-COM-17).
+        if reference.startswith("sub-"):
+            return
+
         async with get_session() as session:
             order = (
                 await session.execute(
@@ -1437,16 +1430,14 @@ class CRMModule(BaseModule):
             order.payment_status = payment_status
             order.status_changed_at = datetime.now(UTC)
             log.info("order_payment_status_updated", order_id=str(order.id), payment_status=payment_status)
-            if payment_status == "pagado":
-                await self._activate_plans_for_order(session, order)
-                if not ya_pagado:
-                    await self._emitir_pedido_pagado(session, tenant_id, order)
+            if payment_status == "pagado" and not ya_pagado:
+                await self._emitir_pedido_pagado(session, tenant_id, order)
 
     @staticmethod
     async def _emitir_pedido_pagado(session, tenant_id, order: Order) -> None:  # type: ignore[no-untyped-def]
         """`order.paid` al outbox (ADR-0107) en la MISMA transacción que marca el pedido pagado,
-        solo en esa transición y con el monto ya validado: cierra las tareas de `contratar_plan` y
-        `tomar_pedido` que esperan el pago (HU-AOS-07), por el `order_id` que fijó `crear_pedido`.
+        solo en esa transición y con el monto ya validado: cierra las tareas de `tomar_pedido`
+        que esperan el pago (HU-AOS-07), por el `order_id` que fijó `crear_pedido`.
         Idempotente por pedido (un webhook repetido o un reintento del despachador no duplica)."""
         from core.events.outbox import emit_domain
         from core.shared.events import ON_ORDER_PAID
@@ -1458,12 +1449,6 @@ class CRMModule(BaseModule):
             dedupe_key=f"{ON_ORDER_PAID}:{order.id}",
             payload={"order_id": str(order.id), "public_order_number": order.public_order_number},
         )
-
-    async def _activate_plans_for_order(self, session, order: Order) -> None:
-        """Plan como producto (ADR-0083, D-16): ver `pack_commerce.planes`."""
-        from pack_commerce.planes import activar_planes_del_pedido
-
-        await activar_planes_del_pedido(session, order)
 
     # ------------------------------------------------------------ verificador
     async def _afirmaciones(self) -> list[Afirmacion]:

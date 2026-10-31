@@ -632,7 +632,7 @@ async def _crear(
         sub.fecha_alta = ahora
         session.add(sub)
         await session.flush()
-        await _emitir_activada(session, sub, None, cambio=False, monto_cobrado=Decimal("0"))
+        await _emitir_activada(session, sub, cambio=False, monto_cobrado=Decimal("0"))
     else:
         # De pago: existe desde la elección pero no vive hasta que pague (no cuenta en MRR ni en los crons).
         sub.estado = PENDIENTE_PAGO
@@ -677,8 +677,8 @@ async def _cambio_desde_free(
     for previa in decision.reemplazar:
         await _reemplazar(session, previa)
     await session.refresh(free, with_for_update=True)
-    evaluado = evaluar_cambio(free, variant_id=str(plan.id), plan=planes.snapshot(plan), ahora=ahora)
-    destino = {"variante_id": str(plan.id), "plan_id": str(plan.id), "plan": planes.snapshot(plan)}
+    evaluado = evaluar_cambio(free, plan_id=str(plan.id), plan=planes.snapshot(plan), ahora=ahora)
+    destino = {"plan_id": str(plan.id), "plan": planes.snapshot(plan)}
     monto = evaluacion.neto if evaluacion is not None else evaluado.monto
     # Un cobro de cambio pendiente al MISMO plan, monto y promoción se reusa (reintento); otro se anula y libera.
     cargo = await _anular_cambios_pendientes(
@@ -844,7 +844,7 @@ async def _activar_por_pago(
         await session.flush()
         # El canje pasa a `confirmado` y el descuento queda en la suscripción con los períodos que falten.
         await promociones.confirmar_por_cargo(session, cargo, sub)
-        await _emitir_activada(session, sub, None, cambio=False, charge_id=cargo.id, monto_cobrado=Decimal(cargo.monto))
+        await _emitir_activada(session, sub, cambio=False, charge_id=cargo.id, monto_cobrado=Decimal(cargo.monto))
         log.info("subs_inscripcion_activada", subscription_id=str(sub.id), numero_publico=sub.numero_publico)
         return None
     if cargo.tipo == "cambio_plan" and cargo.cambio_plan:
@@ -858,7 +858,7 @@ async def _activar_por_pago(
             cargo.cambio_plan = {**cargo.cambio_plan, "activado_en": sub.periodo_actual_inicio.isoformat()}
         await session.flush()
         await promociones.confirmar_por_cargo(session, cargo, sub)
-        await _emitir_activada(session, sub, None, cambio=True, charge_id=cargo.id, monto_cobrado=Decimal(cargo.monto))
+        await _emitir_activada(session, sub, cambio=True, charge_id=cargo.id, monto_cobrado=Decimal(cargo.monto))
         log.info("subs_cambio_de_plan_pagado", subscription_id=str(sub.id), plan=sub.concepto)
         return None
     return None

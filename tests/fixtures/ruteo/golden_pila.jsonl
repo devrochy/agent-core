@@ -1,13 +1,13 @@
-{"catalogo": "planes", "texto": "quiero el plan premium y una demo el jueves", "esperado": ["pack_commerce.contratar_plan", "pack_calendar.agendar_cita"]}
-{"catalogo": "planes", "texto": "quiero contratar el plan anual y también agendar una cita", "esperado": ["pack_commerce.contratar_plan", "pack_calendar.agendar_cita"]}
-{"catalogo": "planes", "texto": "Hola, buenas. Quería agendar una demo para el martes y además contratar el plan mensual", "esperado": ["pack_calendar.agendar_cita", "pack_commerce.contratar_plan"]}
+{"catalogo": "planes", "texto": "quiero el plan premium y una demo el jueves", "esperado": ["pack_subscriptions.contratar_plan", "pack_calendar.agendar_cita"]}
+{"catalogo": "planes", "texto": "quiero contratar el plan anual y también agendar una cita", "esperado": ["pack_subscriptions.contratar_plan", "pack_calendar.agendar_cita"]}
+{"catalogo": "planes", "texto": "Hola, buenas. Quería agendar una demo para el martes y además contratar el plan mensual", "esperado": ["pack_calendar.agendar_cita", "pack_subscriptions.contratar_plan"]}
 {"catalogo": "planes", "texto": "me quiero cambiar de plan, y de paso me agendan una reunión", "esperado": ["pack_subscriptions.cambiar_plan", "pack_calendar.agendar_cita"]}
 {"catalogo": "planes", "texto": "quiero ponerme al día con lo que debo y también cambiarme al plan anual", "esperado": ["pack_cobranza.promesa_de_pago", "pack_subscriptions.cambiar_plan"]}
 {"catalogo": "tienda", "texto": "quiero pedir dos hamburguesas y agendar una cita para el sábado", "esperado": ["pack_commerce.tomar_pedido", "pack_calendar.agendar_cita"]}
 {"catalogo": "tienda", "texto": "me regalas un pedido a domicilio. Aparte quiero reservar una cita", "esperado": ["pack_commerce.tomar_pedido", "pack_calendar.agendar_cita"]}
-{"catalogo": "planes", "texto": "quiero contratar el plan premium y pagarlo con tarjeta", "esperado": ["pack_commerce.contratar_plan"]}
+{"catalogo": "planes", "texto": "quiero contratar el plan premium y pagarlo con tarjeta", "esperado": ["pack_subscriptions.contratar_plan"]}
 {"catalogo": "planes", "texto": "quiero agendar una demo para el jueves y el viernes", "esperado": ["pack_calendar.agendar_cita"]}
-{"catalogo": "planes", "texto": "quiero el plan premium y que me expliquen bien", "esperado": ["pack_commerce.contratar_plan"]}
+{"catalogo": "planes", "texto": "quiero el plan premium y que me expliquen bien", "esperado": ["pack_subscriptions.contratar_plan"]}
 {"catalogo": "planes", "texto": "hola y buenas tardes, quiero agendar una cita", "esperado": ["pack_calendar.agendar_cita"]}
 {"catalogo": "planes", "texto": "me cobraron 1.500 y no entiendo por qué", "esperado": []}
 {"catalogo": "planes", "texto": "agendar una cita a las 3 p. m. y otra a las 5 p. m.", "esperado": ["pack_calendar.agendar_cita"]}

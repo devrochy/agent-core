@@ -6,8 +6,8 @@ del negocio VENDEDOR. Pasos:
 1. Solo vendedores (allowlist `PROVISIONING_SELLER_TENANTS`); el resto, nada.
 2. Registro idempotente en `provisioning_requests` (único por referencia y por suscripción).
 3. Candado consultivo por alta: dos workers nunca trabajan la misma.
-4. Datos del pedido por la fuente del vendedor (`pack_commerce`), no del texto del LLM, y
-   cotejo del cliente del pedido con el de la suscripción.
+4. Datos de la inscripción por la fuente del vendedor (`pack_subscriptions`), no del texto del
+   LLM, y cotejo del cliente de la inscripción con el de la suscripción.
 5. Controles de HU-SH-07 (ADR-0125): interruptor del master, aceptación de términos
    registrada, un Free por persona y señales de riesgo; si algo falla, revisión. Un alta que
    aprobó una persona (`aprobar_alta`) los salta. Un Free solo una vez por cliente y por
@@ -152,7 +152,6 @@ async def aprovisionar(vendedor: uuid.UUID, payload: Mapping[str, Any]) -> Provi
         log.warning("provisioning_evento_invalido", tenant_id=str(vendedor))
         return None
     referencia, _sin_pedido = referencia_del_alta(payload.get("referencia"), subscription_id)
-    variant_id = str(payload.get("variant_id") or "").strip() or None
     # SPEC-43: la inscripción (plan del catálogo de suscripciones) manda `plan_id` y, si la suscripción ya
     # tenía un negocio (Free que paga un plan), `cambio_de_plan`: es un cambio aunque la referencia sea la
     # misma (el `numero_publico` no cambia entre el alta y el cambio).
@@ -163,7 +162,6 @@ async def aprovisionar(vendedor: uuid.UUID, payload: Mapping[str, Any]) -> Provi
         subscription_id=subscription_id,
         referencia=referencia,
         customer_id=_uuid(payload.get("customer_id")),
-        variant_id=variant_id,
         periodo=_periodo_del_evento(payload),
     )
     if registro.subscription_id != subscription_id:
@@ -182,7 +180,7 @@ async def aprovisionar(vendedor: uuid.UUID, payload: Mapping[str, Any]) -> Provi
         if registro.estado == "en_curso":
             registro = await _procesar(vendedor, registro)
         await sincronizar_cambio_de_plan(
-            vendedor, registro, payload, f"{referencia}:cambio" if es_cambio else referencia, variant_id
+            vendedor, registro, payload, f"{referencia}:cambio" if es_cambio else referencia
         )
         return registro
     if registro.estado != "en_curso":
@@ -241,7 +239,6 @@ async def _registro(
     subscription_id: uuid.UUID,
     referencia: str,
     customer_id: uuid.UUID | None,
-    variant_id: str | None,
     periodo: dict[str, Any] | None = None,
 ) -> ProvisioningRequest:
     """La fila del alta (la crea si no existe). INSERT … ON CONFLICT DO NOTHING: dos
@@ -249,7 +246,7 @@ async def _registro(
     existente = await _buscar(vendedor, subscription_id, referencia)
     if existente is not None:
         return existente
-    detalle: dict[str, Any] = {"variant_id": variant_id} if variant_id else {}
+    detalle: dict[str, Any] = {}
     if periodo:
         detalle["periodo"] = periodo
     async with get_session() as session:
@@ -393,12 +390,10 @@ async def _datos_del_pedido(vendedor: uuid.UUID, registro: ProvisioningRequest) 
     fuentes = await fuentes_de_alta.del_negocio(vendedor)
     if not fuentes:
         raise AltaEnRevision("el vendedor no tiene una habilidad de pedidos que dé los datos del alta")
-    # Commerce da los pedidos y suscripciones las inscripciones: gana la primera que conoce la referencia.
+    # Gana la primera fuente que conoce la referencia (hoy, la de las inscripciones de suscripciones).
     datos = None
     for fuente in fuentes:
-        datos = await fuente.datos_de_alta(
-            registro.referencia, variant_id=(registro.detalle or {}).get("variant_id")
-        )
+        datos = await fuente.datos_de_alta(registro.referencia)
         if datos is not None:
             break
     if datos is None:
@@ -888,7 +883,6 @@ async def sincronizar_cambio_de_plan(
     registro: ProvisioningRequest,
     payload: Mapping[str, Any],
     referencia: str,
-    variant_id: str | None,
 ) -> dict[str, Any]:
     """Cambio de plan en el asistente de un negocio ya aprovisionado (HU-SH-04, ADR-0123).
 
@@ -913,7 +907,7 @@ async def sincronizar_cambio_de_plan(
 
     resultado: dict[str, Any] = {"negocio_tenant_id": str(registro.negocio_tenant_id) if registro.negocio_tenant_id else None}
     negocio = registro.negocio_tenant_id
-    plan_id = await plan_del_cargo(vendedor, variant_id, payload.get("plan_id"))
+    plan_id = await plan_del_cargo(vendedor, payload.get("plan_id"))
     plan = get_plan(plan_id) if plan_id else None
     if registro.estado != "completado" or negocio is None:
         resultado["estado"] = f"sin_negocio ({registro.estado})"
@@ -979,7 +973,7 @@ async def sincronizar_cambio_de_plan(
             "referencia": referencia,
             "referencia_del_alta": registro.referencia,
             "subscription_id": str(registro.subscription_id) if registro.subscription_id else None,
-            "variant_id": variant_id,
+            "plan_id": str(payload.get("plan_id") or "") or None,
         },
         output_data=resultado,
     )

@@ -107,7 +107,7 @@ def _aplicar_filtros_suscripcion(
     pend: Any,
     *,
     estado: str | None,
-    variante_id: uuid.UUID | None,
+    plan_id: uuid.UUID | None,
     periodicidad: str | None,
     con_mora: bool,
     q: str | None,
@@ -115,8 +115,8 @@ def _aplicar_filtros_suscripcion(
 ) -> Select[Any]:
     if estado:
         stmt = stmt.where(Subscription.estado == estado)
-    if variante_id:
-        stmt = stmt.where(Subscription.variante_id == variante_id)
+    if plan_id:
+        stmt = stmt.where(Subscription.plan_id == plan_id)
     if periodicidad:
         stmt = stmt.where(Subscription.periodicidad == periodicidad)
     if con_mora:
@@ -140,7 +140,7 @@ def _item(sub: Subscription, nombre: Any, telefono: Any, canal: Any, deuda: Any,
         "id": sub.id,
         "cliente": _cliente(sub.customer_id, nombre, telefono, canal),
         "plan": sub.concepto,
-        "variante_id": sub.variante_id,
+        "plan_id": sub.plan_id,
         "estado": sub.estado,
         "motivo_pausa": sub.motivo_pausa,
         "periodicidad": sub.periodicidad,
@@ -162,7 +162,7 @@ async def listar_suscripciones(
     params: PageParams,
     *,
     estado: str | None = None,
-    variante_id: uuid.UUID | None = None,
+    plan_id: uuid.UUID | None = None,
     periodicidad: str | None = None,
     con_mora: bool = False,
     q: str | None = None,
@@ -172,7 +172,7 @@ async def listar_suscripciones(
     pend = _pendientes(tid, ahora)
     filtros = {
         "estado": estado,
-        "variante_id": variante_id,
+        "plan_id": plan_id,
         "periodicidad": periodicidad,
         "con_mora": con_mora,
         "q": q,

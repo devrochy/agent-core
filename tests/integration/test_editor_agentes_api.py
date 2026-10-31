@@ -146,7 +146,7 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
     assert set(plantillas) == {"agenda", "cobranza", "suscripciones", "ventas"}
     ventas = plantillas["ventas"]
     assert ventas["available"] and ventas["missing_skills"] == [] and ventas["will_enable"] == []
-    assert [s["id"] for s in ventas["superpowers"]] == ["pack_commerce.tomar_pedido", "pack_commerce.contratar_plan"]
+    assert [s["id"] for s in ventas["superpowers"]] == ["pack_commerce.tomar_pedido"]
     assert all(len(s["phrases"]) >= 3 for s in ventas["superpowers"])
     cobranza = plantillas["cobranza"]
     assert cobranza["available"] and cobranza["missing_skills"] == [] and cobranza["will_enable"] == ["pack_cobranza"]
@@ -160,7 +160,7 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
         "ventas", "Mis ventas", None,
     )
     contenido = creado["draft"]["content"]
-    assert {p["id"] for p in contenido["procedures"]} == {"pack_commerce.tomar_pedido", "pack_commerce.contratar_plan"}
+    assert {p["id"] for p in contenido["procedures"]} == {"pack_commerce.tomar_pedido"}
     assert creado["draft"]["lock_version"] == 1
 
     r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
@@ -185,7 +185,7 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
     assert r.status_code == 422, r.text
     error = r.json()["error"]
     assert error["code"] == "invalid_spec"
-    assert set(error["fields"]) == {"procedures[0].overrides.examples", "procedures[1].overrides.examples"}
+    assert set(error["fields"]) == {"procedures[0].overrides.examples"}
     assert "frases" in error["fields"]["procedures[0].overrides.examples"]
 
     # Copiar frases de la habilidad no suma; frases propias sí. Y un modelo de otro proveedor no pasa.
@@ -262,7 +262,7 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
     r = await app_client.post(
         f"/api/v1/admin/agents/{agenda_otro}/publish", headers=h_otro, json={"connection_ids": [str(cid)]}
     )
-    # (Sigue el superpoder con pocas frases: los dos errores vienen juntos, por campo.)
+    # (Sigue el superpoder con pocas frases: ambos errores vienen juntos, por campo.)
     assert r.status_code == 422 and "connection_ids[0]" in r.json()["error"]["fields"], r.text
     assert await _sql(otro, "select 1 from agent_versions where agent_id = :a", a=uuid.UUID(agenda_otro)) == []
 
@@ -334,7 +334,7 @@ async def test_superpoderes_por_enfoque(app_client) -> None:
 
     r = await app_client.get(f"/api/v1/admin/agent-superpowers?agent_id={aid}", headers=h)
     assert r.status_code == 200, r.text
-    assert {s["id"] for s in r.json()["items"]} == {"pack_commerce.tomar_pedido", "pack_commerce.contratar_plan"}
+    assert {s["id"] for s in r.json()["items"]} == {"pack_commerce.tomar_pedido"}
 
     # Marcar un superpoder de otro enfoque: el borrador lo guarda, publicar lo rechaza junto al campo.
     borrador = (await app_client.get(f"/api/v1/admin/agents/{aid}/draft", headers=h)).json()
@@ -348,13 +348,13 @@ async def test_superpoderes_por_enfoque(app_client) -> None:
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
     assert r.status_code == 422, r.text
     campos = r.json()["error"]["fields"]
-    assert "procedures[2].id" in campos and "enfoque" in campos["procedures[2].id"]
+    assert "procedures[1].id" in campos and "enfoque" in campos["procedures[1].id"]
     assert await _sql(tid, "select 1 from agent_versions where agent_id = :a", a=uuid.UUID(aid)) == []
 
     # HU-AOS-51: la API genérica de versiones tampoco se salta el enfoque.
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/versions", headers=h, json={})
     assert r.status_code == 422, r.text
-    assert "enfoque" in r.json()["error"]["fields"]["procedures[2].id"]
+    assert "enfoque" in r.json()["error"]["fields"]["procedures[1].id"]
     assert await _sql(tid, "select 1 from agent_versions where agent_id = :a", a=uuid.UUID(aid)) == []
 
     # Aislamiento: el agente de un negocio no se consulta desde otro.
@@ -412,32 +412,31 @@ async def test_plantillas_traen_seccion_y_solo_sus_herramientas(app_client) -> N
 
 async def test_crear_desde_el_guion_de_la_plantilla(app_client) -> None:
     """HU-AOS-48: las plantillas sirven su guion; `from-script` crea el borrador según las respuestas
-    (planes → solo `contratar_plan`), con 422 por pregunta, 409 `key_taken` y los requisitos pendientes."""
+    (la pregunta `que_vendes` salió con SPEC-43 y se ignora), con 422 por pregunta, 409 `key_taken` y los requisitos pendientes."""
     tid, _ = await _negocio()
     h = await _dueno(app_client, tid)
 
     r = await app_client.get("/api/v1/admin/agent-templates", headers=h)
     assert r.status_code == 200, r.text
     ventas = {p["key"]: p for p in r.json()["items"]}["ventas"]
-    que_vendes = next(q for q in ventas["questions"] if q["id"] == "que_vendes")
-    assert (que_vendes["type"], que_vendes["default"]) == ("option", "productos")
-    assert [o["id"] for o in que_vendes["options"]] == ["productos", "planes", "ambos"]
+    assert "que_vendes" not in {q["id"] for q in ventas["questions"]}
 
     # Respuesta fuera de las opciones: 422 por pregunta y no se crea nada.
-    malo = {"template_key": "ventas", "answers": {"que_vendes": "servicios"}}
+    malo = {"template_key": "ventas", "answers": {"largo_respuesta": "enorme"}}
     r = await app_client.post("/api/v1/admin/agents/from-script", headers=h, json=malo)
     assert (r.status_code, r.json()["error"]["code"]) == (422, "invalid_answers"), r.text
-    assert set(r.json()["error"]["fields"]) == {"que_vendes"}
+    assert set(r.json()["error"]["fields"]) == {"largo_respuesta"}
     # (que no se creó nada lo prueba el 201 siguiente: con un agente ya creado daría 409 `key_taken`)
 
-    # Planes: borrador sin publicar, solo con `contratar_plan`, con el largo elegido y los requisitos.
+    # Un cliente viejo (panel o APK anteriores) todavía envía `que_vendes`: se ignora, no da 422.
     ok = {"template_key": "ventas", "answers": {"que_vendes": "planes", "largo_respuesta": "cortas"}}
     r = await app_client.post("/api/v1/admin/agents/from-script", headers=h, json=ok)
     assert r.status_code == 201, r.text
     creado = r.json()
     assert (creado["agent"]["key"], creado["agent"]["latest_version"]) == ("ventas", None)
     contenido = creado["draft"]["content"]
-    assert [p["id"] for p in contenido["procedures"]] == ["pack_commerce.contratar_plan"]
+    # Aunque pida «planes», Ventas ya no vende planes: solo queda `tomar_pedido`.
+    assert [p["id"] for p in contenido["procedures"]] == ["pack_commerce.tomar_pedido"]
     assert contenido["persona"]["maxLength"] == 300
     assert isinstance(creado["requirements"], list)
     assert all({"skill", "kind", "title", "section"} <= set(x) for x in creado["requirements"])

@@ -60,9 +60,7 @@ def test_commerce_minimos_y_stock() -> None:
 
     assert "pago_en_linea_monto_minimo" in _errores(CRMConfig, pago_en_linea_monto_minimo=-1)
     assert "customer_fiel_min_pedidos" in _errores(CRMConfig, customer_fiel_min_pedidos=0)
-    assert set(_errores(ProductSave, name="x", price=-1, stock=-3, trial_days=-1)) == {
-        "price", "stock", "trial_days",
-    }
+    assert set(_errores(ProductSave, name="x", price=-1, stock=-3)) == {"price", "stock"}
     assert "sort_order" in _errores(CategorySave, name="x", sort_order=-1)
 
 
@@ -74,12 +72,10 @@ def test_payments_y_subscriptions() -> None:
     assert "link_expira_horas" in _errores(
         PaymentsConfig, public_key="p", private_key="s", events_secret="e", link_expira_horas=0
     )
-    assert "trial_dias" in _errores(SubscriptionConfig, trial_dias=-1)
     # Los recordatorios admiten días negativos a propósito (antes del vencimiento).
     assert SubscriptionConfig(recordatorios_dias=[-3, 0, 3]).recordatorios_dias == [-3, 0, 3]
-    assert set(_errores(CrearSuscripcionBody, customer_id=uuid.uuid4(), nombre="Plan", precio=-1, trial_dias=-1)) == {
-        "precio", "trial_dias",
-    }
+    # El plan sale del catálogo (SPEC-43): el cuerpo ya no trae precio ni prueba propios.
+    assert set(_errores(CrearSuscripcionBody, customer_id=uuid.uuid4())) == {"plan_codigo"}
 
 
 def test_app_settings_turnos_top_k_y_umbral() -> None:
@@ -337,7 +333,6 @@ def test_topes_superiores_y_sin_inf_nan() -> None:
     from pack_cobranza.admin_api import RulesUpdate
     from pack_commerce.admin_api import CategorySave, ProductSave
     from pack_commerce.config import CRMConfig
-    from pack_subscriptions.admin_api import CrearSuscripcionBody
 
     assert set(_errores(ProductSave, name="x", price=1e11, stock=10**10)) == {"price", "stock"}
     assert "price" in _errores(ProductSave, name="x", price=float("inf"))
@@ -356,7 +351,6 @@ def test_topes_superiores_y_sin_inf_nan() -> None:
         "monto_alto_threshold",
         "pago_en_linea_monto_minimo",
     }
-    assert "precio" in _errores(CrearSuscripcionBody, customer_id=uuid.uuid4(), nombre="P", precio=1e13)
     assert "umbral_saldo_autonomo" in _errores(RulesUpdate, umbral_saldo_autonomo=float("inf"))
     assert ProductSave(name="x", price=9_999_999_999, stock=1_000_000_000).stock == 1_000_000_000
 

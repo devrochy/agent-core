@@ -32,7 +32,7 @@ pytestmark = [
 ]
 
 PASSWORD = "clave-segura-123"
-PLAN = "pack_commerce.contratar_plan"
+PLAN = "pack_commerce.tomar_pedido"
 CITA = "pack_calendar.agendar_cita"
 BASE = "/api/v1/admin/skills/installations"
 
@@ -116,7 +116,7 @@ async def _dueno(tid: uuid.UUID) -> str:
 
 
 async def _agenda(tid: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
-    """Especialista Agenda publicado con `agendar_cita ^1.0` y un `contratar_plan ^9.0` que no
+    """Especialista Agenda publicado con `agendar_cita ^1.0` y un `tomar_pedido ^9.0` que no
     resuelve. Devuelve (agente, versión)."""
     from core.agents import versiones
     from core.kernel.procedures import catalogo_de_acciones
@@ -201,7 +201,7 @@ async def test_el_build_congela_solo_las_de_la_conexion_y_falla_cerrado(app_clie
 
     r = await app_client.post(BASE, headers=master, json={"pack_id": "pack_calendar", "connection_id": str(cid)})
     assert r.status_code == 201
-    # El General declara `contratar_plan`, que no está en el scope de la conexión: fail-closed.
+    # El General declara `tomar_pedido`, que no está en el scope de la conexión: fail-closed.
     with pytest.raises(ErrorDelBuild) as error:
         await _construir(tid, cid)
     assert error.value.codigo == "procedimiento_sin_resolver"
@@ -211,7 +211,7 @@ async def test_el_build_congela_solo_las_de_la_conexion_y_falla_cerrado(app_clie
     agente, version = await _agenda(tid)
     async with tenant_scope(tid):
         await instancias.agregar_instancia(tid, cid, agente, is_default=True)
-    with pytest.raises(ErrorDelBuild):  # `^9.0` de contratar_plan no lo provee nadie
+    with pytest.raises(ErrorDelBuild):  # `^9.0` de tomar_pedido no lo provee nadie
         await _construir(tid, cid)
     r = await app_client.get(f"/api/v1/admin/agents/{agente}/versions/{version}", headers=master)
     assert r.status_code == 200, r.text

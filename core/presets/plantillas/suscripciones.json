@@ -6,7 +6,7 @@
   "habilidades": ["pack_subscriptions"],
   "procedimientos": ["pack_subscriptions.contratar_plan", "pack_subscriptions.cambiar_plan"],
   "playbooks": ["suscripciones", "planes"],
-  "datos_de_prueba": "pack_commerce.planes",
+  "datos_de_prueba": "pack_subscriptions.planes",
   "preguntas": [
     {
       "id": "largo_respuesta",

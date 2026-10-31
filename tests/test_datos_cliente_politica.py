@@ -154,7 +154,6 @@ def test_las_acciones_de_los_packs_declaran_claves_canonicas_del_perfil() -> Non
     assert {a.id for a in acciones} >= {
         "ventas.pedido_domicilio",
         "ventas.pedido_retiro",
-        "ventas.plan_legado",
         "suscripciones.inscribirse",
         "agenda.agendar_cita",
     }

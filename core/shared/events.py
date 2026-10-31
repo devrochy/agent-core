@@ -58,8 +58,9 @@ ON_SUBSCRIPTION_CHARGE_REMINDER = "subscription.charge_reminder"
 ON_SUBSCRIPTION_PAUSED = "subscription.paused"
 # HU-SUB-06: suscripción activada (alta o cambio de plan) y fin de la prueba de Free
 # (oferta de un plan pago). payload: subscription_id, customer_id, concepto, estado,
-# referencia (el pedido; None si no hubo pedido), cambio_de_plan y variant_id (la línea del
-# pedido). En un negocio vendedor (ADR-0121) dispara el alta automática del comprador.
+# referencia (el número público de la inscripción, `SUB-0001`), cambio_de_plan, plan_id (el plan del
+# catálogo de suscripciones) y numero_publico. En un negocio vendedor (ADR-0121) dispara el alta
+# automática del comprador.
 ON_SUBSCRIPTION_ACTIVATED = "subscription.activated"
 # HU-SH-07 (ADR-0125): el master aprobó un alta en revisión; el consumidor la corre en el
 # worker. payload: referencia (del alta en el vendedor que emite).
@@ -79,7 +80,7 @@ ON_SEGMENT_SEND_BATCH = "crm.segment_send.batch"
 # - `subscription.charge_paid`: el proveedor de suscripciones marcó pagado el cargo de un
 #   período (en el negocio vendedor). Si la suscripción es la de un negocio aprovisionado, el
 #   core aplica ese período a su `tenant_subscriptions`. payload: charge_id, subscription_id,
-#   customer_id, periodo, periodo_inicio, periodo_fin, dia_ancla, monto, moneda, variant_id,
+#   customer_id, periodo, periodo_inicio, periodo_fin, dia_ancla, monto, moneda, plan_id,
 #   provider_reference, pago_duplicado.
 ON_SUBSCRIPTION_CHARGE_PAID = "subscription.charge_paid"
 # - `platform.period_paid`: un período del plan del negocio se pagó por el panel (link de la
@@ -92,7 +93,7 @@ ON_PLATFORM_PERIOD_PAID = "platform.period_paid"
 ON_PLATFORM_RENEWAL_DUE = "platform.renewal_due"
 # HU-AOS-07 (cierre por pago, decisión del dueño 2026-10-11): pack-commerce lo escribe en el
 # outbox en la misma transacción en que un pedido pasa a `pagado` (ya validado el monto contra
-# el total). Cierra las tareas de `contratar_plan` y `tomar_pedido` que esperan el pago, por el
+# el total). Cierra las tareas de `tomar_pedido` que esperan el pago, por el
 # `order_id` que fijó `crear_pedido`. payload: order_id, public_order_number.
 ON_ORDER_PAID = "order.paid"
 # Centro de notificaciones (ADR-0167): se escribe en el outbox junto con la fila de

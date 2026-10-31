@@ -14,67 +14,32 @@
       "sandbox": true
     }
   },
-  "catalogo": {
-    "pack": "pack_commerce",
-    "category_paths": [
-      [
-        "Planes"
-      ]
-    ],
-    "products": [
+  "motor_de_procedimientos": true,
+  "planes": {
+    "planes": [
       {
-        "name": "Plan Free",
-        "description": "Plan de entrada sin costo, con 30 días de prueba.",
-        "category_path": [
-          "Planes"
-        ],
-        "variants": [
-          {
-            "sku": "PLAN-FREE",
-            "price": 0,
-            "stock": 0,
-            "attributes": {
-              "periodicidad": "mensual",
-              "trial_dias": 30
-            }
-          }
-        ]
+        "codigo": "PLAN-FREE",
+        "nombre": "Plan Free",
+        "descripcion": "Plan de entrada sin costo, con 30 días de prueba.",
+        "precio": 0,
+        "periodicidad": "mensual",
+        "trial_dias": 30
       },
       {
-        "name": "Plan Basic",
-        "description": "Clases grabadas y una tutoría al mes.",
-        "category_path": [
-          "Planes"
-        ],
-        "variants": [
-          {
-            "sku": "PLAN-BASIC",
-            "price": 200000,
-            "stock": 0,
-            "attributes": {
-              "periodicidad": "mensual",
-              "trial_dias": 0
-            }
-          }
-        ]
+        "codigo": "PLAN-BASIC",
+        "nombre": "Plan Basic",
+        "descripcion": "Clases grabadas y una tutoría al mes.",
+        "precio": 200000,
+        "periodicidad": "mensual",
+        "trial_dias": 0
       },
       {
-        "name": "Plan Premium",
-        "description": "Clases en vivo y tutorías ilimitadas.",
-        "category_path": [
-          "Planes"
-        ],
-        "variants": [
-          {
-            "sku": "PLAN-PREMIUM",
-            "price": 600000,
-            "stock": 0,
-            "attributes": {
-              "periodicidad": "mensual",
-              "trial_dias": 0
-            }
-          }
-        ]
+        "codigo": "PLAN-PREMIUM",
+        "nombre": "Plan Premium",
+        "descripcion": "Clases en vivo y tutorías ilimitadas.",
+        "precio": 600000,
+        "periodicidad": "mensual",
+        "trial_dias": 0
       }
     ]
   }

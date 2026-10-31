@@ -28,9 +28,9 @@ from core.orchestrator.safe_renderer import SafeExtras, apply_safe_extras
 T0 = datetime(2026, 10, 13, 5, 55, tzinfo=UTC)
 RAIZ = Path(__file__).resolve().parents[1]
 PLAN = Procedure.model_validate(
-    json.loads((RAIZ / "packages/pack-commerce/procedures/contratar_plan.json").read_text(encoding="utf-8"))
+    json.loads((RAIZ / "tests/fixtures/procedures_congeladas/contratar_plan_comercio.json").read_text(encoding="utf-8"))
 )
-ROTULOS = json.loads((RAIZ / "packages/pack-commerce/pack_commerce/rotulos_de_datos.json").read_text(encoding="utf-8"))
+ROTULOS = json.loads((RAIZ / "tests/fixtures/procedures_congeladas/rotulos_contratar_plan_comercio.json").read_text(encoding="utf-8"))
 PIDE_TODO = {f"pide_{n}": True for n in ("full_name", "id_document", "phone", "email", "business_name", "vertical")}
 ORDEN_DEL_DUENO = ["business_name", "vertical", "full_name", "id_document", "email", "phone", "payment_method"]
 
@@ -211,7 +211,7 @@ def test_un_append_sin_link_siempre_se_agrega() -> None:
 
 
 def test_tipo_de_negocio_por_sinonimos() -> None:
-    from pack_commerce.procedimientos import _presets_con_sinonimos, tipo_desde_texto
+    from pack_subscriptions.procedimientos import _presets_con_sinonimos, tipo_desde_texto
 
     presets = _presets_con_sinonimos()
     assert tipo_desde_texto("tienda", presets) == "comercio"
@@ -224,7 +224,7 @@ def test_tipo_de_negocio_por_sinonimos() -> None:
 
 @pytest.mark.asyncio
 async def test_resolver_del_tipo_ofrece_opciones_en_lenguaje_del_cliente() -> None:
-    from pack_commerce.procedimientos import tipo_de_negocio
+    from pack_subscriptions.procedimientos import tipo_de_negocio
 
     ok = await tipo_de_negocio("una tienda", None, {})  # type: ignore[arg-type]
     assert ok.ok and ok.value == "comercio"
@@ -259,7 +259,8 @@ def test_los_rotulos_del_pack_son_datos_de_sus_procedimientos() -> None:
     nombres = {n for p in de_pack.cargar("pack_commerce") for n, s in p.slots.items()} | {
         f"{n}.{v}" for p in de_pack.cargar("pack_commerce") for n, s in p.slots.items() for v in (s.enum or [])
     }
-    assert set(ROTULOS) <= nombres
+    reales = json.loads((RAIZ / "packages/pack-commerce/pack_commerce/rotulos_de_datos.json").read_text(encoding="utf-8"))
+    assert set(reales) <= nombres
 
 
 # ---------------------------------------------------------------- el bloque dinámico

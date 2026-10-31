@@ -43,17 +43,15 @@ if "journeys" not in sys.modules:
     _SPEC.loader.exec_module(_modulo)
 journeys = sys.modules["journeys"]
 
-PLAN = "pack_commerce.contratar_plan"
 PEDIDO = "pack_commerce.tomar_pedido"
 NEGADA = "solo se puede usar dentro de un recorrido"
-CHECKOUT = {"plan": ["full_name", "id_document", "phone", "email"]}
+CHECKOUT = {"domicilio": ["full_name", "phone", "address"], "recoger_en_tienda": ["full_name", "phone"]}
 CATALOGO = {
     "pack": "pack_commerce",
-    "category_paths": [["Planes"]],
+    "category_paths": [["Comida"]],
     "products": [
-        {"name": "Plan Premium", "description": "Todo incluido.", "category_path": ["Planes"],
-         "variants": [{"sku": "PREMIUM-MES", "price": 600000, "stock": 0,
-                       "attributes": {"periodicidad": "mensual", "trial_dias": 0}}]},
+        {"name": "Hamburguesa", "description": "Doble carne.", "category_path": ["Comida"],
+         "variants": [{"sku": "HAM-1", "price": 25000, "stock": 500, "attributes": {}}]},
     ],
 }
 
@@ -212,47 +210,47 @@ async def test_sin_foco_confirmar_se_niega_y_el_modelo_inicia_el_procedimiento(n
     tid_a, _, pagos = negocios
     ctx = await _cliente(tid_a, pagos)
     quote_ajena = str(uuid.uuid4())
-    _, guion = await _turno(ctx, monkeypatch, "Quiero comprar el plan Premium mensual", [
+    _, guion = await _turno(ctx, monkeypatch, "Quiero comprar dos hamburguesas", [
         ("confirmar_cotizacion", {"quote_id": quote_ajena}),     # el camino de siempre: negado
-        ("iniciar_procedimiento", {"procedure_id": PLAN}),
-        ("actualizar_tarea", {"slots": {"variant_id": "premium mensual"}}),
-        ("cotizar_plan", {}),
-        "Perfecto. ¿Me compartes tu nombre, cédula, celular y correo?",
+        ("iniciar_procedimiento", {"procedure_id": PEDIDO}),
+        ("generar_cotizacion", {"items": [{"variant_id": "HAM-1", "quantity": 2}]}),
+        ("actualizar_tarea", {"slots": {"delivery_method": "domicilio", "payment_method": "transferencia"}}),
+        "Perfecto. ¿A qué dirección te lo envío?",
     ])
     # Lo que vio el modelo sin foco: sin la puerta, con iniciar y las consultas; y la pista del
     # kernel en el prompt, que nombra la acción que solo funciona dentro del recorrido.
     ofrecidas = set(guion.tools[0])
     assert "confirmar_cotizacion" not in ofrecidas and "iniciar_procedimiento" in ofrecidas
-    assert {"consultar_inventario", "informar_plan", "crear_pedido", "confirmar_pago_pedido"} <= ofrecidas
+    assert {"consultar_inventario", "crear_pedido", "confirmar_pago_pedido"} <= ofrecidas
     sin_foco, sin_foco_acciones = _pista()
     assert sin_foco in guion.sistema[0] and f"{sin_foco_acciones}confirmar_cotizacion" in guion.sistema[0]
     # Negada con la pista de qué recorrido iniciar; no se ejecutó.
     assert NEGADA in guion.resultados[0] and "iniciar_procedimiento" in guion.resultados[0]
-    assert PLAN in guion.resultados[0] and PEDIDO in guion.resultados[0]
+    assert PEDIDO in guion.resultados[0]
     auditoria = await _filas(ctx, "select action from audit_log where tenant_id = :t and conversation_id = :c "
                                   "and actor = 'tool:confirmar_cotizacion'")
     assert [f.action for f in auditoria] == ["denied"]
-    # Siguió el procedimiento: la etapa `cotizar` ofrece cotizar_plan y la tarea quedó en `datos`.
-    assert "cotizar_plan" in guion.tools[3]
-    assert [(f.procedure_id, f.stage, f.status) for f in await _tareas(ctx)] == [(PLAN, "datos", "active")]
+    # Siguió el procedimiento: la etapa `armar` ofrece generar_cotizacion y la tarea quedó en `entrega`.
+    assert "generar_cotizacion" in guion.tools[2]
+    assert [(f.procedure_id, f.stage, f.status) for f in await _tareas(ctx)] == [(PEDIDO, "entrega", "active")]
     cotizaciones = await _filas(ctx, "select status from pack_commerce_quotes where tenant_id = :t "
                                      "and customer_id = :k", k=ctx.customer_id)
     assert [f.status for f in cotizaciones] == ["draft"]  # nadie la aceptó por fuera del botón
     # Con foco, la tarjeta ya no lleva la pista (lleva la tarea).
-    _, guion2 = await _turno(ctx, monkeypatch, "Ana Gómez", ["¿Tu cédula?"])
+    _, guion2 = await _turno(ctx, monkeypatch, "Calle 1 # 2-3", ["¿Es correcta?"])
     assert sin_foco not in guion2.sistema[0]
 
 
 async def test_iniciar_y_confirmar_en_el_mismo_lote_cae_en_la_etapa(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     tid_a, _, pagos = negocios
     ctx = await _cliente(tid_a, pagos)
-    _, guion = await _turno(ctx, monkeypatch, "Quiero el premium", [
-        ("iniciar_procedimiento", {"procedure_id": PLAN}),
+    _, guion = await _turno(ctx, monkeypatch, "Quiero hamburguesas", [
+        ("iniciar_procedimiento", {"procedure_id": PEDIDO}),
         ("confirmar_cotizacion", {"quote_id": str(uuid.uuid4())}),
-        "¿Qué plan te interesa?",
+        "¿Cuántas quieres?",
     ])
     assert "no corresponde a la etapa" in guion.resultados[1]
-    assert [(f.procedure_id, f.stage) for f in await _tareas(ctx)] == [(PLAN, "elegir_plan")]
+    assert [(f.procedure_id, f.stage) for f in await _tareas(ctx)] == [(PEDIDO, "armar")]
 
 
 async def test_sin_foco_el_link_de_un_pedido_se_sigue_pidiendo(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -276,7 +274,7 @@ async def test_el_otro_negocio_sin_la_bandera_no_cambia(negocios, monkeypatch) -
     tid_a, tid_b, pagos = negocios
     sin_foco, _ = _pista()
     ctx_b = await _cliente(tid_b, pagos)
-    _, guion_b = await _turno(ctx_b, monkeypatch, "Quiero comprar el plan Premium mensual", [
+    _, guion_b = await _turno(ctx_b, monkeypatch, "Quiero comprar hamburguesas", [
         ("confirmar_cotizacion", {"quote_id": str(uuid.uuid4())}),
         "Te ayudo.",
     ])
@@ -294,7 +292,7 @@ async def test_el_otro_negocio_sin_la_bandera_no_cambia(negocios, monkeypatch) -
     ctx_a = await _cliente(tid_a, pagos)
     _, guion_a = await _turno(ctx_a, monkeypatch, "Confirmo la cotización", [
         ("confirmar_cotizacion", {"quote_id": str(uuid.uuid4())}),
-        "Primero armemos tu plan.",
+        "Primero armemos tu pedido.",
     ])
     assert "confirmar_cotizacion" not in guion_a.tools[0] and sin_foco in guion_a.sistema[0]
     assert NEGADA in guion_a.resultados[0]
@@ -327,12 +325,12 @@ async def test_la_pista_y_la_negacion_son_del_negocio_del_turno(negocios, monkey
 
     # A, con una tarea en foco en otra conversación: esta conversación sigue sin foco y niega.
     con_tarea = await _cliente(tid_a, pagos)
-    await _turno(con_tarea, monkeypatch, "Quiero el premium", [("iniciar_procedimiento", {"procedure_id": PLAN}), "¿Cuál?"])
-    assert [f.stage for f in await _tareas(con_tarea)] == ["elegir_plan"]
+    await _turno(con_tarea, monkeypatch, "Quiero hamburguesas", [("iniciar_procedimiento", {"procedure_id": PEDIDO}), "¿Cuántas?"])
+    assert [f.stage for f in await _tareas(con_tarea)] == ["armar"]
     ctx_a = await _cliente(tid_a, pagos)
     _, guion_a = await _turno(ctx_a, monkeypatch, "Agenda y confirma", [
         ("confirmar_cotizacion", {"quote_id": str(uuid.uuid4())}),
-        "Primero armemos tu plan.",
+        "Primero armemos tu pedido.",
     ])
     assert NEGADA in guion_a.resultados[0] and "pack_calendar" not in guion_a.resultados[0]
     assert "create_calendar_event" not in guion_a.sistema[0]

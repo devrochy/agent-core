@@ -157,14 +157,6 @@ async def _verificar_negocio(tid: uuid.UUID, clave: str) -> None:
     )
     assert activa and LANDING in origenes
     assert {"preset_agenda_palabras", "preset_ventas_palabras"} <= set(await _reglas(tid))
-    # El plan de `contratar_plan`: al menos 150.000 COP (mínimo de un link de Wompi sandbox).
-    ((precio,),) = await _sql(
-        tid,
-        "select v.price from pack_commerce_product_variants v where v.tenant_id = :t and v.sku = 'QA-PLAN-MENSUAL' "
-        "and v.billing_period = 'mensual' and v.active",
-        t=tid,
-    )
-    assert precio >= 150000
     # Todas las conexiones conversacionales con release activa al día (sin candidatas pendientes).
     filas = await _sql(
         tid,

@@ -16,14 +16,6 @@
       {"cliente": 4, "estado": "cancelado", "pago": "pendiente", "metodo": "transferencia", "entrega": "recoger_en_tienda",
        "motivo": "El cliente canceló antes de pagar.", "lineas": [{"sku": "QA-CAFE-250", "cantidad": 3}]}
     ],
-    "promocion": {"tipo": "temporada", "descuento_pct": 10, "dias": 30, "sku": "QA-CAFE-500"},
-    "planes": {
-      "products": [
-        {"name": "Plan Básico de café", "description": "Una bolsa de 500 g al mes.",
-         "variants": [{"price": 45000, "attributes": {"periodicidad": "mensual", "trial_dias": 0}}]},
-        {"name": "Plan Anual de asesoría", "description": "Una asesoría al mes durante un año.",
-         "variants": [{"price": 480000, "attributes": {"periodicidad": "anual", "trial_dias": 0}}]}
-      ]
-    }
+    "promocion": {"tipo": "temporada", "descuento_pct": 10, "dias": 30, "sku": "QA-CAFE-500"}
   }
 }

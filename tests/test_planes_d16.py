@@ -1,47 +1,44 @@
-"""HU-SUB-06 · reglas puras de D-16 en commerce (sin BD)."""
+"""D-16 sobre el catálogo de planes de Suscripciones (SPEC-43; antes HU-SUB-06 en commerce).
+
+Reglas puras, sin base: solo un plan de $0 (Free) tiene prueba; en un plan de pago no se admite. Y
+el estado de pago con el que nace un pedido de Comercio, que ya no distingue planes (HU-COM-17).
+"""
 
 from __future__ import annotations
 
 from decimal import Decimal
 
 import pytest
-from pack_commerce.planes import estado_pago_inicial, snapshot_de_plan
+from pack_commerce.skills import _estado_pago_inicial
+from pack_subscriptions.planes import DatosDePlan, PlanError, validar
 
 
-@pytest.mark.parametrize(
-    ("metodo", "es_plan", "total", "esperado"),
-    [
-        ("efectivo_contraentrega", True, 0, "pagado"),  # Free: nada que cobrar
-        ("pago_en_linea", True, Decimal("0"), "pagado"),
-        ("efectivo_contraentrega", True, 99000, "pendiente"),  # plan contra entrega espera el pago
-        ("pago_en_linea", True, 99000, "pendiente"),
-        ("transferencia", False, 50000, "pendiente"),
-        ("efectivo_contraentrega", False, 50000, "pagado"),  # producto: igual que antes
-    ],
-)
-def test_estado_pago_inicial(metodo, es_plan, total, esperado) -> None:
-    assert estado_pago_inicial(metodo, es_plan, total) == esperado
+def _plan(precio: object, trial_dias: int) -> DatosDePlan:
+    return DatosDePlan(codigo="PLAN-X", nombre="X", precio=Decimal(str(precio)), periodicidad="mensual", trial_dias=trial_dias)
 
 
 def test_free_conserva_la_prueba() -> None:
-    plan, ignorado = snapshot_de_plan(
-        sku="PLAN-FREE", nombre="Free", precio=0, periodicidad="mensual", trial_days=30
-    )
-    assert plan["trial_dias"] == 30
-    assert ignorado is False
+    plan = validar(_plan(0, 30))
+    assert plan.trial_dias == 30 and plan.precio == Decimal("0.00")
 
 
-def test_plan_pago_ignora_la_prueba_y_lo_reporta() -> None:
-    plan, ignorado = snapshot_de_plan(
-        sku="PLAN-BASIC", nombre="Basic", precio=Decimal("99000"), periodicidad="mensual", trial_days=30
-    )
-    assert plan["trial_dias"] == 0
-    assert plan["precio"] == 99000.0
-    assert ignorado is True
+def test_plan_pago_con_prueba_se_rechaza() -> None:
+    with pytest.raises(PlanError) as exc:
+        validar(_plan(99000, 30))
+    assert exc.value.code == "prueba_en_plan_de_pago"
 
 
-def test_plan_pago_sin_prueba_no_reporta() -> None:
-    _, ignorado = snapshot_de_plan(
-        sku="PLAN-BASIC", nombre="Basic", precio=99000, periodicidad="mensual", trial_days=None
-    )
-    assert ignorado is False
+def test_plan_pago_sin_prueba_es_valido() -> None:
+    assert validar(_plan(99000, 0)).trial_dias == 0
+
+
+@pytest.mark.parametrize(
+    ("metodo", "esperado"),
+    [
+        ("efectivo_contraentrega", "pagado"),  # un producto contra entrega se da por pagado al entregar
+        ("transferencia", "pendiente"),
+        ("pago_en_linea", "pendiente"),
+    ],
+)
+def test_estado_pago_inicial_de_un_pedido(metodo: str, esperado: str) -> None:
+    assert _estado_pago_inicial(metodo) == esperado

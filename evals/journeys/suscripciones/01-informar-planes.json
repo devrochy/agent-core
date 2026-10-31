@@ -1,15 +1,13 @@
 {
   "nombre": "informar-planes",
-  "descripcion": "El cliente pregunta por los planes: el asistente los consulta en el catálogo y no promete prueba en un plan pago (D-16).",
+  "descripcion": "El cliente pregunta por los planes: el asistente los consulta en el catálogo de suscripciones y no promete prueba en un plan pago (D-16).",
   "pasos": [
     {
       "nota": "pregunta por los planes y la prueba",
       "usuario": "Hola, ¿qué planes tienen y cuánto cuestan? ¿El Basic tiene prueba gratis?",
       "espera": {
         "alguna_herramienta": [
-          "informar_plan",
-          "consultar_inventario",
-          "recomendar_producto"
+          "sub_listar_planes"
         ],
         "texto_contiene": [
           "Basic"

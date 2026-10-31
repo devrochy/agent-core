@@ -10,8 +10,8 @@ from pydantic import Field, SecretStr, field_validator
 from core.mcp.types import BasePluginConfig
 
 _PREFIJO = re.compile(r"^[A-Za-z0-9]{1,8}$")
-# `business_name` y `vertical` (HU-SH-03, ADR-0121): datos del alta del servicio que vende
-# un plan de la plataforma; `vertical` es un id de preset validado, no texto libre.
+# `business_name` y `vertical` se siguen aceptando por compatibilidad con configuraciones ya
+# guardadas (antes los pedía el pedido de un plan; hoy los planes son del pack de Suscripciones).
 _CAMPOS_VALIDOS = {
     "full_name", "id_document", "address", "municipality", "city", "phone", "email",
     "business_name", "vertical",
@@ -52,17 +52,6 @@ class CRMConfig(BasePluginConfig):
     monto_alto_threshold: float = Field(
         default=1_000_000, ge=0, le=9_999_999_999, allow_inf_nan=False, description="Monto en COP que dispara escalamiento a humano"
     )
-    # Umbral propio para planes recurrentes (HU-COM-02). `None` = un plan nunca
-    # escala por monto alto: el cobro ya pasa por el snapshot del servidor
-    # (HU-COM-01) y el negocio conoce su catálogo. Así se puede vender el plan
-    # Empresarial (1,8M) sin fricción.
-    monto_alto_planes_threshold: float | None = Field(
-        default=None,
-        ge=0,
-        le=9_999_999_999,
-        allow_inf_nan=False,
-        description="Monto en COP que dispara escalamiento para planes recurrentes; None = nunca",
-    )
     # Gate determinístico en crear_pedido (incidente real 2026-09-11, tenant yopoldo): un
     # pedido con pago_en_linea por debajo del mínimo de la pasarela nunca puede completarse, y
     # descubrirlo al generar el link es tarde para redirigir la conversación con naturalidad.
@@ -100,14 +89,11 @@ class CRMConfig(BasePluginConfig):
         default_factory=lambda: {
             "domicilio": ["full_name", "id_document", "address", "municipality", "city", "phone"],
             "recoger_en_tienda": ["full_name", "id_document", "phone"],
-            "plan": ["full_name", "id_document", "phone", "email"],
         },
         description=(
-            "Campos que pide crear_pedido por tipo de entrega o producto "
-            "(claves: full_name, id_document, address, municipality, city, phone, email, "
-            "business_name, vertical). Los planes y el retiro en tienda no piden dirección. "
-            "business_name y vertical (tipo de negocio) sirven a quien vende planes de la "
-            "plataforma: el alta automática crea el negocio con ellos."
+            "Campos que pide crear_pedido por tipo de entrega "
+            "(claves: full_name, id_document, address, municipality, city, phone, email). "
+            "El retiro en tienda no pide dirección."
         ),
     )
 

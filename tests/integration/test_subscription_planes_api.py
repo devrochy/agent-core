@@ -154,10 +154,11 @@ async def test_inscribir_con_cliente_o_plan_inexistentes_responde_404(app_client
     r = await app_client.post(f"{BASE}/suscripciones", json={"customer_id": str(cliente_a), "plan_codigo": "NOPE"}, headers=ha)
     assert r.status_code == 404 and r.json()["error"]["code"] == "plan_no_encontrado"
     r = await app_client.post(f"{BASE}/suscripciones", json={"customer_id": str(cliente_a)}, headers=ha)
-    assert r.status_code == 422 and r.json()["error"]["code"] == "plan_requerido"
+    assert r.status_code == 422  # el plan es obligatorio
 
 
-async def test_el_camino_anterior_de_plan_libre_sigue_funcionando(app_client) -> None:
+async def test_el_plan_libre_del_contrato_v1_ya_no_existe(app_client) -> None:
+    """HU-COM-17: el plan libre (nombre, precio, periodicidad) se retiró; sin `plan_codigo` es un 422."""
     tid = await _negocio()
     h = await api_headers(app_client, tid)
     cliente = await _cliente(tid)
@@ -166,7 +167,7 @@ async def test_el_camino_anterior_de_plan_libre_sigue_funcionando(app_client) ->
         json={"customer_id": str(cliente), "nombre": "Plan libre", "precio": 50000, "periodicidad": "mensual"},
         headers=h,
     )
-    assert r.status_code == 200 and r.json()["estado"] == "activa" and r.json()["numero_publico"] is None
+    assert r.status_code == 422, r.text
 
 
 async def test_confirmar_pago_por_la_api(app_client) -> None:
@@ -281,11 +282,8 @@ async def test_un_pedido_de_agente_no_pasa_por_revision_y_un_impago_espera(monke
 async def test_plan_plataforma_de_pregunta_a_cada_fuente_hasta_que_una_responde() -> None:
     from core.provisioning.fuentes import plan_plataforma_de
 
-    class Commerce:
-        provider_id = "pack_commerce"
-
-        async def plan_de_variante(self, variant_id):
-            return "premium" if variant_id == "v1" else None
+    class SinOperacion:
+        provider_id = "otro_proveedor"
 
     class Subs:
         provider_id = "pack_subscriptions"
@@ -293,12 +291,10 @@ async def test_plan_plataforma_de_pregunta_a_cada_fuente_hasta_que_una_responde(
         async def plan_de_inscripcion(self, plan_id):
             return "basic" if plan_id == "p1" else None
 
-    fuentes = [Commerce(), Subs()]
-    assert await plan_plataforma_de(fuentes, variant_id="v1") == "premium"
+    fuentes = [SinOperacion(), Subs()]
     assert await plan_plataforma_de(fuentes, plan_id="p1") == "basic"
     assert await plan_plataforma_de(fuentes, plan_id="otro") is None
-    assert await plan_plataforma_de(fuentes, variant_id="v1", plan_id="p1") == "basic"  # el plan del catálogo manda
-    assert await plan_plataforma_de([Commerce()], plan_id="p1") is None  # una fuente sin la operación se salta
+    assert await plan_plataforma_de([SinOperacion()], plan_id="p1") is None  # una fuente sin la operación se salta
 
 
 # ============================================================================= siembra y precios (HU-SUB-32)
@@ -420,15 +416,15 @@ async def test_el_consumer_trata_cambio_de_plan_aunque_la_referencia_sea_la_mism
     async def procesar(vendedor, registro):
         return registro
 
-    async def sincronizar(vendedor, registro, payload, referencia, variant_id):
-        llamadas.append((referencia, variant_id, payload.get("plan_id")))
+    async def sincronizar(vendedor, registro, payload, referencia):
+        llamadas.append((referencia, payload.get("plan_id")))
         return {}
 
     monkeypatch.setattr(consumer, "_procesar", procesar)
     monkeypatch.setattr(consumer, "sincronizar_cambio_de_plan", sincronizar)
     base = {
         "subscription_id": str(sub_id), "customer_id": str(cliente), "referencia": "SUB-0042",
-        "plan_id": plan_id, "variant_id": None, "estado": "activa",
+        "plan_id": plan_id, "estado": "activa",
     }
     async with tenant_scope(tid):
         async with get_session() as session:  # `subscription_id` no tiene FK: basta la fila del alta
@@ -440,4 +436,4 @@ async def test_el_consumer_trata_cambio_de_plan_aunque_la_referencia_sea_la_mism
         await consumer.aprovisionar(tid, {**base, "cambio_de_plan": False})  # reentrega del outbox
         assert llamadas == []
         await consumer.aprovisionar(tid, {**base, "cambio_de_plan": True})
-    assert llamadas == [("SUB-0042:cambio", None, plan_id)]
+    assert llamadas == [("SUB-0042:cambio", plan_id)]

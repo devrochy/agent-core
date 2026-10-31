@@ -5,15 +5,11 @@ guarda el mensaje del cliente y la respuesta como el consumidor y el envío), to
 pack-commerce, pagos de pack-payments con la pasarela simulada de los journeys y la base de
 prueba. Gherkin de la HU:
 
-- **Contratar un plan:** el cliente compra Premium mensual: el pedido tiene la variante y el total
-  del servidor y el link es el de la acción (pass^4 en vivo queda para medir con OK del dueño).
 - **Pedido con entrega:** a domicilio, sin dirección (o sin confirmarla) la tarea no pasa a
   confirmar.
-- **Cambio de opinión:** el cliente cambia de plan antes de confirmar: la cotización se recalcula y
-  la anterior no se usa.
-
-Más: plan pago por transferencia, Free sin link, datos del negocio vendedor (términos del alta) y
-bandera apagada.
+Más: bandera apagada. Los recorridos de plan (elegir, cotizar, inscribir, Free sin link, datos del negocio
+vendedor) salieron de commerce con SPEC-43/HU-COM-17: ahora viven en `pack_subscriptions.contratar_plan` y los
+cubre `test_procedimiento_contratar_plan`.
 
 Cierre por pago (decisión del dueño 2026-10-11): con pago en línea la tarea espera en
 `esperar_pago` hasta `order.paid` (webhook simulado real de pack-payments → outbox → despachador →
@@ -24,7 +20,6 @@ commerce marca el pedido pagado → `order.paid` → cierre), con pago rechazado
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
 import sys
 import types
@@ -55,30 +50,19 @@ if "journeys" not in sys.modules:
     _SPEC.loader.exec_module(_modulo)
 journeys = sys.modules["journeys"]
 
-PLAN = "pack_commerce.contratar_plan"
 PEDIDO = "pack_commerce.tomar_pedido"
 CHECKOUT = {
     "domicilio": ["full_name", "id_document", "address", "city", "phone"],
     "recoger_en_tienda": ["full_name", "phone"],
-    "plan": ["full_name", "id_document", "phone", "email"],
 }
-
-
-def _variante(sku: str, precio: int, periodicidad: str | None = None, stock: int = 0) -> dict[str, Any]:
-    attrs = {"periodicidad": periodicidad, "trial_dias": 0} if periodicidad else {}
-    return {"sku": sku, "price": precio, "stock": stock, "attributes": attrs}
 
 
 CATALOGO = {
     "pack": "pack_commerce",
-    "category_paths": [["Planes"], ["Comida"]],
+    "category_paths": [["Comida"]],
     "products": [
-        {"name": "Plan Free", "description": "Sin costo.", "category_path": ["Planes"],
-         "variants": [_variante("PLAN-FREE", 0, "mensual")]},
-        {"name": "Plan Premium", "description": "Todo incluido.", "category_path": ["Planes"],
-         "variants": [_variante("PREMIUM-MES", 600000, "mensual"), _variante("PREMIUM-ANO", 6000000, "anual")]},
         {"name": "Hamburguesa", "description": "Doble carne.", "category_path": ["Comida"],
-         "variants": [_variante("HAM-1", 25000, stock=50)]},
+         "variants": [{"sku": "HAM-1", "price": 25000, "stock": 500, "attributes": {}}]},
     ],
 }
 
@@ -211,12 +195,6 @@ async def _filas(ctx: Any, sql: str, **params: Any) -> list[Any]:
             return list((await s.execute(text(sql), {"t": ctx.tenant_id, **params})).all())
 
 
-async def _variante_id(ctx: Any, sku: str) -> str:
-    fila = (await _filas(ctx, "select id from pack_commerce_product_variants where tenant_id = :t and sku = :s",
-                         s=sku))[0]
-    return str(fila.id)
-
-
 async def _auditoria(ctx: Any, accion: str) -> list[Any]:
     return await _filas(
         ctx,
@@ -226,148 +204,7 @@ async def _auditoria(ctx: Any, accion: str) -> list[Any]:
     )
 
 
-DATOS_ANA = {"full_name": "Ana Gómez", "id_document": "1012345678", "phone": "3001234567", "email": "Ana@Example.com"}
-
-
-async def _hasta_el_resumen(ctx: Any, monkeypatch: Any, plan: str, pago: str) -> Any:
-    """Turnos 1-2 de contratar un plan: elegir y cotizar; los datos y el resumen único para el sí
-    (el correo se confirma dentro del resumen, adenda 2026-10-13)."""
-    resultado, guion = await _turno(ctx, monkeypatch, f"Hola, quiero contratar el plan {plan}", [
-        ("iniciar_procedimiento", {"procedure_id": PLAN}),
-        ("actualizar_tarea", {"slots": {"variant_id": plan}}),
-        ("cotizar_plan", {}),
-        "Perfecto. ¿Me compartes tu nombre, cédula, celular, correo y cómo quieres pagar?",
-    ])
-    assert "cotizar_plan" not in guion.tools[0] and "iniciar_procedimiento" in guion.tools[0]
-    assert "cotizar_plan" in guion.tools[2]  # la etapa `cotizar` la ofrece
-    tarea = await _tarea(ctx)
-    assert (tarea.procedure_id, tarea.stage) == (PLAN, "datos")
-    assert _valor(tarea, "requiere_pago") is (plan != "free")
-
-    resultado, guion = await _turno(ctx, monkeypatch, "Ana Gómez, 1012345678, 3001234567, Ana@Example.com", [
-        ("actualizar_tarea", {"slots": {**DATOS_ANA, **({"payment_method": pago} if pago else {})}}),
-        ("confirmar_cotizacion", {}),
-        "Te muestro el resumen para que lo confirmes.",
-    ])
-    tarea = await _tarea(ctx)
-    assert tarea.stage == "confirmar"
-    assert "aplicar_promocion" not in guion.tools[1]  # en confirmar nada cambia el total
-    assert resultado.confirmacion is not None and "ana@example.com" in resultado.text
-    return resultado
-
-
 # ---------------------------------------------------------------- Gherkin
-
-
-async def test_contratar_premium_mensual_pedido_y_link_del_servidor(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    tid, pagos = negocio
-    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset())
-    ctx = await _cliente(tid, pagos)
-    resultado = await _hasta_el_resumen(ctx, monkeypatch, "premium mensual", "pago_en_linea")
-    # El cliente confirma lo que leyó el servidor de la cotización, no lo que redactó el modelo.
-    assert "• Total: $600.000" in resultado.text and "• Plan: Premium mensual" in resultado.text
-    assert "• Nombre completo: Ana Gómez" in resultado.text and "resumen para que" not in resultado.text
-
-    resultado, guion = await _turno(ctx, monkeypatch, "Sí, confirmo", [
-        ("confirmar_tarea", {}),
-        ("confirmar_cotizacion", {}),
-        ("confirmar_pago_pedido", {"order_id": str(uuid.uuid4())}),  # un pedido que no es el de la tarea
-        ("crear_pedido", {"payment_method": "pago_en_linea", "customer_data": {"full_name": "Ana Gómez"}}),
-        ("confirmar_pago_pedido", {}),
-        "Listo, ya puedes pagar.",
-    ])
-    assert "no coincide con el dato vigente" in guion.resultados[2]
-    tarea = await _tarea(ctx)
-    # Cierre por pago (decisión del dueño 2026-10-11): con el link, la tarea espera el pago.
-    assert (tarea.stage, tarea.status) == ("esperar_pago", "active"), guion.resultados
-    premium = await _variante_id(ctx, "PREMIUM-MES")
-    pedido = (await _filas(ctx, "select id, total, payment_status, public_order_number, payment_link_url "
-                                "from pack_commerce_orders where tenant_id = :t and customer_id = :c",
-                           c=ctx.customer_id))
-    assert len(pedido) == 1 and float(pedido[0].total) == 600000 and pedido[0].payment_status == "pendiente"
-    lineas = await _filas(ctx, "select variant_id from pack_commerce_order_items where tenant_id = :t and order_id = :o",
-                          o=pedido[0].id)
-    assert [str(f.variant_id) for f in lineas] == [premium]
-    # Los datos del cliente del pedido salen de la tarea (ligados a `customer_data`).
-    entrada = (await _auditoria(ctx, "crear_pedido"))[-1]
-    assert entrada.action == "execute" and entrada.output["status"] == "confirmed"
-    link = f"https://pagos.simulados/{pedido[0].public_order_number}"
-    assert _valor(tarea, "link") == link == pedido[0].payment_link_url
-    assert link in resultado.text
-    transaccion = await _filas(ctx, "select amount from pack_payments_transactions where tenant_id = :t "
-                                    "and reference = :r", r=pedido[0].public_order_number)
-    assert [float(f.amount) for f in transaccion] == [600000]
-
-
-async def test_si_el_total_cambia_despues_del_si_se_vuelve_a_pedir(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """La confirmación se ata al resumen que vio el cliente: si la misma cotización cambia de total
-    (una promoción aplicada desde otro lado), el sí anterior no vale."""
-    tid, pagos = negocio
-    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset())
-    ctx = await _cliente(tid, pagos)
-    await _hasta_el_resumen(ctx, monkeypatch, "premium mensual", "transferencia")
-    cotizacion = _valor(await _tarea(ctx), "quote_id")
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(tid):
-        async with get_session() as s:
-            await s.execute(text("update pack_commerce_quotes set discount = 60000, total = 540000 "
-                                 "where tenant_id = :t and id = :q"), {"t": tid, "q": cotizacion})
-    resultado, guion = await _turno(ctx, monkeypatch, "Sí, confirmo", [
-        ("confirmar_tarea", {}),
-        ("confirmar_cotizacion", {}),
-        "Te muestro el resumen.",
-    ])
-    assert "confirmation_required" in guion.resultados[-1]
-    assert "Total: $540.000" in resultado.text and "Descuento: $60.000" in resultado.text
-    tarea = await _tarea(ctx)
-    assert tarea.stage == "confirmar"
-    estados = await _filas(ctx, "select status from pack_commerce_quotes where tenant_id = :t and id = :q", q=cotizacion)
-    assert estados[0].status == "draft"  # todavía nadie aceptó el total nuevo
-
-
-async def test_cambio_de_plan_antes_de_confirmar_recalcula_y_no_usa_la_vieja(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    tid, pagos = negocio
-    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset())
-    ctx = await _cliente(tid, pagos)
-    await _hasta_el_resumen(ctx, monkeypatch, "premium mensual", "transferencia")
-    vieja = _valor(await _tarea(ctx), "quote_id")
-    assert vieja
-
-    resultado, guion = await _turno(ctx, monkeypatch, "Mejor el premium anual", [
-        ("actualizar_tarea", {"slots": {"variant_id": "PREMIUM-ANO"}}),
-        ("confirmar_cotizacion", {"quote_id": vieja}),      # fuera de etapa: volvió a cotizar
-        ("cotizar_plan", {"variant_id": "PREMIUM-MES"}),     # otro plan que el elegido: se niega
-        ("cotizar_plan", {"variant_id": "PREMIUM-ANO"}),     # el SKU del elegido vale (resolver)
-        ("confirmar_cotizacion", {"quote_id": vieja}),      # ya en confirmar: la vieja no se usa
-        ("confirmar_cotizacion", {}),
-        "Te muestro el nuevo resumen.",
-    ])
-    salidas = guion.resultados
-    assert "no corresponde a la etapa" in salidas[1]
-    assert "no coincide con el dato vigente" in salidas[2]
-    assert "no coincide con el dato vigente" in salidas[4]
-    tarea = await _tarea(ctx)
-    nueva = _valor(tarea, "quote_id")
-    assert tarea.stage == "confirmar" and nueva and nueva != vieja
-    assert "Total: $6.000.000" in resultado.text and "Plan: Premium anual" in resultado.text
-
-    await _turno(ctx, monkeypatch, "Sí, confirmo", [
-        ("confirmar_tarea", {}),
-        ("confirmar_cotizacion", {}),
-        ("crear_pedido", {"payment_method": "transferencia", "customer_data": {}}),
-        "Listo.",
-    ])
-    tarea = await _tarea(ctx)
-    assert tarea.status == "completed"  # plan pago por transferencia: sin link
-    anual = await _variante_id(ctx, "PREMIUM-ANO")
-    pedido = await _filas(ctx, "select o.total, i.variant_id, o.quote_id from pack_commerce_orders o "
-                               "join pack_commerce_order_items i on i.order_id = o.id "
-                               "where o.tenant_id = :t and o.customer_id = :c", c=ctx.customer_id)
-    assert [(float(f.total), str(f.variant_id), str(f.quote_id)) for f in pedido] == [(6000000, anual, nueva)]
-    estados = await _filas(ctx, "select status from pack_commerce_quotes where tenant_id = :t and id = :q", q=vieja)
-    assert estados[0].status == "draft"  # la cotización vieja nunca se aceptó ni se convirtió
 
 
 async def test_pedido_a_domicilio_no_pasa_a_confirmar_sin_la_direccion_confirmada(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -453,105 +290,13 @@ async def test_una_direccion_sin_confirmar_atascada_se_desatasca(negocio, monkey
     assert tarea.stage == "confirmar" and (tarea.slots.get("address") or {}).get("confirmed") is True
 
 
-async def test_free_sin_link_y_sin_pago_en_linea(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    tid, pagos = negocio
-    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset())
-    ctx = await _cliente(tid, pagos)
-    await _turno(ctx, monkeypatch, "Quiero el plan free", [
-        ("iniciar_procedimiento", {"procedure_id": PLAN}),
-        ("actualizar_tarea", {"slots": {"variant_id": "free"}}),
-        ("cotizar_plan", {}),
-        ("actualizar_tarea", {"slots": {**DATOS_ANA, "payment_method": "pago_en_linea"}}),
-        "Listo.",
-    ])
-    tarea = await _tarea(ctx)
-    assert _valor(tarea, "requiere_pago") is False and _valor(tarea, "email") is None  # todo o nada
-
-
-async def test_el_negocio_vendedor_pide_sus_datos_y_los_terminos_van_en_el_resumen(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Como solvershub: `checkout_fields` del plan con tipo y nombre del negocio, y los términos del
-    alta (ADR-0125) DENTRO del resumen único: el «Sí, confirmo» los acepta y `crear_pedido` los
-    sigue exigiendo (token y mensaje del cliente posterior a los enlaces), sin pedirlos después
-    (adenda 2026-10-13 de ADR-0125, decisión del dueño)."""
-    from core.plugin_manager import plugin_manager
-    from core.provisioning.antiabuso import pedido_de_alta
-    from core.shared.tenant import tenant_scope
-
-    tid, pagos = negocio
-    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset({tid}))
-    plan = [*CHECKOUT["plan"], "business_name", "vertical"]
-    async with tenant_scope(tid):
-        await plugin_manager.save_config("pack_commerce", {"checkout_fields": {**CHECKOUT, "plan": plan}})
-    await journeys.publicar_documentos_legales(tid, [
-        {"tipo": t, "version": "aos07", "url": f"https://solvershub.test/legal/{t}"} for t in ("terminos", "privacidad", "dpa")
-    ])
-    try:
-        ctx = await _cliente(tid, pagos)
-        datos = {**journeys.datos_unicos(ctx.customer_id)}
-        correo = f"ana+{ctx.customer_id.hex[:8]}@example.com"
-        _, guion = await _turno(ctx, monkeypatch, "Quiero el premium mensual", [
-            ("iniciar_procedimiento", {"procedure_id": PLAN}),
-            ("actualizar_tarea", {"slots": {"variant_id": "premium mensual"}}),
-            ("cotizar_plan", {}),
-            ("actualizar_tarea", {"slots": {
-                "full_name": "Ana Gómez", "id_document": datos["documento"], "phone": datos["celular"],
-                "email": correo, "business_name": "Pizzería Roma", "vertical": "astronautas",
-                "payment_method": "transferencia",
-            }}),
-            "¿Qué tipo de negocio tienes?",
-        ])
-        # El tipo que no se reconoce vuelve con las opciones en lenguaje del cliente, no con ids.
-        errores = " ".join(json.loads(guion.resultados[-1])["errors"])
-        assert "No reconocí el tipo de negocio" in errores and "Restaurante" in errores and "pizzería" in errores
-        tarea = await _tarea(ctx)
-        assert tarea.stage == "datos" and _valor(tarea, "business_name") is None  # todo o nada
-        # "pizzería" es un sinónimo del preset `restaurante`.
-        resultado, _ = await _turno(
-            ctx, monkeypatch, f"Ana Gómez, {datos['documento']}, {datos['celular']}, {correo}. Es una pizzería", [
-                ("actualizar_tarea", {"slots": {
-                    "full_name": "Ana Gómez", "id_document": datos["documento"], "phone": datos["celular"],
-                    "email": correo, "business_name": "Pizzería Roma", "vertical": "pizzería",
-                    "payment_method": "transferencia",
-                }}),
-                ("confirmar_cotizacion", {}),
-                "Resumen.",
-            ])
-        tarea = await _tarea(ctx)
-        assert tarea.stage == "confirmar" and _valor(tarea, "vertical") == "restaurante"
-        assert resultado.confirmacion is not None
-        assert all(f"https://solvershub.test/legal/{t}" in resultado.text for t in ("terminos", "privacidad", "dpa"))
-        assert resultado.text.splitlines()[-1].startswith("Si todo está bien y aceptas los términos")
-        resultado, guion = await _turno(ctx, monkeypatch, "Sí, confirmo", [
-            ("confirmar_tarea", {}),
-            ("confirmar_cotizacion", {}),
-            ("crear_pedido", {"payment_method": "transferencia", "customer_data": {}}),
-            "Listo.",
-        ])
-        assert "terminos_pendientes" not in "".join(guion.resultados), guion.resultados
-        tarea = await _tarea(ctx)
-        assert tarea.status == "completed"
-        pedido = await _filas(ctx, "select datos_alta, public_order_number from pack_commerce_orders "
-                                   "where tenant_id = :t and customer_id = :c", c=ctx.customer_id)
-        assert pedido[0].datos_alta["vertical"] == "restaurante" and pedido[0].datos_alta["negocio"] == "Pizzería Roma"
-        # La aceptación queda registrada como siempre, con el «Sí, confirmo» como evidencia.
-        async with tenant_scope(tid):
-            registro = await pedido_de_alta(tid, pedido[0].public_order_number)
-        confirmo = await _filas(ctx, "select id from messages where tenant_id = :t and conversation_id = :c "
-                                     "and direction = 'inbound' and content = 'Sí, confirmo'", c=ctx.conversation_id)
-        assert registro is not None and registro.aceptacion["mensaje_id"] == str(confirmo[0].id)
-        assert {d["version"] for d in registro.aceptacion["documentos"]} == {"aos07"}
-    finally:
-        async with tenant_scope(tid):
-            await plugin_manager.save_config("pack_commerce", {"checkout_fields": CHECKOUT})
-
-
 async def test_con_la_bandera_apagada_no_se_ofrece_nada_nuevo(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     tid, pagos = negocio
     await _banderas(tid, False)
     try:
         ctx = await _cliente(tid, pagos)
-        _, guion = await _turno(ctx, monkeypatch, "Quiero el premium", [
-            ("cotizar_plan", {"variant_id": "PREMIUM-MES"}),  # inventada o inyectada: no se ejecuta
+        _, guion = await _turno(ctx, monkeypatch, "¿Ya pagué?", [
+            ("verificar_pago_pedido", {}),  # inventada o inyectada: no se ejecuta
             "Claro, te cuento.",
         ])
     finally:
@@ -561,13 +306,13 @@ async def test_con_la_bandera_apagada_no_se_ofrece_nada_nuevo(negocio, monkeypat
                         c=ctx.customer_id) == []
     ofrecidas = set(guion.tools[0])
     assert "generar_cotizacion" in ofrecidas and "crear_pedido" in ofrecidas
-    assert "cotizar_plan" not in ofrecidas and "verificar_pago_pedido" not in ofrecidas
+    assert "verificar_pago_pedido" not in ofrecidas
     assert not ofrecidas & {"iniciar_procedimiento", "actualizar_tarea", "confirmar_tarea", "cancelar_tarea"}
     assert await _tarea(ctx) is None
 
 
 async def test_las_frases_de_los_procedimientos_se_verifican_solo_con_el_motor(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """"Quedó registrado tu pedido" solo lo declara `contratar_plan` (las `COMPLETION_CLAIMS` de
+    """"Quedó registrado tu pedido" solo lo declara `tomar_pedido` (las `COMPLETION_CLAIMS` de
     commerce no lo atrapan): con el motor activo, sin `crear_pedido`, el verificador lo rechaza."""
     tid, pagos = negocio
     afirma, corrige = "Listo, quedó registrado tu pedido.", "Te ayudo a terminar tu compra."
@@ -587,18 +332,25 @@ async def test_las_frases_de_los_procedimientos_se_verifican_solo_con_el_motor(n
 
 
 async def _hasta_el_link(ctx: Any, monkeypatch: Any) -> Any:
-    """Premium mensual con pago en línea hasta mandar el link: la tarea queda esperando el pago."""
-    await _hasta_el_resumen(ctx, monkeypatch, "premium mensual", "pago_en_linea")
+    """Seis hamburguesas para recoger con pago en línea hasta mandar el link: la tarea queda esperando el pago."""
+    await _turno(ctx, monkeypatch, "Seis hamburguesas para recoger, pago en línea", [
+        ("iniciar_procedimiento", {"procedure_id": PEDIDO}),
+        ("generar_cotizacion", {"items": [{"variant_id": "HAM-1", "quantity": 6}]}),
+        ("actualizar_tarea", {"slots": {"delivery_method": "recoger_en_tienda", "payment_method": "pago_en_linea"}}),
+        ("confirmar_cotizacion", {}),
+        "Te muestro el total.",
+    ])
     await _turno(ctx, monkeypatch, "Sí, confirmo", [
         ("confirmar_tarea", {}),
         ("confirmar_cotizacion", {}),
-        ("crear_pedido", {"payment_method": "pago_en_linea", "customer_data": {}}),
+        ("crear_pedido", {"payment_method": "pago_en_linea", "delivery_method": "recoger_en_tienda",
+                          "customer_data": {"full_name": "Ana", "phone": "3001"}}),
         ("confirmar_pago_pedido", {}),
         "Listo, ya puedes pagar.",
     ])
     tarea = await _tarea(ctx)
     assert (tarea.stage, tarea.status) == ("esperar_pago", "active")
-    [pedido] = await _filas(ctx, "select id, public_order_number, payment_status from pack_commerce_orders "
+    [pedido] = await _filas(ctx, "select id, public_order_number, payment_status, total from pack_commerce_orders "
                                  "where tenant_id = :t and customer_id = :c", c=ctx.customer_id)
     assert _valor(tarea, "order_id") == str(pedido.id)
     return pedido
@@ -648,14 +400,14 @@ async def test_el_pago_confirmado_por_el_webhook_cierra_la_tarea(negocio, monkey
     ])
     ofrecidas = set(guion.tools[0])
     assert {"verificar_pago_pedido", "confirmar_pago_pedido", "consultar_inventario"} <= ofrecidas
-    assert not ofrecidas & {"crear_pedido", "confirmar_cotizacion", "cotizar_plan", "generar_cotizacion"}
+    assert not ofrecidas & {"crear_pedido", "confirmar_cotizacion", "generar_cotizacion"}
     assert "pago_pendiente" in guion.resultados[0]
     assert "ya no se puede cambiar" in guion.resultados[1]
     assert "no corresponde a la etapa" in guion.resultados[2]
     tarea = await _tarea(ctx)
     assert (tarea.stage, tarea.status, _valor(tarea, "payment_method")) == ("esperar_pago", "active", "pago_en_linea")
 
-    await _webhook(tid, pedido.public_order_number, "aprobado", 600000)
+    await _webhook(tid, pedido.public_order_number, "aprobado", float(pedido.total))
     await _despachar(tid)
     tarea = await _tarea(ctx)
     assert (tarea.status, tarea.stage) == ("completed", "esperar_pago")
@@ -668,7 +420,7 @@ async def test_el_pago_confirmado_por_el_webhook_cierra_la_tarea(negocio, monkey
     assert [e.status for e in await _mi_order_paid(ctx, pedido.id)] == ["entregado"]
 
     # Un webhook repetido no emite otro `order.paid` ni toca la tarea cerrada.
-    await _webhook(tid, pedido.public_order_number, "aprobado", 600000)
+    await _webhook(tid, pedido.public_order_number, "aprobado", float(pedido.total))
     await _despachar(tid)
     assert len(await _mi_order_paid(ctx, pedido.id)) == 1
 
@@ -679,7 +431,7 @@ async def test_pago_rechazado_sigue_esperando_y_el_reintento_aprobado_cierra(neg
     ctx = await _cliente(tid, pagos)
     pedido = await _hasta_el_link(ctx, monkeypatch)
 
-    await _webhook(tid, pedido.public_order_number, "rechazado", 600000)
+    await _webhook(tid, pedido.public_order_number, "rechazado", float(pedido.total))
     await _despachar(tid)
     tarea = await _tarea(ctx)
     assert (tarea.stage, tarea.status) == ("esperar_pago", "active")  # el cliente puede reintentar
@@ -688,7 +440,7 @@ async def test_pago_rechazado_sigue_esperando_y_el_reintento_aprobado_cierra(neg
     assert "pago_rechazado" in guion.resultados[0]
     assert (await _tarea(ctx)).status == "active"
 
-    await _webhook(tid, pedido.public_order_number, "aprobado", 600000)  # reintento en el mismo link
+    await _webhook(tid, pedido.public_order_number, "aprobado", float(pedido.total))  # reintento en el mismo link
     await _despachar(tid)
     tarea = await _tarea(ctx)
     assert tarea.status == "completed"
@@ -728,7 +480,7 @@ async def test_link_vencido_sale_uno_nuevo_y_el_pago_en_el_nuevo_cierra(negocio,
                                       "and reference = :r order by created_at", r=pedido.public_order_number)
     assert [(t.status, t.deleted_at is not None) for t in transacciones] == [("expirado", True), ("pendiente", False)]
 
-    await _webhook(tid, pedido.public_order_number, "aprobado", 600000, provider_reference=f"sim-{pedido.public_order_number}-2")
+    await _webhook(tid, pedido.public_order_number, "aprobado", float(pedido.total), provider_reference=f"sim-{pedido.public_order_number}-2")
     await _despachar(tid)
     assert (await _tarea(ctx)).status == "completed"
 
@@ -773,7 +525,7 @@ async def test_un_pago_de_otro_negocio_o_de_otro_pedido_no_cierra_la_tarea(negoc
             async with get_session() as s:
                 await emit_domain(s, tenant_id=tid_b, topic="payment.confirmed", dedupe_key=f"t:{uuid.uuid4()}",
                                   payload={"reference": pedido.public_order_number, "provider": "simulado",
-                                           "provider_reference": "sim-x", "amount": 600000})
+                                           "provider_reference": "sim-x", "amount": float(pedido.total)})
                 await emit_domain(s, tenant_id=tid_b, topic="order.paid", dedupe_key=f"t:{uuid.uuid4()}",
                                   payload={"order_id": str(pedido.id), "public_order_number": pedido.public_order_number})
         await _despachar(tid_b)
@@ -791,7 +543,7 @@ async def test_un_pago_de_otro_negocio_o_de_otro_pedido_no_cierra_la_tarea(negoc
     finally:
         await deactivate_tenant(str(tid_b))
         await purge_tenant(str(tid_b), f"ELIMINAR {slug_b}")
-    await _webhook(tid, pedido.public_order_number, "aprobado", 600000)
+    await _webhook(tid, pedido.public_order_number, "aprobado", float(pedido.total))
     await _despachar(tid)
     assert (await _tarea(ctx)).status == "completed"
 

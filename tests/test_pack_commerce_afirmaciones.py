@@ -370,34 +370,3 @@ async def test_pedido_patron_lineal_ante_texto_armado():
         inicio = time.perf_counter()
         await _verificar(module, texto, [])
         assert time.perf_counter() - inicio < 1.0
-
-
-# Medición pass^4 del 2026-10-24: sin confirmación del cliente el modelo dijo «Ya quedó registrada tu
-# confirmación del Plan Premium anual…» y nunca se llamó a `crear_pedido`.
-@pytest.mark.parametrize(
-    "borrador",
-    [
-        "Gracias, Ana. Ya quedó registrada tu confirmación del Plan Premium anual.",
-        "Tu confirmación quedó registrada. En un momento te comparto los datos de la cuenta.",
-        "Listo, confirmación registrada.",
-        "Perfecto, ya está registrado tu pedido.",
-    ],
-)
-def test_contratar_plan_no_deja_decir_que_quedo_registrada_la_confirmacion_sin_pedido(borrador: str) -> None:
-    import json
-    from pathlib import Path
-
-    from core.kernel.procedures import compilar_afirmaciones, validar
-    from core.orchestrator.verificador.evidencia import Evidencia
-    from core.orchestrator.verificador.verificador import verificar
-
-    crudo = json.loads(
-        (Path(__file__).parents[1] / "packages/pack-commerce/procedures/contratar_plan.json").read_text("utf-8")
-    )
-    proc, _ = validar(crudo)
-    assert proc is not None and proc.version == "1.3.0"
-    afirmaciones = compilar_afirmaciones(proc)
-    sin = verificar(borrador, Evidencia.desde([]), afirmaciones)
-    assert not sin.passed and sin.motivo == "status_sin_evidencia", borrador
-    con = verificar(borrador, Evidencia.desde([{"_tool_name": "crear_pedido", "_ok": True}]), afirmaciones)
-    assert con.passed

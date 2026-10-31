@@ -108,7 +108,7 @@ async def _escenario(*, clases: list[str], gobernadas: list[str] | None = None) 
     from core.shared.tenant import tenant_scope
 
     tid, cid = await _negocio()
-    ventas_a = await _especialista(tid, cid, "ventas", PLAN, {"informar_plan"}, defecto=True)
+    ventas_a = await _especialista(tid, cid, "ventas", PLAN, {"consultar_inventario"}, defecto=True)
     agenda_a = await _especialista(tid, cid, "agenda", CITA, {"list_appointment_types"}, defecto=False)
     await _publicar_release(tid, cid)
     filas = await _sql(
@@ -134,11 +134,11 @@ async def _escenario(*, clases: list[str], gobernadas: list[str] | None = None) 
         "values (:id, :t, :cc, :conv, :r, 'routed', 5)",
         id=turno, t=tid, cc=cid, conv=conv, r=rid,
     )
-    permitidos = frozenset({"pack_commerce", "pack_calendar", "core"})
+    permitidos = frozenset({"pack_commerce", "pack_subscriptions", "pack_calendar", "core"})
     async with tenant_scope(tid):
         async with get_session() as s:
             await state.iniciar(
-                s, tenant_id=tid, conversation_id=conv, procedure_id=PLAN, procedure_version="1.3.0",
+                s, tenant_id=tid, conversation_id=conv, procedure_id=PLAN, procedure_version="2.0.0",
                 stage="elegir_plan", actor="kernel", owner_instance_id=inst["ventas"],
             )
         async with get_session() as s:

@@ -7,7 +7,7 @@ import pytest
 from core.presets import PlantillaAgente, load_plantilla
 from core.presets.guion import RespuestasInvalidas, resolver
 
-VENTAS = ["pack_commerce.tomar_pedido", "pack_commerce.contratar_plan"]
+VENTAS = ["pack_commerce.tomar_pedido"]
 
 
 def test_las_cuatro_plantillas_traen_un_guion_corto_y_valido() -> None:
@@ -18,13 +18,25 @@ def test_las_cuatro_plantillas_traen_un_guion_corto_y_valido() -> None:
         assert len(plantilla.preguntas) + 4 <= 10, key
 
 
-def test_ventas_pregunta_el_tipo_de_negocio_y_deja_el_superpoder_que_corresponde() -> None:
+def test_ventas_solo_toma_pedidos_y_la_pregunta_que_vendes_esta_retirada() -> None:
+    """SPEC-43 (HU-COM-17): contratar un plan es de Suscripciones; Ventas ya no pregunta `que_vendes`
+    y el servidor IGNORA esa respuesta de los clientes viejos (panel y APK) en vez de dar 422."""
     ventas = load_plantilla("ventas")
-    assert resolver(ventas, {"que_vendes": "planes"}).procedimientos == ["pack_commerce.contratar_plan"]
-    assert resolver(ventas, {"que_vendes": "productos"}).procedimientos == ["pack_commerce.tomar_pedido"]
-    assert resolver(ventas, {"que_vendes": "ambos"}).procedimientos == VENTAS
-    # Sin responder, se aplica el defecto del guion (productos).
-    assert resolver(ventas, {}).procedimientos == ["pack_commerce.tomar_pedido"]
+    assert ventas.procedimientos == VENTAS
+    assert "que_vendes" not in {q.id for q in ventas.preguntas}
+    assert "que_vendes" in ventas.preguntas_retiradas
+    for vieja in ("planes", "productos", "ambos", "cualquier-cosa"):
+        assert resolver(ventas, {"que_vendes": vieja}).procedimientos == VENTAS
+    # Sin responder, o con la respuesta retirada, el resto del guion sigue igual.
+    assert resolver(ventas, {}).procedimientos == VENTAS
+    assert resolver(ventas, {"que_vendes": "planes", "largo_respuesta": "cortas"}).largo_maximo == 300
+
+
+def test_una_pregunta_no_puede_estar_vigente_y_retirada_a_la_vez() -> None:
+    base = load_plantilla("ventas").model_dump()
+    base["preguntas_retiradas"] = ["largo_respuesta"]
+    with pytest.raises(ValueError, match="vigentes y retiradas"):
+        PlantillaAgente.model_validate(base)
 
 
 def test_una_plantilla_sin_pregunta_de_superpoderes_los_conserva_todos() -> None:
@@ -43,8 +55,8 @@ def test_el_largo_de_respuesta_solo_cambia_si_la_opcion_lo_declara() -> None:
 def test_respuesta_fuera_de_las_opciones_o_pregunta_inexistente_da_un_error_por_pregunta() -> None:
     ventas = load_plantilla("ventas")
     with pytest.raises(RespuestasInvalidas) as exc:
-        resolver(ventas, {"que_vendes": "servicios", "largo_respuesta": "cortas", "nada": "x"})
-    assert set(exc.value.por_pregunta) == {"que_vendes", "nada"}
+        resolver(ventas, {"largo_respuesta": "enormes", "nada": "x"})
+    assert set(exc.value.por_pregunta) == {"largo_respuesta", "nada"}
 
 
 def _con_texto() -> PlantillaAgente:

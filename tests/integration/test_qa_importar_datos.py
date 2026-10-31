@@ -1,6 +1,6 @@
 """HU-QA-12 · Importar datos existentes por agente desde un CSV (ADR-0180).
 
-- **Los cuatro módulos:** productos, tipos de cita, clientes y préstamos (sin teléfono) y planes se crean
+- **Los tres módulos con plantilla** (los planes salieron de commerce con SPEC-43/HU-COM-17): productos, tipos de cita y clientes y préstamos (sin teléfono) se crean
   desde su plantilla descargable y quedan en un lote con `origen = 'importacion'`.
 - **Vista previa:** errores por fila sin escribir; con errores confirmar da 422 salvo `solo_validas`.
 - **Idempotente:** subir dos veces el mismo archivo no duplica; lo creado a mano no se toca.
@@ -22,7 +22,6 @@ from test_backfill_agentes import _sql
 from test_fiabilidad_api import PASSWORD, _colaborador
 from test_qa_datos_generados import (
     CATALOGO,
-    DESCRIPCION,
     ProveedorGuionado,
     _agente,
     _negocio,
@@ -274,48 +273,6 @@ async def test_cobranza_clientes_y_prestamos_sin_telefono(app_client, qa_on) -> 
         t=tid,
     )
     assert vivos[0] == (0, 0)
-
-
-# ---------------------------------------------------------------- planes (Suscripciones)
-async def test_planes(app_client, qa_on) -> None:  # noqa: F811
-    from _api_helpers import uniq
-
-    from core.alta_negocio import onboard_tenant
-
-    slug = uniq("qa12s")
-    tid, _ = await onboard_tenant(
-        name=f"QA12 {slug}",
-        slug=slug,
-        business_description=DESCRIPCION,
-        packs=["pack_commerce", "pack_subscriptions"],
-        admin_email="admin@local",
-        sembrar_ejemplos=False,
-    )
-    subs = await _agente(tid, "suscripciones", ["pack_subscriptions.cambiar_plan"])
-    h = await api_headers(app_client, tid)
-    estado = (await app_client.get(f"{_BASE}/{subs}/importar-datos", headers=h)).json()
-    assert estado["disponible"] is True and estado["plantilla"]["id"] == "planes", estado
-    texto = (
-        "sku,nombre,precio,periodicidad,dias_de_prueba,descripcion\r\n"
-        "PLAN-M,Plan mensual,90000,mensual,7,Dos cortes\r\n"
-        "PLAN-A,Plan anual,900000,anual,0,\r\n"
-    )
-    r = await _subir(app_client, h, subs, "", texto)
-    assert r.status_code == 201, r.text
-    filas = await _sql(
-        tid,
-        "select v.sku, v.billing_period, v.trial_days from pack_commerce_product_variants v "
-        "where v.tenant_id = :t order by v.sku",
-        t=tid,
-    )
-    assert filas == [("PLAN-A", "anual", 0), ("PLAN-M", "mensual", 7)]
-    categoria = await _sql(
-        tid,
-        "select c.name from pack_commerce_categories c join pack_commerce_products p on p.category_id = c.id "
-        "where p.tenant_id = :t and p.name = 'Plan anual'",
-        t=tid,
-    )
-    assert categoria == [("Planes",)]
 
 
 # ---------------------------------------------------------------- permisos y aislamiento

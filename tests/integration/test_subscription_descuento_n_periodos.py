@@ -297,10 +297,10 @@ async def test_cualquier_cambio_de_plan_termina_el_descuento_vigente() -> None:
     pro = await _dos_planes(tid)
     cap = await _cap()
     async with tenant_scope(tid):
-        cotiza = await cap.cotizar_cambio(sub_id, variant_id=str(pro.id), plan=planes.snapshot(pro))
+        cotiza = await cap.cotizar_cambio(sub_id, plan_id=str(pro.id), plan=planes.snapshot(pro))
         assert cotiza["reemplaza_descuento"]["periodos_restantes"] == 2
         vista = await cap.change_plan(
-            sub_id, variant_id=str(pro.id), plan=planes.snapshot(pro), monto_esperado=cotiza["monto_a_pagar"]
+            sub_id, plan_id=str(pro.id), plan=planes.snapshot(pro), monto_esperado=cotiza["monto_a_pagar"]
         )
     # Mientras no se paga, conserva el descuento anterior.
     assert vista["cambio"] == "pendiente_pago"
@@ -321,7 +321,7 @@ async def test_un_downgrade_programado_termina_el_descuento_al_aplicarse() -> No
     bajo = await _plan(tid, "BAJO", "50000")
     cap = await _cap()
     async with tenant_scope(tid):
-        vista = await cap.change_plan(sub_id, variant_id=str(bajo.id), plan=planes.snapshot(bajo))
+        vista = await cap.change_plan(sub_id, plan_id=str(bajo.id), plan=planes.snapshot(bajo))
     assert vista["cambio"] == "programado"
     assert (await _sub(tid, sub_id)).descuento_periodos_restantes == 2, "hasta el corte sigue el descuento"
 
@@ -343,7 +343,7 @@ async def test_un_downgrade_con_codigo_responde_promo_no_aplica_a_downgrade() ->
     cap = await _cap()
     async with tenant_scope(tid):
         with pytest.raises(SubscriptionError) as e:
-            await cap.change_plan(sub_id, variant_id=str(bajo.id), plan=planes.snapshot(bajo), codigo_promocion="otra")
+            await cap.change_plan(sub_id, plan_id=str(bajo.id), plan=planes.snapshot(bajo), codigo_promocion="otra")
     assert e.value.code == "promo_no_aplica_a_downgrade"
     assert (await _canjes(tid, otra.id)) == []
 
@@ -368,11 +368,11 @@ async def test_upgrade_con_codigo_descuenta_la_diferencia_y_los_n_periodos_empie
     promo = await _promo(tid, valor="50", periodos=3)
     cap = await _cap()
     async with tenant_scope(tid):
-        cotiza = await cap.cotizar_cambio(sub_id, variant_id=str(pro.id), plan=planes.snapshot(pro), codigo_promocion=CODIGO)
+        cotiza = await cap.cotizar_cambio(sub_id, plan_id=str(pro.id), plan=planes.snapshot(pro), codigo_promocion=CODIGO)
         assert cotiza["monto_bruto"] > cotiza["monto_a_pagar"] > 0
         assert cotiza["descuento"] == cotiza["monto_bruto"] - cotiza["monto_a_pagar"]
         vista = await cap.change_plan(
-            sub_id, variant_id=str(pro.id), plan=planes.snapshot(pro),
+            sub_id, plan_id=str(pro.id), plan=planes.snapshot(pro),
             monto_esperado=cotiza["monto_a_pagar"], codigo_promocion=CODIGO,
         )
     cargo = next(c for c in await _cargos(tid, sub_id) if c.tipo == "cambio_plan")
@@ -399,10 +399,10 @@ async def test_un_codigo_nuevo_en_un_upgrade_reemplaza_el_descuento_vigente_solo
     promo_b = await _promo(tid, "nueva", valor="20", periodos=2, etiqueta="Nueva")
     cap = await _cap()
     async with tenant_scope(tid):
-        cotiza = await cap.cotizar_cambio(sub_id, variant_id=str(pro.id), plan=planes.snapshot(pro), codigo_promocion="nueva")
+        cotiza = await cap.cotizar_cambio(sub_id, plan_id=str(pro.id), plan=planes.snapshot(pro), codigo_promocion="nueva")
         assert cotiza["reemplaza_descuento"] == {"periodos_restantes": 2, "etiqueta": "Lanzamiento"}
         await cap.change_plan(
-            sub_id, variant_id=str(pro.id), plan=planes.snapshot(pro),
+            sub_id, plan_id=str(pro.id), plan=planes.snapshot(pro),
             monto_esperado=cotiza["monto_a_pagar"], codigo_promocion="nueva",
         )
     # Sin pagar, conserva el anterior.
@@ -426,7 +426,7 @@ async def test_un_upgrade_cuyo_codigo_no_admite_el_precio_completo_se_rechaza() 
     cap = await _cap()
     async with tenant_scope(tid):
         with pytest.raises(SubscriptionError) as e:
-            await cap.change_plan(sub_id, variant_id=str(pro.id), plan=planes.snapshot(pro), codigo_promocion=CODIGO)
+            await cap.change_plan(sub_id, plan_id=str(pro.id), plan=planes.snapshot(pro), codigo_promocion=CODIGO)
     assert e.value.code == "descuento_excede_precio"
 
 
@@ -440,7 +440,7 @@ async def test_la_diferencia_usa_el_factor_del_periodo_pagado_con_descuento_aunq
     sub = await _sub(tid, sub_id)
     cap = await _cap()
     async with tenant_scope(tid):
-        cotiza = await cap.cotizar_cambio(sub_id, variant_id=str(pro.id), plan=planes.snapshot(pro))
+        cotiza = await cap.cotizar_cambio(sub_id, plan_id=str(pro.id), plan=planes.snapshot(pro))
     completa = diferencia_prorrateada(
         Decimal(sub.valor_periodo), Decimal("300000"), sub.periodo_actual_inicio, sub.proximo_cargo,
         datetime.now(UTC), sub.moneda,
@@ -541,7 +541,7 @@ async def test_un_cambio_inmediato_termina_el_descuento_vigente() -> None:
     gemelo = await _plan(tid, "GEMELO", "100000")  # mismo precio: el cambio es inmediato
     cap = await _cap()
     async with tenant_scope(tid):
-        vista = await cap.change_plan(sub_id, variant_id=str(gemelo.id), plan=planes.snapshot(gemelo))
+        vista = await cap.change_plan(sub_id, plan_id=str(gemelo.id), plan=planes.snapshot(gemelo))
     assert vista["cambio"] == "inmediato"
     sub = await _sub(tid, sub_id)
     assert sub.plan_id == gemelo.id and sub.promocion_id is None and sub.descuento_periodos_restantes is None

@@ -21,7 +21,6 @@ from pack_commerce.models import (
     Product,
     ProductVariant,
 )
-from pack_commerce.precios_de_plan import ATRIBUTO, precio_de_plan
 
 
 async def seed_catalog(
@@ -100,29 +99,13 @@ async def seed_catalog(
                     )
                     variant = (await session.execute(vstmt)).scalars().first()
                     attrs = variante.get("attributes", {}) or {}
-                    plan_meta = {
-                        "billing_period": attrs.get("periodicidad") or attrs.get("billing_period"),
-                        # `0` es un valor válido (plan pago sin prueba, D-16): no usar `or`.
-                        "trial_days": next(
-                            (attrs[k] for k in ("trial_dias", "trial_days") if attrs.get(k) is not None),
-                            None,
-                        ),
-                        "entitlements": attrs.get("limites") or attrs.get("entitlements"),
-                    }
-                    # HU-SH-01: un plan de la plataforma toma su precio de core/billing.
-                    precio = precio_de_plan(attrs)
-                    if precio is None:
-                        precio = variante["price"]
                     if variant is None:
                         variant = ProductVariant(
                             product_id=product.id,
                             sku=variante["sku"],
                             attributes=attrs,
-                            price=precio,
+                            price=variante["price"],
                             active=True,
-                            billing_period=plan_meta["billing_period"],
-                            trial_days=int(plan_meta["trial_days"]) if plan_meta["trial_days"] is not None else None,
-                            entitlements=plan_meta["entitlements"],
                         )
                         session.add(variant)
                         await session.flush()
@@ -130,14 +113,6 @@ async def seed_catalog(
                             creados.append(("variante", variant.id))
                     else:
                         variant.attributes = attrs
-                        if attrs.get(ATRIBUTO):
-                            variant.price = precio
-                        if plan_meta["billing_period"]:
-                            variant.billing_period = plan_meta["billing_period"]
-                        if plan_meta["trial_days"] is not None:
-                            variant.trial_days = int(plan_meta["trial_days"])
-                        if plan_meta["entitlements"]:
-                            variant.entitlements = plan_meta["entitlements"]
                     existing_stock = (
                         await session.execute(
                             select(Inventory).where(

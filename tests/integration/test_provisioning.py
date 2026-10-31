@@ -18,7 +18,6 @@ enlaces, cliente del pedido cotejado, y reintentar o descartar un alta en revisi
 
 from __future__ import annotations
 
-import itertools
 import os
 import time
 import uuid
@@ -27,7 +26,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from _alta_helpers import aceptar_terminos
+from _alta_helpers import (
+    activar_inscripcion,
+    corregir_datos_alta,
+    inscribir_y_pagar,
+    plan_del_catalogo,
+    suscripcion_de_plan,
+)
 from _api_helpers import uniq
 from sqlalchemy import func, select
 
@@ -38,8 +43,6 @@ pytestmark = [
         reason="tests de integración: requiere AGENT_CORE_INTEGRATION=1 y el stack local",
     ),
 ]
-
-_SEQ = itertools.count(1)
 
 
 # ------------------------------------------------------------------ fixtures
@@ -115,58 +118,13 @@ async def _pedido_de_plan(
     activar: bool = True,
     aceptar: bool = True,
 ) -> tuple[str, uuid.UUID]:
-    """Variante de un plan de la plataforma + pedido pagado; activarlo emite el evento."""
-    from pack_commerce.models import Order, OrderItem, Product, ProductVariant
-    from pack_commerce.planes import activar_planes_del_pedido
+    """Inscripción de un plan de la plataforma (SPEC-43); activarla emite el evento.
 
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    seq = next(_SEQ) + 100
-    customer_id = customer_id or uuid.uuid4()
-    atributos = {"periodicidad": "mensual", "precio_de_plan": plan} if plan else {"periodicidad": "mensual"}
-    async with tenant_scope(tid):
-        async with get_session() as s:
-            product = Product(tenant_id=tid, name=f"Plan {plan or 'propio'}", description="Plan", has_variants=False)
-            s.add(product)
-            await s.flush()
-            variant = ProductVariant(
-                tenant_id=tid,
-                product_id=product.id,
-                sku=f"PLAN-{(plan or 'propio').upper()}-{seq}",
-                price=precio,
-                billing_period="mensual",
-                trial_days=30 if precio == 0 else 0,
-                attributes=atributos,
-            )
-            s.add(variant)
-            await s.flush()
-            order = Order(
-                tenant_id=tid,
-                conversation_id=uuid.uuid4(),
-                customer_id=customer_id,
-                status="abierto",
-                payment_status="pagado" if pagado else "pendiente",
-                payment_method="pago_en_linea",
-                delivery_method="recoger_en_tienda",
-                total=precio,
-                idempotency_key=str(uuid.uuid4()),
-                order_seq=seq,
-                public_order_number=f"SH-{seq:04d}",
-                delivery_full_name="Ana Pérez",
-                datos_alta=datos_alta,
-            )
-            s.add(order)
-            await s.flush()
-            s.add(OrderItem(tenant_id=tid, order_id=order.id, variant_id=variant.id, quantity=1, unit_price=precio))
-            await s.flush()
-            if activar:
-                assert await activar_planes_del_pedido(s, order) == 1
-            referencia = order.public_order_number
-    if aceptar:
-        # HU-SH-07: como `crear_pedido`, el pedido lleva la aceptación de los términos.
-        await aceptar_terminos(tid, referencia, customer_id=customer_id, gratis=precio == 0)
-    return referencia, customer_id
+    Devuelve la referencia (`numero_publico` de la inscripción) y el cliente."""
+    return await suscripcion_de_plan(
+        tid, plan=plan, precio=precio, datos_alta=datos_alta, customer_id=customer_id,
+        pagado=pagado, activar=activar, aceptar=aceptar,
+    )
 
 
 async def _cliente_con_whatsapp(tid: uuid.UUID) -> uuid.UUID:
@@ -190,7 +148,7 @@ async def _cliente_con_whatsapp(tid: uuid.UUID) -> uuid.UUID:
 
 
 def _datos(email: str, *, negocio: str = "Pizzería Roma", vertical: str | None = "restaurante") -> dict[str, Any]:
-    datos: dict[str, Any] = {"email": email, "telefono": "+573000000000", "negocio": negocio}
+    datos: dict[str, Any] = {"email": email, "telefono": "+573000000000", "negocio": negocio, "nombre": "Ana Pérez"}
     if vertical:
         datos["vertical"] = vertical
     return datos
@@ -344,7 +302,7 @@ async def test_alta_automatica_premium_con_preset_e_invitacion(vendedores, corre
 
     [evento] = await _eventos(vendedor, referencia)
     assert evento.status == "entregado", evento.last_error
-    assert evento.payload["referencia"] == referencia and evento.payload["variant_id"]
+    assert evento.payload["referencia"] == referencia and evento.payload["plan_id"]
     registro = await _registro(vendedor, referencia)
     assert registro.estado == "completado", registro.motivo
     negocio = await _tenant(registro.negocio_tenant_id)
@@ -521,17 +479,8 @@ async def test_nunca_agrega_un_owner_a_un_negocio_ajeno(vendedores, correos) -> 
     vendedores(vendedor)
     referencia, _ = await _pedido_de_plan(vendedor, datos_alta=_datos(_correo()), activar=False)
     ajeno, _ = await onboard_tenant(name="Ajeno", slug=slug_del_negocio("Pizzería Roma", vendedor, referencia))
-    # Ahora sí se activa el plan del pedido (emite el evento).
-    from pack_commerce.models import Order
-    from pack_commerce.planes import activar_planes_del_pedido
-
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(vendedor):
-        async with get_session() as s:
-            order = (await s.execute(select(Order).where(Order.public_order_number == referencia))).scalar_one()
-            assert await activar_planes_del_pedido(s, order) == 1
+    # Ahora sí se activa la inscripción (emite el evento).
+    await activar_inscripcion(vendedor, referencia)
     await _entregar(vendedor, referencia)
 
     registro = await _registro(vendedor, referencia)
@@ -580,7 +529,7 @@ async def test_pedido_que_aun_no_se_ve_se_reintenta_y_termina_en_revision(vended
 
     vendedor = await _vendedor()
     vendedores(vendedor)
-    payload = {"subscription_id": str(uuid.uuid4()), "customer_id": str(uuid.uuid4()), "referencia": "SH-9999"}
+    payload = {"subscription_id": str(uuid.uuid4()), "customer_id": str(uuid.uuid4()), "referencia": "SUB-9999"}
     async with tenant_scope(vendedor):
         for _ in range(MAX_INTENTOS - 1):
             with pytest.raises(AltaTransitoria):
@@ -603,23 +552,36 @@ async def test_plan_que_no_es_de_la_plataforma_se_omite(vendedores, correos) -> 
 
 async def test_cambio_de_plan_no_crea_otro_negocio(vendedores, correos) -> None:
     """Free → Premium en la misma suscripción: un solo negocio; el cambio queda auditado."""
+    from pack_subscriptions.models import Subscription
+
+    from core.db.session import get_session
+    from core.events.outbox import payload_para_handlers
+    from core.provisioning.consumer import on_subscription_activated
+    from core.shared.tenant import tenant_scope
+
     vendedor = await _vendedor()
     vendedores(vendedor)
     email = _correo()
-    free, cliente = await _pedido_de_plan(vendedor, plan="free", precio=0, datos_alta=_datos(email))
+    cliente = await _cliente_con_whatsapp(vendedor)
+    free, _ = await _pedido_de_plan(vendedor, plan="free", precio=0, customer_id=cliente, datos_alta=_datos(email))
     await _entregar(vendedor, free)
-    premium, _ = await _pedido_de_plan(vendedor, customer_id=cliente, datos_alta=_datos(email))
-    [evento] = await _eventos(vendedor, premium)
-    assert evento.payload["cambio_de_plan"] is True
-    await _entregar(vendedor, premium)
+    async with tenant_scope(vendedor):
+        async with get_session() as s:
+            sub_id = (await s.execute(select(Subscription.id).where(Subscription.numero_publico == free))).scalar_one()
+    premium = await plan_del_catalogo(vendedor, plan="premium", precio=600_000)
+    await inscribir_y_pagar(vendedor, cliente, sub_id, premium)  # el cambio sale con la misma referencia de la suscripción
+    [alta, evento] = sorted(await _eventos(vendedor, free), key=lambda e: e.payload["cambio_de_plan"])
+    assert evento.payload["cambio_de_plan"] is True and evento.payload["subscription_id"] == str(sub_id)
+    async with tenant_scope(vendedor):
+        await on_subscription_activated(**payload_para_handlers(evento.payload))
 
     registro = await _registro(vendedor, free)
     assert registro.estado == "completado"
-    assert await _registro(vendedor, premium) is None
     [cambio] = await _auditoria(vendedor, "aprovisionamiento_cambio_de_plan")
-    assert cambio.input["referencia"] == premium
+    assert cambio.input["referencia"] == f"{free}:cambio"
     assert cambio.output["negocio_tenant_id"] == str(registro.negocio_tenant_id)
     assert len(await _auditoria(vendedor, "negocio_aprovisionado")) == 1
+    del alta
 
 
 # ------------------------------------------------------------------ owner e invitación
@@ -811,11 +773,7 @@ async def test_si_el_cliente_del_pedido_no_es_el_de_la_suscripcion_va_a_revision
 
 async def test_el_master_reintenta_o_descarta_un_alta_en_revision(vendedores, correos) -> None:
     """Runbook `docs/runbooks/altas-en-revision.md`: se corrige el dato y se reintenta; o se descarta."""
-    from pack_commerce.models import Order
-
-    from core.db.session import get_session
     from core.provisioning.consumer import descartar_alta, reintentar_alta
-    from core.shared.tenant import tenant_scope
 
     vendedor = await _vendedor()
     vendedores(vendedor)
@@ -825,10 +783,7 @@ async def test_el_master_reintenta_o_descarta_un_alta_en_revision(vendedores, co
     await _entregar(vendedor, otro)
     assert (await _registro(vendedor, sin_correo)).estado == "revision"
 
-    async with tenant_scope(vendedor):
-        async with get_session() as s:
-            pedido = (await s.execute(select(Order).where(Order.public_order_number == sin_correo))).scalar_one()
-            pedido.datos_alta = {**pedido.datos_alta, "email": _correo()}
+    await corregir_datos_alta(vendedor, sin_correo, email=_correo())
     reintentada = await reintentar_alta(vendedor, sin_correo)
     assert reintentada.estado == "completado", reintentada.motivo
     with pytest.raises(ValueError):
@@ -844,13 +799,9 @@ async def test_el_master_reintenta_o_descarta_un_alta_en_revision(vendedores, co
 async def test_reintento_con_el_correo_corregido_no_manda_el_enlace_a_otro_correo(vendedores, monkeypatch) -> None:
     """La cuenta anotada en el alta es la del correo A. Si el master corrige el pedido al
     correo B y reintenta, el alta va a revisión: el enlace de la cuenta A nunca va a B."""
-    from pack_commerce.models import Order
-
-    from core.db.session import get_session
     from core.provisioning import AltaTransitoria
     from core.provisioning.consumer import MAX_INTENTOS, reintentar_alta
     from core.provisioning.owner import CORREO_CAMBIADO
-    from core.shared.tenant import tenant_scope
 
     vendedor = await _vendedor()
     vendedores(vendedor)
@@ -878,10 +829,7 @@ async def test_reintento_con_el_correo_corregido_no_manda_el_enlace_a_otro_corre
         return "msg-test"
 
     monkeypatch.setattr("core.gateway.system_email.send_system_email", smtp_ok)
-    async with tenant_scope(vendedor):
-        async with get_session() as s:
-            pedido = (await s.execute(select(Order).where(Order.public_order_number == referencia))).scalar_one()
-            pedido.datos_alta = {**pedido.datos_alta, "email": correo_b}
+    await corregir_datos_alta(vendedor, referencia, email=correo_b)
     fila = await reintentar_alta(vendedor, referencia)
 
     assert fila.estado == "revision"

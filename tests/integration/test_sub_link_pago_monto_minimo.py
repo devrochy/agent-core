@@ -10,6 +10,7 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+from _subs_helpers import nueva_sub
 
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
@@ -36,7 +37,7 @@ class _CapRechaza:
 
 async def test_sub_link_pago_monto_bajo_minimo(monkeypatch):
     from pack_subscriptions.capability import SubscriptionCapabilityImpl
-    from pack_subscriptions.models import Subscription, SubscriptionCharge
+    from pack_subscriptions.models import SubscriptionCharge
 
     import core.agents.spec as spec_mod
     import core.payments as payments_mod
@@ -55,11 +56,10 @@ async def test_sub_link_pago_monto_bajo_minimo(monkeypatch):
 
     async with tenant_scope(TENANT):
         async with get_session() as session:
-            sub = Subscription(
-                tenant_id=TENANT, customer_id=customer_id, concepto="Plan",
+            sub = await nueva_sub(
+                session, TENANT, customer_id=customer_id, concepto="Plan",
                 valor_periodo=54_000, estado="activa",
             )
-            session.add(sub)
             await session.flush()
             session.add(
                 SubscriptionCharge(

@@ -154,18 +154,18 @@ async def test_el_cambio_de_plan_pasa_el_codigo_de_promocion_solo_si_el_cliente_
     llamadas: list[tuple[str, dict[str, Any]]] = []
 
     class _CapCambio:
-        async def cotizar_cambio(self, subscription_id, *, variant_id, plan, **extra):
+        async def cotizar_cambio(self, subscription_id, *, plan_id, plan, **extra):
             llamadas.append(("cotizar", extra))
             return {"cambio": "inmediato", "monto_a_pagar": 40000.0, "monto_bruto": 50000.0}
 
-        async def change_plan(self, subscription_id, *, variant_id, plan, monto_esperado, **extra):
+        async def change_plan(self, subscription_id, *, plan_id, plan, monto_esperado, **extra):
             llamadas.append(("aplicar", extra))
             return {"cambio": "inmediato", "cargo_cambio": {"monto": 40000.0}}
 
     sub = {"subscription_id": str(uuid.uuid4())}
 
     async def _cotizable(ctx, plan_code):
-        return _CapCambio(), sub, "v1", PLAN
+        return _CapCambio(), sub, "plan-1", PLAN
 
     monkeypatch.setattr(tools_mod, "_cambio_cotizable", _cotizable)
     skill = tools_mod.SubscriptionSkill()
