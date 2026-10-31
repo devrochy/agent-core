@@ -263,6 +263,54 @@ async def test_nombrar_otro_plan_que_el_del_resumen_no_confirma(packs_registrado
     assert (await _tarea(conv, PROC))[0].stage == "confirmar"
 
 
+async def test_en_el_negocio_vendedor_el_resumen_lleva_los_documentos_y_el_confirmo_inscribe(
+    packs_registrados, monkeypatch  # noqa: F811
+) -> None:
+    """HU-SH-07 por el loop real: en el negocio vendedor (documentos legales publicados) el resumen del kernel lleva
+    los enlaces y el «Sí, confirmo» del cliente acepta los términos en el mismo turno de la inscripción, sin
+    `terminos_pendientes`. (Antes lo cubría `test_journeys_terminos_alta` sobre `crear_pedido` de planes.)"""
+    from test_conversacion_ordenada_motor import journeys
+
+    tid, conv = await _listo()
+    monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset({tid}))
+    await journeys.publicar_documentos_legales(tid, [
+        {"tipo": t, "version": "motor", "url": f"https://solvershub.test/legal/{t}"}
+        for t in ("terminos", "privacidad", "dpa")
+    ])
+    resultado = await _hasta_confirmar(conv, monkeypatch)
+    assert all(f"https://solvershub.test/legal/{t}" in resultado.text for t in ("terminos", "privacidad", "dpa")), resultado.text
+    assert await _inscripciones(tid) == []
+
+    guion = _Guion([
+        ("confirmar_tarea", {}),
+        ("sub_confirmar_inscripcion", {"plan_code": "PREMIUM", "monto_a_pagar": 600000}),
+        ("sub_inscribir", {"plan_code": "PREMIUM", "monto_a_pagar": 600000, "customer_data": {}}),
+        "Listo, quedaste inscrito.",
+    ])
+    await _turno(conv, guion, monkeypatch, "Sí, confirmo")
+    assert "terminos_pendientes" not in "".join(guion.vistos), guion.vistos[-1][-600:]
+    assert len(await _inscripciones(tid)) == 1
+    from core.provisioning.antiabuso import pedido_de_alta
+    from core.shared.tenant import tenant_scope
+
+    async with _scope(tid) as s:
+        [(numero,)] = (await s.execute(
+            text("select numero_publico from pack_subscriptions_subscriptions where tenant_id = :t"), {"t": tid}
+        )).all()
+        [(confirmo,)] = (await s.execute(
+            text("select id from messages where tenant_id = :t and conversation_id = :c and direction = 'inbound' "
+                 "and content = 'Sí, confirmo'"),
+            {"t": tid, "c": conv.id},
+        )).all()
+    async with tenant_scope(tid):
+        registro = await pedido_de_alta(tid, numero)
+    assert registro is not None
+    assert {d["tipo"]: d["version"] for d in registro.aceptacion["documentos"]} == {
+        "terminos": "motor", "privacidad": "motor", "dpa": "motor",
+    }
+    assert registro.aceptacion["mensaje_id"] == str(confirmo)  # el «Sí, confirmo» del cliente
+
+
 async def test_dos_negocios_no_se_cruzan(packs_registrados, monkeypatch) -> None:  # noqa: F811
     """El «Sí, confirmo» de un cliente de A no confirma nada en B."""
     _a, conv_a = await _listo()
