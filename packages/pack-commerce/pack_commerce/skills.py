@@ -38,6 +38,8 @@ from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.shared.texto_seguro import contiene_url
 from pack_commerce.datos import A_LEGADO, ACCION_POR_ENTREGA
+from pack_commerce.etapas import ETAPAS, EtapaInvalida, TransicionNoPermitida, cambiar_etapa
+from pack_commerce.etapas import calificar as calificar_etapa
 from pack_commerce.fotos import url_foto
 from pack_commerce.models import (
     CategoryComplement,
@@ -987,10 +989,10 @@ class LeadSkill(BaseSkill):
             ).scalars().first()
             if lead is None:
                 return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
-            lead.score = score
-            lead.status = "calificado"
-            lead.last_activity_at = _now()
-        return {"lead_id": str(lead.id), "score": score, "status": "calificado"}
+            etapa = await calificar_etapa(
+                session, lead, score, actor="agente", idempotency_key=f"agente:calificar_lead:{context.idempotency_key}"
+            )
+        return {"lead_id": str(lead.id), "score": score, "status": etapa}
 
     async def actualizar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         async with get_session() as session:
@@ -999,6 +1001,20 @@ class LeadSkill(BaseSkill):
             ).scalars().first()
             if lead is None:
                 return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
+            # La etapa primero: si no vale, no se guarda nada del resto (HU-CRM-18).
+            if arguments.get("status"):
+                try:
+                    await cambiar_etapa(
+                        session,
+                        lead,
+                        arguments["status"],
+                        actor="agente",
+                        idempotency_key=f"agente:actualizar_lead:{context.idempotency_key}",
+                    )
+                except EtapaInvalida as exc:
+                    return {"error": str(exc), "etapas_validas": list(ETAPAS)}
+                except TransicionNoPermitida as exc:
+                    return {"error": str(exc), "etapa_actual": lead.status}
             if arguments.get("name"):
                 lead.name = str(arguments["name"])
             if arguments.get("email"):
@@ -1007,8 +1023,6 @@ class LeadSkill(BaseSkill):
                 lead.phone = str(arguments["phone"])
             if arguments.get("interest"):
                 lead.interest = str(arguments["interest"])
-            if arguments.get("status"):
-                lead.status = str(arguments["status"])
             lead.last_activity_at = _now()
         # Los datos de contacto también van al perfil, que es lo que muestra la ficha (ADR-0149).
         topes = {"name": 200, "email": 254, "phone": 40}  # los de `completar_lead`

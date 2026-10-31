@@ -22,6 +22,7 @@ from core.shared.exceptions import PluginConfigError
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from core.tasks.decorators import register_cron
+from pack_commerce.etapas import cambiar_etapa
 from pack_commerce.models import Lead, Quote
 
 log = get_logger(__name__)
@@ -139,7 +140,15 @@ async def _follow_up_leads_del_negocio(tenant_id: uuid.UUID, config) -> tuple[in
             async with get_session() as session:
                 fresh = await get_owned(session, Lead, lead.id, tenant_id)
                 if fresh is not None:
-                    fresh.status = "contactado"
+                    # Solo si sigue «calificado»: un humano pudo moverlo mientras se enviaba el mensaje.
+                    if fresh.status == "calificado":
+                        await cambiar_etapa(
+                            session,
+                            fresh,
+                            "contactado",
+                            actor="sistema",
+                            idempotency_key=f"sistema:seguimiento:{fresh.id}:{datetime.now(UTC):%Y-%m-%d}",
+                        )
                     fresh.last_activity_at = datetime.now(UTC)
             total_sent += 1
         except Exception:

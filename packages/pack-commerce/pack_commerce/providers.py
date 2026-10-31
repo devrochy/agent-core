@@ -14,7 +14,7 @@ Importar este módulo (lo hace `module.py`) registra el provider.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC
 from typing import Any
 
 from sqlalchemy import Select, and_, case, func, literal, or_, select, union
@@ -34,7 +34,8 @@ from core.db.models import Customer
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
 from pack_commerce import ficha as _ficha
-from pack_commerce.models import Lead, Order, Quote
+from pack_commerce.etapas import ETAPA_INICIAL, ETAPAS, cambiar_etapa
+from pack_commerce.models import Lead, LeadStageChange, Order, Quote
 
 PLUGIN_ID = "pack_commerce"
 
@@ -52,6 +53,7 @@ ESTADOS_LEAD = (
     ("convertido", "Convertido"),
     ("perdido", "Perdido"),
 )
+assert tuple(v for v, _ in ESTADOS_LEAD) == ETAPAS  # una sola lista de etapas (HU-CRM-18)
 
 
 async def _umbrales() -> dict[str, int]:
@@ -124,11 +126,26 @@ async def _filter_query(key: str, value: str) -> Select[Any] | None:
 def _ultimo_lead(tid: uuid.UUID) -> Select[Any]:
     """El lead más reciente de cada cliente (por última actividad)."""
     return (
-        select(Lead.customer_id, Lead.status, Lead.score, Lead.interest)
+        select(
+            Lead.customer_id, Lead.status, Lead.score, Lead.interest, Lead.stage_changed_at, Lead.last_activity_at
+        )
         .where(Lead.tenant_id == tid, Lead.customer_id.is_not(None))
         .distinct(Lead.customer_id)
         .order_by(Lead.customer_id, Lead.last_activity_at.desc())
     )
+
+
+def _desde_cuando(lead: Any) -> dict[str, Any]:
+    """Desde cuándo está el lead en su etapa (HU-CRM-18): `etapa_desde` (ISO, UTC) y si es aproximada.
+    Un lead anterior a la HU no tiene `stage_changed_at`: se muestra su última actividad conocida."""
+    if lead is None:
+        return {"etapa_desde": None, "etapa_desde_aproximada": None}
+    exacta = lead.stage_changed_at
+    desde = exacta or lead.last_activity_at
+    return {
+        "etapa_desde": desde.astimezone(UTC).isoformat() if desde else None,
+        "etapa_desde_aproximada": None if desde is None else exacta is None,
+    }
 
 
 async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any]]:
@@ -193,6 +210,7 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
             "clasificacion": etiquetas[segmentos.get(cid, "nuevo")],
             "estado_lead": estados.get(lead.status, lead.status) if lead else None,
             "puntaje": lead.score if lead else None,
+            **_desde_cuando(lead),
             "interes": (lead.interest or None) if lead else None,
             "pedidos": n,
             "total_compras": total,
@@ -246,13 +264,14 @@ async def _escribir_lead(customer_id: uuid.UUID, valores: dict[str, str]) -> Non
                 tenant_id=tid,
                 customer_id=customer_id,
                 interest="",
-                status="nuevo",
+                status=ETAPA_INICIAL,
                 idempotency_key=f"manual:{customer_id}",
             )
             session.add(lead)
-        if "estado_lead" in valores and valores["estado_lead"] != lead.status:
-            lead.status = valores["estado_lead"]
-            lead.last_activity_at = datetime.now(UTC)
+        if "estado_lead" in valores:
+            # Una persona (el hook solo lo llama el panel/APK): puede reabrir un perdido (HU-CRM-18).
+            # Un estado inválido ya lo rechazó el core; si llega uno, es un error del que llama.
+            await cambiar_etapa(session, lead, valores["estado_lead"], actor="persona")
         if "interes" in valores:
             lead.interest = valores["interes"]
 
@@ -289,9 +308,14 @@ def _pesos(valor: Any) -> str:
     return f"${float(valor or 0):,.0f}".replace(",", ".")
 
 
+FUENTE_ETAPA = "pack_commerce.lead_etapa"
+_QUIEN_CAMBIO = {"agente": "Lo hizo el agente", "persona": "Lo hizo una persona", "sistema": "Lo hizo el sistema"}
+
+
 async def _timeline(customer_id: uuid.UUID, cursor: Cursor | None, limit: int) -> list[TimelineEvent]:
     """Cotizaciones y pedidos del cliente (HU-CRM-04). Del pedido se ve la creación y su último
-    cambio de estado (`status_changed_at`): no hay historia de estados guardada."""
+    cambio de estado (`status_changed_at`): no hay historia de estados guardada. Los cambios de
+    etapa del lead sí la tienen (HU-CRM-18)."""
     tid = get_current_tenant_id()
     eventos: list[TimelineEvent] = []
     async with get_session() as session:
@@ -354,6 +378,27 @@ async def _timeline(customer_id: uuid.UUID, cursor: Cursor | None, limit: int) -
                 TimelineEvent(
                     at=o.status_changed_at, source="pack_commerce.pedido_estado", id=str(o.id), kind="pedido",
                     title=f"Pedido {o.public_order_number}: {o.status}", link_kind="order", link_id=str(o.id),
+                )
+            )
+        etapas = (
+            await session.execute(
+                select(LeadStageChange)
+                .where(
+                    LeadStageChange.tenant_id == tid,
+                    LeadStageChange.customer_id == customer_id,
+                    antes_del_cursor(LeadStageChange.changed_at, LeadStageChange.id, FUENTE_ETAPA, cursor),
+                )
+                .order_by(LeadStageChange.changed_at.desc(), LeadStageChange.id.desc())
+                .limit(limit)
+            )
+        ).scalars().all()
+        etiquetas = dict(ESTADOS_LEAD)
+        for c in etapas:
+            eventos.append(
+                TimelineEvent(
+                    at=c.changed_at, source=FUENTE_ETAPA, id=str(c.id), kind="etapa",
+                    title=f"Etapa: {etiquetas.get(c.from_stage, c.from_stage)} → {etiquetas.get(c.to_stage, c.to_stage)}",
+                    detail=_QUIEN_CAMBIO.get(c.actor, c.actor),
                 )
             )
     return eventos
