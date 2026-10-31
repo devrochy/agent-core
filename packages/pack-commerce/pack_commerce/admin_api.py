@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 
 from core import almacenamiento
 from core.api.deps import Principal, get_principal, require
@@ -36,6 +36,7 @@ from .models import Ally, Category, Inventory, Order, OrderItem, Product, Produc
 router = APIRouter(prefix="/api/v1/pack/commerce", tags=["pack · comercio"])
 
 ORDER_STATUSES = ("abierto", "despachado", "entregado", "cancelado", "expirado")
+PAYMENT_STATUSES = ("pendiente", "pagado", "rechazado")
 
 # HU-CRM-01: la foto del producto es un link público. Solo https (WhatsApp la descarga
 # por el link) y con tope de largo.
@@ -1029,6 +1030,9 @@ class OrderLine(BaseModel):
 class OrderOut(BaseModel):
     id: uuid.UUID
     public_order_number: str
+    # HU-CRM-20: a quién pertenece el pedido (enlace a su ficha) y su nombre actual.
+    customer_id: uuid.UUID
+    customer_name: str | None = None
     total: float
     status: str
     payment_status: str
@@ -1044,45 +1048,146 @@ class OrderStatusUpdate(BaseModel):
     status: str
 
 
-@router.get("/orders", response_model=list[OrderOut])
+ORDERS_DEFAULT_LIMIT = 200
+ORDERS_MAX_LIMIT = 200
+
+
+def _like_literal(texto: str) -> str:
+    """Patrón `%texto%` que trata `%`, `_` y `\\` del usuario como texto literal."""
+    escapado = texto.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escapado}%"
+
+
+@router.get(
+    "/orders",
+    response_model=list[OrderOut],
+    responses={
+        200: {
+            "headers": {
+                "X-Total-Count": {
+                    "description": "Total de pedidos que coinciden con los filtros (sin paginar).",
+                    "schema": {"type": "integer"},
+                }
+            }
+        }
+    },
+)
 async def list_orders(
     principal: Annotated[Principal, Depends(require("pack_commerce"))],
+    response: Response,
+    estado: Annotated[str | None, Query(description="Estado del pedido.")] = None,
+    pago: Annotated[str | None, Query(description="Estado del pago: pendiente, pagado o rechazado.")] = None,
+    q: Annotated[
+        str | None,
+        Query(max_length=120, description="Número de pedido o nombre del cliente."),
+    ] = None,
+    customer_id: Annotated[uuid.UUID | None, Query(description="Solo los pedidos de este cliente.")] = None,
+    limit: Annotated[int, Query(ge=1, le=ORDERS_MAX_LIMIT)] = ORDERS_DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[OrderOut]:
+    """Pedidos del negocio, del más reciente al más antiguo (HU-CRM-20).
+
+    Conserva la forma de lista (la consumen el panel y la APK); el total de los que coinciden
+    con los filtros viaja en la cabecera `X-Total-Count`.
+    """
+    from core.db.models import Customer
+
+    if estado is not None and estado not in ORDER_STATUSES:
+        raise ApiError.bad_request(
+            f"Estado inválido: {estado}. Válidos: {', '.join(ORDER_STATUSES)}",
+            "invalid_status",
+        )
+    if pago is not None and pago not in PAYMENT_STATUSES:
+        raise ApiError.bad_request(
+            f"Estado de pago inválido: {pago}. Válidos: {', '.join(PAYMENT_STATUSES)}",
+            "invalid_payment_status",
+        )
     tenant_id = principal.tenant_id
+    texto = (q or "").strip()
     async with get_session() as session:
+        filtros = [Order.tenant_id == tenant_id]
+        if estado is not None:
+            filtros.append(Order.status == estado)
+        if pago is not None:
+            filtros.append(Order.payment_status == pago)
+        if customer_id is not None:
+            filtros.append(Order.customer_id == customer_id)
+        if texto:
+            patron = _like_literal(texto)
+            filtros.append(
+                or_(
+                    Order.public_order_number.ilike(patron, escape="\\"),
+                    Order.delivery_full_name.ilike(patron, escape="\\"),
+                    Order.customer_id.in_(
+                        select(Customer.id).where(
+                            Customer.tenant_id == tenant_id,
+                            Customer.name.ilike(patron, escape="\\"),
+                        )
+                    ),
+                )
+            )
+        total = (
+            await session.execute(select(func.count()).select_from(Order).where(*filtros))
+        ).scalar_one()
         orders = (
             (
                 await session.execute(
                     select(Order)
-                    .where(Order.tenant_id == tenant_id)
-                    .order_by(Order.created_at.desc())
-                    .limit(200)
+                    .where(*filtros)
+                    .order_by(Order.created_at.desc(), Order.id.desc())
+                    .limit(limit)
+                    .offset(offset)
                 )
             )
             .scalars()
             .all()
         )
+        order_ids = [o.id for o in orders]
         items = (
             (
                 await session.execute(
-                    select(OrderItem).where(OrderItem.tenant_id == tenant_id)
+                    select(OrderItem).where(
+                        OrderItem.tenant_id == tenant_id, OrderItem.order_id.in_(order_ids)
+                    )
                 )
             )
             .scalars()
             .all()
+            if order_ids
+            else []
         )
         variants = (
-            await session.execute(
-                select(ProductVariant, Product)
-                .join(Product, Product.id == ProductVariant.product_id)
-                .where(
-                    ProductVariant.tenant_id == tenant_id,
-                    Product.tenant_id == tenant_id,
-                    Product.deleted_at.is_(None),
+            (
+                await session.execute(
+                    select(ProductVariant, Product)
+                    .join(Product, Product.id == ProductVariant.product_id)
+                    .where(
+                        ProductVariant.tenant_id == tenant_id,
+                        Product.tenant_id == tenant_id,
+                        Product.deleted_at.is_(None),
+                        ProductVariant.id.in_(list({i.variant_id for i in items})),
+                    )
                 )
+            ).all()
+            if items
+            else []
+        )
+        customer_ids = {o.customer_id for o in orders}
+        nombres = (
+            dict(
+                (
+                    await session.execute(
+                        select(Customer.id, Customer.name).where(
+                            Customer.tenant_id == tenant_id, Customer.id.in_(customer_ids)
+                        )
+                    )
+                ).all()
             )
-        ).all()
+            if customer_ids
+            else {}
+        )
 
+    response.headers["X-Total-Count"] = str(total)
     name_by_variant = {v.id: p.name for v, p in variants}
     items_by_order: dict[str, list[OrderLine]] = {}
     for i in items:
@@ -1098,6 +1203,8 @@ async def list_orders(
         OrderOut(
             id=o.id,
             public_order_number=o.public_order_number,
+            customer_id=o.customer_id,
+            customer_name=nombres.get(o.customer_id),
             total=float(o.total or 0),
             status=o.status,
             payment_status=o.payment_status,
