@@ -7,7 +7,9 @@ la lógica de permisos (ADR-0076/0077).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,9 +30,10 @@ from core.admin.permissions import (
 from core.admin.roles import ROLES_DE_PLATAFORMA, es_tester
 from core.db.models import Admin, AdminPermission, Tenant, TenantInvitation, TenantUser
 from core.db.session import get_session
+from core.mcp.types import PackProfile
 from core.plugin_manager import plugin_manager
 from core.shared.logger import get_logger
-from core.shared.tenant import get_current_tenant_id
+from core.shared.tenant import get_current_tenant_id, tenant_scope
 
 log = get_logger(__name__)
 
@@ -681,4 +684,57 @@ async def pack_collaborator_roles() -> list[dict[str, str]]:
             role_id = str(role.get("id") or "").strip()
             if role_id:
                 out.append({"value": f"{module.id}:{role_id}", "label": str(role.get("label") or role_id)})
+    return out
+
+
+# ------------------------------------------------------------------ perfiles de pack (ADR-0176)
+PERFILES_TIMEOUT_S = 1.0
+
+
+async def perfiles_de_pack(
+    tenant_id: uuid.UUID,
+    admin_ids: list[uuid.UUID],
+    *,
+    ver_detalle: Callable[[str], bool],
+) -> dict[uuid.UUID, list[PackProfile]]:
+    """Perfiles que los packs habilitados del negocio tienen de estos colaboradores (hook
+    `collaborator_profiles`). Una llamada por pack con TODOS los ids (sin N+1), en paralelo y con un tope de
+    `PERFILES_TIMEOUT_S` por pack: si uno falla o se pasa, el listado sale sin sus perfiles (`log.warning`).
+
+    `ver_detalle(pack_id)` dice si quien pregunta ve el detalle de ese pack; si no, se conservan `pack`,
+    `role_id`, `ref_id` y `etiqueta` y se descartan `resumen` y `edit`. Solo se aceptan ids pedidos."""
+    if not admin_ids:
+        return {}
+    from core.agents.spec import enabled_packs, load_active_spec
+
+    async with tenant_scope(tenant_id):
+        habilitados = enabled_packs(await load_active_spec(tenant_id))
+    modulos = [m for m in plugin_manager.list_modules() if m.id in habilitados]
+    pedidos = set(admin_ids)
+
+    async def pedir(modulo: Any) -> dict[uuid.UUID, list[PackProfile]]:
+        try:
+            async with tenant_scope(tenant_id):
+                return await asyncio.wait_for(
+                    modulo.collaborator_profiles(tenant_id, list(admin_ids)), PERFILES_TIMEOUT_S
+                )
+        except Exception:
+            log.warning(
+                "collaborator_profiles_fallo", pack=modulo.id, tenant_id=str(tenant_id), exc_info=True
+            )
+            return {}
+
+    resultados = await asyncio.gather(*(pedir(m) for m in modulos))
+    out: dict[uuid.UUID, list[PackProfile]] = {}
+    for modulo, por_admin in zip(modulos, resultados, strict=True):
+        detalle = ver_detalle(modulo.id)
+        for admin_id, perfiles in por_admin.items():
+            if admin_id not in pedidos:  # un pack no puede traer cuentas que no se pidieron
+                continue
+            for perfil in perfiles:
+                if perfil.pack != modulo.id:
+                    continue
+                out.setdefault(admin_id, []).append(
+                    perfil if detalle else perfil.model_copy(update={"resumen": None, "edit": None})
+                )
     return out

@@ -127,6 +127,84 @@ class CobranzaModule(BaseModule):
         async with get_session() as session:
             return "gestor" if await _gestor_de(session, tenant_id, admin_id) is not None else None
 
+    async def collaborator_profiles(self, tenant_id: Any, admin_ids: list[Any]) -> dict[Any, list[Any]]:
+        """Perfil de gestor de los colaboradores pedidos, para Equipo (ADR-0176).
+
+        Tres consultas por lote (gestores, carteras y permisos), sin importar cuántos ids lleguen. El
+        resumen lleva el estatus, las carteras `{id, nombre}` y el conteo de permisos de campo activos;
+        editar los permisos se hace con el `PUT …/collectors/{id}/permissions` ya existente."""
+        from sqlalchemy import select
+
+        from core.db.session import get_session
+        from core.mcp.types import PackProfile, PackProfileEdit
+        from pack_cobranza.models import Cartera, Gestor, GestorPermiso
+        from pack_cobranza.permisos import GESTOR_PERMISOS
+
+        if not admin_ids:
+            return {}
+        async with get_session() as session:
+            gestores = (
+                (
+                    await session.execute(
+                        select(Gestor).where(
+                            Gestor.tenant_id == tenant_id,
+                            Gestor.admin_id.in_(admin_ids),
+                            Gestor.deleted_at.is_(None),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not gestores:
+                return {}
+            ids = [g.id for g in gestores]
+            carteras = (
+                await session.execute(
+                    select(Cartera.gestor_id, Cartera.id, Cartera.nombre)
+                    .where(
+                        Cartera.tenant_id == tenant_id,
+                        Cartera.gestor_id.in_(ids),
+                        Cartera.deleted_at.is_(None),
+                    )
+                    .order_by(Cartera.nombre)
+                )
+            ).all()
+            permisos = (
+                await session.execute(
+                    select(GestorPermiso.gestor_id, GestorPermiso.permiso).where(
+                        GestorPermiso.tenant_id == tenant_id,
+                        GestorPermiso.gestor_id.in_(ids),
+                        GestorPermiso.habilitado.is_(True),
+                    )
+                )
+            ).all()
+        carteras_de: dict[Any, list[dict[str, str]]] = {}
+        for gestor_id, cartera_id, nombre in carteras:
+            carteras_de.setdefault(gestor_id, []).append({"id": str(cartera_id), "nombre": nombre})
+        activos_de: dict[Any, int] = {}
+        for gestor_id, permiso in permisos:
+            if permiso in GESTOR_PERMISOS:
+                activos_de[gestor_id] = activos_de.get(gestor_id, 0) + 1
+        return {
+            g.admin_id: [
+                PackProfile(
+                    pack=self.id,
+                    role_id="gestor",
+                    ref_id=str(g.id),
+                    etiqueta="Gestor",
+                    resumen={
+                        "estatus": g.estatus,
+                        "carteras": carteras_de.get(g.id, []),
+                        "permisos_activos": activos_de.get(g.id, 0),
+                        "permisos_total": len(GESTOR_PERMISOS),
+                    },
+                    edit=PackProfileEdit(kind="cobranza_gestor_permisos", ref_id=str(g.id)),
+                )
+            ]
+            for g in gestores
+        }
+
     async def on_collaborator_role(self, tenant_id: Any, admin_id: Any, role_id: str) -> None:
         """Rol de pack asignado a un colaborador (ADR-0066): crea su perfil `Gestor`.
 
@@ -139,6 +217,7 @@ class CobranzaModule(BaseModule):
 
         from sqlalchemy import select
 
+        from core.access.devices import degradar_por_cambio_de_rol, invalidar_cuenta
         from core.db.models import Admin
         from core.db.session import get_session
         from core.shared.tenant import tenant_scope
@@ -149,18 +228,25 @@ class CobranzaModule(BaseModule):
         async with tenant_scope(tid):
             async with get_session() as session:
                 existe = (await session.execute(select(Gestor).where(Gestor.tenant_id == tid, Gestor.admin_id == aid))).scalar_one_or_none()
-                if existe is not None:
-                    return
-                admin = (await session.execute(select(Admin).where(Admin.id == aid))).scalar_one_or_none()
-                session.add(
-                    Gestor(
-                        tenant_id=tid,
-                        admin_id=aid,
-                        nombre=(admin.username or admin.email) if admin else "Gestor",
-                        correo=admin.email if admin else None,
+                if existe is None:
+                    admin = (await session.execute(select(Admin).where(Admin.id == aid))).scalar_one_or_none()
+                    session.add(
+                        Gestor(
+                            tenant_id=tid,
+                            admin_id=aid,
+                            nombre=(admin.username or admin.email) if admin else "Gestor",
+                            correo=admin.email if admin else None,
+                        )
                     )
-                )
-        log.info("cobranza_gestor_creado", tenant_id=str(tid), admin_id=str(aid))
+                # Pasa a la política de campo (más estricta): sus equipos que entraron solo porque la política
+                # de colaborador era abierta vuelven a pendiente (ADR-0174, HU-ACC-06). Idempotente.
+                bajados = await degradar_por_cambio_de_rol(session, tid, aid, "gestor")
+        if existe is None:
+            log.info("cobranza_gestor_creado", tenant_id=str(tid), admin_id=str(aid))
+        # El rol cambió: la caché de la cuenta se invalida siempre, y la de los equipos que bajaron, ya con el commit.
+        await invalidar_cuenta(tid, aid, bajados)
+        if bajados:
+            log.info("access_equipos_degradados", tenant_id=str(tid), admin_id=str(aid), equipos=len(bajados))
 
     async def seed_data(self, tenant_id: Any, data: dict[str, Any]) -> list[str]:
         """Datos de ejemplo de la cartera (ADR-0083): carteras, caja, gestor y clientes con

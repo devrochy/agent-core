@@ -93,6 +93,20 @@ async def invalidar(
         log.warning("access_cache_no_disponible", exc_info=True)
 
 
+async def invalidar_negocio(tenant_id: uuid.UUID) -> None:
+    """Borra la caché de vigencia de TODAS las cuentas del negocio: la política cambió y vale para todas.
+    Barre solo las claves `acceso:req` y `acceso:cuenta` de este negocio. Un fallo de Redis no impide el
+    cambio: el TTL acota el efecto."""
+    try:
+        r = _redis()
+        for patron in (f"acceso:req:{tenant_id}:*", f"acceso:cuenta:{tenant_id}:*"):
+            claves = [c async for c in r.scan_iter(match=patron, count=500)]
+            if claves:
+                await r.delete(*claves)
+    except Exception:
+        log.warning("access_cache_no_disponible", exc_info=True)
+
+
 async def motivo_de_denegacion(
     session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID, did: uuid.UUID
 ) -> str | None:

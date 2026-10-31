@@ -94,6 +94,16 @@ async def login(request: Request) -> JSONResponse:
                 )
             )
             if not ok:
+                # Login v1 (código + API key): el rastro va al negocio, sin cuenta (HU-ACC-06).
+                from core.access.events import registrar_evento_unico
+
+                await registrar_evento_unico(
+                    session,
+                    tenant_id=tenant_id,
+                    tipo="login_fallido",
+                    canal="campo_v1",
+                    ip=request.client.host if request.client else None,
+                )
                 return JSONResponse({"error": "credenciales inválidas"}, status_code=401)
             token = issue_token(
                 {"tenant_id": str(tenant_id), "gestor_id": str(device.gestor_id) if device.gestor_id else None, "device_id": str(device.id)},

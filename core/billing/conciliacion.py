@@ -239,13 +239,16 @@ async def conciliar_negocio(
         plan = get_plan(sub.plan_id)
         if plan is not None and not plan.is_free and plan_asistente == sub.plan_id:
             for etiqueta, cargo in sorted(cargos.items()):
-                if cargo.get("estado") == "pendiente" and abs(float(cargo.get("monto") or 0) - plan.price_cop) > 0.01:
+                # Con descuento el cargo cobra el neto: se compara el precio de lista (`monto_bruto`).
+                lista = cargo.get("monto_bruto")
+                lista = cargo.get("monto") if lista is None else lista
+                if cargo.get("estado") == "pendiente" and abs(float(lista or 0) - plan.price_cop) > 0.01:
                     diferencias.append(
                         Diferencia(
                             "monto_distinto",
                             slug,
                             _referencia(slug, etiqueta),
-                            {"asistente": cargo.get("monto"), "plan": plan.price_cop},
+                            {"asistente": lista, "plan": plan.price_cop},
                         )
                     )
     if (

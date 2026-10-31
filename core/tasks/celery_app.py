@@ -211,6 +211,25 @@ celery.conf.beat_schedule[_NOTIFICATIONS_RETENTION_TASK] = {
     "schedule": crontab(hour="4", minute="0"),
 }
 
+# Retención de los eventos de acceso (ADR-0174, HU-ACC-06): baja lógica a los 180 días.
+_ACCESS_EVENTS_RETENTION_TASK = "core.access_events_retention"
+
+
+@celery.task(name=_ACCESS_EVENTS_RETENTION_TASK)
+def _access_events_retention() -> None:
+    from core.tasks.access_events_retention import retener_eventos_de_acceso
+
+    try:
+        run_async(retener_eventos_de_acceso())
+    except Exception:
+        log.exception("cron_task_failed", task=_ACCESS_EVENTS_RETENTION_TASK)
+
+
+celery.conf.beat_schedule[_ACCESS_EVENTS_RETENTION_TASK] = {
+    "task": _ACCESS_EVENTS_RETENTION_TASK,
+    "schedule": crontab(hour="4", minute="10"),
+}
+
 # «Cliente esperando respuesta» (ADR-0167): cada 5 min avisa de los clientes con una escalación
 # abierta que llevan más de 15 min sin respuesta humana (un aviso por episodio).
 _CLIENTE_ESPERANDO_TASK = "core.cliente_esperando"
