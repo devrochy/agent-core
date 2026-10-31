@@ -51,10 +51,32 @@ async def _con_plan(tid: uuid.UUID, codigo: str = "PREMIUM", precio: str = "6000
 
 async def _listo() -> tuple[uuid.UUID, Any]:
     """Negocio con el motor y el plan Premium; devuelve (negocio, conversación)."""
+    _asegurar_resumen()
     tid = await _negocio(["pack_subscriptions"])
     await _banderas(tid, True)
     await _con_plan(tid)
     return tid, await _conversacion(tid)
+
+
+def _asegurar_resumen() -> None:
+    """El resumen de `sub_confirmar_inscripcion` lo registra el pack al activarse y solo si las skills del core ya
+    estaban; otro test del mismo proceso puede haber activado el pack antes (o quitado su registro), y entonces el
+    kernel cae al texto fijo con los argumentos crudos. Se vuelve a publicar solo el resumen para que este módulo no
+    dependa del orden de la corrida."""
+    from pack_subscriptions.procedimientos import resumen_de_inscripcion
+
+    from core.mcp.host import mcp_host
+    from core.tools.core_skill import register_core_skills
+
+    if mcp_host.get_resumen("sub_confirmar_inscripcion") is not None:
+        return
+    if mcp_host.get_tool("sub_confirmar_inscripcion") is None:
+        register_core_skills(mcp_host)
+    mcp_host.begin_activation("pack_subscriptions")
+    try:
+        mcp_host.register_resumen("sub_confirmar_inscripcion", resumen_de_inscripcion)
+    finally:
+        mcp_host.end_activation()
 
 
 async def _hasta_datos(conv: Any, monkeypatch: Any) -> Any:  # type: ignore[no-untyped-def]
