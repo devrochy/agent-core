@@ -250,7 +250,7 @@ async def preparar_negocio(
         packs=list(definicion.get("packs", [])),
         preset=definicion.get("preset"),
         plan=definicion.get("plan", "premium"),
-        sembrar_ejemplos=not definicion.get("catalogo") and not replica,
+        sembrar_ejemplos=not definicion.get("catalogo") and not definicion.get("planes") and not replica,
         agentes_base=False,  # el journey monta su propio runtime (`encender_runtime_v3`), no el del alta
     )
     async with tenant_scope(tenant_id):
@@ -267,6 +267,12 @@ async def preparar_negocio(
         from pack_commerce.seed import seed_catalog  # el set declara su catálogo de commerce
 
         await seed_catalog(tenant_id, definicion["catalogo"])
+    if definicion.get("planes"):
+        from pack_subscriptions.seed import (
+            seed_planes,  # el set declara sus planes de suscripciones (SPEC-43)
+        )
+
+        await seed_planes(tenant_id, definicion["planes"])
     if definicion.get("vendedor"):
         _como_vendedor(tenant_id)
     await publicar_documentos_legales(tenant_id, definicion.get("documentos_legales") or [])
