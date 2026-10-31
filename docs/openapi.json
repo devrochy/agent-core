@@ -43169,6 +43169,14 @@
             },
             "type": "array",
             "title": "Links"
+          },
+          "pack_profiles": {
+            "items": {
+              "$ref": "#/components/schemas/PackProfile"
+            },
+            "type": "array",
+            "title": "Pack Profiles",
+            "default": []
           }
         },
         "type": "object",
@@ -68031,6 +68039,18 @@
             "title": "Mrr",
             "description": "Ingreso recurrente mensual: activas de pago, trimestral ÷ 3 y anual ÷ 12."
           },
+          "mrr_descuento": {
+            "type": "number",
+            "title": "Mrr Descuento",
+            "description": "Descuento vigente por mes (SPEC-43): de las activas de pago con descuento y períodos por consumir, valor del período por el porcentaje, normalizado a mes. El MRR no lo resta.",
+            "default": 0
+          },
+          "suscripciones_con_descuento": {
+            "type": "integer",
+            "title": "Suscripciones Con Descuento",
+            "description": "Activas de pago con descuento vigente.",
+            "default": 0
+          },
           "mrr_mes_anterior": {
             "type": "number",
             "title": "Mrr Mes Anterior",
@@ -71694,7 +71714,7 @@
             "maximum": 12.0,
             "minimum": 1.0,
             "title": "Periodos",
-            "description": "Cobros que descuenta. Hoy solo se acepta 1.",
+            "description": "Cobros que descuenta. De 1 a 12 períodos; el monto fijo solo descuenta 1.",
             "default": 1
           },
           "plan_id": {
@@ -71804,7 +71824,7 @@
             "maximum": 12.0,
             "minimum": 1.0,
             "title": "Periodos",
-            "description": "Cobros que descuenta. Hoy solo se acepta 1.",
+            "description": "Cobros que descuenta. De 1 a 12 períodos; el monto fijo solo descuenta 1.",
             "default": 1
           },
           "plan_id": {
@@ -72570,6 +72590,78 @@
           "costo"
         ],
         "title": "PuntoActividadOut"
+      },
+      "PackProfile": {
+        "properties": {
+          "pack": {
+            "type": "string",
+            "title": "Pack"
+          },
+          "role_id": {
+            "type": "string",
+            "title": "Role Id"
+          },
+          "ref_id": {
+            "type": "string",
+            "title": "Ref Id"
+          },
+          "etiqueta": {
+            "type": "string",
+            "title": "Etiqueta"
+          },
+          "resumen": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resumen"
+          },
+          "edit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PackProfileEdit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "pack",
+          "role_id",
+          "ref_id",
+          "etiqueta"
+        ],
+        "title": "PackProfile",
+        "description": "Perfil que un pack tiene de un colaborador (ADR-0176), para mostrarlo en Equipo.\n\n`resumen` es un objeto pequeño y plano que el cliente pinta sin interpretar; lo define el pack. El core\nlo descarta (y `edit`) para quien no tiene acceso a ninguna sección del pack."
+      },
+      "PackProfileEdit": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "ref_id": {
+            "type": "string",
+            "title": "Ref Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "ref_id"
+        ],
+        "title": "PackProfileEdit",
+        "description": "Cómo se edita un perfil: `kind` es una cadena abierta que el cliente reconoce o ignora."
       }
     }
   }

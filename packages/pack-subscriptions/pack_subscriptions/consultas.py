@@ -496,6 +496,19 @@ def _mrr(valor: Any, periodicidad: Any) -> float:
     return base
 
 
+def _descuento_mensual(valor: Any, periodicidad: Any, descuento: Any) -> float:
+    """Lo que descuenta por mes el descuento vigente de una suscripción (porcentaje del valor del período, o
+    el monto fijo), normalizado igual que el MRR."""
+    if not isinstance(descuento, dict):
+        return 0.0
+    try:
+        v = float(descuento.get("valor") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    por_periodo = float(valor or 0) * v / 100 if descuento.get("tipo") == "porcentaje" else v
+    return _mrr(min(por_periodo, float(valor or 0)), periodicidad)
+
+
 def _inicio_de_mes(ahora: datetime, meses_atras: int = 0) -> datetime:
     mes = ahora.year * 12 + (ahora.month - 1) - meses_atras
     return datetime(mes // 12, mes % 12 + 1, 1, tzinfo=UTC)
@@ -533,6 +546,21 @@ async def metricas(session: AsyncSession, tid: uuid.UUID, ahora: datetime | None
         )
     ).all()
     mrr = sum(_mrr(v, p) for v, p in activas_pago)
+    # Descuento vigente (HU-SUB-36): solo `activa` (los pendientes de pago no suman), misma moneda y con
+    # períodos por consumir. El MRR sigue nominal; esta es la segunda línea del Resumen.
+    con_descuento = (
+        await session.execute(
+            select(s.valor_periodo, s.periodicidad, s.descuento).where(
+                *cond,
+                s.estado == "activa",
+                s.moneda == moneda,
+                s.valor_periodo > 0,
+                s.promocion_id.is_not(None),
+                s.descuento_periodos_restantes >= 1,
+            )
+        )
+    ).all()
+    mrr_descuento = sum(_descuento_mensual(v, p, d) for v, p, d in con_descuento)
     otras = (
         await session.execute(select(func.count()).where(*cond, s.estado == "activa", s.moneda != moneda))
     ).scalar_one()
@@ -619,6 +647,8 @@ async def metricas(session: AsyncSession, tid: uuid.UUID, ahora: datetime | None
         moneda=moneda,
         otras_monedas=int(otras),
         mrr=round(mrr, 2),
+        mrr_descuento=round(mrr_descuento, 2),
+        suscripciones_con_descuento=len(con_descuento),
         mrr_mes_anterior=round(mrr_anterior, 2),
         activas=int(conteo.get("activa", 0)),
         en_prueba=int(conteo.get("trialing", 0)),

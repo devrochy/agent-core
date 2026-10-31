@@ -32,6 +32,7 @@ from core.shared.tenant import tenant_scope
 from core.tasks.decorators import register_cron
 from pack_subscriptions import promociones
 from pack_subscriptions.avisos import recordatorio_de_hoy
+from pack_subscriptions.cargos import crear_cargo_de_periodo
 from pack_subscriptions.horario_legal import (
     en_horario_de_cobro,
     hora_local,
@@ -253,36 +254,81 @@ async def _generar_cargos(now: datetime) -> int:
     """
     total = 0
     for tenant_id in await _tenant_ids():
-        from core.agents.spec import enabled_packs, load_active_spec
-        from core.payments import payment_registry
-
-        async with tenant_scope(tenant_id):
-            spec = await load_active_spec()
-            cap = payment_registry.capability_for(enabled_packs(spec))
-            config = await _config_del_negocio()
-            # HU-SUB-05: el cargo se genera `dias_anticipacion` antes del vencimiento
-            # para que el link llegue antes (su vencimiento sigue siendo el inicio del
-            # período, D-SPEC-06-3).
-            horizonte = now + timedelta(days=config.dias_anticipacion)
-            async with get_session() as session:
-                subs = (
-                    await session.execute(
-                        select(Subscription).where(
-                            Subscription.tenant_id == tenant_id,
-                            Subscription.estado.in_(("trialing", "activa")),
-                            Subscription.deleted_at.is_(None),
-                            Subscription.proximo_cargo.isnot(None),
-                            Subscription.proximo_cargo <= horizonte,
-                        )
-                    )
-                ).scalars().all()
-                generadas = 0
-                for sub in subs:
-                    if await generar_cargo_de(session, tenant_id, sub, now, cap=cap, config=config) is not None:
-                        generadas += 1
+        try:
+            generadas = await _generar_cargos_del_negocio(tenant_id, now)
+        except Exception:
+            # Un negocio que falla no frena a los demás. Su transacción se deshizo entera (cargos y descuento
+            # consumido incluidos), así que la corrida de mañana reintenta sin perder ni duplicar un período.
+            log.exception("subs_cargos_negocio_fallido", tenant_id=str(tenant_id))
+            continue
         total += generadas
         log.info("subs_cargos_generados", tenant_id=str(tenant_id), generadas=generadas)
     return total
+
+
+async def _generar_cargos_del_negocio(tenant_id: uuid.UUID, now: datetime) -> int:
+    from core.agents.spec import enabled_packs, load_active_spec
+    from core.payments import payment_registry
+
+    async with tenant_scope(tenant_id):
+        spec = await load_active_spec()
+        cap = payment_registry.capability_for(enabled_packs(spec))
+        config = await _config_del_negocio()
+        # HU-SUB-05: el cargo se genera `dias_anticipacion` antes del vencimiento
+        # para que el link llegue antes (su vencimiento sigue siendo el inicio del
+        # período, D-SPEC-06-3).
+        horizonte = now + timedelta(days=config.dias_anticipacion)
+        async with get_session() as session:
+            # `SKIP LOCKED`: una suscripción que otra transacción tiene bloqueada (un pago, un cambio de plan,
+            # otra corrida) se deja para la próxima corrida en vez de esperar o cobrarla dos veces.
+            subs = (
+                await session.execute(
+                    select(Subscription)
+                    .where(
+                        Subscription.tenant_id == tenant_id,
+                        Subscription.estado.in_(("trialing", "activa")),
+                        Subscription.deleted_at.is_(None),
+                        Subscription.proximo_cargo.isnot(None),
+                        Subscription.proximo_cargo <= horizonte,
+                    )
+                    .with_for_update(skip_locked=True)
+                )
+            ).scalars().all()
+            generadas = 0
+            for sub in subs:
+                if await generar_cargo_de(session, tenant_id, sub, now, cap=cap, config=config) is not None:
+                    generadas += 1
+    return generadas
+
+
+@register_cron(PACK_ID, "30 3 * * *")
+async def verificar_descuentos() -> None:
+    await _verificar_descuentos()
+
+
+async def _verificar_descuentos() -> int:
+    """Invariante diario de HU-SUB-35: `restantes = periodos_total − cargos no anulados del canje que consumen
+    período`. Loguea `subs_descuento_inconsistente` por cada suscripción que no cuadra (no corrige nada solo)
+    y deja los gauges de descuentos vigentes. Devuelve cuántas no cuadran."""
+    inconsistentes = 0
+    for tenant_id in await _tenant_ids():
+        try:
+            async with tenant_scope(tenant_id), get_session() as session:
+                malas = await promociones.descuentos_inconsistentes(session)
+                vigentes, mensual = await promociones.resumen_de_descuentos(session)
+        except Exception:
+            log.exception("subs_descuentos_verificacion_fallida", tenant_id=str(tenant_id))
+            continue
+        for sub_id in malas:
+            log.error("subs_descuento_inconsistente", tenant_id=str(tenant_id), subscription_id=str(sub_id))
+        inconsistentes += len(malas)
+        log.info(
+            "subs_descuentos_vigentes",
+            tenant_id=str(tenant_id),
+            suscripciones_con_descuento=vigentes,
+            descuento_vigente_mensual_cop=str(mensual),
+        )
+    return inconsistentes
 
 
 async def generar_cargo_de(session, tenant_id: uuid.UUID, sub: Subscription, now: datetime, *, cap, config) -> SubscriptionCharge | None:  # type: ignore[no-untyped-def]
@@ -299,7 +345,7 @@ async def generar_cargo_de(session, tenant_id: uuid.UUID, sub: Subscription, now
     inicio = sub.proximo_cargo
     if inicio is None:
         return None
-    _aplicar_cambio_programado(sub, inicio)
+    await _aplicar_cambio_programado(session, sub, inicio)
     # Un cambio de plan pendiente se calculó sobre el período que termina:
     # pagarlo después ya no aplica (auditoría HU-SUB-07).
     from pack_subscriptions.capability import _anular_cambios_pendientes
@@ -311,31 +357,12 @@ async def generar_cargo_de(session, tenant_id: uuid.UUID, sub: Subscription, now
         sub.proximo_cargo = siguiente
         return None
     periodo = etiqueta_periodo(inicio, sub.periodicidad)
-    existe = (
-        await session.execute(
-            select(SubscriptionCharge).where(
-                SubscriptionCharge.tenant_id == tenant_id,
-                SubscriptionCharge.subscription_id == sub.id,
-                SubscriptionCharge.periodo == periodo,
-                SubscriptionCharge.tipo == "periodo",
-                SubscriptionCharge.deleted_at.is_(None),
-            )
-        )
-    ).scalars().first()
     sub.periodo_actual_inicio = inicio
     sub.proximo_cargo = siguiente
-    if existe is not None:
+    # ÚNICO creador de cargos de período (HU-SUB-35): reutiliza el existente y consume el descuento una sola vez.
+    cargo, creado = await crear_cargo_de_periodo(session, sub, inicio)
+    if not creado:
         return None
-    cargo = SubscriptionCharge(
-        tenant_id=tenant_id,
-        subscription_id=sub.id,
-        periodo=periodo,
-        monto=Decimal(sub.valor_periodo or 0),
-        estado="pendiente",
-        fecha_vencimiento=inicio,
-    )
-    session.add(cargo)
-    await session.flush()
     if await paga_por_otro_canal(session, tenant_id, sub):
         # HU-SH-04 (ADR-0123): el último período lo pagó otro canal (p. ej. el panel de la
         # plataforma). El cargo existe, pero sin link ni aviso: el cliente no recibe dos cobros
@@ -515,7 +542,7 @@ async def paga_por_otro_canal(session, tenant_id: uuid.UUID, sub: Subscription) 
     return bool(externo) and externo.get("canal") != CANAL_TRANSFERENCIA
 
 
-def _aplicar_cambio_programado(sub: Subscription, inicio: datetime) -> None:
+async def _aplicar_cambio_programado(session, sub: Subscription, inicio: datetime) -> None:  # type: ignore[no-untyped-def]
     """Downgrade programado (HU-SUB-07): el período que empieza en `inicio` ya va con el
     plan nuevo, así que su cargo sale con el precio nuevo."""
     cambio = sub.cambio_programado or {}
@@ -524,6 +551,8 @@ def _aplicar_cambio_programado(sub: Subscription, inicio: datetime) -> None:
         return
     from pack_subscriptions.capability import aplicar_plan
 
+    # Cualquier cambio de plan termina el descuento vigente (HU-SUB-35).
+    await promociones.terminar_descuento(session, sub, motivo="cambio_de_plan")
     aplicar_plan(sub, cambio, inicio)
     log.info("subs_downgrade_aplicado", subscription_id=str(sub.id), plan=sub.concepto)
 

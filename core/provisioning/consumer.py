@@ -220,7 +220,7 @@ def _periodo_del_evento(payload: Mapping[str, Any]) -> dict[str, Any]:
     del negocio corta sus períodos el mismo día que el asistente."""
     periodo = {
         clave: payload.get(clave)
-        for clave in ("periodo_inicio", "proximo_cargo", "dia_ancla")
+        for clave in ("periodo_inicio", "proximo_cargo", "dia_ancla", "monto_cobrado")
         if payload.get(clave) is not None
     }
     return periodo
@@ -658,6 +658,7 @@ async def _registrar_periodo(tenant_id: uuid.UUID, plan_id: str, slug: str, peri
                 plan_id,
                 periodo=periodo_del_vendedor(slug, periodo),
                 dia_ancla=_ancla(periodo),
+                monto=periodo.get("monto_cobrado"),
             )
 
 
@@ -942,7 +943,12 @@ async def sincronizar_cambio_de_plan(
                 if sub is None or not tiene_periodo_pago(sub.plan_id, sub.status):
                     periodo = periodo_del_vendedor(slug, _periodo_del_evento(payload))
                     pago = await registrar_periodo_pagado(
-                        session, negocio, plan.id, periodo=periodo, dia_ancla=_ancla(_periodo_del_evento(payload))
+                        session,
+                        negocio,
+                        plan.id,
+                        periodo=periodo,
+                        dia_ancla=_ancla(_periodo_del_evento(payload)),
+                        monto=payload.get("monto_cobrado"),  # lo realmente cobrado (neto, SPEC-43)
                     )
                     resultado.update(estado="periodo_pagado", referencia=periodo.referencia, pago=pago.resultado)
                 else:

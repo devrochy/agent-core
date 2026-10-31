@@ -55,6 +55,8 @@ CARGO_INSCRIPCION = "inscripcion"
 ESTADOS_CANJE = ("reservado", "confirmado", "agotado", "terminado", "liberado")
 CANJE_RESERVADO = "reservado"
 CANJE_CONFIRMADO = "confirmado"
+CANJE_AGOTADO = "agotado"  # se consumieron los N períodos del descuento
+CANJE_TERMINADO = "terminado"  # el descuento acabó antes: cancelación o cambio de plan
 CANJE_LIBERADO = "liberado"
 
 
@@ -120,6 +122,11 @@ class Subscription(Base):
     motivo_pausa: Mapped[str | None] = mapped_column(Text)  # HU-SUB-05: "mora" si la pausó el cron
     # HU-SUB-07 (ADR-0111): downgrade programado.
     cambio_programado: Mapped[dict | None] = mapped_column(JSONB)
+    # HU-SUB-35 (migración 0012): descuento vigente. Las tres NULL o las tres con valor; al consumirse el
+    # último período vuelven a NULL. `descuento` = {promocion_id, canje_id, etiqueta, tipo, valor, periodos_total}.
+    promocion_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    descuento: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), default=None)
+    descuento_periodos_restantes: Mapped[int | None] = mapped_column(SmallInteger, default=None)
     periodo_actual_inicio: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     periodo_actual_fin: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     proximo_cargo: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

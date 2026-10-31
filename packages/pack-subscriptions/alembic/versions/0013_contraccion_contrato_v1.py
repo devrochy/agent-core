@@ -17,12 +17,8 @@ puede venir de un entorno que no corrió `0010` en orden o de una inserción a m
 recrea el único; los valores de `variante_id` y `referencia_origen` no vuelven (la columna se creó
 vacía).
 
-NOTA DE ORDEN: `down_revision` apunta a la `0011` porque la `0012` (descuento de N períodos, #647) vive
-en otra rama del tren. Al rebasar sobre ella hay que cambiarlo a `pack_subscriptions_0012`; con las dos
-sin ajustar Alembic ve dos heads.
-
 Revision ID: pack_subscriptions_0013
-Revises: pack_subscriptions_0011
+Revises: pack_subscriptions_0012
 Create Date: 2026-10-30
 """
 
@@ -33,7 +29,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "pack_subscriptions_0013"
-down_revision = "pack_subscriptions_0011"
+down_revision = "pack_subscriptions_0012"
 branch_labels = None
 depends_on = None
 

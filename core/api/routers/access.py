@@ -37,6 +37,8 @@ from core.api.deps import (
 from core.api.errors import ApiError
 from core.db.models import AccessEvent, AccountDevice, Admin, TenantUser
 from core.db.session import get_session
+from core.security.rate_limit import Bucket
+from core.security.rate_limit import hit as rate_limit_hit
 from core.shared.audit import record_audit
 
 router = APIRouter(prefix="/access", tags=["access"])
@@ -292,6 +294,9 @@ async def device_session(
     dependencia del principal): así consulta su estado y puede cerrar sesión. Con la política abierta el
     alta es automática; con la restringida queda `pendiente` hasta que un admin lo apruebe."""
     tenant_id = _tenant(principal)
+    cupo = Bucket(f"acceso:device_session:{tenant_id}:{principal.admin.id}", 30, 60)
+    if await rate_limit_hit(cupo, name="access_device_session"):
+        raise ApiError(429, "demasiadas_solicitudes", "Demasiadas consultas seguidas. Espera un momento.")
     async with _sesion() as session:
         rol = await rol_de_acceso(session, tenant_id, principal.admin.id)
         if rol is None:
@@ -594,6 +599,9 @@ async def update_policy(
                 detalle={"antes": antes, "despues": despues},
             )
     if antes != despues:
+        from core.access.sesion import invalidar_negocio
+
+        await invalidar_negocio(tenant_id)  # ya con el cambio confirmado: no se recachea lo anterior
         await record_audit(
             _actor(principal),
             "politica_dispositivos_cambiada",

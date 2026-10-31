@@ -22,6 +22,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.background import BackgroundTasks
 from pydantic import BaseModel, Field
 
+from core.access.events import registrar_fallo_de_login
 from core.admin.auth import (
     SESSION_TTL_HOURS,
     NegocioSuspendido,
@@ -105,7 +106,11 @@ async def post_login(payload: LoginRequest, request: Request) -> LoginResponse:
         # Credenciales correctas: no cuenta como intento fallido (ADR-0136).
         raise ApiError(403, exc.code, exc.mensaje) from None
     if token is None:
-        await register_failure("admin", identifier, ip)
+        bloqueado = await register_failure("admin", identifier, ip)
+        # Rastro en los negocios de la cuenta (ADR-0174, HU-ACC-06); no cambia la respuesta.
+        await registrar_fallo_de_login(
+            payload.identifier, ip, canal="panel_apk", bloqueado=bloqueado
+        )
         raise ApiError(401, "invalid_credentials", "Correo o contraseña incorrectos.")
     await register_success("admin", identifier, ip)
     admin = await admin_from_token(token)

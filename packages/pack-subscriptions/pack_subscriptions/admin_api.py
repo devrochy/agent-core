@@ -83,6 +83,7 @@ _CODIGOS_422 = {
     "codigo_no_valido",
     "promo_no_aplica_a_free",
     "promo_no_aplica_a_cambio",
+    "promo_no_aplica_a_downgrade",
     "descuento_excede_precio",
 }
 
@@ -335,7 +336,7 @@ class PromocionBody(BaseModel):
     )
     tipo_descuento: Literal["porcentaje", "monto"] = "porcentaje"
     valor: float = Field(gt=0, le=999_999_999_999, allow_inf_nan=False, description="1 a 99 si es porcentaje.")
-    periodos: int = Field(default=1, ge=1, le=12, description="Cobros que descuenta. Hoy solo se acepta 1.")
+    periodos: int = Field(default=1, ge=1, le=12, description="Cobros que descuenta. De 1 a 12 períodos; el monto fijo solo descuenta 1.")
     plan_id: uuid.UUID | None = Field(default=None, description="Plan al que aplica; vacío = cualquier plan de pago.")
     vigente_desde: datetime | None = None
     vigente_hasta: datetime | None = None
