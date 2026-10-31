@@ -801,9 +801,10 @@ async def completar_lead(
 
 
 
-async def _avisar_lead_nuevo(session, lead_id) -> None:  # type: ignore[no-untyped-def]
+async def _avisar_lead_nuevo(session, lead_id, customer_id=None) -> None:  # type: ignore[no-untyped-def]
     """Centro de notificaciones (ADR-0167): lead nuevo, en la transacción que lo crea. Sin
-    datos del cliente en el texto; nunca propaga."""
+    datos del cliente en el texto; nunca propaga. El destino es el CLIENTE (HU-CRM-20): la ficha
+    se abre por id de cliente, no de lead; sin él (no debería pasar) queda el destino de lead."""
     from core.notifications.service import notify
     from core.notifications.spec import NotificationSpec
 
@@ -822,7 +823,11 @@ async def _avisar_lead_nuevo(session, lead_id) -> None:  # type: ignore[no-untyp
             dedupe_key=f"lead_nuevo:{lead_id}",
             section="leads",
             data={"kind": "lead_nuevo", "lead_id": str(lead_id)},
-            target={"entity": "lead", "id": str(lead_id), "section": "leads"},
+            target=(
+                {"entity": "cliente", "id": str(customer_id), "section": "leads"}
+                if customer_id is not None
+                else {"entity": "lead", "id": str(lead_id), "section": "leads"}
+            ),
         ),
     )
 
@@ -963,7 +968,7 @@ class LeadSkill(BaseSkill):
             session.add(lead)
             await session.flush()
             lead_id = str(lead.id)
-            await _avisar_lead_nuevo(session, lead.id)
+            await _avisar_lead_nuevo(session, lead.id, lead.customer_id)
 
         # Entity Memory (Capa 2): el core recuerda esto en TODAS las conversaciones futuras.
         # El perfil es la fuente de los datos de contacto que muestra la ficha (ADR-0149).

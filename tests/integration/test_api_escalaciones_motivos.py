@@ -123,3 +123,30 @@ async def test_filtro_por_estado(app_client) -> None:
     assert [i["summary"] for i in pendientes["items"]] == ["Pendiente"]
     assert [i["summary"] for i in resueltas["items"]] == ["Resuelta"]
     assert (await app_client.get(URL, params={"estado": "otro"}, headers=headers)).status_code == 422
+
+
+async def test_trae_el_cliente_de_la_escalacion_y_no_el_de_otro_negocio(app_client) -> None:
+    """HU-CRM-20: `customer_id` es el de la conversación; el listado nunca trae el de otro negocio."""
+    from sqlalchemy import select
+
+    from core.db.models import Conversation
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    mio = await _negocio_con_escalaciones([("tool:queja", "Llegó tarde")])
+    otro = await _negocio_con_escalaciones([("tool:queja", "Del otro negocio")])
+    headers = await api_headers(app_client, mio)
+
+    r = await app_client.get(URL, headers=headers)
+
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    assert [i["summary"] for i in items] == ["Llegó tarde"]
+    async with tenant_scope(mio):
+        async with get_session() as session:
+            conv = (await session.execute(select(Conversation))).scalars().one()
+    assert items[0]["customer_id"] == str(conv.customer_id)
+    async with tenant_scope(otro):
+        async with get_session() as session:
+            ajeno = (await session.execute(select(Conversation))).scalars().one()
+    assert items[0]["customer_id"] != str(ajeno.customer_id)

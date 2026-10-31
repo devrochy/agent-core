@@ -22,6 +22,8 @@ router = APIRouter(prefix="/admin/escalations", tags=["admin · escalaciones"])
 
 class EscalationItem(BaseModel):
     conversation_id: uuid.UUID
+    # HU-CRM-20: el nombre abre la ficha del cliente.
+    customer_id: uuid.UUID
     customer_name: str | None
     external_id: str | None
     reason: str = Field(description="Motivo tal como se guardó (crudo)")
@@ -78,6 +80,7 @@ async def list_escalations(
     items = [
         EscalationItem(
             conversation_id=conv.id,
+            customer_id=cust.id,
             customer_name=cust.name,
             external_id=cust.external_id,
             reason=esc.reason,

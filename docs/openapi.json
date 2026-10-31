@@ -20171,8 +20171,106 @@
           "pack · comercio"
         ],
         "summary": "List Orders",
+        "description": "Pedidos del negocio, del más reciente al más antiguo (HU-CRM-20).\n\nConserva la forma de lista (la consumen el panel y la APK); el total de los que coinciden\ncon los filtros viaja en la cabecera `X-Total-Count`.",
         "operationId": "list_orders_api_v1_pack_commerce_orders_get",
         "parameters": [
+          {
+            "name": "estado",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Estado del pedido.",
+              "title": "Estado"
+            },
+            "description": "Estado del pedido."
+          },
+          {
+            "name": "pago",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Estado del pago: pendiente, pagado o rechazado.",
+              "title": "Pago"
+            },
+            "description": "Estado del pago: pendiente, pagado o rechazado."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Número de pedido o nombre del cliente.",
+              "title": "Q"
+            },
+            "description": "Número de pedido o nombre del cliente."
+          },
+          {
+            "name": "customer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Solo los pedidos de este cliente.",
+              "title": "Customer Id"
+            },
+            "description": "Solo los pedidos de este cliente."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
           {
             "name": "X-Tenant-Id",
             "in": "header",
@@ -20217,6 +20315,14 @@
                     "$ref": "#/components/schemas/OrderOut"
                   },
                   "title": "Response List Orders Api V1 Pack Commerce Orders Get"
+                }
+              }
+            },
+            "headers": {
+              "X-Total-Count": {
+                "description": "Total de pedidos que coinciden con los filtros (sin paginar).",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -44917,6 +45023,11 @@
             "format": "uuid",
             "title": "Conversation Id"
           },
+          "customer_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Customer Id"
+          },
           "customer_name": {
             "anyOf": [
               {
@@ -44989,6 +45100,7 @@
         "type": "object",
         "required": [
           "conversation_id",
+          "customer_id",
           "customer_name",
           "external_id",
           "reason",
@@ -49719,6 +49831,22 @@
             "type": "string",
             "title": "Public Order Number"
           },
+          "customer_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Customer Id"
+          },
+          "customer_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Customer Name"
+          },
           "total": {
             "type": "number",
             "title": "Total"
@@ -49807,6 +49935,7 @@
         "required": [
           "id",
           "public_order_number",
+          "customer_id",
           "total",
           "status",
           "payment_status",

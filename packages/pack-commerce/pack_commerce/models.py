@@ -266,6 +266,7 @@ class Order(TenantMixin, Base):
     __table_args__ = (
         Index("uq_crm_orders_tenant_idem", "tenant_id", "idempotency_key", unique=True),
         Index("uq_crm_orders_tenant_seq", "tenant_id", "order_seq", unique=True),
+        Index("ix_pack_commerce_orders_tenant_customer", "tenant_id", "customer_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
