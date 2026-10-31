@@ -28,9 +28,9 @@ from core.orchestrator.safe_renderer import SafeExtras, apply_safe_extras
 T0 = datetime(2026, 10, 13, 5, 55, tzinfo=UTC)
 RAIZ = Path(__file__).resolve().parents[1]
 PLAN = Procedure.model_validate(
-    json.loads((RAIZ / "tests/fixtures/procedures/contratar_plan_comercio.json").read_text(encoding="utf-8"))
+    json.loads((RAIZ / "tests/fixtures/procedures_congeladas/contratar_plan_comercio.json").read_text(encoding="utf-8"))
 )
-ROTULOS = json.loads((RAIZ / "tests/fixtures/procedures/rotulos_contratar_plan_comercio.json").read_text(encoding="utf-8"))
+ROTULOS = json.loads((RAIZ / "tests/fixtures/procedures_congeladas/rotulos_contratar_plan_comercio.json").read_text(encoding="utf-8"))
 PIDE_TODO = {f"pide_{n}": True for n in ("full_name", "id_document", "phone", "email", "business_name", "vertical")}
 ORDEN_DEL_DUENO = ["business_name", "vertical", "full_name", "id_document", "email", "phone", "payment_method"]
 

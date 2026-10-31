@@ -45,7 +45,7 @@ def _publicado(pack: str, nombre: str) -> Procedure:
     # `contratar_plan` de commerce se retiró (SPEC-43): su última versión queda como fixture del motor
     # (sus puertas `confirmar_cotizacion`/`crear_pedido`), que es lo que estas pruebas ejercitan.
     if (pack, nombre) == ("pack-commerce", "contratar_plan"):
-        ruta = ROOT / "tests" / "fixtures" / "procedures" / "contratar_plan_comercio.json"
+        ruta = ROOT / "tests" / "fixtures" / "procedures_congeladas" / "contratar_plan_comercio.json"
     else:
         ruta = ROOT / "packages" / pack / "procedures" / f"{nombre}.json"
     return Procedure.model_validate(json.loads(ruta.read_text(encoding="utf-8")))

@@ -30,7 +30,7 @@ def _plan() -> Procedure:
     fixture para que estas pruebas del motor (ligadura de argumentos, invalidación al cambiar un dato,
     congelamiento tras un efecto de riesgo alto, cierre por pago) sigan ejerciendo un procedimiento de
     ventas con cotización. Ya no lo publica el pack."""
-    ruta = Path(__file__).parent / "fixtures" / "procedures" / "contratar_plan_comercio.json"
+    ruta = Path(__file__).parent / "fixtures" / "procedures_congeladas" / "contratar_plan_comercio.json"
     return Procedure.model_validate(json.loads(ruta.read_text(encoding="utf-8")))
 
 
