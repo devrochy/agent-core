@@ -34,8 +34,9 @@ from core.db.models import Customer
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
 from pack_commerce import ficha as _ficha
+from pack_commerce import seguimiento as _seg
 from pack_commerce.etapas import ETAPA_INICIAL, ETAPAS, cambiar_etapa
-from pack_commerce.models import Lead, LeadStageChange, Order, Quote
+from pack_commerce.models import Lead, LeadFollowup, LeadStageChange, Order, Quote
 
 PLUGIN_ID = "pack_commerce"
 
@@ -120,6 +121,10 @@ async def _filter_query(key: str, value: str) -> Select[Any] | None:
     if key == "estado_lead":
         ultimo = _ultimo_lead(tid).subquery()
         return select(ultimo.c.customer_id).where(ultimo.c.status == value)
+    if key == "seguimiento":
+        ultimo = _ultimo_lead(tid).subquery()
+        lim = await _limites_de_hoy(tid)
+        return select(ultimo.c.customer_id).where(_seg.condicion(value, ultimo.c.next_action_at, lim))
     return None
 
 
@@ -133,6 +138,17 @@ async def _facet_query(key: str) -> Select[Any] | None:
     if key == "estado_lead":
         ultimo = _ultimo_lead(tid).subquery()
         return select(ultimo.c.customer_id.label("customer_id"), ultimo.c.status.label("valor"))
+    if key == "seguimiento":
+        ultimo = _ultimo_lead(tid).subquery()
+        lim = await _limites_de_hoy(tid)
+        en = ultimo.c.next_action_at
+        return select(
+            ultimo.c.customer_id.label("customer_id"),
+            case(
+                *[(_seg.condicion(v, en, lim), literal(v)) for v, _ in _seg.OPCIONES],
+                else_=literal("sin_seguimiento"),
+            ).label("valor"),
+        )
     if key == "clasificacion":
         seg = _segmentos_con_pedidos(tid, await _umbrales()).subquery()
         con_pedidos = select(Order.customer_id).where(Order.tenant_id == tid, Order.status != "expirado")
@@ -145,15 +161,37 @@ async def _facet_query(key: str) -> Select[Any] | None:
     return None
 
 
+async def _limites_de_hoy(tid: uuid.UUID) -> _seg.Limites:
+    """Los cortes de «hoy» y «próximos 7 días» en la zona del negocio (HU-CRM-21)."""
+    async with get_session() as session:
+        zona = await _seg.zona_del_negocio(session, tid)
+    return _seg.limites(zona)
+
+
+async def _sort_query(orden: str) -> Select[Any] | None:
+    """`(customer_id, valor)` para ordenar la lista por seguimiento: el más atrasado primero."""
+    if orden != "seguimiento":
+        return None
+    ultimo = _ultimo_lead(get_current_tenant_id()).subquery()
+    return select(ultimo.c.customer_id.label("customer_id"), ultimo.c.next_action_at.label("valor"))
+
+
 def _ultimo_lead(tid: uuid.UUID) -> Select[Any]:
     """El lead más reciente de cada cliente (por última actividad)."""
     return (
         select(
-            Lead.customer_id, Lead.status, Lead.score, Lead.interest, Lead.stage_changed_at, Lead.last_activity_at
+            Lead.customer_id,
+            Lead.status,
+            Lead.score,
+            Lead.interest,
+            Lead.stage_changed_at,
+            Lead.last_activity_at,
+            Lead.next_action_at,
+            Lead.next_action_note,
         )
         .where(Lead.tenant_id == tid, Lead.customer_id.is_not(None))
         .distinct(Lead.customer_id)
-        .order_by(Lead.customer_id, Lead.last_activity_at.desc())
+        .order_by(Lead.customer_id, Lead.last_activity_at.desc(), Lead.id.desc())
     )
 
 
@@ -170,6 +208,18 @@ def _desde_cuando(lead: Any) -> dict[str, Any]:
     }
 
 
+def _del_seguimiento(lead: Any, lim: _seg.Limites) -> dict[str, Any]:
+    """Próxima acción del lead (HU-CRM-21): la fecha en ISO UTC, la nota y en qué opción cae
+    (`vencidos`, `hoy`, `proximos_7_dias`, `mas_adelante`), calculado aquí para que panel y APK
+    no repitan la cuenta con la zona del negocio."""
+    en = lead.next_action_at if lead is not None else None
+    return {
+        "seguimiento_en": en.astimezone(UTC).isoformat() if en else None,
+        "seguimiento_nota": (lead.next_action_note or None) if lead is not None else None,
+        "seguimiento_estado": _seg.estado(en, lim),
+    }
+
+
 async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any]]:
     if not customer_ids:
         return {}
@@ -177,6 +227,7 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
     seg = _segmentos_con_pedidos(tid, await _umbrales()).subquery()
     ultimo = _ultimo_lead(tid).subquery()
     async with get_session() as session:
+        zona = await _seg.zona_del_negocio(session, tid)
         segmentos = dict(
             (await session.execute(select(seg.c.customer_id, seg.c.segmento).where(seg.c.customer_id.in_(customer_ids)))).tuples().all()
         )
@@ -221,6 +272,7 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
     # Las columnas muestran etiquetas; los filtros usan los códigos (`filters[].options`).
     etiquetas = dict(SEGMENTOS)
     estados = dict(ESTADOS_LEAD)
+    lim = _seg.limites(zona)
     out: dict[uuid.UUID, dict[str, Any]] = {}
     for cid in customer_ids:
         lead = leads.get(cid)
@@ -233,6 +285,7 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
             "estado_lead": estados.get(lead.status, lead.status) if lead else None,
             "puntaje": lead.score if lead else None,
             **_desde_cuando(lead),
+            **_del_seguimiento(lead, lim),
             "interes": (lead.interest or None) if lead else None,
             "pedidos": n,
             "total_compras": total,
@@ -245,14 +298,38 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
 
 async def _leer_lead(customer_id: uuid.UUID) -> dict[str, Any]:
     """Estado (código) e interés del lead que muestra la ficha (el de `_ultimo_lead`)."""
-    ultimo = _ultimo_lead(get_current_tenant_id()).subquery()
+    tid = get_current_tenant_id()
+    ultimo = _ultimo_lead(tid).subquery()
     async with get_session() as session:
+        zona = await _seg.zona_del_negocio(session, tid)
         lead = (
             await session.execute(select(ultimo).where(ultimo.c.customer_id == customer_id))
         ).first()
     if lead is None:
         return {}
-    return {"estado_lead": lead.status, "interes": lead.interest or ""}
+    return {
+        "estado_lead": lead.status,
+        "interes": lead.interest or "",
+        # Hora del negocio, sin zona, lista para el selector de fecha y hora.
+        "seguimiento_en": _seg.texto_local(lead.next_action_at, zona),
+        "seguimiento_nota": lead.next_action_note or "",
+    }
+
+
+async def _programar_seguimiento(session: Any, tid: uuid.UUID, lead: Lead, valores: dict[str, str]) -> None:
+    """Programa, mueve o quita el seguimiento (HU-CRM-21). La fecha sin zona es hora del negocio;
+    vacía, quita el seguimiento y su nota. No mueve `last_activity_at` (ADR-0149)."""
+    # El lead bloqueado: un PATCH y un «hecho» a la vez no cierran dos veces el mismo seguimiento.
+    await session.flush()
+    await session.refresh(lead, with_for_update=True)
+    zona = await _seg.zona_del_negocio(session, tid)
+    if "seguimiento_en" in valores:
+        texto = valores["seguimiento_en"]
+        en = _seg.parsear_fecha(texto, zona) if texto else None
+        nota = valores.get("seguimiento_nota")  # sin fecha, la nota vieja se va con ella
+    else:
+        en, nota = lead.next_action_at, valores["seguimiento_nota"]
+    _seg.programar(session, lead, fecha=en, nota=nota)
 
 
 async def _escribir_lead(customer_id: uuid.UUID, valores: dict[str, str]) -> None:
@@ -296,6 +373,8 @@ async def _escribir_lead(customer_id: uuid.UUID, valores: dict[str, str]) -> Non
             await cambiar_etapa(session, lead, valores["estado_lead"], actor="persona")
         if "interes" in valores:
             lead.interest = valores["interes"]
+        if "seguimiento_en" in valores or "seguimiento_nota" in valores:
+            await _programar_seguimiento(session, tid, lead, valores)
 
 
 def _con_texto(columna: Any) -> Any:
@@ -331,6 +410,12 @@ def _pesos(valor: Any) -> str:
 
 
 FUENTE_ETAPA = "pack_commerce.lead_etapa"
+FUENTE_SEGUIMIENTO = "pack_commerce.lead_seguimiento"
+_SEGUIMIENTO_CIERRE = {
+    "hecho": "Seguimiento hecho",
+    "reprogramado": "Seguimiento reprogramado",
+    "cancelado": "Seguimiento cancelado",
+}
 _QUIEN_CAMBIO = {"agente": "Lo hizo el agente", "persona": "Lo hizo una persona", "sistema": "Lo hizo el sistema"}
 
 
@@ -423,6 +508,29 @@ async def _timeline(customer_id: uuid.UUID, cursor: Cursor | None, limit: int) -
                     detail=_QUIEN_CAMBIO.get(c.actor, c.actor),
                 )
             )
+        zona = await _seg.zona_del_negocio(session, tid)
+        cierres = (
+            await session.execute(
+                select(LeadFollowup)
+                .where(
+                    LeadFollowup.tenant_id == tid,
+                    LeadFollowup.customer_id == customer_id,
+                    antes_del_cursor(LeadFollowup.closed_at, LeadFollowup.id, FUENTE_SEGUIMIENTO, cursor),
+                )
+                .order_by(LeadFollowup.closed_at.desc(), LeadFollowup.id.desc())
+                .limit(limit)
+            )
+        ).scalars().all()
+        for f in cierres:
+            titulo = _SEGUIMIENTO_CIERRE.get(f.outcome, f.outcome)
+            para = f.due_at.astimezone(zona).strftime("%d/%m/%Y %H:%M")
+            eventos.append(
+                TimelineEvent(
+                    at=f.closed_at, source=FUENTE_SEGUIMIENTO, id=str(f.id), kind="seguimiento",
+                    title=f"{titulo}: {f.note}" if f.note else titulo,
+                    detail=f"Estaba para el {para} · {_QUIEN_CAMBIO.get(f.actor, f.actor)}",
+                )
+            )
     return eventos
 
 
@@ -432,6 +540,7 @@ lead_registry.register(
         LeadColumn(key="clasificacion", label="Clasificación"),
         LeadColumn(key="estado_lead", label="Estado del lead"),
         LeadColumn(key="puntaje", label="Puntaje"),
+        LeadColumn(key="seguimiento_nota", label="Próxima acción"),
         LeadColumn(key="interes", label="Interés"),
         LeadColumn(key="pedidos", label="Pedidos"),
         LeadColumn(key="total_compras", label="Total comprado"),
@@ -443,14 +552,18 @@ lead_registry.register(
     filters=[
         LeadFilter(key="clasificacion", label="Clasificación", options=SEGMENTOS),
         LeadFilter(key="estado_lead", label="Estado del lead", options=ESTADOS_LEAD),
+        LeadFilter(key="seguimiento", label="Seguimiento", options=_seg.OPCIONES),
     ],
     filter_query=_filter_query,
     facet_query=_facet_query,
+    sort_query=_sort_query,
     timeline=_timeline,
     edicion=LeadEdicion(
         campos=(
             LeadCampoEditable(key="estado_lead", label="Estado del lead", tipo="opciones", options=ESTADOS_LEAD),
             LeadCampoEditable(key="interes", label="Interés", tipo="texto", max_length=500),
+            LeadCampoEditable(key="seguimiento_nota", label="Próxima acción", tipo="texto", max_length=_seg.NOTA_MAX),
+            LeadCampoEditable(key="seguimiento_en", label="Fecha de seguimiento", tipo="fecha", max_length=32),
         ),
         leer=_leer_lead,
         escribir=_escribir_lead,
