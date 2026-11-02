@@ -44,6 +44,10 @@ Hoy el negocio se entera de lo que pasa por un push que solo llega a los dueños
 
 **Qué haría que revisáramos esto:** necesidad de tiempo real por debajo del polling, de preferencias por canal o por evento, o de notificar a personas sin cuenta de admin.
 
+## Enmienda 2026-11-02 · destino con filtro y avisos de seguimiento (HU-CRM-22)
+
+El destino neutro gana un campo opcional `filtro` (`clave:valor`, la forma del filtro de la propia lista, p. ej. `seguimiento:vencidos`) para que un aviso agregado, como «Tu día de ventas», abra la lista ya filtrada. Es aditivo: el cliente que no lo conozca abre la lista sin filtrar. `pack_commerce` suma dos eventos (`commerce.seguimiento_vencido` y `commerce.resumen_ventas`), ambos de la sección `leads`, que nacen de un trabajo determinista cada 5 minutos y se deduplican por clave (`seguimiento:<lead>:<instante>` y `resumen_ventas:<día local>`), sin tabla nueva. El texto del recordatorio lleva el nombre del cliente y la nota que escribió quien programó (lo pide la HU); `data` sigue llevando solo ids.
+
 ## Impacto en el código
 
 - `core/db/models.py` (`Notification`, `NotificationState`, `NotificationRead`), `alembic/versions/0107_notificaciones.py`.

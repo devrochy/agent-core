@@ -70122,6 +70122,17 @@
               }
             ],
             "title": "Section"
+          },
+          "filtro": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filtro"
           }
         },
         "type": "object",

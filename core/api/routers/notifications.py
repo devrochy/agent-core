@@ -37,6 +37,9 @@ class NotificationTarget(BaseModel):
     entity: str = Field(description="conversacion, escalacion, lead, cliente, pedido, pago, suscripcion, cobro, cita, conexion, mensaje_fallido, cobranza")
     id: str | None
     section: str | None
+    # Filtro con el que abrir la lista del destino, en la forma de la propia lista (`clave:valor`,
+    # p. ej. `seguimiento:vencidos`). Aditivo: un cliente que no lo conozca abre la lista sin filtrar.
+    filtro: str | None = None
 
 
 class NotificationItem(BaseModel):
@@ -111,7 +114,9 @@ def _parse_cursor(raw: str) -> tuple[datetime, uuid.UUID]:
 def _destino(target: dict | None) -> NotificationTarget | None:
     if not target:
         return None
-    return NotificationTarget(entity=target["entity"], id=target.get("id"), section=target.get("section"))
+    return NotificationTarget(
+        entity=target["entity"], id=target.get("id"), section=target.get("section"), filtro=target.get("filtro")
+    )
 
 
 def _out(n: Notification, leida: bool) -> NotificationItem:
