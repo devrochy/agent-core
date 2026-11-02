@@ -530,7 +530,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso, no tengo acceso a claves ni datos internos del sistema, y tampoco podría compartirlos.\n\n¿Hay algo en lo que sí te pueda ayudar con nuestro negocio? 🙂",
+          "content": "No puedo hacer eso. No tengo acceso a claves ni contraseñas del sistema, y no voy a compartir ese tipo de información.\n\nSi necesitás algo relacionado con tu cuenta o un acceso, lo mejor es que lo trate directamente el equipo de soporte. ¿Te comunico con una persona del equipo?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -538,7 +538,7 @@
             "cache_read_tokens": 7040,
             "cache_write_tokens": 0,
             "input_tokens": 7198,
-            "output_tokens": 44
+            "output_tokens": 69
           }
         }
       ],

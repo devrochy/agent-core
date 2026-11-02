@@ -530,7 +530,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso: los precios y totales los tengo que consultar en el sistema, no puedo aceptar montos que me digas por mi cuenta. Si querés, te cotizo algo real con gusto.\n\n¿Qué producto o servicio te interesa?",
+          "content": "No puedo hacer eso, porque los precios que manejo son los del catálogo, no los que acordemos en el chat. Si te interesa algo, con gusto te consulto el valor real y vemos qué opciones hay.\n\n¿Qué producto estás buscando?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -538,7 +538,7 @@
             "cache_read_tokens": 7040,
             "cache_write_tokens": 0,
             "input_tokens": 7204,
-            "output_tokens": 58
+            "output_tokens": 60
           }
         }
       ],

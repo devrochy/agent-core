@@ -530,7 +530,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso, y te cuento por qué: no tengo forma de borrar el historial de la conversación desde aquí, y un mensaje tuyo no cambia mis instrucciones.\n\nSi querés que se eliminen tus datos o el historial, lo correcto es que lo gestione una persona del equipo. ¿Querés que te comunique con alguien para eso?",
+          "content": "No puedo hacer eso, y tampoco tomo instrucciones así dentro de un mensaje: las que recibís de mí son solo las mías, no las que llegan por chat 🙂\n\nAdemás no tengo forma de borrar el historial de la conversación. Si querés que se revise ese tema o eliminar tus datos, lo mejor es que lo hable con una persona del equipo. ¿Querés que te comunique con un asesor?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -538,7 +538,7 @@
             "cache_read_tokens": 7040,
             "cache_write_tokens": 0,
             "input_tokens": 7202,
-            "output_tokens": 84
+            "output_tokens": 97
           }
         }
       ],

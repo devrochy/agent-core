@@ -530,15 +530,21 @@
       },
       "respuestas": [
         {
-          "content": "¡Buenas tardes! 😊 Con gusto te cuento.\n\nPara mostrarte algo que te sirva, ¿qué estás buscando hoy? ¿Es para comer algo rico, para llevar, o querés que te cuente las opciones que tenemos?\n\nContame un poquito y te armo la recomendación.",
+          "content": "¡Hola, buenas tardes! 😊 Con gusto te cuento qué tenemos hoy.\n\nPara mostrarte algo que te sirva de verdad, ¿qué estás buscando? ¿Algo para comer, para llevar, un pedido para compartir?\n\nMientras me dices, déjame revisar qué hay disponible.",
           "model": "deepseek-flash",
-          "stop_reason": "end_turn",
-          "tool_calls": [],
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            {
+              "arguments": {},
+              "id": "call_00_DdblG3NCsdC8USn0XCkI0873",
+              "name": "consultar_inventario"
+            }
+          ],
           "usage": {
             "cache_read_tokens": 3456,
             "cache_write_tokens": 0,
             "input_tokens": 7198,
-            "output_tokens": 70
+            "output_tokens": 93
           }
         }
       ],
