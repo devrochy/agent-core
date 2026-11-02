@@ -144,7 +144,11 @@ def test_beat_init_vuelve_a_aplicar_los_overrides(scheduler, monkeypatch):
     scheduler.overrides = {"core.cliente_esperando": "*/10 * * * *"}
     scheduler.refrescar_overrides(force=True)
     monkeypatch.setattr(celery_app, "_load_plugins", lambda: None)
-    # El beat_schedule global de la app real: el hook fusiona ESE diccionario.
-    monkeypatch.setattr(celery_app.celery.conf, "beat_schedule", {n: dict(e) for n, e in BASE.items()})
+    # El hook fusiona `celery.conf.beat_schedule` del módulo. Se sustituye el objeto `celery` entero:
+    # parchear un atributo de `Settings` hace que el teardown de monkeypatch falle con `delattr`
+    # bajo xdist (visto en CI).
+    monkeypatch.setattr(
+        celery_app, "celery", SimpleNamespace(conf=SimpleNamespace(beat_schedule={n: dict(e) for n, e in BASE.items()}))
+    )
     celery_app._load_plugins_on_beat_start(sender=SimpleNamespace(scheduler=scheduler))
     assert _cron(scheduler, "core.cliente_esperando") == parse_expression("*/10 * * * *")
