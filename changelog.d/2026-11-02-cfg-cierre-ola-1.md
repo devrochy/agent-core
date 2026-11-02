@@ -4,3 +4,4 @@
 - Los rangos enteros de herramientas por turno, mensajes recientes y fragmentos salen de `core/config_limites.py`, y los decimales de las constantes del registro; `PUT /brain` y `PUT /memory` leen de ahí. `PUT /brain` ahora rechaza un presupuesto por conversación mayor de 1000 USD (antes sin tope).
 - `PUT /admin/settings/identity`: si el horario de atención usaba la zona del negocio, al cambiar `timezone` el horario la sigue; uno con zona propia no se toca.
 - Configuración de habilidades: un campo marcado `oculto` en el esquema (`json_schema_extra={"oculto": True}`) no sale en el formulario y conserva lo guardado. `asistente_activo` y `escalar_siempre_a_humano` de Cobranza quedan ocultos: el runtime no los lee.
+- `GET /admin/settings/catalog` trae `aos_runtime` (`legacy` o `v3`) para que el panel avise, junto al nombre, la descripción y la voz de marca, que con `v3` esos cambios se aplican al publicar una versión del agente.

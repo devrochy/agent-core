@@ -102,3 +102,10 @@ def test_los_defectos_salen_del_spec_por_defecto() -> None:
     assert POR_CLAVE["model_primary"].por_defecto == DEFAULT_SPEC["model"]["primary"]
     assert POR_CLAVE["policy_budget"].por_defecto == DEFAULT_SPEC["policies"]["budgetUsdPerConversation"]
     assert POR_CLAVE["short_term_turns"].por_defecto == DEFAULT_SPEC["memory"]["shortTermTurns"]
+
+
+def test_el_catalogo_dice_el_runtime_del_negocio() -> None:
+    from core.config_registro import catalogo_para
+
+    assert catalogo_para(es_master=False, guardrails_disponibles=[]).aos_runtime == "legacy"
+    assert catalogo_para(es_master=False, guardrails_disponibles=[], aos_runtime="v3").aos_runtime == "v3"

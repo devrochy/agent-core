@@ -42903,6 +42903,11 @@
             "type": "array",
             "title": "Asistente",
             "default": []
+          },
+          "aos_runtime": {
+            "type": "string",
+            "title": "Aos Runtime",
+            "default": "legacy"
           }
         },
         "type": "object",

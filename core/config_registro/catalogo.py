@@ -18,11 +18,14 @@ class Catalogo(BaseModel):
     opciones: list[Opcion]
     # Preguntas por sección que dejan un ajuste predeterminado (ADR del asistente de configuración).
     asistente: list[Guion] = []
+    # Runtime del negocio (`legacy` | `v3`): con `v3` la voz, el nombre y la descripción se aplican al publicar
+    # una versión del agente, y el panel lo avisa junto a esos campos (HU-CFG-09).
+    aos_runtime: str = "legacy"
 
 
-def _huella(opciones: list[Opcion], asistente: list[Guion]) -> str:
+def _huella(opciones: list[Opcion], asistente: list[Guion], aos_runtime: str) -> str:
     cuerpo = json.dumps(
-        [o.model_dump(mode="json") for o in opciones] + [g.model_dump(mode="json") for g in asistente],
+        [o.model_dump(mode="json") for o in opciones] + [g.model_dump(mode="json") for g in asistente] + [aos_runtime],
         sort_keys=True,
         ensure_ascii=False,
     )
@@ -79,7 +82,9 @@ def catalogo_para(
         # Copia propia: lo que sale al cliente nunca comparte listas con el registro global.
         visibles.append(opcion if opcion.valores_calculados else opcion.model_copy(deep=True))
     guiones = guiones_para(aos_runtime)
-    return Catalogo(version=_huella(visibles, guiones), opciones=visibles, asistente=guiones)
+    return Catalogo(
+        version=_huella(visibles, guiones, aos_runtime), opciones=visibles, asistente=guiones, aos_runtime=aos_runtime
+    )
 
 
 def opcion(clave: str) -> Opcion:

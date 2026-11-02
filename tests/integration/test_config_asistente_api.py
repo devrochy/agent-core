@@ -51,6 +51,7 @@ async def test_el_catalogo_trae_el_guion_del_asistente(app_client) -> None:
     secciones = {g["seccion"]: [q["id"] for q in g["preguntas"]] for g in r.json()["asistente"]}
     assert secciones["voz"] == ["tono", "emojis", "largo", "prohibidas"]  # negocio nuevo = legacy
     assert "horario" in secciones["atencion"]
+    assert r.json()["aos_runtime"] == "legacy"
 
 
 async def test_vista_previa_no_escribe_y_aplicar_guarda_ambos_almacenes(app_client) -> None:
