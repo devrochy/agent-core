@@ -113,7 +113,9 @@ class LeadCampoEditable:
     key: str
     label: str
     # `fecha`: fecha y hora en ISO 8601; sin zona es hora del negocio; vacío la quita (HU-CRM-21).
-    tipo: Literal["opciones", "texto", "fecha"]
+    # `numero`: número de cero en adelante, con punto o coma decimal y sin separador de miles; vacío lo quita
+    # (HU-CRM-23). El pack aplica además su propio tope.
+    tipo: Literal["opciones", "texto", "fecha", "numero"]
     options: tuple[tuple[str, str], ...] = ()  # (valor, etiqueta) si tipo == "opciones"
     max_length: int = 200
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import Boolean, DateTime, Index, Integer, Numeric, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -77,6 +78,12 @@ class Lead(TenantMixin, Base):
     # Próxima acción y cuándo (HU-CRM-21): la fecha va en UTC; «hoy» se resuelve con la zona del negocio.
     next_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_action_note: Mapped[str | None] = mapped_column(Text)  # tope 200 (CHECK en la migración)
+    # Por qué se perdió (HU-CRM-23): solo vale mientras el lead está «perdido»; reabrirlo lo limpia (el
+    # motivo queda en la fila del cambio de etapa). NULL en un perdido anterior a la HU: «sin motivo».
+    loss_reason: Mapped[str | None] = mapped_column(Text)  # catálogo cerrado (CHECK en la migración)
+    loss_note: Mapped[str | None] = mapped_column(Text)  # tope 300 (CHECK en la migración)
+    # Cuánto vale el lead, en la moneda del negocio (sin conversión). Opcional, nunca negativo.
+    estimated_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -106,6 +113,10 @@ class LeadStageChange(TenantMixin, Base):
     actor: Mapped[str] = mapped_column(Text)  # agente | persona | sistema
     idempotency_key: Mapped[str | None] = mapped_column(Text)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # El motivo con que se perdió (HU-CRM-23), solo en el cambio a «perdido»: la historia lo conserva aunque
+    # se reabra el lead y el lead ya no lo muestre como vigente.
+    loss_reason: Mapped[str | None] = mapped_column(Text)
+    loss_note: Mapped[str | None] = mapped_column(Text)
 
 
 class LeadFollowup(TenantMixin, Base):

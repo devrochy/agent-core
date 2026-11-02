@@ -27,7 +27,14 @@ from core.memory import entity as entity_memory
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from pack_commerce.datos import A_LEGADO, ACCION_POR_ENTREGA
-from pack_commerce.etapas import ETAPAS, EtapaInvalida, TransicionNoPermitida, cambiar_etapa
+from pack_commerce.etapas import (
+    CODIGOS_DE_MOTIVO,
+    ETAPAS,
+    EtapaInvalida,
+    MotivoDePerdidaInvalido,
+    TransicionNoPermitida,
+    cambiar_etapa,
+)
 from pack_commerce.etapas import calificar as calificar_etapa
 from pack_commerce.fotos import url_foto
 from pack_commerce.models import (
@@ -681,7 +688,8 @@ class LeadSkill(BaseSkill):
                     "Actualiza datos del lead ya registrado en esta conversación. Úsala DE "
                     "INMEDIATO cuando el lead (registrado con crear_lead) te dé un dato nuevo: "
                     "teléfono, email, interés o una corrección. No respondas 'ya anoté' sin "
-                    "haberla llamado."
+                    "haberla llamado. Para marcar el lead como «perdido» (status=perdido) envía "
+                    "SIEMPRE loss_reason con el motivo; sin él no se guarda el cambio."
                 ),
                 parameters={
                     "type": "object",
@@ -693,6 +701,15 @@ class LeadSkill(BaseSkill):
                         "status": {
                             "type": "string",
                             "enum": ["nuevo", "calificado", "contactado", "convertido", "perdido"],
+                        },
+                        "loss_reason": {
+                            "type": "string",
+                            "enum": list(CODIGOS_DE_MOTIVO),
+                            "description": "Por qué se perdió. Obligatorio si status es perdido",
+                        },
+                        "loss_note": {
+                            "type": "string",
+                            "description": "Detalle breve de la pérdida (máx. 300 caracteres), opcional",
                         },
                     },
                 },
@@ -784,10 +801,17 @@ class LeadSkill(BaseSkill):
                         arguments["status"],
                         actor="agente",
                         idempotency_key=f"agente:actualizar_lead:{context.idempotency_key}",
+                        loss_reason=arguments.get("loss_reason"),
+                        loss_note=arguments.get("loss_note"),
                     )
                 except EtapaInvalida as exc:
                     return {"error": str(exc), "etapas_validas": list(ETAPAS)}
                 except TransicionNoPermitida as exc:
+                    return {"error": str(exc), "etapa_actual": lead.status}
+                except MotivoDePerdidaInvalido as exc:
+                    # La etapa no cambió: el agente reintenta con un motivo del catálogo (HU-CRM-23).
+                    return {"error": str(exc), "motivos_validos": list(CODIGOS_DE_MOTIVO), "etapa_actual": lead.status}
+                except ValueError as exc:  # nota de la pérdida demasiado larga
                     return {"error": str(exc), "etapa_actual": lead.status}
             if arguments.get("name"):
                 lead.name = str(arguments["name"])

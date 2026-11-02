@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -185,7 +186,7 @@ class LeadEditable(BaseModel):
     plugin_id: str
     key: str
     label: str
-    tipo: Literal["opciones", "texto", "fecha"]
+    tipo: Literal["opciones", "texto", "fecha", "numero"]
     options: list[LeadFilterOption] = Field(default_factory=list)
     max_length: int
     value: str | None = None
@@ -536,14 +537,18 @@ async def _consulta(
     return query
 
 
-Orden = Literal["alta", "actividad", "nombre", "nombre_desc", "seguimiento"]
+Orden = Literal["alta", "actividad", "nombre", "nombre_desc", "seguimiento", "valor", "valor_desc"]
+
+# Órdenes que calcula un provider (`sort_query`): el core aplica el sentido y deja los nulos al final.
+_ORDENES_DE_PROVIDER = {"seguimiento": "asc", "valor": "asc", "valor_desc": "desc"}
 
 OrdenQuery = Annotated[
     Orden,
     Query(
         description="`alta` (por defecto, el más nuevo primero), `actividad` (último mensaje, el más reciente "
         "primero; los clientes sin mensajes van al final), `nombre`, `nombre_desc` o `seguimiento` (el seguimiento "
-        "más atrasado primero; los clientes sin seguimiento van al final)."
+        "más atrasado primero; los clientes sin seguimiento van al final), `valor` (valor estimado del lead, de menor a "
+        "mayor) o `valor_desc` (de mayor a menor); los clientes sin valor van siempre al final."
     ),
 ]
 
@@ -572,15 +577,18 @@ def _ultima_actividad(tenant_id: uuid.UUID, customer_ids: list[uuid.UUID] | None
 async def _ordenar(
     query: Select[Any], orden: Orden, tenant_id: uuid.UUID, enabled: set[str] | None = None
 ) -> Select[Any]:
-    if orden == "seguimiento":
+    if orden in _ORDENES_DE_PROVIDER:
         for provider in lead_registry.providers_for(enabled):
             sub = await provider.sort_query(orden) if provider.sort_query is not None else None
             if sub is not None:
                 sub = sub.subquery()
+                columna = sub.c.valor.desc() if _ORDENES_DE_PROVIDER[orden] == "desc" else sub.c.valor.asc()
                 return query.outerjoin(sub, sub.c.customer_id == Customer.id).order_by(
-                    sub.c.valor.asc().nulls_last(), Customer.created_at.desc(), Customer.id
+                    columna.nulls_last(), Customer.created_at.desc(), Customer.id
                 )
-        raise ApiError.bad_request("Este negocio no tiene seguimiento de leads.", code="orden_invalido")
+        raise ApiError.bad_request(
+            "Este negocio no tiene seguimiento ni valor de leads para ordenar.", code="orden_invalido"
+        )
     if orden == "actividad":
         actividad = _ultima_actividad(tenant_id).subquery()
         return query.outerjoin(actividad, actividad.c.customer_id == Customer.id).order_by(
@@ -1326,6 +1334,9 @@ async def update_lead(
     return await get_lead(lead_id, principal)
 
 
+_NUMERO = re.compile(r"^\d+(?:[.,]\d{1,2})?$")
+
+
 def _fecha_valida(valor: str) -> bool:
     try:
         datetime.fromisoformat(valor)
@@ -1361,6 +1372,8 @@ async def update_lead_pack(
             errores[clave] = "Elige una de las opciones."
         elif campo.tipo == "fecha" and valor and not _fecha_valida(valor):
             errores[clave] = "Usa una fecha y hora válidas."
+        elif campo.tipo == "numero" and valor and not _NUMERO.match(valor):
+            errores[clave] = "Escribe un número de cero en adelante, sin puntos de miles (por ejemplo 250000)."
         elif len(valor) > campo.max_length:
             errores[clave] = f"Máximo {campo.max_length} caracteres."
     if errores:

@@ -35,7 +35,18 @@ from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
 from pack_commerce import ficha as _ficha
 from pack_commerce import seguimiento as _seg
-from pack_commerce.etapas import ETAPA_INICIAL, ETAPAS, cambiar_etapa
+from pack_commerce import valor as _valor
+from pack_commerce.etapas import (
+    ETAPA_DE_PERDIDA,
+    ETAPA_INICIAL,
+    ETAPAS,
+    MOTIVOS_DE_PERDIDA,
+    SIN_MOTIVO,
+    MotivoDePerdidaInvalido,
+    anotar_motivo,
+    cambiar_etapa,
+    nota_de_perdida,
+)
 from pack_commerce.models import Lead, LeadFollowup, LeadStageChange, Order, Quote
 
 PLUGIN_ID = "pack_commerce"
@@ -55,6 +66,9 @@ ESTADOS_LEAD = (
     ("perdido", "Perdido"),
 )
 assert tuple(v for v, _ in ESTADOS_LEAD) == ETAPAS  # una sola lista de etapas (HU-CRM-18)
+# Filtro «Motivo de pérdida» (HU-CRM-23): los cinco motivos y los perdidos de antes de la HU, sin motivo.
+SIN_MOTIVO_CODIGO = "sin_motivo"
+MOTIVOS_FILTRO = (*MOTIVOS_DE_PERDIDA, (SIN_MOTIVO_CODIGO, SIN_MOTIVO))
 
 
 async def _umbrales() -> dict[str, int]:
@@ -125,6 +139,15 @@ async def _filter_query(key: str, value: str) -> Select[Any] | None:
         ultimo = _ultimo_lead(tid).subquery()
         lim = await _limites_de_hoy(tid)
         return select(ultimo.c.customer_id).where(_seg.condicion(value, ultimo.c.next_action_at, lim))
+    if key == "motivo_perdida":
+        ultimo = _ultimo_lead(tid).subquery()
+        motivo = (
+            ultimo.c.loss_reason.is_(None) if value == SIN_MOTIVO_CODIGO else ultimo.c.loss_reason == value
+        )
+        return select(ultimo.c.customer_id).where(ultimo.c.status == ETAPA_DE_PERDIDA, motivo)
+    if key == "valor":
+        ultimo = _ultimo_lead(tid).subquery()
+        return select(ultimo.c.customer_id).where(_valor.condicion(value, ultimo.c.estimated_value))
     return None
 
 
@@ -149,6 +172,21 @@ async def _facet_query(key: str) -> Select[Any] | None:
                 else_=literal("sin_seguimiento"),
             ).label("valor"),
         )
+    if key == "motivo_perdida":
+        ultimo = _ultimo_lead(tid).subquery()
+        return select(
+            ultimo.c.customer_id.label("customer_id"),
+            case(
+                (ultimo.c.status != ETAPA_DE_PERDIDA, literal("no_perdido")),
+                (ultimo.c.loss_reason.is_(None), literal(SIN_MOTIVO_CODIGO)),
+                else_=ultimo.c.loss_reason,
+            ).label("valor"),
+        )
+    if key == "valor":
+        ultimo = _ultimo_lead(tid).subquery()
+        return select(
+            ultimo.c.customer_id.label("customer_id"), _valor.tramo_sql(ultimo.c.estimated_value).label("valor")
+        )
     if key == "clasificacion":
         seg = _segmentos_con_pedidos(tid, await _umbrales()).subquery()
         con_pedidos = select(Order.customer_id).where(Order.tenant_id == tid, Order.status != "expirado")
@@ -169,11 +207,13 @@ async def _limites_de_hoy(tid: uuid.UUID) -> _seg.Limites:
 
 
 async def _sort_query(orden: str) -> Select[Any] | None:
-    """`(customer_id, valor)` para ordenar la lista por seguimiento: el más atrasado primero."""
-    if orden != "seguimiento":
+    """`(customer_id, valor)` para ordenar la lista: por seguimiento (el más atrasado primero) o por valor
+    estimado (`valor`, `valor_desc`). El core aplica el sentido y deja los nulos al final."""
+    if orden not in ("seguimiento", "valor", "valor_desc"):
         return None
     ultimo = _ultimo_lead(get_current_tenant_id()).subquery()
-    return select(ultimo.c.customer_id.label("customer_id"), ultimo.c.next_action_at.label("valor"))
+    columna = ultimo.c.next_action_at if orden == "seguimiento" else ultimo.c.estimated_value
+    return select(ultimo.c.customer_id.label("customer_id"), columna.label("valor"))
 
 
 def _ultimo_lead(tid: uuid.UUID) -> Select[Any]:
@@ -188,6 +228,9 @@ def _ultimo_lead(tid: uuid.UUID) -> Select[Any]:
             Lead.last_activity_at,
             Lead.next_action_at,
             Lead.next_action_note,
+            Lead.loss_reason,
+            Lead.loss_note,
+            Lead.estimated_value,
         )
         .where(Lead.tenant_id == tid, Lead.customer_id.is_not(None))
         .distinct(Lead.customer_id)
@@ -217,6 +260,21 @@ def _del_seguimiento(lead: Any, lim: _seg.Limites) -> dict[str, Any]:
         "seguimiento_en": en.astimezone(UTC).isoformat() if en else None,
         "seguimiento_nota": (lead.next_action_note or None) if lead is not None else None,
         "seguimiento_estado": _seg.estado(en, lim),
+    }
+
+
+def _del_cierre(lead: Any) -> dict[str, Any]:
+    """Motivo de pérdida y valor estimado del lead (HU-CRM-23). El motivo solo se muestra mientras el lead
+    está perdido; un perdido anterior a la HU sale como «Sin motivo registrado» (el texto lo pone el servidor
+    para que lista, ficha y exportación digan lo mismo). `valor_estimado` es un número o `None`."""
+    perdido = lead is not None and lead.status == ETAPA_DE_PERDIDA
+    etiquetas = dict(MOTIVOS_DE_PERDIDA)
+    codigo = lead.loss_reason if perdido else None
+    return {
+        "motivo_perdida": (etiquetas.get(codigo, codigo) if codigo else SIN_MOTIVO) if perdido else None,
+        "motivo_perdida_codigo": codigo,
+        "motivo_perdida_nota": (lead.loss_note or None) if perdido else None,
+        "valor_estimado": float(lead.estimated_value) if lead is not None and lead.estimated_value is not None else None,
     }
 
 
@@ -286,6 +344,7 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
             "puntaje": lead.score if lead else None,
             **_desde_cuando(lead),
             **_del_seguimiento(lead, lim),
+            **_del_cierre(lead),
             "interes": (lead.interest or None) if lead else None,
             "pedidos": n,
             "total_compras": total,
@@ -313,6 +372,10 @@ async def _leer_lead(customer_id: uuid.UUID) -> dict[str, Any]:
         # Hora del negocio, sin zona, lista para el selector de fecha y hora.
         "seguimiento_en": _seg.texto_local(lead.next_action_at, zona),
         "seguimiento_nota": lead.next_action_note or "",
+        # Solo vigentes mientras está perdido (HU-CRM-23); el valor es del lead en cualquier etapa.
+        "motivo_perdida": (lead.loss_reason or "") if lead.status == ETAPA_DE_PERDIDA else "",
+        "nota_perdida": (lead.loss_note or "") if lead.status == ETAPA_DE_PERDIDA else "",
+        "valor_estimado": _valor.texto(lead.estimated_value),
     }
 
 
@@ -367,10 +430,36 @@ async def _escribir_lead(customer_id: uuid.UUID, valores: dict[str, str]) -> Non
                 idempotency_key=f"manual:{customer_id}",
             )
             session.add(lead)
+        perdido_ahora = False
         if "estado_lead" in valores:
             # Una persona (el hook solo lo llama el panel/APK): puede reabrir un perdido (HU-CRM-18).
             # Un estado inválido ya lo rechazó el core; si llega uno, es un error del que llama.
-            await cambiar_etapa(session, lead, valores["estado_lead"], actor="persona")
+            # Perder un lead pide motivo (HU-CRM-23): sin él, `MotivoDePerdidaInvalido` (un `ValueError`
+            # que el core devuelve como 400 con los motivos permitidos) y no cambia nada.
+            try:
+                perdido_ahora = await cambiar_etapa(
+                    session,
+                    lead,
+                    valores["estado_lead"],
+                    actor="persona",
+                    loss_reason=valores.get("motivo_perdida"),
+                    loss_note=valores.get("nota_perdida"),
+                ) and lead.status == ETAPA_DE_PERDIDA
+            except MotivoDePerdidaInvalido as exc:
+                # Al agente se le habla en `loss_reason`; a una persona, con los nombres que ve en pantalla.
+                motivos = ", ".join(etiqueta for _, etiqueta in MOTIVOS_DE_PERDIDA)
+                raise ValueError(f"Elige el motivo de la pérdida para marcar el lead como perdido ({motivos}).") from exc
+        if not perdido_ahora and ("motivo_perdida" in valores or "nota_perdida" in valores):
+            # El lead ya estaba perdido (p. ej. uno de antes de la HU, sin motivo): se anota o corrige.
+            if "motivo_perdida" in valores:
+                nota = valores["nota_perdida"] if "nota_perdida" in valores else lead.loss_note
+                anotar_motivo(lead, valores["motivo_perdida"], nota)
+            elif lead.status == ETAPA_DE_PERDIDA:
+                lead.loss_note = nota_de_perdida(valores["nota_perdida"])
+            else:
+                raise ValueError(f"La nota de la pérdida solo se anota en un lead «{ETAPA_DE_PERDIDA}».")
+        if "valor_estimado" in valores:
+            lead.estimated_value = _valor.parsear(valores["valor_estimado"])
         if "interes" in valores:
             lead.interest = valores["interes"]
         if "seguimiento_en" in valores or "seguimiento_nota" in valores:
@@ -407,6 +496,16 @@ async def _con_datos(ids: list[uuid.UUID] | None) -> Select[Any]:
 
 def _pesos(valor: Any) -> str:
     return f"${float(valor or 0):,.0f}".replace(",", ".")
+
+
+def _detalle_de_etapa(cambio: Any) -> str:
+    """Quién hizo el cambio y, si fue a «perdido», con qué motivo (HU-CRM-23)."""
+    quien = _QUIEN_CAMBIO.get(cambio.actor, cambio.actor)
+    if cambio.to_stage != ETAPA_DE_PERDIDA or not cambio.loss_reason:
+        return quien
+    motivo = dict(MOTIVOS_DE_PERDIDA).get(cambio.loss_reason, cambio.loss_reason)
+    nota = f" — {cambio.loss_note}" if cambio.loss_note else ""
+    return f"Motivo: {motivo}{nota} · {quien}"
 
 
 FUENTE_ETAPA = "pack_commerce.lead_etapa"
@@ -505,7 +604,7 @@ async def _timeline(customer_id: uuid.UUID, cursor: Cursor | None, limit: int) -
                 TimelineEvent(
                     at=c.changed_at, source=FUENTE_ETAPA, id=str(c.id), kind="etapa",
                     title=f"Etapa: {etiquetas.get(c.from_stage, c.from_stage)} → {etiquetas.get(c.to_stage, c.to_stage)}",
-                    detail=_QUIEN_CAMBIO.get(c.actor, c.actor),
+                    detail=_detalle_de_etapa(c),
                 )
             )
         zona = await _seg.zona_del_negocio(session, tid)
@@ -541,6 +640,8 @@ lead_registry.register(
         LeadColumn(key="estado_lead", label="Estado del lead"),
         LeadColumn(key="puntaje", label="Puntaje"),
         LeadColumn(key="seguimiento_nota", label="Próxima acción"),
+        LeadColumn(key="motivo_perdida", label="Motivo de pérdida"),
+        LeadColumn(key="valor_estimado", label="Valor estimado"),
         LeadColumn(key="interes", label="Interés"),
         LeadColumn(key="pedidos", label="Pedidos"),
         LeadColumn(key="total_compras", label="Total comprado"),
@@ -553,6 +654,8 @@ lead_registry.register(
         LeadFilter(key="clasificacion", label="Clasificación", options=SEGMENTOS),
         LeadFilter(key="estado_lead", label="Estado del lead", options=ESTADOS_LEAD),
         LeadFilter(key="seguimiento", label="Seguimiento", options=_seg.OPCIONES),
+        LeadFilter(key="motivo_perdida", label="Motivo de pérdida", options=MOTIVOS_FILTRO),
+        LeadFilter(key="valor", label="Valor estimado", options=_valor.OPCIONES),
     ],
     filter_query=_filter_query,
     facet_query=_facet_query,
@@ -561,6 +664,9 @@ lead_registry.register(
     edicion=LeadEdicion(
         campos=(
             LeadCampoEditable(key="estado_lead", label="Estado del lead", tipo="opciones", options=ESTADOS_LEAD),
+            LeadCampoEditable(key="motivo_perdida", label="Motivo de pérdida", tipo="opciones", options=MOTIVOS_DE_PERDIDA),
+            LeadCampoEditable(key="nota_perdida", label="Nota de la pérdida", tipo="texto", max_length=300),
+            LeadCampoEditable(key="valor_estimado", label="Valor estimado", tipo="numero", max_length=14),
             LeadCampoEditable(key="interes", label="Interés", tipo="texto", max_length=500),
             LeadCampoEditable(key="seguimiento_nota", label="Próxima acción", tipo="texto", max_length=_seg.NOTA_MAX),
             LeadCampoEditable(key="seguimiento_en", label="Fecha de seguimiento", tipo="fecha", max_length=32),

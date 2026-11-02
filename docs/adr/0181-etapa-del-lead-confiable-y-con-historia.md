@@ -114,3 +114,28 @@ puerta de edición (ADR-0149).
 9. **Un cliente sin lead.** Programar le crea el lead `manual:<cliente>` (el mismo camino que el estado y el interés);
    «Hecho» sobre un cliente sin lead responde 404.
 10. **Reversa de `crm_0018`:** se niega si hay seguimientos programados o historia (los perdería).
+
+## Enmienda 2026-11-02 · Motivo de pérdida y valor estimado (HU-CRM-23)
+
+1. **Perder pide motivo.** `cambiar_etapa` rechaza llevar un lead a `perdido` sin un `loss_reason` del catálogo cerrado
+   (`precio`, `sin_respuesta`, `compro_en_otro_lado`, `no_era_para_el`, `otro`) con `MotivoDePerdidaInvalido`, que lista los
+   permitidos; la etapa no cambia ni se guarda nada. Es la misma puerta para la persona (hook de la ficha, ADR-0149) y para el
+   agente (`actualizar_lead`). Ningún camino automático (`sistema`) pierde leads, así que el job de reenganche no cambia.
+2. **El motivo vigente es del lead; el de la pérdida, de la historia.** `pack_commerce_leads.loss_reason/loss_note`
+   (`crm_0019`) solo valen mientras el lead está perdido: reabrirlo los limpia. Para que reabrir no borre la causa, el cambio
+   de etapa a `perdido` guarda el motivo y la nota también en `pack_commerce_lead_stage_changes` (extensión mínima de lo que
+   pedía la HU) y la línea de tiempo lo muestra («Motivo: Precio — nota»).
+3. **Perdidos de antes.** Un lead perdido anterior a la HU queda con motivo vacío y se muestra como «Sin motivo registrado»
+   (texto del servidor, el mismo en lista, ficha y exportación). Se puede anotar después sin crear un cambio de etapa falso.
+4. **Valor estimado.** `estimated_value numeric(12,2)` con `CHECK >= 0`, opcional, en la moneda del negocio (sin conversión).
+   Se escribe como número simple (punto o coma decimal): no se aceptan separadores de miles porque `150.000` es 150 mil en
+   Colombia y 150 en otros países, y adivinar guardaría un valor mil veces mal. Nuevo `tipo="numero"` en `LeadCampoEditable`
+   (validado por campo en el core, como `fecha`) que el pack vuelve a validar con su tope.
+5. **Filtrar y ordenar.** Filtro `motivo_perdida` (cinco motivos más `sin_motivo`) y filtro `valor` en **tramos fijos**
+   (`hasta_100000`, `100000_500000`, `500000_2000000`, `mas_de_2000000`, `sin_valor`; cortes semiabiertos, en pesos): el
+   contrato de filtros del core es `clave:valor` con opciones fijas, un rango libre exigiría cambiarlo. Órdenes `valor` y
+   `valor_desc`; los leads sin valor van siempre al final (el core aplica el sentido a la columna del provider).
+6. **Contrato de la tool.** `actualizar_lead` gana `loss_reason` (enum cerrado) y `loss_note`, opcionales en el esquema y
+   obligatorios cuando `status` es `perdido`; así ningún uso existente se rompe. Cambiar el esquema cambia la huella de las
+   grabaciones del LLM: las nueve que incluyen la tool se regraban (`scripts/gate_evals.sh record`, con OK del dueño).
+7. **Reversa de `crm_0019`:** se niega si hay motivos o valores guardados (los perdería).

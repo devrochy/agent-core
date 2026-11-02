@@ -513,7 +513,7 @@ async def test_lead_nuevo_apunta_al_cliente_para_abrir_su_ficha(app_client) -> N
     h = await api_headers(app_client, tid, email=owner_email, password=PW)
     items = (await app_client.get(BASE, headers=h)).json()["items"]
     destinos = {i["data"]["lead_id"]: i["target"] for i in items}
-    assert destinos[str(lead_id)] == {"entity": "cliente", "id": str(cliente_id), "section": "leads"}
+    assert destinos[str(lead_id)] == {"entity": "cliente", "id": str(cliente_id), "section": "leads", "filtro": None}
     assert destinos[str(lead_huerfano)]["entity"] == "lead"
 
 
