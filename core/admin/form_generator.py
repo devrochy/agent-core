@@ -137,6 +137,13 @@ def parse_json_schema_form(
         ptype = prop.get("type")
         raw = form_data.get(name)
 
+        if prop.get("oculto"):
+            # No sale en el formulario: un booleano ausente no es «apagado». Se conserva lo guardado.
+            if name in previous:
+                values[name] = previous[name]
+            elif "default" in prop:
+                values[name] = prop["default"]
+            continue
         if ptype == "boolean":
             values[name] = name in form_data and form_data[name] in ("on", "true", "1")
             continue

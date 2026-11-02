@@ -5,7 +5,7 @@ from __future__ import annotations
 from pack_cobranza.config import CobranzaConfig
 from pydantic import BaseModel, Field
 
-from core.admin.form_generator import render_json_schema_form
+from core.admin.form_generator import parse_json_schema_form, render_json_schema_form
 from core.api.forms import coerce_schema_values, hide_fields
 
 OCULTAS = {"asistente_activo", "escalar_siempre_a_humano"}
@@ -32,6 +32,18 @@ def test_el_formulario_no_pinta_los_campos_ocultos() -> None:
 def test_sin_campos_ocultos_no_cambia_nada() -> None:
     schema = {"type": "object", "properties": {"a": {"type": "integer"}}}
     assert hide_fields(schema, {"a": 1}) == (schema, {"a": 1})
+
+
+def test_el_formulario_clasico_no_pisa_los_booleanos_ocultos_ausentes() -> None:
+    """El panel SSR (aún activo) no manda un campo que no pinta: no debe leerse como «apagado»."""
+    schema = CobranzaConfig.model_json_schema()
+    previo = {"asistente_activo": False, "escalar_siempre_a_humano": True}
+    valores = parse_json_schema_form(schema, {"umbral_mora_dias": "7"}, previo)
+    assert valores["asistente_activo"] is False and valores["escalar_siempre_a_humano"] is True
+    assert valores["umbral_mora_dias"] == 7
+    # Sin valor previo, el de fábrica.
+    sin_previo = parse_json_schema_form(schema, {})
+    assert sin_previo["asistente_activo"] is True and sin_previo["escalar_siempre_a_humano"] is False
 
 
 def test_guardar_conserva_lo_guardado_y_ignora_lo_que_llegue() -> None:
