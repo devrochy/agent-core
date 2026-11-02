@@ -15711,6 +15711,178 @@
         }
       }
     },
+    "/api/v1/admin/settings/asistente/{seccion}/aplicar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Asistente Aplicar",
+        "description": "Escribe lo que mostró la vista previa. Todo o nada: la configuración del negocio y la persona\ndel agente se guardan en una sola transacción, y si lo que se escribiría ya no es lo que se vio\n(la configuración cambió en medio) responde 409 sin escribir.",
+        "operationId": "asistente_aplicar_api_v1_admin_settings_asistente__seccion__aplicar_post",
+        "parameters": [
+          {
+            "name": "seccion",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seccion"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AsistenteAplicar"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Propuesta"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/settings/asistente/{seccion}/vista-previa": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · configuración"
+        ],
+        "summary": "Asistente Vista Previa",
+        "description": "Qué cambiaría el asistente con esas respuestas (valor actual → propuesto), sin escribir nada.",
+        "operationId": "asistente_vista_previa_api_v1_admin_settings_asistente__seccion__vista_previa_post",
+        "parameters": [
+          {
+            "name": "seccion",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seccion"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AsistenteRespuestas"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Propuesta"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/settings/identity": {
       "put": {
         "tags": [
@@ -42641,6 +42813,14 @@
             },
             "type": "array",
             "title": "Opciones"
+          },
+          "asistente": {
+            "items": {
+              "$ref": "#/components/schemas/Guion"
+            },
+            "type": "array",
+            "title": "Asistente",
+            "default": []
           }
         },
         "type": "object",
@@ -72881,6 +73061,256 @@
         ],
         "title": "LeadFacetaOut",
         "description": "Cuántos clientes hay por opción de un filtro, con el resto de los filtros de la lista aplicados\n(pero no el propio, para que las pestañas de un mismo filtro sumen contra el mismo total)."
+      },
+      "AsistenteAplicar": {
+        "properties": {
+          "respuestas": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Respuestas"
+          },
+          "huella": {
+            "type": "string",
+            "title": "Huella"
+          }
+        },
+        "type": "object",
+        "required": [
+          "huella"
+        ],
+        "title": "AsistenteAplicar"
+      },
+      "AsistenteRespuestas": {
+        "properties": {
+          "respuestas": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Respuestas"
+          }
+        },
+        "type": "object",
+        "title": "AsistenteRespuestas",
+        "description": "Lo que el dueño contestó: id de pregunta → id de opción (o lista de ids en las de varias)."
+      },
+      "Cambio": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "etiqueta": {
+            "type": "string",
+            "title": "Etiqueta"
+          },
+          "actual": {
+            "title": "Actual"
+          },
+          "propuesto": {
+            "title": "Propuesto"
+          },
+          "editado_a_mano": {
+            "type": "boolean",
+            "title": "Editado A Mano",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "etiqueta"
+        ],
+        "title": "Cambio"
+      },
+      "Guion": {
+        "properties": {
+          "seccion": {
+            "type": "string",
+            "enum": [
+              "voz",
+              "atencion"
+            ],
+            "title": "Seccion"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "ayuda": {
+            "type": "string",
+            "title": "Ayuda",
+            "default": ""
+          },
+          "preguntas": {
+            "items": {
+              "$ref": "#/components/schemas/Pregunta"
+            },
+            "type": "array",
+            "title": "Preguntas"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "seccion",
+          "titulo",
+          "preguntas"
+        ],
+        "title": "Guion"
+      },
+      "Omitido": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "etiqueta": {
+            "type": "string",
+            "title": "Etiqueta"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "etiqueta",
+          "motivo"
+        ],
+        "title": "Omitido"
+      },
+      "Pregunta": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "ayuda": {
+            "type": "string",
+            "title": "Ayuda",
+            "default": ""
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "una",
+              "varias"
+            ],
+            "title": "Tipo"
+          },
+          "opciones": {
+            "items": {
+              "$ref": "#/components/schemas/RespuestaPosible"
+            },
+            "type": "array",
+            "title": "Opciones"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "titulo",
+          "tipo",
+          "opciones"
+        ],
+        "title": "Pregunta"
+      },
+      "Propuesta": {
+        "properties": {
+          "seccion": {
+            "type": "string",
+            "enum": [
+              "voz",
+              "atencion"
+            ],
+            "title": "Seccion"
+          },
+          "cambios": {
+            "items": {
+              "$ref": "#/components/schemas/Cambio"
+            },
+            "type": "array",
+            "title": "Cambios"
+          },
+          "omitidos": {
+            "items": {
+              "$ref": "#/components/schemas/Omitido"
+            },
+            "type": "array",
+            "title": "Omitidos"
+          },
+          "huella": {
+            "type": "string",
+            "title": "Huella",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "seccion"
+        ],
+        "title": "Propuesta"
+      },
+      "RespuestaPosible": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "ayuda": {
+            "type": "string",
+            "title": "Ayuda",
+            "default": ""
+          },
+          "cambios": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Cambios"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "titulo",
+          "cambios"
+        ],
+        "title": "RespuestaPosible",
+        "description": "Una opción que el dueño puede elegir y lo que cambia en el registro."
       }
     }
   }
