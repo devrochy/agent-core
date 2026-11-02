@@ -185,7 +185,7 @@ class LeadEditable(BaseModel):
     plugin_id: str
     key: str
     label: str
-    tipo: Literal["opciones", "texto"]
+    tipo: Literal["opciones", "texto", "fecha"]
     options: list[LeadFilterOption] = Field(default_factory=list)
     max_length: int
     value: str | None = None
@@ -536,13 +536,14 @@ async def _consulta(
     return query
 
 
-Orden = Literal["alta", "actividad", "nombre", "nombre_desc"]
+Orden = Literal["alta", "actividad", "nombre", "nombre_desc", "seguimiento"]
 
 OrdenQuery = Annotated[
     Orden,
     Query(
         description="`alta` (por defecto, el más nuevo primero), `actividad` (último mensaje, el más reciente "
-        "primero; los clientes sin mensajes van al final), `nombre` o `nombre_desc`."
+        "primero; los clientes sin mensajes van al final), `nombre`, `nombre_desc` o `seguimiento` (el seguimiento "
+        "más atrasado primero; los clientes sin seguimiento van al final)."
     ),
 ]
 
@@ -568,7 +569,18 @@ def _ultima_actividad(tenant_id: uuid.UUID, customer_ids: list[uuid.UUID] | None
     return query
 
 
-def _ordenar(query: Select[Any], orden: Orden, tenant_id: uuid.UUID) -> Select[Any]:
+async def _ordenar(
+    query: Select[Any], orden: Orden, tenant_id: uuid.UUID, enabled: set[str] | None = None
+) -> Select[Any]:
+    if orden == "seguimiento":
+        for provider in lead_registry.providers_for(enabled):
+            sub = await provider.sort_query(orden) if provider.sort_query is not None else None
+            if sub is not None:
+                sub = sub.subquery()
+                return query.outerjoin(sub, sub.c.customer_id == Customer.id).order_by(
+                    sub.c.valor.asc().nulls_last(), Customer.created_at.desc(), Customer.id
+                )
+        raise ApiError.bad_request("Este negocio no tiene seguimiento de leads.", code="orden_invalido")
     if orden == "actividad":
         actividad = _ultima_actividad(tenant_id).subquery()
         return query.outerjoin(actividad, actividad.c.customer_id == Customer.id).order_by(
@@ -733,6 +745,7 @@ async def list_leads(
         tenant_id, enabled=enabled, q=q, channel=channel, connection_id=connection_id, filtro=filtro, agente=agente
     )
 
+    ordenada = await _ordenar(query, orden, tenant_id, enabled)
     async with get_session() as session:
         total = (
             await session.execute(select(func.count()).select_from(query.subquery()))
@@ -740,7 +753,7 @@ async def list_leads(
         customers = (
             (
                 await session.execute(
-                    _ordenar(query, orden, tenant_id).offset(params.offset).limit(params.page_size)
+                    ordenada.offset(params.offset).limit(params.page_size)
                 )
             )
             .scalars()
@@ -1313,6 +1326,14 @@ async def update_lead(
     return await get_lead(lead_id, principal)
 
 
+def _fecha_valida(valor: str) -> bool:
+    try:
+        datetime.fromisoformat(valor)
+    except ValueError:
+        return False
+    return True
+
+
 @router.patch("/{lead_id}/pack/{plugin_id}", response_model=LeadDetail)
 async def update_lead_pack(
     lead_id: uuid.UUID,
@@ -1338,6 +1359,8 @@ async def update_lead_pack(
             errores[clave or "(vacía)"] = "Este dato no se puede editar aquí."
         elif campo.tipo == "opciones" and valor not in {v for v, _ in campo.options}:
             errores[clave] = "Elige una de las opciones."
+        elif campo.tipo == "fecha" and valor and not _fecha_valida(valor):
+            errores[clave] = "Usa una fecha y hora válidas."
         elif len(valor) > campo.max_length:
             errores[clave] = f"Máximo {campo.max_length} caracteres."
     if errores:

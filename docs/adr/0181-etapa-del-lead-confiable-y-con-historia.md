@@ -73,3 +73,44 @@ la etapa.
   etapa inicial y no generan registro.
 - Un cliente con varios leads cambia el más reciente (`_ultimo_lead_del_cliente`), igual que hoy.
 - HU-CRM-21 y HU-CRM-23 agregan columnas al lead: sus migraciones encadenan después de `crm_0015`.
+
+## Enmienda 2026-11-02 — Próxima acción y fecha de seguimiento (HU-CRM-21)
+
+Lo que decide la HU; el ADR sigue siendo uno solo porque el seguimiento cuelga del mismo lead y de la misma
+puerta de edición (ADR-0149).
+
+1. **Dos columnas en el lead** (`crm_0018`, aditiva): `next_action_at timestamptz` y `next_action_note text`
+   (CHECK ≤ 200), índice parcial `(tenant_id, next_action_at) WHERE next_action_at IS NOT NULL`. La fecha va
+   siempre en UTC. Una nota sin fecha se rechaza («Elige la fecha del seguimiento»); quitar la fecha quita la nota.
+2. **Tipo `fecha` en el hook de edición.** `LeadCampoEditable.tipo` y `LeadEditable.tipo` admiten `"fecha"`:
+   ISO 8601, **sin zona es hora del negocio** (`AppSettings.timezone`, `America/Bogota` por defecto), con zona
+   se respeta; vacío la quita. El core solo valida que parsee; el pack convierte a UTC (`pack_commerce.seguimiento`).
+   La ficha devuelve la fecha **en hora del negocio y sin zona** (`2026-11-03T09:00`) para el selector, y la lista
+   trae `seguimiento_en` (ISO UTC), `seguimiento_nota` y `seguimiento_estado`, calculado en el servidor para que
+   panel y APK no repitan la cuenta de la zona.
+3. **Cuatro opciones de la HU más una.** El filtro `seguimiento` ofrece `vencidos`, `hoy`, `proximos_7_dias`,
+   `mas_adelante` y `sin_seguimiento`. Cada lead cae en **exactamente una** (`vencidos` = ya pasó; `hoy` = lo que
+   queda del día del negocio; `proximos_7_dias` = de mañana a 7 días; `mas_adelante` = después), para que las
+   pestañas con contador sumen el total de la lista. La quinta (`mas_adelante`) no estaba en la HU: sin ella, los
+   leads con fecha lejana habrían salido como «sin valor» en el contador. Los cortes se arman con medianoches
+   locales (un cambio de hora no corre el día) y se comparan en UTC sobre la columna, sin `AT TIME ZONE`, para que
+   el índice sirva. Un cliente sin lead cuenta en `sin_valor` de la faceta.
+4. **Orden `seguimiento`.** `orden=seguimiento` pone primero el más atrasado y al final a quien no tiene
+   seguimiento. El core no conoce columnas de packs: el provider declara `sort_query(orden) → Select(customer_id,
+   valor)` (como `facet_query`) y el core hace el `OUTER JOIN`. Un negocio sin pack que lo declare responde 400
+   `orden_invalido`. `Orden` sigue siendo un `Literal` (el core nombra `seguimiento`).
+5. **Historia.** `pack_commerce_lead_followups` (RLS forzada, `crm_0018`) guarda cada seguimiento que deja de estar
+   vigente: nota, fecha que tenía, `outcome` (`hecho`, `reprogramado`, `cancelado`) y actor. `pack_commerce_lead_stage_changes`
+   no sirve: su CHECK solo admite las cinco etapas. Se cierra uno al **cambiar la fecha** (reprogramado), **quitarla**
+   (cancelado) o **completarlo** (hecho); cambiar solo la nota no es otro seguimiento y no deja fila. Aparece en la
+   línea de tiempo como `kind="seguimiento"`, fuente `pack_commerce.lead_seguimiento`.
+6. **Completar.** `POST /api/v1/pack/commerce/leads/{cliente}/seguimiento/hecho` (permiso de escritura de `leads`)
+   cierra el vigente como «hecho» y, en el mismo gesto, programa el siguiente si llega `siguiente_en`. El hook de
+   edición no alcanza para «hecho» (sería indistinguible de «cancelado»), por eso la ruta propia.
+7. **No mueve la actividad.** Programar un seguimiento no toca `last_activity_at` (ADR-0149: solo un cambio de etapa
+   lo mueve); si lo moviera, anotar «llamar el viernes» dejaría al lead dentro del reenganche automático de `jobs.py`.
+8. **El agente no escribe aquí.** No hay tool nueva ni cambia ninguna existente: es una acción de personas. Que el
+   agente cree seguimientos («te escribo mañana») es otra HU con evals.
+9. **Un cliente sin lead.** Programar le crea el lead `manual:<cliente>` (el mismo camino que el estado y el interés);
+   «Hecho» sobre un cliente sin lead responde 404.
+10. **Reversa de `crm_0018`:** se niega si hay seguimientos programados o historia (los perdería).

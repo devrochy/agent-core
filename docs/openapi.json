@@ -4547,14 +4547,15 @@
                 "alta",
                 "actividad",
                 "nombre",
-                "nombre_desc"
+                "nombre_desc",
+                "seguimiento"
               ],
               "type": "string",
-              "description": "`alta` (por defecto, el más nuevo primero), `actividad` (último mensaje, el más reciente primero; los clientes sin mensajes van al final), `nombre` o `nombre_desc`.",
+              "description": "`alta` (por defecto, el más nuevo primero), `actividad` (último mensaje, el más reciente primero; los clientes sin mensajes van al final), `nombre`, `nombre_desc` o `seguimiento` (el seguimiento más atrasado primero; los clientes sin seguimiento van al final).",
               "default": "alta",
               "title": "Orden"
             },
-            "description": "`alta` (por defecto, el más nuevo primero), `actividad` (último mensaje, el más reciente primero; los clientes sin mensajes van al final), `nombre` o `nombre_desc`."
+            "description": "`alta` (por defecto, el más nuevo primero), `actividad` (último mensaje, el más reciente primero; los clientes sin mensajes van al final), `nombre`, `nombre_desc` o `seguimiento` (el seguimiento más atrasado primero; los clientes sin seguimiento van al final)."
           },
           {
             "name": "facetas",
@@ -40248,6 +40249,85 @@
           }
         }
       }
+    },
+    "/api/v1/pack/commerce/leads/{customer_id}/seguimiento/hecho": {
+      "post": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Seguimiento Hecho",
+        "description": "Marca como hecho el seguimiento del lead del cliente. Queda en su línea de tiempo con la nota.",
+        "operationId": "seguimiento_hecho_api_v1_pack_commerce_leads__customer_id__seguimiento_hecho_post",
+        "parameters": [
+          {
+            "name": "customer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Customer Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeguimientoHechoIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -64798,7 +64878,8 @@
             "type": "string",
             "enum": [
               "opciones",
-              "texto"
+              "texto",
+              "fecha"
             ],
             "title": "Tipo"
           },
@@ -73311,6 +73392,37 @@
         ],
         "title": "RespuestaPosible",
         "description": "Una opción que el dueño puede elegir y lo que cambia en el registro."
+      },
+      "SeguimientoHechoIn": {
+        "properties": {
+          "siguiente_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siguiente En"
+          },
+          "siguiente_nota": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siguiente Nota"
+          }
+        },
+        "type": "object",
+        "title": "SeguimientoHechoIn",
+        "description": "Cierra el seguimiento y, si se pide, programa el siguiente en el mismo gesto (HU-CRM-21).\n`siguiente_en` es ISO 8601: sin zona es hora del negocio."
       }
     }
   }

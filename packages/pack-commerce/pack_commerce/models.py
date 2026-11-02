@@ -74,6 +74,9 @@ class Lead(TenantMixin, Base):
     last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     # Desde cuándo está en la etapa actual (HU-CRM-18). NULL en los leads anteriores: no se inventa.
     stage_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Próxima acción y cuándo (HU-CRM-21): la fecha va en UTC; «hoy» se resuelve con la zona del negocio.
+    next_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_action_note: Mapped[str | None] = mapped_column(Text)  # tope 200 (CHECK en la migración)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -103,6 +106,26 @@ class LeadStageChange(TenantMixin, Base):
     actor: Mapped[str] = mapped_column(Text)  # agente | persona | sistema
     idempotency_key: Mapped[str | None] = mapped_column(Text)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LeadFollowup(TenantMixin, Base):
+    """Un seguimiento del lead que se cerró: hecho, reprogramado o cancelado (HU-CRM-21).
+
+    El seguimiento vigente vive en `Lead.next_action_at/_note`; aquí queda el que dejó de estar
+    vigente, con su nota y la fecha que tenía. Solo lo escribe `pack_commerce.seguimiento`.
+    `customer_id` va copiado del lead porque la línea de tiempo de la ficha consulta por cliente."""
+
+    __tablename__ = "pack_commerce_lead_followups"
+    __table_args__ = (Index("ix_pack_commerce_lead_followups_cliente", "tenant_id", "customer_id", "closed_at", "id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))  # FK lógica a pack_commerce_leads
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    note: Mapped[str | None] = mapped_column(Text)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # la fecha que tenía programada
+    outcome: Mapped[str] = mapped_column(Text)  # hecho | reprogramado | cancelado (CHECK en la migración)
+    actor: Mapped[str] = mapped_column(Text, default="persona")  # persona | sistema
+    closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 # ------------------------------------------------------------------ catálogo

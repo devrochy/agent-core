@@ -60,6 +60,7 @@ from sqlalchemy import String, and_, cast, or_
 LeadResolver = Callable[[list[uuid.UUID]], Awaitable[dict[uuid.UUID, dict[str, Any]]]]
 LeadFilterQuery = Callable[[str, str], Awaitable[Any]]  # (clave, valor) -> Select[customer_id]
 LeadFacetQuery = Callable[[str], Awaitable[Any]]  # (clave) -> Select[customer_id, valor]
+LeadSortQuery = Callable[[str], Awaitable[Any]]  # (orden) -> Select[customer_id, valor] o None si no es suyo
 
 Cursor = tuple[datetime, str, str]  # (at, source, id) del último evento de la página anterior
 
@@ -111,7 +112,8 @@ class LeadFilter:
 class LeadCampoEditable:
     key: str
     label: str
-    tipo: Literal["opciones", "texto"]
+    # `fecha`: fecha y hora en ISO 8601; sin zona es hora del negocio; vacío la quita (HU-CRM-21).
+    tipo: Literal["opciones", "texto", "fecha"]
     options: tuple[tuple[str, str], ...] = ()  # (valor, etiqueta) si tipo == "opciones"
     max_length: int = 200
 
@@ -157,6 +159,8 @@ class LeadProvider:
     icon: str | None = None
     relacion: LeadRelacion | None = None
     facet_query: LeadFacetQuery | None = None
+    # Órdenes extra de la lista que sabe resolver el pack (p. ej. `seguimiento`, HU-CRM-21).
+    sort_query: LeadSortQuery | None = None
 
 
 class LeadRegistry:
@@ -178,6 +182,7 @@ class LeadRegistry:
         icon: str | None = None,
         relacion: LeadRelacion | None = None,
         facet_query: LeadFacetQuery | None = None,
+        sort_query: LeadSortQuery | None = None,
     ) -> None:
         """Idempotente: registrar dos veces el mismo pack reemplaza la entrada."""
         self._providers[plugin_id] = LeadProvider(
@@ -193,6 +198,7 @@ class LeadRegistry:
             icon,
             relacion,
             facet_query,
+            sort_query,
         )
 
     def providers_for(self, enabled: set[str] | None) -> list[LeadProvider]:
