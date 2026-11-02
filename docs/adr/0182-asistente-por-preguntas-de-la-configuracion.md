@@ -1,6 +1,6 @@
 # ADR-0182 — Asistente por preguntas de la configuración: el guion vive en el registro y aplica lo que el dueño confirma
 
-- **Estado:** propuesto (se acepta al mergear el PR de HU-CFG-10 en agent-core y registrarse la decisión en `decisiones.md` de solvershub-docs).
+- **Estado:** aceptado (HU-CFG-10, SPEC-37, D-58 de solvershub-docs). El dueño aprobó el plan el 2026-11-02; el core se mergeó en agent-core#657 y el panel en solvershub-panel#189.
 - **Fecha:** 2026-11-02
 - **Contexto:** SPEC-37 ampliada (HU-CFG-08 a HU-CFG-11, rediseño de Configuración, ola 1). Hecho con el dueño el 2026-11-02.
 - **Usa:**
