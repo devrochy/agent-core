@@ -515,3 +515,88 @@ async def test_lead_nuevo_apunta_al_cliente_para_abrir_su_ficha(app_client) -> N
     destinos = {i["data"]["lead_id"]: i["target"] for i in items}
     assert destinos[str(lead_id)] == {"entity": "cliente", "id": str(cliente_id), "section": "leads"}
     assert destinos[str(lead_huerfano)]["entity"] == "lead"
+
+
+async def _cliente_con_conversacion(tid: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
+    from core.db.models import Conversation, Customer
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            cliente = Customer(tenant_id=tid, channel="web", external_id=f"web:{uniq('v')}", name="")
+            session.add(cliente)
+            await session.flush()
+            conv = Conversation(tenant_id=tid, customer_id=cliente.id)
+            session.add(conv)
+            await session.flush()
+            return cliente.id, conv.id
+
+
+def _con_pack_habilitado(monkeypatch, *, auto_create_lead: bool) -> None:
+    """El hook solo actúa con el pack habilitado y `auto_create_lead` activo: se fijan sin montar un AgentSpec."""
+    import core.agents.spec as agent_spec
+    from core.plugin_manager import plugin_manager
+
+    async def _spec_activo(_tenant_id):
+        return object()
+
+    async def _config(_plugin_id):
+        return types.SimpleNamespace(auto_create_lead=auto_create_lead)
+
+    monkeypatch.setattr(agent_spec, "load_active_spec", _spec_activo)
+    monkeypatch.setattr(agent_spec, "enabled_packs", lambda _spec: {"pack_commerce"})
+    monkeypatch.setattr(plugin_manager, "load_config", _config)
+
+
+@pytest.mark.aislamiento
+async def test_el_borrador_automatico_de_lead_avisa_con_destino_al_cliente(app_client, monkeypatch) -> None:
+    """HU-CRM-20: con `auto_create_lead` el borrador es el primer lead del cliente y `crear_lead` responde
+    `ya_existe`, así que el aviso «Lead nuevo» tiene que salir al crear el borrador, una sola vez, y su
+    destino es el CLIENTE (la ficha se abre por id de cliente)."""
+    from pack_commerce.models import Lead
+    from pack_commerce.module import CRMModule
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid, _owner, owner_email = await _tenant_con_owner(uniq("nt-bor"))
+    cliente_id, conv_id = await _cliente_con_conversacion(tid)
+    _con_pack_habilitado(monkeypatch, auto_create_lead=True)
+
+    modulo = CRMModule()
+    async with tenant_scope(tid):
+        await modulo._on_conversation_started(conv_id, cliente_id)
+        # Otra conversación del mismo cliente: ya tiene lead, no se crea ni se avisa de nuevo.
+        await modulo._on_conversation_started(uuid.uuid4(), cliente_id)
+        async with get_session() as session:
+            leads = (await session.execute(select(Lead).where(Lead.customer_id == cliente_id))).scalars().all()
+    assert len(leads) == 1
+
+    h = await api_headers(app_client, tid, email=owner_email, password=PW)
+    items = [i for i in (await app_client.get(BASE, headers=h)).json()["items"] if i["event_key"] == "commerce.lead_nuevo"]
+    assert len(items) == 1
+    assert items[0]["target"] == {"entity": "cliente", "id": str(cliente_id), "section": "leads"}
+    assert items[0]["data"]["lead_id"] == str(leads[0].id)
+
+
+async def test_sin_auto_create_lead_el_borrador_no_crea_lead_ni_avisa(app_client, monkeypatch) -> None:
+    from pack_commerce.models import Lead
+    from pack_commerce.module import CRMModule
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid, _owner, owner_email = await _tenant_con_owner(uniq("nt-bor0"))
+    cliente_id, conv_id = await _cliente_con_conversacion(tid)
+    _con_pack_habilitado(monkeypatch, auto_create_lead=False)
+
+    async with tenant_scope(tid):
+        await CRMModule()._on_conversation_started(conv_id, cliente_id)
+        async with get_session() as session:
+            leads = (await session.execute(select(Lead).where(Lead.customer_id == cliente_id))).scalars().all()
+    assert leads == []
+
+    h = await api_headers(app_client, tid, email=owner_email, password=PW)
+    items = (await app_client.get(BASE, headers=h)).json()["items"]
+    assert [i for i in items if i["event_key"] == "commerce.lead_nuevo"] == []

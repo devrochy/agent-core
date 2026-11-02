@@ -57,6 +57,7 @@ from pack_commerce.skills import (
     CatalogSkill,
     LeadSkill,
     OrderSkill,
+    _avisar_lead_nuevo,
     classify_customer,
     referencias_vigentes,
 )
@@ -1309,14 +1310,17 @@ class CRMModule(BaseModule):
                 )
             ).scalar_one_or_none()
             if existing is None:
-                session.add(
-                    Lead(
-                        customer_id=customer_id,
-                        conversation_id=conversation_id,
-                        status="nuevo",
-                        idempotency_key=f"auto:{conversation_id}",
-                    )
+                lead = Lead(
+                    customer_id=customer_id,
+                    conversation_id=conversation_id,
+                    status="nuevo",
+                    idempotency_key=f"auto:{conversation_id}",
                 )
+                session.add(lead)
+                await session.flush()
+                # Con `auto_create_lead` el borrador es SIEMPRE el primer lead del cliente: `crear_lead`
+                # lo encuentra y responde `ya_existe`, así que el aviso solo puede salir de aquí.
+                await _avisar_lead_nuevo(session, lead.id, customer_id)
                 log.info("lead_draft_created", conversation_id=str(conversation_id))
 
     async def _on_procedure_slots_set(
