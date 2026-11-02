@@ -126,7 +126,10 @@ async def test_edita_el_lead_que_muestra_la_ficha_sin_duplicar(app_client) -> No
     assert leads[0].last_activity_at == hace_una_hora
 
     r = await app_client.patch(
-        f"{URL}/{ana}/pack/pack_commerce", json={"valores": {"estado_lead": "perdido"}}, headers=headers
+        f"{URL}/{ana}/pack/pack_commerce",
+        # Perder un lead pide motivo (HU-CRM-23).
+        json={"valores": {"estado_lead": "perdido", "motivo_perdida": "otro"}},
+        headers=headers,
     )
     assert r.status_code == 200, r.text
     ficha = r.json()

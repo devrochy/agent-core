@@ -4548,14 +4548,16 @@
                 "actividad",
                 "nombre",
                 "nombre_desc",
-                "seguimiento"
+                "seguimiento",
+                "valor",
+                "valor_desc"
               ],
               "type": "string",
-              "description": "`alta` (por defecto, el más nuevo primero), `actividad` (último mensaje, el más reciente primero; los clientes sin mensajes van al final), `nombre`, `nombre_desc` o `seguimiento` (el seguimiento más atrasado primero; los clientes sin seguimiento van al final).",
+              "description": "`alta` (por defecto, el más nuevo primero), `actividad` (último mensaje, el más reciente primero; los clientes sin mensajes van al final), `nombre`, `nombre_desc` o `seguimiento` (el seguimiento más atrasado primero; los clientes sin seguimiento van al final), `valor` (valor estimado del lead, de menor a mayor) o `valor_desc` (de mayor a menor); los clientes sin valor van siempre al final.",
               "default": "alta",
               "title": "Orden"
             },
-            "description": "`alta` (por defecto, el más nuevo primero), `actividad` (último mensaje, el más reciente primero; los clientes sin mensajes van al final), `nombre`, `nombre_desc` o `seguimiento` (el seguimiento más atrasado primero; los clientes sin seguimiento van al final)."
+            "description": "`alta` (por defecto, el más nuevo primero), `actividad` (último mensaje, el más reciente primero; los clientes sin mensajes van al final), `nombre`, `nombre_desc` o `seguimiento` (el seguimiento más atrasado primero; los clientes sin seguimiento van al final), `valor` (valor estimado del lead, de menor a mayor) o `valor_desc` (de mayor a menor); los clientes sin valor van siempre al final."
           },
           {
             "name": "facetas",
@@ -64879,7 +64881,8 @@
             "enum": [
               "opciones",
               "texto",
-              "fecha"
+              "fecha",
+              "numero"
             ],
             "title": "Tipo"
           },
