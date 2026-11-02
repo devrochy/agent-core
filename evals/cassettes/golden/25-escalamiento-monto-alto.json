@@ -12,7 +12,7 @@
   "escena": "25-escalamiento-monto-alto",
   "formato": 1,
   "herramientas": {
-    "e7178b5f78c7a22a": [
+    "f2a4ef910a90e456": [
       {
         "description": "Devuelve el perfil estructurado del cliente (nombre, contacto y atributos guardados). Úsala antes de personalizar. Es de solo lectura.",
         "name": "get_customer_profile",
@@ -158,7 +158,7 @@
         }
       },
       {
-        "description": "Actualiza datos del lead ya registrado en esta conversación. Úsala DE INMEDIATO cuando el lead (registrado con crear_lead) te dé un dato nuevo: teléfono, email, interés o una corrección. No respondas 'ya anoté' sin haberla llamado.",
+        "description": "Actualiza datos del lead ya registrado en esta conversación. Úsala DE INMEDIATO cuando el lead (registrado con crear_lead) te dé un dato nuevo: teléfono, email, interés o una corrección. No respondas 'ya anoté' sin haberla llamado. Para marcar el lead como «perdido» (status=perdido) envía SIEMPRE loss_reason con el motivo; sin él no se guarda el cambio.",
         "name": "actualizar_lead",
         "parameters": {
           "properties": {
@@ -166,6 +166,21 @@
               "type": "string"
             },
             "interest": {
+              "type": "string"
+            },
+            "loss_note": {
+              "description": "Detalle breve de la pérdida (máx. 300 caracteres), opcional",
+              "type": "string"
+            },
+            "loss_reason": {
+              "description": "Por qué se perdió. Obligatorio si status es perdido",
+              "enum": [
+                "precio",
+                "sin_respuesta",
+                "compro_en_otro_lado",
+                "no_era_para_el",
+                "otro"
+              ],
               "type": "string"
             },
             "name": {
@@ -488,9 +503,9 @@
   },
   "llamadas": [
     {
-      "clave": "23ae183e6d72872490ae453f7d0f841b58a3cdf575fbe83848d8545f08f748a9",
+      "clave": "776b4e67eeef9f679619963edd05a5aaf3d28e89130cf6ced8ff428fdff3f0d9",
       "pedido": {
-        "herramientas": "e7178b5f78c7a22a",
+        "herramientas": "f2a4ef910a90e456",
         "max_tokens": 4096,
         "mensajes": [
           {
@@ -515,15 +530,21 @@
       },
       "respuestas": [
         {
-          "content": "¡Hola! Gracias por escribir 😊\n\nVeo que tu compra sería grande, así que dejame pasarte con un asesor de nuestro equipo para coordinarlo bien y darte la atención que merece.\n\n¿Me confirmás tu nombre para dejarle el contexto a la persona que te atienda?",
+          "content": "¡Hola! Con gusto te ayudo con tu compra 🙂\n\nAntes de seguir necesito revisar el catálogo real. Déjame ver qué tenemos disponible.",
           "model": "deepseek-flash",
-          "stop_reason": "end_turn",
-          "tool_calls": [],
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            {
+              "arguments": {},
+              "id": "call_00_ucPOIm04d6ZH9okENvNT0706",
+              "name": "consultar_inventario"
+            }
+          ],
           "usage": {
-            "cache_read_tokens": 6784,
+            "cache_read_tokens": 7040,
             "cache_write_tokens": 0,
-            "input_tokens": 7059,
-            "output_tokens": 65
+            "input_tokens": 7201,
+            "output_tokens": 59
           }
         }
       ],
