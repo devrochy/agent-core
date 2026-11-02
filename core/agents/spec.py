@@ -13,6 +13,7 @@ from typing import Any
 from agentcore_contracts import AgentSpec
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db.models import AgentSpecRecord
 from core.db.session import get_session
@@ -369,7 +370,11 @@ async def next_spec_version(tenant_id: uuid.UUID) -> str:
 
 
 async def save_spec_version(
-    new_spec: AgentSpec, tenant_id: uuid.UUID | None = None, *, base_id: uuid.UUID | None = None
+    new_spec: AgentSpec,
+    tenant_id: uuid.UUID | None = None,
+    *,
+    base_id: uuid.UUID | None = None,
+    session: AsyncSession | None = None,
 ) -> str | None:
     """Persiste `new_spec` como nueva versión ACTIVA del tenant.
 
@@ -383,38 +388,51 @@ async def save_spec_version(
     solo si esa fila SIGUE activa: si otra edición ya confirmó una versión nueva devuelve `None` y no
     pisa nada. Sin él, leer-modificar-guardar pierde la edición del que confirmó en medio (los índices
     parciales solo atajan a dos que confirman a la vez, no a uno que lee después de que el otro confirmó).
+
+    Con `session` la versión se escribe en la transacción de quien llama (para guardar el spec y otra
+    cosa de forma atómica): aquí no se confirma, y si devuelve `None` quien llama debe abortar (la
+    sesión puede quedar con un flush fallido).
     """
     tid = tenant_id or get_current_tenant_id()
     if tid is None:
         return None
     new_spec = con_tenant_de_la_fila(new_spec, tid)
     version = await next_spec_version(tid)
-    try:
-        async with get_session() as session:
-            current_row = (
-                await session.execute(
-                    select(AgentSpecRecord).where(
-                        AgentSpecRecord.tenant_id == tid,
-                        AgentSpecRecord.is_active.is_(True),
-                        AgentSpecRecord.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if base_id is not None and (current_row is None or current_row.id != base_id):
-                return None
-            if current_row is not None:
-                current_row.is_active = False
-            session.add(
-                AgentSpecRecord(
-                    tenant_id=tid,
-                    version=version,
-                    is_active=True,
-                    spec=new_spec.model_dump(mode="json"),
+
+    async def _guardar(sesion: AsyncSession) -> str | None:
+        current_row = (
+            await sesion.execute(
+                select(AgentSpecRecord).where(
+                    AgentSpecRecord.tenant_id == tid,
+                    AgentSpecRecord.is_active.is_(True),
+                    AgentSpecRecord.deleted_at.is_(None),
                 )
             )
+        ).scalar_one_or_none()
+        if base_id is not None and (current_row is None or current_row.id != base_id):
+            return None
+        if current_row is not None:
+            current_row.is_active = False
+        sesion.add(
+            AgentSpecRecord(
+                tenant_id=tid,
+                version=version,
+                is_active=True,
+                spec=new_spec.model_dump(mode="json"),
+            )
+        )
+        if session is not None:
+            await sesion.flush()
+        return version
+
+    try:
+        if session is not None:
+            return await _guardar(session)
+        async with get_session() as propia:
+            resultado = await _guardar(propia)
+        return resultado
     except IntegrityError:
         return None
-    return version
 
 
 async def save_spec_if_changed(

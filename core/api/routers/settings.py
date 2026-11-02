@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from agentcore_contracts import AgentSpec
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
@@ -33,19 +34,29 @@ from core.admin.settings_service import (
 from core.agents.spec import (
     con_tenant_de_la_fila,
     enabled_packs,
+    leer_spec_activo,
     load_active_spec,
     save_spec_if_changed,
+    save_spec_version,
 )
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.config import DEBOUNCE_DELAY_MS, get_settings
 from core.config_limites import leer_entero, rango
-from core.config_registro import Catalogo, catalogo_para
+from core.config_registro import (
+    POR_CLAVE,
+    Catalogo,
+    Propuesta,
+    RespuestasInvalidas,
+    catalogo_para,
+    resolver,
+)
 from core.config_registro.validar import validar_valor
 from core.db.models import AppSettings, AuditLog
 from core.db.session import get_session
 from core.gateway import avisos_opciones
 from core.gateway.message_splitter import CAPS
+from core.kernel.banderas import banderas_del_negocio
 from core.kernel.fuera_de_horario import texto_por_defecto
 from core.kernel.horario_de_servicio import modo_del_horario
 from core.llm.difficulty_router import (
@@ -439,6 +450,7 @@ async def get_catalog_api(
         es_master=actua_como_master(principal.admin),
         guardrails_disponibles=_available_guardrails(spec),
         guardrails_info={g.name: (g.etiqueta, g.explicacion) for g in mcp_host.get_guardrails()},
+        aos_runtime=await _aos_runtime(principal.tenant_id),
     )
 
 
@@ -521,6 +533,130 @@ async def save_identity(
 
     refreshed = await _load_app_settings(principal.tenant_id)
     return _identity_out(refreshed, spec, available)
+
+
+# ------------------------------------------------------------------ asistente de configuración
+class AsistenteRespuestas(BaseModel):
+    """Lo que el dueño contestó: id de pregunta → id de opción (o lista de ids en las de varias)."""
+
+    respuestas: dict[str, str | list[str]] = Field(default_factory=dict)
+
+
+class AsistenteAplicar(AsistenteRespuestas):
+    # La que devolvió la vista previa: si lo que se escribiría cambió desde entonces, 409.
+    huella: str
+
+
+async def _aos_runtime(tenant_id) -> str:
+    async with get_session() as session:
+        return (await banderas_del_negocio(session, tenant_id)).runtime
+
+
+def _actuales_del_registro(app_settings: AppSettings | None, spec) -> dict[str, Any]:
+    """Los valores de hoy con las claves del registro (las de `IdentitySettings` son las mismas)."""
+    identidad = _identity_out(app_settings, spec, _available_guardrails(spec))
+    return {k: v for k, v in identidad.model_dump().items() if k in POR_CLAVE}
+
+
+async def _proponer(seccion: str, respuestas: dict[str, Any], tenant_id) -> tuple[Propuesta, Any, str]:
+    spec = await load_active_spec()
+    app_settings = await _load_app_settings(tenant_id)
+    runtime = await _aos_runtime(tenant_id)
+    try:
+        propuesta = resolver(seccion, respuestas, _actuales_del_registro(app_settings, spec), aos_runtime=runtime)
+    except RespuestasInvalidas as exc:
+        raise ApiError(422, "validation_error", "Revisa las respuestas marcadas.", fields=exc.por_pregunta) from None
+    except ValueError as exc:
+        raise ApiError(404, "not_found", str(exc)) from None
+    return propuesta, spec, runtime
+
+
+def _escribir_opcion(app_settings: AppSettings, persona: dict[str, Any], clave: str, valor: Any) -> None:
+    """Escribe una opción del registro en su almacén. Solo los almacenes que usa el asistente."""
+    tipo, _, ruta = POR_CLAVE[clave].almacen.partition(":")
+    if tipo == "behavior_config":
+        app_settings.behavior_config = {**dict(app_settings.behavior_config or {}), ruta: valor}
+    elif tipo == "escalation_config":
+        escalation = dict(app_settings.escalation_config or {})
+        if ruta == "business_hours.ranges":
+            ranges = validate_business_ranges(valor)
+            tz = ((escalation.get("business_hours") or {}).get("tz")) or app_settings.timezone or DEFAULT_TIMEZONE
+            escalation["business_hours"] = {"tz": tz, "ranges": ranges} if ranges else None
+        elif ruta == "keywords":
+            escalation["keywords"] = [k.strip() for k in valor if k.strip()]
+        elif "." in ruta:
+            raise ValueError(f"El asistente no escribe «{clave}».")
+        else:
+            escalation[ruta] = valor
+        app_settings.escalation_config = escalation
+    elif tipo == "spec" and ruta.startswith("persona."):
+        persona[ruta.removeprefix("persona.")] = [p.strip() for p in valor if p.strip()] if isinstance(valor, list) else valor
+    else:
+        raise ValueError(f"El asistente no escribe «{clave}».")
+
+
+@router.post("/asistente/{seccion}/vista-previa", response_model=Propuesta)
+async def asistente_vista_previa(
+    seccion: str,
+    payload: AsistenteRespuestas,
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> Propuesta:
+    """Qué cambiaría el asistente con esas respuestas (valor actual → propuesto), sin escribir nada."""
+    _exigir_negocio(principal)
+    propuesta, _, _ = await _proponer(seccion, payload.respuestas, principal.tenant_id)
+    return propuesta
+
+
+@router.post("/asistente/{seccion}/aplicar", response_model=Propuesta)
+async def asistente_aplicar(
+    seccion: str,
+    payload: AsistenteAplicar,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> Propuesta:
+    """Escribe lo que mostró la vista previa. Todo o nada: la configuración del negocio y la persona
+    del agente se guardan en una sola transacción, y si lo que se escribiría ya no es lo que se vio
+    (la configuración cambió en medio) responde 409 sin escribir."""
+    _exigir_negocio(principal)
+    # La fila del spec de la que parte la propuesta se lee ANTES de calcularla: si otra edición del
+    # agente (habilidades, cerebro…) confirma una versión en medio, no se pisa en silencio.
+    activo = await leer_spec_activo(principal.tenant_id)
+    base_id = activo[0] if activo else None
+    propuesta, spec, _ = await _proponer(seccion, payload.respuestas, principal.tenant_id)
+    if propuesta.huella != payload.huella:
+        raise ApiError(409, "conflict", "La configuración cambió mientras decidías: revisa los cambios de nuevo.")
+    if not propuesta.cambios:
+        return propuesta
+
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == principal.tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+        datos = spec.model_dump(mode="json")
+        persona = dict(datos.get("persona") or {})
+        for cambio in propuesta.cambios:
+            _escribir_opcion(app_settings, persona, cambio.clave, cambio.propuesto)
+        datos["persona"] = persona
+        nuevo = AgentSpec.model_validate({**datos, "tenantId": str(principal.tenant_id)})
+        if nuevo.model_dump(mode="json") != spec.model_dump(mode="json"):
+            if await save_spec_version(nuevo, principal.tenant_id, base_id=base_id, session=session) is None:
+                raise ApiError(409, "conflict", "El agente cambió mientras guardabas: vuelve a intentarlo.")
+        session.add(
+            AuditLog(
+                tenant_id=principal.tenant_id,
+                actor=f"admin:{principal.admin.email}",
+                action=f"settings.asistente.{seccion}",
+                input={"cambios": [{"clave": c.clave, "antes": c.actual, "despues": c.propuesto} for c in propuesta.cambios]},
+            )
+        )
+    return propuesta
 
 
 # ------------------------------------------------------------------ palabras de baja (HU-CFG-05)
