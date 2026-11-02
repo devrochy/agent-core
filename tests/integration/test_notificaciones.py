@@ -576,7 +576,7 @@ async def test_el_borrador_automatico_de_lead_avisa_con_destino_al_cliente(app_c
     h = await api_headers(app_client, tid, email=owner_email, password=PW)
     items = [i for i in (await app_client.get(BASE, headers=h)).json()["items"] if i["event_key"] == "commerce.lead_nuevo"]
     assert len(items) == 1
-    assert items[0]["target"] == {"entity": "cliente", "id": str(cliente_id), "section": "leads"}
+    assert items[0]["target"] == {"entity": "cliente", "id": str(cliente_id), "section": "leads", "filtro": None}
     assert items[0]["data"]["lead_id"] == str(leads[0].id)
 
 
