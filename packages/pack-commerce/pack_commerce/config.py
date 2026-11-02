@@ -29,6 +29,17 @@ class CRMConfig(BasePluginConfig):
     follow_up_hours: int = Field(
         default=24, ge=0, le=8760, description="Horas sin actividad antes de marcar un lead para seguimiento"
     )
+    # HU-CRM-22: avisos de seguimiento. Nacen encendidos porque solo se disparan por seguimientos que
+    # una persona programó (HU-CRM-21) y van a su propio centro de notificaciones, sin mensajes al cliente.
+    seguimiento_recordatorios: bool = Field(
+        default=True, description="Avisar cuando llega la hora de un seguimiento programado"
+    )
+    seguimiento_resumen_diario: bool = Field(
+        default=True, description="Mandar cada mañana «Tu día de ventas» con los seguimientos y leads nuevos"
+    )
+    seguimiento_resumen_hora: int = Field(
+        default=8, ge=0, le=19, description="Hora del negocio (0-19) desde la que sale el resumen diario"
+    )
     scoring_mode: Literal["manual", "auto"] = Field(
         default="auto", description="Cómo se puntúan los leads (auto = el agente pregunta y califica)"
     )

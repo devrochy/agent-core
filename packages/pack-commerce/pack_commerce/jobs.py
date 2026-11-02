@@ -4,6 +4,9 @@
   de 24h de WhatsApp (patrón 'cazador de ventas' de agent-sale).
 - follow_up_quotes: reengancha cotizaciones en borrador sin convertir dentro de
   la ventana de 3-20h (ag-sale: ventana de mensajería proactiva).
+- recordar_seguimientos: avisa a la persona cuando llega la hora de un seguimiento que
+  programó y le manda cada mañana «Tu día de ventas» (HU-CRM-22). Sin LLM y sin mensajes
+  al cliente.
 
 El decorador @register_cron salta automáticamente si el plugin está inactivo. Un
 negocio con el pack habilitado pero sin configurar se salta con un aviso y el cron
@@ -221,3 +224,72 @@ async def _follow_up_quotes_del_negocio(tenant_id: uuid.UUID, config) -> tuple[i
         except Exception:
             log.exception("follow_up_quote_send_failed", quote_id=str(quote.id))
     return total_candidates, total_sent
+
+
+@register_cron("pack_commerce", "*/5 * * * *")
+async def recordar_seguimientos() -> None:
+    """Recordatorios de seguimiento y resumen diario de ventas (HU-CRM-22).
+
+    Cada 5 minutos, por negocio y dentro de su `tenant_scope`. Es idempotente por la clave de
+    deduplicación de cada aviso (ver `recordatorios`): correrlo de más o tras una caída no repite
+    nada. Un negocio que falla no corta a los demás."""
+    from pack_commerce import recordatorios
+
+    total = recordatorios.Conteo()
+    resumenes = 0
+    for tenant_id in await _tenant_ids():
+        try:
+            async with tenant_scope(tenant_id):
+                config = await _config_del_negocio(tenant_id, "seguimiento")
+                if config is None:
+                    continue
+                conteo, resumen = await _recordar_del_negocio(tenant_id, config)
+            total.sumar(conteo)
+            resumenes += int(resumen)
+        except Exception:
+            log.exception("recordar_seguimientos_fallo", tenant_id=str(tenant_id))
+    log.info(
+        "recordar_seguimientos_completed",
+        enviados=total.enviados,
+        ya_avisados=total.ya_avisados,
+        saltados_horario=total.saltados_horario,
+        saltados_resueltos=total.saltados_resueltos,
+        resumenes=resumenes,
+    )
+
+
+async def _recordar_del_negocio(tenant_id: uuid.UUID, config, ahora: datetime | None = None):  # type: ignore[no-untyped-def]
+    """Recordatorios y resumen de un negocio (dentro de su `tenant_scope`): (conteo, ¿salió el resumen?)."""
+    from core.db.models import AppSettings
+    from core.orchestrator.escalation import within_business_hours
+    from pack_commerce import recordatorios, seguimiento
+
+    ahora = ahora or datetime.now(UTC)
+    conteo = recordatorios.Conteo()
+    resumen = False
+    async with get_session() as session:
+        zona = await seguimiento.zona_del_negocio(session, tenant_id)
+        if getattr(config, "seguimiento_recordatorios", True):
+            escalacion = (
+                await session.execute(
+                    select(AppSettings.escalation_config).where(
+                        AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
+                    )
+                )
+            ).scalar_one_or_none()
+            horario = (escalacion or {}).get("business_hours")
+            conteo = await recordatorios.recordar_vencidos(
+                session, tenant_id, ahora=ahora, zona=zona, abierto=within_business_hours(horario, ahora)
+            )
+        if getattr(config, "seguimiento_resumen_diario", True):
+            resumen = await recordatorios.resumen_diario(
+                session, tenant_id, ahora=ahora, zona=zona, hora=getattr(config, "seguimiento_resumen_hora", 8)
+            )
+    if conteo.saltados_horario or conteo.saltados_resueltos:
+        log.info(
+            "recordar_seguimientos_saltados",
+            tenant_id=str(tenant_id),
+            saltados_horario=conteo.saltados_horario,
+            saltados_resueltos=conteo.saltados_resueltos,
+        )
+    return conteo, resumen
