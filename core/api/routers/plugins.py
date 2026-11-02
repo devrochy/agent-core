@@ -23,7 +23,7 @@ from sqlalchemy import select
 from core.agents.spec import CORE_PACK_ID, enabled_packs, load_active_spec
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
-from core.api.forms import coerce_schema_values, redact_secrets
+from core.api.forms import coerce_schema_values, hide_fields, redact_secrets
 from core.billing.enforcement import QuotaExceeded
 from core.db.models import PluginConfig, PluginRecord, PluginTenantState
 from core.db.session import get_session
@@ -220,6 +220,7 @@ async def get_plugin_config(
     except PluginConfigError:
         values = {}
 
+    schema, values = hide_fields(schema, values)
     redacted, configured = redact_secrets(schema, values)
     return PluginConfigResponse(
         plugin_id=plugin_id,

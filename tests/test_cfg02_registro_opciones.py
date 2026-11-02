@@ -39,10 +39,15 @@ CLAVES_ESPERADAS = {
 
 
 # ------------------------------------------------------------------ forma
+# Grupos que se sumaron después del primer recorte: Coordinador y Agent OS (HU-CFG-07) y las ayudas de
+# Cerebro, Memoria, Chat web y Multimedia (HU-CFG-09).
+GRUPOS_AMPLIADOS = ("coordinador", "agent_os", "cerebro", "memoria", "chat_web", "multimedia")
+
+
 def test_las_opciones_de_identidad_son_las_31_del_primer_recorte_y_el_modo_del_horario() -> None:
     claves = [o.clave for o in OPCIONES]
     assert len(claves) == len(set(claves))
-    identidad = {o.clave for o in OPCIONES if o.grupo not in ("coordinador", "agent_os")}
+    identidad = {o.clave for o in OPCIONES if o.grupo not in GRUPOS_AMPLIADOS}
     assert identidad == CLAVES_ESPERADAS and len(identidad) == 32
 
 

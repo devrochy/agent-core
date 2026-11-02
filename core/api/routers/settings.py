@@ -51,6 +51,7 @@ from core.config_registro import (
     catalogo_para,
     resolver,
 )
+from core.config_registro.opciones import PRESUPUESTO_USD, SIMILITUD_RAG, TEMPERATURA
 from core.config_registro.validar import validar_valor
 from core.db.models import AppSettings, AuditLog
 from core.db.session import get_session
@@ -234,9 +235,11 @@ class BrainUpdate(BrainSettings):
     """Entrada de `PUT /brain`: mismos rangos que recorta `save_brain` (temperatura 0–2,
     1–50 llamadas a tools por turno, presupuesto ≥ 0); fuera de rango responde 422."""
 
-    model_temperature: float = Field(default=0.3, ge=0, le=2)
-    policy_max_tool_calls: int = Field(default=10, ge=1, le=50)
-    policy_budget: float = Field(default=0.5, ge=0)
+    model_temperature: float = Field(default=0.3, ge=TEMPERATURA[0], le=TEMPERATURA[1])
+    policy_max_tool_calls: int = Field(
+        default=10, ge=rango("policy_max_tool_calls").minimo, le=rango("policy_max_tool_calls").maximo
+    )
+    policy_budget: float = Field(default=0.5, ge=PRESUPUESTO_USD[0], le=PRESUPUESTO_USD[1])
 
 
 class MemorySettings(BaseModel):
@@ -249,9 +252,9 @@ class MemoryUpdate(MemorySettings):
     """Entrada de `PUT /memory`: turnos de contexto 1–200, top-k 0–20 (0 = sin RAG) y
     umbral 0–1 (los rangos de `save_memory`); fuera de rango responde 422."""
 
-    short_term_turns: int = Field(ge=1, le=200)
-    rag_top_k: int = Field(ge=0, le=20)
-    rag_min_score: float = Field(ge=0, le=1)
+    short_term_turns: int = Field(ge=rango("short_term_turns").minimo, le=rango("short_term_turns").maximo)
+    rag_top_k: int = Field(ge=rango("rag_top_k").minimo, le=rango("rag_top_k").maximo)
+    rag_min_score: float = Field(ge=SIMILITUD_RAG[0], le=SIMILITUD_RAG[1])
 
 
 class SkillBinding(BaseModel):
@@ -479,6 +482,7 @@ async def save_identity(
         app_settings.brand_voice = payload.brand_voice
         # Moneda del negocio (HU-UI-01): ISO-4217 en mayúsculas, default COP.
         app_settings.currency = (payload.currency or "COP").strip().upper()[:3] or "COP"
+        zona_anterior = app_settings.timezone or DEFAULT_TIMEZONE
         if payload.timezone is not None:
             app_settings.timezone = payload.timezone
         behavior = dict(app_settings.behavior_config)
@@ -504,6 +508,9 @@ async def save_identity(
         ranges = validate_business_ranges(payload.business_ranges)
         # Sin zona propia, el horario de atención usa la del negocio (ADR-0091).
         business_tz = payload.business_tz.strip() or app_settings.timezone or DEFAULT_TIMEZONE
+        # El horario que seguía la zona del negocio la sigue al cambiarla (HU-CFG-09); uno con zona propia no se toca.
+        if business_tz == zona_anterior and payload.timezone is not None:
+            business_tz = payload.timezone
         business_hours = {"tz": business_tz, "ranges": ranges} if ranges else None
         app_settings.escalation_config = {
             **dict(app_settings.escalation_config or {}),

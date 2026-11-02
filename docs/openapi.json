@@ -42903,6 +42903,11 @@
             "type": "array",
             "title": "Asistente",
             "default": []
+          },
+          "aos_runtime": {
+            "type": "string",
+            "title": "Aos Runtime",
+            "default": "legacy"
           }
         },
         "type": "object",
@@ -49062,7 +49067,11 @@
               "bajas",
               "whatsapp_web",
               "coordinador",
-              "agent_os"
+              "agent_os",
+              "cerebro",
+              "memoria",
+              "chat_web",
+              "multimedia"
             ],
             "title": "Grupo"
           },
@@ -61197,6 +61206,7 @@
           },
           "policy_budget": {
             "type": "number",
+            "maximum": 1000.0,
             "minimum": 0.0,
             "title": "Policy Budget",
             "default": 0.5

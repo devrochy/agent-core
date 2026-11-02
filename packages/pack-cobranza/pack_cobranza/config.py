@@ -32,8 +32,12 @@ class CobranzaConfig(BasePluginConfig):
     dias_anticipacion_cobro: int = Field(
         default=0, ge=0, le=365, description="Días de anticipación del cobro al propietario"
     )
+    # `oculto`: el runtime no lee estas dos claves (HU-CFG-09); no salen en el formulario para que nadie
+    # crea que apagan al asistente. Se conserva lo guardado.
     asistente_activo: bool = Field(
-        default=True, description="Habilitar las respuestas automáticas por WhatsApp"
+        default=True,
+        description="Habilitar las respuestas automáticas por WhatsApp",
+        json_schema_extra={"oculto": True},
     )
     umbral_mora_dias: int = Field(
         default=5, ge=0, le=365, description="Días de atraso a partir de los cuales el cliente es 'rojo'"
@@ -42,7 +46,9 @@ class CobranzaConfig(BasePluginConfig):
         default=2, ge=0, le=365, description="Días de anticipación del recordatorio de cuota"
     )
     escalar_siempre_a_humano: bool = Field(
-        default=False, description="Desviar toda conversación a un gestor humano"
+        default=False,
+        description="Desviar toda conversación a un gestor humano",
+        json_schema_extra={"oculto": True},
     )
     # Cobro digital (ADR-0067). Con `pack_payments` activo se generan links/QR en
     # línea; sin él, la app muestra la cuenta informativa de abajo.
