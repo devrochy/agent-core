@@ -25,6 +25,11 @@ Grupo = Literal[
     # HU-CFG-07: el Coordinador de la conexión (KernelSpec) y las banderas del Agent OS.
     "coordinador",
     "agent_os",
+    # HU-CFG-09: ayudas de las secciones que el panel escribía a mano.
+    "cerebro",
+    "memoria",
+    "chat_web",
+    "multimedia",
 ]
 # De quién es el valor: del negocio o de una conexión (un negocio tiene N). Sale del almacén.
 Ambito = Literal["negocio", "conexion"]

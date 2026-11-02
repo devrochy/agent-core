@@ -35,6 +35,10 @@ RANGOS: dict[str, Rango] = {
     "waweb_send_min_delay_ms": Rango(0, 60_000),
     "waweb_send_max_delay_ms": Rango(0, 120_000),
     "waweb_daily_outbound_cap": Rango(0, 10_000),
+    # Cerebro y memoria (HU-CFG-09)
+    "policy_max_tool_calls": Rango(1, 50),
+    "short_term_turns": Rango(1, 200),
+    "rag_top_k": Rango(0, 20),
 }
 
 

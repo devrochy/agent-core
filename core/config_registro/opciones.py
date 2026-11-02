@@ -890,7 +890,197 @@ AGENT_OS: list[Opcion] = [
     ),
 ]
 
+# ------------------------------------------------ cerebro, memoria, chat web y multimedia (HU-CFG-09)
+# Solo texto para personas: cada una se guarda con su propio `PUT` (`/brain`, `/memory`, `/web-chat`, `/media`).
+# El proveedor, el modelo y la llave de audio y visión quedan fuera: su catálogo cambia por proveedor y la
+# llave es un secreto que el registro no describe.
+_MODELO_POR_DEFECTO = DEFAULT_SPEC["model"]
+_POLITICAS_POR_DEFECTO = DEFAULT_SPEC["policies"]
+_MEMORIA_POR_DEFECTO = DEFAULT_SPEC["memory"]
+# Los decimales no están en `config_limites` (solo enteros): se espejan de los modelos de entrada de la API y
+# `tests/test_cfg02_registro_opciones.py` vigila que coincidan.
+TEMPERATURA = (0.0, 2.0)
+PRESUPUESTO_USD = (0.0, 1000.0)
+SIMILITUD_RAG = (0.0, 1.0)
+SIMILITUD_RAG_POR_DEFECTO = 0.6
+
+CEREBRO = [
+    Opcion(
+        clave="model_primary",
+        grupo="cerebro",
+        tipo="texto",
+        etiqueta="Modelo principal",
+        explicacion=(
+            "El modelo de IA que responde a tus clientes. Cambiarlo afecta el costo y la calidad de todas "
+            "las respuestas."
+        ),
+        por_defecto=_MODELO_POR_DEFECTO["primary"],
+        almacen="spec:model.primary",
+    ),
+    Opcion(
+        clave="model_router",
+        grupo="cerebro",
+        tipo="texto",
+        etiqueta="Modelo para turnos complejos",
+        explicacion="Modelo que se usa en los turnos difíciles que no necesitan herramientas. Vacío, usa el principal.",
+        por_defecto="",
+        almacen="spec:model.router",
+    ),
+    Opcion(
+        clave="model_fallback",
+        grupo="cerebro",
+        tipo="texto",
+        etiqueta="Modelo de respaldo",
+        explicacion="Se usa si el modelo principal falla. Vacío, no hay respaldo y el cliente recibe un aviso.",
+        por_defecto="",
+        almacen="spec:model.fallback",
+    ),
+    Opcion(
+        clave="model_temperature",
+        grupo="cerebro",
+        tipo="decimal",
+        etiqueta="Temperatura",
+        explicacion=(
+            "Qué tan variadas son las respuestas: cerca de 0 el asistente es más predecible y cerca de 2 más "
+            "creativo. Para atender clientes conviene un valor bajo."
+        ),
+        minimo=TEMPERATURA[0],
+        maximo=TEMPERATURA[1],
+        por_defecto=_MODELO_POR_DEFECTO["temperature"],
+        almacen="spec:model.temperature",
+    ),
+    Opcion(
+        clave="policy_max_tool_calls",
+        grupo="cerebro",
+        tipo="entero",
+        etiqueta="Herramientas por turno",
+        explicacion=(
+            "Cuántas veces puede usar una herramienta (agendar, consultar, cobrar…) para responder un solo "
+            "mensaje."
+        ),
+        minimo=rango("policy_max_tool_calls").minimo,
+        maximo=rango("policy_max_tool_calls").maximo,
+        por_defecto=_POLITICAS_POR_DEFECTO["maxToolCallsPerTurn"],
+        almacen="spec:policies.maxToolCallsPerTurn",
+    ),
+    Opcion(
+        clave="policy_budget",
+        grupo="cerebro",
+        tipo="decimal",
+        etiqueta="Presupuesto por conversación",
+        explicacion="En dólares: el asistente deja de trabajar en una conversación al llegar a este gasto.",
+        unidad="USD",
+        minimo=PRESUPUESTO_USD[0],
+        maximo=PRESUPUESTO_USD[1],
+        por_defecto=_POLITICAS_POR_DEFECTO["budgetUsdPerConversation"],
+        almacen="spec:policies.budgetUsdPerConversation",
+    ),
+]
+
+MEMORIA = [
+    Opcion(
+        clave="short_term_turns",
+        grupo="memoria",
+        tipo="entero",
+        etiqueta="Mensajes recientes que recuerda",
+        explicacion="Cuántos mensajes recientes de la conversación ve el asistente al responder.",
+        unidad="mensajes",
+        minimo=rango("short_term_turns").minimo,
+        maximo=rango("short_term_turns").maximo,
+        por_defecto=_MEMORIA_POR_DEFECTO["shortTermTurns"],
+        almacen="spec:memory.shortTermTurns",
+    ),
+    Opcion(
+        clave="rag_top_k",
+        grupo="memoria",
+        tipo="entero",
+        etiqueta="Fragmentos de conocimiento",
+        explicacion=(
+            "Cuántos fragmentos de tu conocimiento y de conversaciones pasadas se le pasan al asistente en cada "
+            "respuesta. 0 = no busca nada."
+        ),
+        minimo=rango("rag_top_k").minimo,
+        maximo=rango("rag_top_k").maximo,
+        por_defecto=0,
+        almacen="spec:memory.rag.topK",
+    ),
+    Opcion(
+        clave="rag_min_score",
+        grupo="memoria",
+        tipo="decimal",
+        etiqueta="Parecido mínimo",
+        explicacion=(
+            "Qué tan parecido debe ser un fragmento a la pregunta para usarlo: cerca de 1 solo los casi idénticos, "
+            "cerca de 0 casi cualquiera. Sin fragmentos a buscar, este valor no se usa."
+        ),
+        minimo=SIMILITUD_RAG[0],
+        maximo=SIMILITUD_RAG[1],
+        por_defecto=SIMILITUD_RAG_POR_DEFECTO,
+        almacen="spec:memory.rag.minScore",
+    ),
+]
+
+CHAT_WEB = [
+    Opcion(
+        clave="web_chat_enabled",
+        grupo="chat_web",
+        tipo="booleano",
+        etiqueta="Chat web activo",
+        explicacion="Enciende el chat que puedes incrustar en tu página. Apagado, el widget no responde.",
+        por_defecto=False,
+        almacen="columna:web_chat_config.enabled",
+    ),
+    Opcion(
+        clave="web_chat_allowed_origins",
+        grupo="chat_web",
+        tipo="lista_de_textos",
+        etiqueta="Dominios permitidos",
+        explicacion="Solo estos dominios pueden incrustar el chat. Uno por línea, con https:// al inicio.",
+        ejemplo="https://tunegocio.com",
+        por_defecto=[],
+        almacen="columna:web_chat_config.allowed_origins",
+    ),
+]
+
+MULTIMEDIA = [
+    Opcion(
+        clave="audio_enabled",
+        grupo="multimedia",
+        tipo="booleano",
+        etiqueta="Transcribir notas de voz",
+        explicacion="El asistente convierte en texto las notas de voz de tus clientes para poder contestarlas.",
+        por_defecto=True,
+        almacen="columna:audio_enabled",
+    ),
+    Opcion(
+        clave="vision_enabled",
+        grupo="multimedia",
+        tipo="booleano",
+        etiqueta="Interpretar imágenes",
+        explicacion="El asistente mira las fotos que envían tus clientes. Apagado, solo acusa recibo.",
+        por_defecto=True,
+        almacen="columna:vision_enabled",
+    ),
+    Opcion(
+        clave="vision_mode",
+        grupo="multimedia",
+        tipo="elegir_una",
+        etiqueta="Modo de imagen",
+        explicacion="Con descripción, el asistente cuenta lo que ve. Sin descripción solo acusa recibo y pregunta qué necesita.",
+        valores=_valores(
+            ("describir", "Describir la imagen", "cuenta lo que ve y contesta"),
+            ("sin_descripcion", "Sin descripción", "acusa recibo y pregunta"),
+        ),
+        por_defecto="describir",
+        depende_de=Dependencia(
+            clave="vision_enabled", condicion="verdadera", motivo="Con la visión apagada no se interpreta ninguna imagen."
+        ),
+        almacen="columna:vision_mode",
+    ),
+]
+
 OPCIONES: tuple[Opcion, ...] = tuple(
     IDENTIDAD + RESPUESTA + CALIDAD + BAJAS + WHATSAPP_WEB + ESCALAMIENTO + VOZ + COORDINADOR + AGENT_OS
+    + CEREBRO + MEMORIA + CHAT_WEB + MULTIMEDIA
 )
 POR_CLAVE: dict[str, Opcion] = {o.clave: o for o in OPCIONES}

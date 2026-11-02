@@ -169,3 +169,26 @@ async def test_horario_lunes_ida_y_vuelta_lo_aplica_el_lunes(app_client) -> None
     assert within_business_hours(business_hours, datetime(2026, 10, 19, 15, 0, tzinfo=UTC)) is True
     assert within_business_hours(business_hours, datetime(2026, 10, 20, 15, 0, tzinfo=UTC)) is False
     assert within_business_hours(business_hours, datetime(2026, 10, 18, 15, 0, tzinfo=UTC)) is False
+
+
+@pytest.mark.aislamiento
+async def test_el_horario_sigue_la_zona_del_negocio_al_cambiarla(app_client) -> None:
+    """HU-CFG-09: un horario que usaba la zona del negocio la sigue; uno con zona propia no se toca."""
+    cookie = await _cookie_for_new_tenant(app_client, "tzsig")
+    current = await _identity(app_client, cookie)
+    franjas = [{"day": 0, "from": "08:00", "to": "18:00"}]
+
+    r = await _put(app_client, cookie, dict(current, business_ranges=franjas, business_tz=""))
+    assert r.status_code == 200, r.text
+    assert (await _identity(app_client, cookie))["business_tz"] == "America/Bogota"
+
+    r = await _put(app_client, cookie, dict(await _identity(app_client, cookie), timezone="America/Mexico_City"))
+    assert r.status_code == 200, r.text
+    assert (await _identity(app_client, cookie))["business_tz"] == "America/Mexico_City"
+
+    # Con zona propia (distinta de la del negocio) no se mueve.
+    propia = dict(await _identity(app_client, cookie), business_tz="Europe/Madrid")
+    assert (await _put(app_client, cookie, propia)).status_code == 200
+    r = await _put(app_client, cookie, dict(await _identity(app_client, cookie), timezone="America/Lima"))
+    assert r.status_code == 200, r.text
+    assert (await _identity(app_client, cookie))["business_tz"] == "Europe/Madrid"

@@ -31,7 +31,7 @@ def render_json_schema_form(schema: dict[str, Any], current_values: dict[str, An
     required = set(schema.get("required", []) or [])
     parts: list[str] = []
     for name, prop in properties.items():
-        if not isinstance(prop, dict):
+        if not isinstance(prop, dict) or prop.get("oculto"):
             continue
         parts.append(_render_prop(name, prop, values.get(name), name in required))
     return "\n".join(parts)
