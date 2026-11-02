@@ -292,3 +292,47 @@ async def test_resumen_cuenta_el_dia_del_negocio_no_el_de_utc() -> None:
     (aviso,) = await _avisos(tid, "commerce.resumen_ventas")
     assert aviso.data["hoy"] == 1 and aviso.data["vencidos"] == 0
     assert aviso.target["filtro"] == "seguimiento:hoy"
+
+
+async def test_el_resumen_de_dos_negocios_el_mismo_dia_no_se_pisa() -> None:
+    """La clave `resumen_ventas:<día>` es la misma en todos los negocios: la unicidad es por negocio."""
+    uno, otro = await _negocio(), await _negocio()
+    ahora = datetime(2026, 11, 3, 13, 0, tzinfo=UTC)
+    await _lead(uno, en=ahora + timedelta(hours=2))
+    await _lead(otro, en=ahora + timedelta(hours=2))
+    await _lead(otro, en=ahora + timedelta(hours=3))
+    await _correr(uno, ahora=ahora)
+    await _correr(otro, ahora=ahora)
+    (a,) = await _avisos(uno, "commerce.resumen_ventas")
+    (b,) = await _avisos(otro, "commerce.resumen_ventas")
+    assert a.data["hoy"] == 1 and b.data["hoy"] == 2
+
+
+async def test_un_negocio_que_falla_no_corta_a_los_demas(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pack_commerce import jobs
+
+    roto, sano = await _negocio(), await _negocio()
+    await _lead(sano, "Del sano", en=datetime.now(UTC) - timedelta(minutes=10))
+    llamados: list[uuid.UUID] = []
+
+    async def tenants() -> list[uuid.UUID]:
+        return [roto, sano]
+
+    real = jobs._recordar_del_negocio
+
+    async def recordar(tenant_id, config, ahora=None):  # type: ignore[no-untyped-def]
+        llamados.append(tenant_id)
+        if tenant_id == roto:
+            raise RuntimeError("negocio roto")
+        return await real(tenant_id, config, ahora)
+
+    async def config(tenant_id, kind):  # type: ignore[no-untyped-def]
+        return CONFIG
+
+    monkeypatch.setattr(jobs, "_tenant_ids", tenants)
+    monkeypatch.setattr(jobs, "_recordar_del_negocio", recordar)
+    monkeypatch.setattr(jobs, "_config_del_negocio", config)
+    await jobs.recordar_seguimientos()
+    assert llamados == [roto, sano]
+    (aviso,) = await _avisos(sano, "commerce.seguimiento_vencido")
+    assert aviso.title == "Seguimiento: Del sano"

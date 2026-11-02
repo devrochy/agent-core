@@ -1,7 +1,9 @@
 """Recordatorios de seguimiento y resumen diario de ventas (HU-CRM-22).
 
-Todo es determinista y sin LLM: una persona programó un seguimiento (HU-CRM-21) y el sistema
-le avisa a ella cuando llega la hora, y cada mañana le resume su día. No escribe al cliente ni
+Todo es determinista y sin LLM: una persona programó un seguimiento (HU-CRM-21) y el sistema avisa
+cuando llega la hora, y cada mañana resume el día. El aviso no se dirige a quien lo programó (el lead no
+guarda quién fue; P-38 deja la asignación por persona abierta): lo ven el dueño, los masters y quien tenga
+acceso a la sección de Ventas, como el aviso de «Lead nuevo». No escribe al cliente ni
 gasta créditos: el aviso va al centro de notificaciones (ADR-0167) y de ahí al push.
 
 Idempotencia sin tabla nueva: la clave de deduplicación del aviso lo es todo.
