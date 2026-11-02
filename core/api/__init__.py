@@ -26,6 +26,7 @@ from core.api.routers import (
     conversation_tasks,
     conversations,
     costs,
+    crons,
     dashboard,
     dashboard_agents,
     datos_cliente,
@@ -121,6 +122,7 @@ api_router.include_router(plan.router)
 api_router.include_router(platform.router)
 api_router.include_router(platform_altas.router)
 api_router.include_router(platform_meta_es.router)
+api_router.include_router(crons.router)
 api_router.include_router(qa.router)
 api_router.include_router(declarative_tools.router)
 api_router.include_router(settings.router)

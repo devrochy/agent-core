@@ -2074,6 +2074,53 @@ class PlatformReadinessRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class CronJobConfig(Base):
+    """Estado operativo de un cron del beat (ADR-0183): pausado y/o con otro horario.
+
+    Tabla de SISTEMA (sin RLS, sin `tenant_id`): los crons son de la plataforma y recorren los
+    negocios por dentro. Solo la lee y escribe `core/admin/crons_service.py` (detrás de rutas
+    master-only, el wrapper de cada cron y el planificador del beat). Sin fila = valores por
+    defecto del catálogo (`core/tasks/cron_catalog.py`)."""
+
+    __tablename__ = "cron_job_configs"
+
+    task_name: Mapped[str] = mapped_column(Text, primary_key=True)
+    paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    schedule_override: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CronRun(Base):
+    """Una ejecución de un cron (ADR-0183): quién la disparó, cuánto tardó y cómo terminó.
+
+    Tabla de SISTEMA (sin RLS, sin `tenant_id`), mismo criterio que `CronJobConfig`. No guarda
+    datos de ningún negocio: de un error solo la CLASE de la excepción (el mensaje puede traer
+    parámetros de consulta). Retención de 30 días (`core.cron_runs_retention`)."""
+
+    __tablename__ = "cron_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('running','success','failed','skipped')", name="ck_cron_runs_status"
+        ),
+        CheckConstraint("trigger in ('scheduled','manual')", name="ck_cron_runs_trigger"),
+        Index("ix_cron_runs_task_started", "task_name", text("started_at desc")),
+        Index("ix_cron_runs_started_at", "started_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_name: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="running")
+    trigger: Mapped[str] = mapped_column(Text, nullable=False, default="scheduled")
+    triggered_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    error_class: Mapped[str | None] = mapped_column(Text)
+    # Código corto del motivo de una ejecución omitida (`plugin_inactivo`, `en_ejecucion`).
+    detail: Mapped[str | None] = mapped_column(Text)
+
+
 class GraphApiCall(Base):
     """Observabilidad: una fila por llamada saliente a Graph API."""
 
