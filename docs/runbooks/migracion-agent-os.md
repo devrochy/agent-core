@@ -80,7 +80,8 @@ agent-core db ruteo --tenant <slug> --modo active
 ### 3.5 pass^4 antes de encender `aos_procedures`
 
 La medición de la plataforma es el workflow **`pass^k de los procedimientos`** (`.github/workflows/evals-procedimientos.yml`, `workflow_dispatch`, runner propio): `k=4`, `runtime=ambos`, sobre la rama/commit que se va a desplegar.
-Mide con y sin el motor los journeys de comercio, agenda, suscripciones y cobranza (cliente simulado + LLM real). Criterio (ADR-0112): **con motor, pass^4 igual o mejor que sin él** (hoy 100 %). Anota **valor y fecha en la bitácora de solvershub-docs**.
+Mide con y sin el motor los journeys de comercio, agenda, suscripciones y cobranza (cliente simulado + LLM real). Criterio (ADR-0112): **con motor, pass^4 igual o mejor que sin él** (hoy 100 %).
+Desde SPEC-43, los journeys con `"requiere_motor": true` (`contratar_plan`, `cambiar_plan`: sus acciones solo existen con el motor, `solo_con_motor_activo`) **no corren en `legacy`**: el log dice «Omitido en legacy» y el reporte los lista en `omitidos`. La comparación «igual o mejor que sin motor» es sobre los journeys que ambos pueden cumplir; los omitidos se miden solo con motor (umbral ≥ 0,85, HU-AOS-15). Anota **valor y fecha en la bitácora de solvershub-docs**.
 
 Qué leer si no llega: el log del job (`≈ n/4` = inestable, con el motivo y el intento fallido). Un solo intento fallido baja el pass^4 a 75 % con 4 journeys: investiga la causa raíz (no re-corras hasta que salga).
 

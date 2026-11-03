@@ -4,6 +4,7 @@
   "procedimientos": [
     "pack_subscriptions.contratar_plan"
   ],
+  "requiere_motor": true,
   "descripcion": "Gherkin 3 de HU-AOS-07 (SPEC-43): el cliente pide el Premium mensual y, antes de confirmar el total, se cambia al anual. El resumen se recalcula y la inscripción sale del anual (el mensual nunca se inscribe).",
   "pasos": [
     {
