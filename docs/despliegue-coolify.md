@@ -89,6 +89,7 @@ Equivalencia con `docker-compose.yml` (la topología de desarrollo):
   Coolify: el orden lo pone quien despliega. **Primero la API** (aplica las migraciones), y cuando
   está `healthy`, el worker y el beat con el mismo commit.
 - El beat corre en **una sola instancia**: dos beats duplican los crons.
+- El beat usa el planificador `core.tasks.cron_scheduler:DbOverrideScheduler` (`-S` en `entrypoint-beat.sh`, ADR-0183): lee `cron_job_configs` cada 30 s, así que necesita `DATABASE_URL` (rol `app_runtime`, como el worker). Si la base no responde sigue con los horarios del código y deja `cron_scheduler_lectura_fallida` en el log. Aplicar la migración 0120 antes del primer despliegue.
 
 El panel y la landing de producción nacen con HU-ARCH-01. La API de campo de cobranza (APK,
 `/api/pack/pack_cobranza/*`) y la app oficial (`/api/v1` directo) **no** tienen ruta pública en

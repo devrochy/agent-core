@@ -110,7 +110,7 @@ services:
   celery-beat:
     build: .
     entrypoint: ["/app/scripts/entrypoint.sh"]
-    command: celery -A core.tasks.celery_app:celery beat --loglevel=info
+    command: celery -A core.tasks.celery_app:celery beat --loglevel=info -S core.tasks.cron_scheduler:DbOverrideScheduler
     env_file: .env
     environment:
       AGENT_CORE_ROLE: beat

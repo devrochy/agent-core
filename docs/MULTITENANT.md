@@ -62,6 +62,7 @@ reconoce `.claude/hooks/guards.py`) y explica el motivo.
 | `pack_versions` (+ vista `agent_templates`) | contenido versionado de las habilidades de la plataforma (ADR-0118 §1); los plugins del negocio no entran. Inmutable salvo `yanked`; `app_runtime` solo tiene `SELECT` |
 | `webhook_events`, `meta_app_subscriptions`, `admin_permissions`, `tenant_invitations`, `platform_meta_app_requirements` | se leen antes de resolver el negocio o son de la plataforma |
 | `tenant_user` | membresía admin→negocio: se consulta antes de conocer el negocio (ADR-0012) y es la base de la autorización |
+| `cron_job_configs`, `cron_runs` | estado operativo e historial de los crons periódicos de la plataforma (ADR-0183): sin `tenant_id` ni datos de un negocio (solo la clase de la excepción). Solo las toca `core/admin/crons_service.py`, desde rutas master-only, el wrapper de los crons y el planificador del beat |
 | `qa_tester_datasets` | datos de prueba de cada tester (ADR-0135 §4), como el resto de `qa_*`; solo el master accede |
 
 Ninguna **vista** de `public` puede tener columna `tenant_id`: `purge_tenant` recorre
