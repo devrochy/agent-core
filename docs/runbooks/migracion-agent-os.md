@@ -96,6 +96,20 @@ Para cerrar R3: el golden en `CUMPLE` y, en `shadow`, durante 7 días el tráfic
 La medición de la plataforma es el workflow **`pass^k de los procedimientos`** (`.github/workflows/evals-procedimientos.yml`, `workflow_dispatch`, runner propio): `k=4`, `runtime=ambos`, sobre la rama/commit que se va a desplegar.
 Mide con y sin el motor los journeys de comercio, agenda, suscripciones y cobranza (cliente simulado + LLM real). Criterio (ADR-0112): **con motor, pass^4 igual o mejor que sin él** (hoy 100 %). Anota **valor y fecha en la bitácora de solvershub-docs**.
 
+**Lanzarlo (solo con el OK explícito del dueño: gasta LLM):**
+
+```bash
+git fetch origin develop && git rev-parse --short origin/develop   # anota el commit que se mide
+gh workflow run evals-procedimientos.yml --ref develop -f k=4 -f runtime=ambos
+gh run list --workflow=evals-procedimientos.yml --limit 1          # id de la corrida; luego: gh run watch <id>
+```
+
+- **Qué corre:** 4 journeys (`evals/journeys/procedimientos/`: contratar plan, cambiar de plan antes de confirmar, pedido a domicilio, agendar una demo) × `k = 4` × 2 runtimes (sin motor y con motor) = 32 intentos, cada uno con cliente simulado y asistente contra el LLM real. Solo con el motor: `-f runtime=v3` (la mitad), pero el criterio compara contra sin motor.
+- **Costo y duración:** 1 a 3 USD por corrida `ambos` (estimación; el workflow no registra el gasto, mídelo en el panel del proveedor del LLM y anótalo) y 20 a 35 minutos (corridas #11 a #13; el límite del job es 180). El workflow **no tiene tope de gasto propio**: lo acotan `k` y el límite de tiempo. El tope mensual por negocio (`EVAL_TOPE_USD_MENSUAL`, 10 USD) es del gate por release (`evaluar-release`, HU-AOS-21), no de este workflow.
+- **Costo cero antes de lanzar:** `bash scripts/gate_evals.sh replay` (golden y journeys de suscripciones grabados, sin red ni clave; exige una base recién migrada y sembrada). **El set `procedimientos` no tiene grabaciones**: `journeys.py --set procedimientos --grabacion replay` falla cerrado (exit 3) y nunca cae al LLM real. Regrabarlo también gasta (`--grabacion record`, con OK).
+- **Comparte el grupo de concurrencia `evals-nightly`:** no corre a la vez que el nightly ni otra corrida de este workflow.
+- **Después:** valor y fecha en la bitácora de solvershub-docs (con el commit medido y el id de la corrida), y el HU-AOS-15 / HU-AOS-21 según el resultado.
+
 Qué leer si no llega: el log del job (`≈ n/4` = inestable, con el motivo y el intento fallido). Un solo intento fallido baja el pass^4 a 75 % con 4 journeys: investiga la causa raíz (no re-corras hasta que salga).
 
 > Límite conocido: esta medición es de **la plataforma** (sets de journeys del repo), no del golden set de cada negocio. HU-AOS-15 pide el pass^4 *por negocio*; hasta que exista una corrida por negocio, usa además el golden set del negocio
