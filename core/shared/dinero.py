@@ -32,6 +32,9 @@ MONEY_KEYS = {
     # SPEC-43 (HU-SUB-29/34): lo que el cliente confirma en la inscripción y en el cambio de plan. Las cotizaciones
     # ya los devolvían sin verificarse, aunque `cambiar_plan.json` hace `mustMatch` sobre ambos.
     "monto_a_pagar", "precio_nuevo",
+    # ADR-0185 (HU-SUB-37): el precio de un plan en `sub_listar_planes` (catálogo del negocio). Sin esta clave,
+    # «$200.000» tomado del listado se bloqueaba con `monto_sin_evidencia`. Hoy solo esa tool la devuelve.
+    "precio",
 }
 
 
