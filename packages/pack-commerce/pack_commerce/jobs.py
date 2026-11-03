@@ -25,6 +25,7 @@ from core.shared.exceptions import PluginConfigError
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from core.tasks.decorators import register_cron
+from pack_commerce.config import FOLLOW_UP_HORAS_MAX, FOLLOW_UP_HORAS_POR_DEFECTO
 from pack_commerce.etapas import cambiar_etapa
 from pack_commerce.models import Lead, Quote
 
@@ -99,10 +100,14 @@ async def _follow_up_leads_del_negocio(tenant_id: uuid.UUID, config) -> tuple[in
 
     total_candidates = 0
     total_sent = 0
-    follow_up_hours = getattr(config, "follow_up_hours", 24) or 24
-    threshold = datetime.now(UTC) - timedelta(hours=follow_up_hours)
-    # Ventana de 24h de WhatsApp: solo leads con actividad en las últimas 24h
-    window_limit = datetime.now(UTC) - timedelta(hours=24)
+    # Dentro de la ventana de 24h de WhatsApp el tramo [window_limit, threshold) solo existe si la espera es
+    # menor que 24h. Una config vieja con 24 o más (nunca envió nada) se lee como el valor por defecto.
+    follow_up_hours = getattr(config, "follow_up_hours", FOLLOW_UP_HORAS_POR_DEFECTO)
+    if not 0 < follow_up_hours <= FOLLOW_UP_HORAS_MAX:
+        follow_up_hours = FOLLOW_UP_HORAS_POR_DEFECTO
+    now = datetime.now(UTC)
+    threshold = now - timedelta(hours=follow_up_hours)
+    window_limit = now - timedelta(hours=24)
 
     async with get_session() as session:
         leads = (

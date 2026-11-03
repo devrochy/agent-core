@@ -10,6 +10,12 @@ from pydantic import Field, SecretStr, field_validator
 from core.mcp.types import BasePluginConfig
 
 _PREFIJO = re.compile(r"^[A-Za-z0-9]{1,8}$")
+# Reenganche de leads (`jobs.follow_up_leads`): solo se escribe a quien habló en las últimas 24 h
+# (ventana de WhatsApp: fuera de ella no se puede mandar texto libre), así que la espera tiene que
+# ser menor que 24. Un valor de 24 o más dejaría las dos cotas de la consulta en el mismo punto:
+# el cron correría cada día sin enviar nada.
+FOLLOW_UP_HORAS_POR_DEFECTO = 4
+FOLLOW_UP_HORAS_MAX = 23
 # `business_name` y `vertical` se siguen aceptando por compatibilidad con configuraciones ya
 # guardadas (antes los pedía el pedido de un plan; hoy los planes son del pack de Suscripciones).
 _CAMPOS_VALIDOS = {
@@ -26,8 +32,14 @@ class CRMConfig(BasePluginConfig):
         default=True,
         description="Crear un lead automáticamente cuando inicia una conversación nueva",
     )
+    # `le=8760` se mantiene: negocios que guardaron 24 (el default anterior) tienen que seguir cargando
+    # su config; fuera de 1..`FOLLOW_UP_HORAS_MAX` el cron usa el valor por defecto.
     follow_up_hours: int = Field(
-        default=24, ge=0, le=8760, description="Horas sin actividad antes de marcar un lead para seguimiento"
+        default=FOLLOW_UP_HORAS_POR_DEFECTO, ge=0, le=8760,
+        description=(
+            f"Horas sin actividad antes de reenganchar a un lead calificado (1 a {FOLLOW_UP_HORAS_MAX}: "
+            "solo se le escribe dentro de las 24 h de WhatsApp desde su último mensaje)"
+        ),
     )
     # HU-CRM-22: avisos de seguimiento. Nacen encendidos porque solo se disparan por seguimientos que
     # una persona programó (HU-CRM-21) y van a su propio centro de notificaciones, sin mensajes al cliente.
