@@ -715,7 +715,10 @@ async def publicar_en_conexiones(
     release candidata sin activarla. `ErrorDelEditor` (409/422) o `versiones.ErroresDeContrato`
     (422 por campo) antes de escribir nada."""
     from core.agents import instancias, versiones
+    from core.agents.aviso_retiros import problemas_de_publicacion
+    from core.agents.referencias_retiradas import binario_de
     from core.billing.enforcement import QuotaExceeded
+    from core.plugin_manager import plugin_manager
     from core.releases import build
 
     _exigir_scope(tenant_id)
@@ -740,6 +743,8 @@ async def publicar_en_conexiones(
     modelo = problema_de_modelo(contenido, contexto.provider)
     if modelo is not None:
         issues.append(modelo)
+    # HU-AOS-59: lo que el binario ya retiró, en palabras simples, ANTES de publicar la versión.
+    issues += problemas_de_publicacion(contenido, binario_de(plugin_manager.list_modules()))
     disponibles = {
         d.connection_id: d
         for d in await destinos(tenant_id, agent_id, habilidades_del_contenido(contenido), habilitados)

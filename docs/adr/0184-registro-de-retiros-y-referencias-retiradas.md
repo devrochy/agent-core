@@ -48,4 +48,12 @@ Detalles que el diseño fija:
 - `cli/commands/db.py`: `auditar-referencias` y `migrar-referencias`.
 - `core/releases/build.py`: `habilidades_efectivas` (lectura); `core/releases/promocion.py` y `core/api/routers/connection_releases.py`: exención y motivo reservado `migrar_referencias`.
 - `packages/catalogo-nombres.lock.json`, `scripts/catalogo_nombres_lock.py`, `tests/test_catalogo_retiros.py`, `tests/test_referencias_retiradas.py`, `tests/integration/test_referencias_retiradas.py`.
-- Runbook: `docs/runbooks/referencias-retiradas.md`. Pendiente (entregas posteriores de la HU): endpoint de master, aviso al dueño en el editor y en la publicación, y botón «Corregir» en el panel.
+- Runbook: `docs/runbooks/referencias-retiradas.md`. Pendiente (entrega posterior de la HU): el botón «Corregir» en el panel (la corrección sigue siendo solo del CLI).
+
+## Adenda (2026-11-03): API de solo lectura del aviso
+
+El aviso llega al panel por tres rutas de solo lectura; ninguna escribe ni corrige (decisión del dueño: solo avisar).
+
+- **Master:** `GET /api/v1/admin/platform/tenants/{tenant_id}/retired-references`. Es `auditar-referencias --tenant` por HTTP: filas con código interno, borradores y conexiones aparte. Solo `master` (ni tester ni colaborador, como el resto de Agent OS).
+- **Dueño:** `GET /api/v1/admin/agents/retired-references` (todos los agentes del negocio con avisos) y `GET /api/v1/admin/agents/{id}/retired-references` (uno, para el editor). Aislados por `tenant_scope`; el texto sale de `core/agents/aviso_retiros.py`, sin códigos internos.
+- **Publicar:** el borrador que nombra algo retirado da 422 `invalid_spec` con ese mismo texto por campo (y `details.retired_references`), antes de publicar. Para una acción retirada el status ya era 422; para un procedimiento retirado, el linter del contrato no lo veía: la versión salía publicada (200) y el build de la release fallaba después, por conexión. Ahora es el mismo 422 antes de publicar.

@@ -370,6 +370,73 @@
         }
       }
     },
+    "/api/v1/admin/agents/retired-references": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "List Retired References",
+        "description": "Avisos del negocio (HU-AOS-59, ADR-0184): por agente, lo que nombra y ya no existe, en palabras\nsimples. Solo lectura; solo ve los agentes de su negocio. Solo salen los agentes con avisos.",
+        "operationId": "list_retired_references_api_v1_admin_agents_retired_references_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetiredReferencesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/agents/{agent_id}": {
       "get": {
         "tags": [
@@ -700,6 +767,83 @@
                   }
                 },
                 "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/retired-references": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Get Retired References",
+        "description": "Aviso de un agente para el editor y el flujo de publicar (mismo texto que el 422 de publicar).\nSin avisos, `notices` viene vacío y `blocks_publish` en false. 404 si no es un agente del negocio.",
+        "operationId": "get_retired_references_api_v1_admin_agents__agent_id__retired_references_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRetiredNotices"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
@@ -14691,6 +14835,103 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AgentOSResultado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/tenants/{tenant_id}/retired-references": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Get Retired References",
+        "description": "Agentes, versiones, rutas, códigos y releases activas de este negocio que nombran algo que el\nbinario ya retiró: el mismo contenido que `agent-core db auditar-referencias --tenant <slug>`.\nSolo lectura: no escribe nada ni corrige. Solo el master (ni el tester ni un colaborador).",
+        "operationId": "get_retired_references_api_v1_admin_platform_tenants__tenant_id__retired_references_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetiredReferencesReport"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No es el admin master (tampoco el tester ni un colaborador).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "El negocio no existe o está borrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
                 }
               }
             }
@@ -55774,6 +56015,308 @@
         ],
         "title": "ResumenPorAgente"
       },
+      "RetiredAffectedConnection": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "release": {
+            "type": "integer",
+            "title": "Release",
+            "description": "Número de la release activa afectada."
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "release"
+        ],
+        "title": "RetiredAffectedConnection"
+      },
+      "RetiredAsideConnection": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "borrada",
+              "playground",
+              "integracion"
+            ],
+            "title": "Reason"
+          },
+          "release": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/RetiredReferenceRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "reason",
+          "release",
+          "rows"
+        ],
+        "title": "RetiredAsideConnection",
+        "description": "Conexión borrada o que no produce conversaciones: se reporta aparte y no cuenta como falla."
+      },
+      "RetiredNotice": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "published",
+              "in_use"
+            ],
+            "title": "Scope",
+            "description": "`draft`: está en el borrador (publicar falla hasta corregirlo). `published`: está en la última versión publicada. `in_use`: lo que corre hoy en una conexión lo nombra, aunque el borrador y la última versión ya estén limpios."
+          },
+          "field": {
+            "type": "string",
+            "title": "Field",
+            "description": "Dónde del contenido del agente está (p. ej. `tools[3].tool`), para señalar el control en el editor. Es un localizador técnico: no se muestra al dueño."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "action",
+              "procedure"
+            ],
+            "title": "Kind"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Cómo se llamaba lo retirado (p. ej. `informar_plan`)."
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Qué ya no existe y qué hacer, en palabras simples. Es el texto que se muestra."
+          }
+        },
+        "type": "object",
+        "required": [
+          "scope",
+          "field",
+          "kind",
+          "name",
+          "message"
+        ],
+        "title": "RetiredNotice",
+        "description": "Una cosa que el agente nombra y ya no existe, con el texto para el dueño (sin códigos internos)."
+      },
+      "RetiredReferenceRow": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "version",
+              "draft",
+              "release"
+            ],
+            "title": "Scope",
+            "description": "`version`: la última versión publicada del agente. `draft`: el borrador, si difiere de esa versión (se avisa, no cuenta como falla). `release`: el manifiesto de una release activa."
+          },
+          "agent": {
+            "type": "string",
+            "title": "Agent",
+            "description": "Key del agente."
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version",
+            "description": "Número de versión (null en el borrador)."
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Ruta en el contenido (p. ej. `tools[3].tool`)."
+          },
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "`accion_inexistente` o `procedimiento_inexistente` (código interno: solo para el equipo)."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "action",
+              "procedure"
+            ],
+            "title": "Kind"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "destination": {
+            "type": "string",
+            "title": "Destination",
+            "description": "Lo que haría `migrar-referencias`: «quitar» o «reemplazar por <id> <rango>»."
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "El mismo aviso en palabras simples que ve el dueño."
+          },
+          "where": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Where",
+            "description": "Releases activas que lo contienen («conexión <id> release #n»)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "scope",
+          "agent",
+          "version",
+          "path",
+          "code",
+          "kind",
+          "name",
+          "destination",
+          "message",
+          "where"
+        ],
+        "title": "RetiredReferenceRow",
+        "description": "Una referencia retirada, con el mismo contenido que una fila de `auditar-referencias`."
+      },
+      "RetiredReferencesOut": {
+        "properties": {
+          "affected_agents": {
+            "type": "integer",
+            "title": "Affected Agents"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AgentRetiredNotices"
+            },
+            "type": "array",
+            "title": "Agents",
+            "description": "Solo los agentes con al menos un aviso."
+          }
+        },
+        "type": "object",
+        "required": [
+          "affected_agents",
+          "agents"
+        ],
+        "title": "RetiredReferencesOut"
+      },
+      "RetiredReferencesReport": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Tenant Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "affected": {
+            "type": "boolean",
+            "title": "Affected",
+            "description": "Hay versiones o releases activas con referencias retiradas (lo que pone el exit code del CLI)."
+          },
+          "agents_affected": {
+            "type": "integer",
+            "title": "Agents Affected"
+          },
+          "releases_affected": {
+            "type": "integer",
+            "title": "Releases Affected"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/RetiredReferenceRow"
+            },
+            "type": "array",
+            "title": "Rows",
+            "description": "Versiones publicadas y releases activas: lo que cuenta."
+          },
+          "drafts": {
+            "items": {
+              "$ref": "#/components/schemas/RetiredReferenceRow"
+            },
+            "type": "array",
+            "title": "Drafts",
+            "description": "Borradores con referencias retiradas: se avisan, no cuentan."
+          },
+          "affected_connections": {
+            "items": {
+              "$ref": "#/components/schemas/RetiredAffectedConnection"
+            },
+            "type": "array",
+            "title": "Affected Connections"
+          },
+          "aside": {
+            "items": {
+              "$ref": "#/components/schemas/RetiredAsideConnection"
+            },
+            "type": "array",
+            "title": "Aside"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Si la auditoría de este negocio falló, por qué; el resto del informe puede estar vacío."
+          }
+        },
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "slug",
+          "affected",
+          "agents_affected",
+          "releases_affected",
+          "rows",
+          "drafts",
+          "affected_connections",
+          "aside",
+          "error"
+        ],
+        "title": "RetiredReferencesReport"
+      },
       "RevokeRequest": {
         "properties": {
           "section": {
@@ -62985,6 +63528,63 @@
           "cost_usd"
         ],
         "title": "AgentReliability"
+      },
+      "AgentRetiredNotices": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "published_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Version",
+            "description": "Número de la última versión publicada (null si nunca se publicó)."
+          },
+          "in_use": {
+            "type": "boolean",
+            "title": "In Use",
+            "description": "Una conexión viva de tu negocio corre hoy algo que nombra lo retirado."
+          },
+          "blocks_publish": {
+            "type": "boolean",
+            "title": "Blocks Publish",
+            "description": "El borrador nombra algo retirado: publicar da 422 hasta corregirlo."
+          },
+          "notices": {
+            "items": {
+              "$ref": "#/components/schemas/RetiredNotice"
+            },
+            "type": "array",
+            "title": "Notices"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "key",
+          "name",
+          "published_version",
+          "in_use",
+          "blocks_publish",
+          "notices"
+        ],
+        "title": "AgentRetiredNotices"
       },
       "AgentTask": {
         "properties": {

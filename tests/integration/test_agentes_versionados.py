@@ -43,6 +43,10 @@ def fixture(nombre: str) -> dict[str, Any]:
 def ventas_sin_secretos() -> dict[str, Any]:
     spec = fixture("ventas.agentspec.json")
     spec["declarativeTools"][0]["headers"] = {"X-Cliente": "demo"}
+    # La fixture todavía nombra procedimientos que el binario retiró (SPEC-43 PR-4). Publicar ya no los
+    # deja pasar (HU-AOS-59, ADR-0184: 422 con el aviso en palabras simples), así que aquí se quitan.
+    spec["procedures"] = []
+    spec["exposes"]["procedures"] = []
     return spec
 
 
