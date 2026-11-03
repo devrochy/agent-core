@@ -6,12 +6,14 @@ plugins para que sus tareas @register_cron queden registradas.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 from celery import Celery
 from celery.schedules import crontab
 from celery.signals import beat_init, setup_logging, worker_init
 
 from core.config import get_settings
-from core.shared.async_bridge import run_async
 from core.shared.logger import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -50,6 +52,29 @@ _conectar_trazas()
 
 
 # ---------------------------------------------------------------- cron de core
+def core_cron(task_name: str, schedule: Any) -> Callable[[Callable[[], Any]], Callable[[], Any]]:
+    """Registra un cron de CORE (ADR-0183): tarea Celery + entrada del beat.
+
+    Lo decorado es un `job()` sin argumentos que devuelve la corrutina a ejecutar (o hace el
+    trabajo síncrono y devuelve `None`). `run_cron` lo envuelve: pausa, lock anti-solape y
+    registro de la ejecución en `cron_runs`. La tarea acepta `trigger`/`triggered_by` para la
+    ejecución manual (`POST /admin/platform/crons/{name}/run`); el beat no manda argumentos.
+    Los crons de packs hacen lo mismo con `register_cron` (core/tasks/decorators.py).
+    """
+
+    def decorator(job: Callable[[], Any]) -> Callable[[], Any]:
+        @celery.task(name=task_name)
+        def _task(trigger: str = "scheduled", triggered_by: str | None = None) -> None:
+            from core.tasks.cron_runtime import run_cron
+
+            run_cron(task_name, job, trigger=trigger, triggered_by=triggered_by)
+
+        celery.conf.beat_schedule[task_name] = {"task": task_name, "schedule": schedule}
+        return job
+
+    return decorator
+
+
 # Salud de suscripciones de webhook de Meta (cada 15 min): capacidad de
 # CORE, no de un pack -- no pasa por `register_cron` (core/tasks/decorators.py),
 # que está atado a `plugin_manager.is_active(plugin_id)` y no tiene sentido
@@ -57,60 +82,36 @@ _conectar_trazas()
 _META_SUBSCRIPTIONS_HEALTH_TASK = "core.meta_subscriptions_health_check"
 
 
-@celery.task(name=_META_SUBSCRIPTIONS_HEALTH_TASK)
-def _meta_subscriptions_health_check() -> None:
+@core_cron(_META_SUBSCRIPTIONS_HEALTH_TASK, crontab(minute="*/15"))
+def _meta_subscriptions_health_check() -> Any:
     from core.tasks.meta_subscriptions_health import check_all_subscriptions_health
 
-    try:
-        run_async(check_all_subscriptions_health())
-    except Exception:
-        log.exception("cron_task_failed", task=_META_SUBSCRIPTIONS_HEALTH_TASK)
+    return check_all_subscriptions_health()
 
-
-celery.conf.beat_schedule[_META_SUBSCRIPTIONS_HEALTH_TASK] = {
-    "task": _META_SUBSCRIPTIONS_HEALTH_TASK,
-    "schedule": crontab(minute="*/15"),
-}
 
 # Refresco del token de 60 días de Instagram Login (diario, de madrugada): Meta solo deja refrescar un token de al
 # menos 24 h y aún vigente, así que se corre una vez al día y solo toca los que están por vencer (HU-CHAN-04).
 _INSTAGRAM_TOKEN_REFRESH_TASK = "core.instagram_token_refresh"
 
 
-@celery.task(name=_INSTAGRAM_TOKEN_REFRESH_TASK)
-def _instagram_token_refresh() -> None:
+@core_cron(_INSTAGRAM_TOKEN_REFRESH_TASK, crontab(hour="3", minute="30"))
+def _instagram_token_refresh() -> Any:
     from core.tasks.instagram_token_refresh import refresh_instagram_tokens
 
-    try:
-        run_async(refresh_instagram_tokens())
-    except Exception:
-        log.exception("cron_task_failed", task=_INSTAGRAM_TOKEN_REFRESH_TASK)
+    return refresh_instagram_tokens()
 
-
-celery.conf.beat_schedule[_INSTAGRAM_TOKEN_REFRESH_TASK] = {
-    "task": _INSTAGRAM_TOKEN_REFRESH_TASK,
-    "schedule": crontab(hour="3", minute="30"),
-}
 
 # Sync de plantillas de WhatsApp (cada hora): el webhook `message_template_
 # status_update` es la fuente de verdad real, esto es solo el fallback.
 _MESSAGE_TEMPLATE_SYNC_TASK = "core.message_template_sync"
 
 
-@celery.task(name=_MESSAGE_TEMPLATE_SYNC_TASK)
-def _message_template_sync() -> None:
+@core_cron(_MESSAGE_TEMPLATE_SYNC_TASK, crontab(minute="0"))
+def _message_template_sync() -> Any:
     from core.tasks.message_template_sync import sync_all_waba_templates
 
-    try:
-        run_async(sync_all_waba_templates())
-    except Exception:
-        log.exception("cron_task_failed", task=_MESSAGE_TEMPLATE_SYNC_TASK)
+    return sync_all_waba_templates()
 
-
-celery.conf.beat_schedule[_MESSAGE_TEMPLATE_SYNC_TASK] = {
-    "task": _MESSAGE_TEMPLATE_SYNC_TASK,
-    "schedule": crontab(minute="0"),
-}
 
 # Sync de `pricing_analytics` (diario, de madrugada): el webhook `statuses`
 # (con su objeto `pricing`) llega en tiempo real pero NUNCA trae un monto
@@ -118,20 +119,12 @@ celery.conf.beat_schedule[_MESSAGE_TEMPLATE_SYNC_TASK] = {
 _META_PRICING_SYNC_TASK = "core.meta_pricing_sync"
 
 
-@celery.task(name=_META_PRICING_SYNC_TASK)
-def _meta_pricing_sync() -> None:
+@core_cron(_META_PRICING_SYNC_TASK, crontab(hour="2", minute="0"))
+def _meta_pricing_sync() -> Any:
     from core.tasks.meta_pricing_sync import sync_all_waba_pricing
 
-    try:
-        run_async(sync_all_waba_pricing())
-    except Exception:
-        log.exception("cron_task_failed", task=_META_PRICING_SYNC_TASK)
+    return sync_all_waba_pricing()
 
-
-celery.conf.beat_schedule[_META_PRICING_SYNC_TASK] = {
-    "task": _META_PRICING_SYNC_TASK,
-    "schedule": crontab(hour="2", minute="0"),
-}
 
 # Salud completa de conexiones Meta (horaria) -- `app_subscription_active`
 # (15 min) sigue siendo `core.meta_subscriptions_health_check`, este cron
@@ -139,116 +132,68 @@ celery.conf.beat_schedule[_META_PRICING_SYNC_TASK] = {
 _META_HEALTH_CHECK_TASK = "core.meta_health_check"
 
 
-@celery.task(name=_META_HEALTH_CHECK_TASK)
-def _meta_health_check() -> None:
+@core_cron(_META_HEALTH_CHECK_TASK, crontab(minute="30"))
+def _meta_health_check() -> Any:
     from core.tasks.meta_health_check import check_all_connections_health
 
-    try:
-        run_async(check_all_connections_health())
-    except Exception:
-        log.exception("cron_task_failed", task=_META_HEALTH_CHECK_TASK)
+    return check_all_connections_health()
 
-
-celery.conf.beat_schedule[_META_HEALTH_CHECK_TASK] = {
-    "task": _META_HEALTH_CHECK_TASK,
-    "schedule": crontab(minute="30"),
-}
 
 # Alerta de access tokens de Meta vencidos/por vencer (diaria, de madrugada).
 _META_TOKEN_EXPIRY_TASK = "core.meta_token_expiry_check"
 
 
-@celery.task(name=_META_TOKEN_EXPIRY_TASK)
-def _meta_token_expiry_check() -> None:
+@core_cron(_META_TOKEN_EXPIRY_TASK, crontab(hour="3", minute="15"))
+def _meta_token_expiry_check() -> Any:
     from core.tasks.meta_token_expiry_check import check_tokens_expiry
 
-    try:
-        run_async(check_tokens_expiry())
-    except Exception:
-        log.exception("cron_task_failed", task=_META_TOKEN_EXPIRY_TASK)
+    return check_tokens_expiry()
 
-
-celery.conf.beat_schedule[_META_TOKEN_EXPIRY_TASK] = {
-    "task": _META_TOKEN_EXPIRY_TASK,
-    "schedule": crontab(hour="3", minute="15"),
-}
 
 # Retención de la memoria semántica (ADR-0053; no-op si MEMORY_RETENTION_DAYS=0).
 _MEMORY_RETENTION_TASK = "core.memory_retention"
 
 
-@celery.task(name=_MEMORY_RETENTION_TASK)
-def _memory_retention() -> None:
+@core_cron(_MEMORY_RETENTION_TASK, crontab(hour="3", minute="45"))
+def _memory_retention() -> Any:
     from core.tasks.memory_retention import purge_expired_memory
 
-    try:
-        run_async(purge_expired_memory())
-    except Exception:
-        log.exception("cron_task_failed", task=_MEMORY_RETENTION_TASK)
+    return purge_expired_memory()
 
-
-celery.conf.beat_schedule[_MEMORY_RETENTION_TASK] = {
-    "task": _MEMORY_RETENTION_TASK,
-    "schedule": crontab(hour="3", minute="45"),
-}
 
 # Retención del centro de notificaciones (ADR-0167): baja lógica a los 180 días.
 _NOTIFICATIONS_RETENTION_TASK = "core.notifications_retention"
 
 
-@celery.task(name=_NOTIFICATIONS_RETENTION_TASK)
-def _notifications_retention() -> None:
+@core_cron(_NOTIFICATIONS_RETENTION_TASK, crontab(hour="4", minute="0"))
+def _notifications_retention() -> Any:
     from core.tasks.notifications_retention import retener_notificaciones
 
-    try:
-        run_async(retener_notificaciones())
-    except Exception:
-        log.exception("cron_task_failed", task=_NOTIFICATIONS_RETENTION_TASK)
+    return retener_notificaciones()
 
-
-celery.conf.beat_schedule[_NOTIFICATIONS_RETENTION_TASK] = {
-    "task": _NOTIFICATIONS_RETENTION_TASK,
-    "schedule": crontab(hour="4", minute="0"),
-}
 
 # Retención de los eventos de acceso (ADR-0174, HU-ACC-06): baja lógica a los 180 días.
 _ACCESS_EVENTS_RETENTION_TASK = "core.access_events_retention"
 
 
-@celery.task(name=_ACCESS_EVENTS_RETENTION_TASK)
-def _access_events_retention() -> None:
+@core_cron(_ACCESS_EVENTS_RETENTION_TASK, crontab(hour="4", minute="10"))
+def _access_events_retention() -> Any:
     from core.tasks.access_events_retention import retener_eventos_de_acceso
 
-    try:
-        run_async(retener_eventos_de_acceso())
-    except Exception:
-        log.exception("cron_task_failed", task=_ACCESS_EVENTS_RETENTION_TASK)
+    return retener_eventos_de_acceso()
 
-
-celery.conf.beat_schedule[_ACCESS_EVENTS_RETENTION_TASK] = {
-    "task": _ACCESS_EVENTS_RETENTION_TASK,
-    "schedule": crontab(hour="4", minute="10"),
-}
 
 # «Cliente esperando respuesta» (ADR-0167): cada 5 min avisa de los clientes con una escalación
 # abierta que llevan más de 15 min sin respuesta humana (un aviso por episodio).
 _CLIENTE_ESPERANDO_TASK = "core.cliente_esperando"
 
 
-@celery.task(name=_CLIENTE_ESPERANDO_TASK)
-def _cliente_esperando() -> None:
+@core_cron(_CLIENTE_ESPERANDO_TASK, crontab(minute="*/5"))
+def _cliente_esperando() -> Any:
     from core.tasks.cliente_esperando import avisar_clientes_esperando
 
-    try:
-        run_async(avisar_clientes_esperando())
-    except Exception:
-        log.exception("cron_task_failed", task=_CLIENTE_ESPERANDO_TASK)
+    return avisar_clientes_esperando()
 
-
-celery.conf.beat_schedule[_CLIENTE_ESPERANDO_TASK] = {
-    "task": _CLIENTE_ESPERANDO_TASK,
-    "schedule": crontab(minute="*/5"),
-}
 
 # Canary (HU-AOS-32, adenda de ADR-0117 §5): cada 5 min la señal dura y la habilidad retirada; cada
 # hora, además, la no-inferioridad (dos entradas: no hace falta estado para saber «una vez por hora»).
@@ -256,61 +201,38 @@ _CANARY_SENAL_DURA_TASK = "core.canary_senal_dura"
 _CANARY_NO_INFERIORIDAD_TASK = "core.canary_no_inferioridad"
 
 
-@celery.task(name=_CANARY_SENAL_DURA_TASK)
-def _canary_senal_dura() -> None:
+@core_cron(_CANARY_SENAL_DURA_TASK, crontab(minute="*/5"))
+def _canary_senal_dura() -> Any:
     from core.releases.canary_job import revisar
 
-    try:
-        run_async(revisar(no_inferioridad=False))
-    except Exception:
-        log.exception("cron_task_failed", task=_CANARY_SENAL_DURA_TASK)
+    return revisar(no_inferioridad=False)
 
 
-@celery.task(name=_CANARY_NO_INFERIORIDAD_TASK)
-def _canary_no_inferioridad() -> None:
+@core_cron(_CANARY_NO_INFERIORIDAD_TASK, crontab(minute="0"))
+def _canary_no_inferioridad() -> Any:
     from core.releases.canary_job import revisar
 
-    try:
-        run_async(revisar(no_inferioridad=True))
-    except Exception:
-        log.exception("cron_task_failed", task=_CANARY_NO_INFERIORIDAD_TASK)
+    return revisar(no_inferioridad=True)
 
-
-celery.conf.beat_schedule[_CANARY_SENAL_DURA_TASK] = {
-    "task": _CANARY_SENAL_DURA_TASK,
-    "schedule": crontab(minute="*/5"),
-}
-celery.conf.beat_schedule[_CANARY_NO_INFERIORIDAD_TASK] = {
-    "task": _CANARY_NO_INFERIORIDAD_TASK,
-    "schedule": crontab(minute="0"),
-}
 
 # Consolidación nocturna de la memoria (ADR-0114, HU-AOS-36): datos de tareas cerradas → hechos.
 _MEMORY_CONSOLIDATION_TASK = "core.memory_consolidation"
 
 
-@celery.task(name=_MEMORY_CONSOLIDATION_TASK)
-def _memory_consolidation() -> None:
+@core_cron(_MEMORY_CONSOLIDATION_TASK, crontab(hour="3", minute="30"))
+def _memory_consolidation() -> Any:
     from core.tasks.memory_consolidation import consolidar_memoria
 
-    try:
-        run_async(consolidar_memoria())
-    except Exception:
-        log.exception("cron_task_failed", task=_MEMORY_CONSOLIDATION_TASK)
+    return consolidar_memoria()
 
-
-celery.conf.beat_schedule[_MEMORY_CONSOLIDATION_TASK] = {
-    "task": _MEMORY_CONSOLIDATION_TASK,
-    "schedule": crontab(hour="3", minute="30"),
-}
 
 # Esperas vencidas del motor de procedimientos (HU-AOS-07): una tarea que espera el pago y no lo
 # recibe en 72 h se cancela con `espera_vencida`. Sin negocios con `aos_procedures`, no hace nada.
 _KERNEL_ESPERAS_TASK = "core.kernel_esperas_vencidas"
 
 
-@celery.task(name=_KERNEL_ESPERAS_TASK)
-def _kernel_esperas_vencidas() -> None:
+@core_cron(_KERNEL_ESPERAS_TASK, crontab(minute="25"))
+def _kernel_esperas_vencidas() -> Any:
     from core.kernel.procedures.esperas import vencer_esperas
     from core.plugin_manager import plugin_manager
 
@@ -319,36 +241,20 @@ def _kernel_esperas_vencidas() -> None:
         await plugin_manager.ensure_process_activation()
         await vencer_esperas()
 
-    try:
-        run_async(_correr())
-    except Exception:
-        log.exception("cron_task_failed", task=_KERNEL_ESPERAS_TASK)
+    return _correr()
 
-
-celery.conf.beat_schedule[_KERNEL_ESPERAS_TASK] = {
-    "task": _KERNEL_ESPERAS_TASK,
-    "schedule": crontab(minute="25"),
-}
 
 # Antiabuso del alta (HU-SH-07, ADR-0125): las huellas de teléfono y documento de los
 # pedidos de alta se vacían a los 12 meses (ya no sirven para ninguna regla).
 _ALTA_HUELLAS_RETENCION_TASK = "core.alta_huellas_retencion"
 
 
-@celery.task(name=_ALTA_HUELLAS_RETENCION_TASK)
-def _alta_huellas_retencion() -> None:
+@core_cron(_ALTA_HUELLAS_RETENCION_TASK, crontab(hour="4", minute="10"))
+def _alta_huellas_retencion() -> Any:
     from core.provisioning.antiabuso import olvidar_huellas_vencidas
 
-    try:
-        run_async(olvidar_huellas_vencidas())
-    except Exception:
-        log.exception("cron_task_failed", task=_ALTA_HUELLAS_RETENCION_TASK)
+    return olvidar_huellas_vencidas()
 
-
-celery.conf.beat_schedule[_ALTA_HUELLAS_RETENCION_TASK] = {
-    "task": _ALTA_HUELLAS_RETENCION_TASK,
-    "schedule": crontab(hour="4", minute="10"),
-}
 
 # Heartbeat del worker (cada 1 min) -- la única forma de que el checklist
 # de la plataforma (core/gateway/meta_production_readiness.py::
@@ -359,8 +265,8 @@ _WORKER_HEARTBEAT_KEY = "worker:heartbeat"
 _WORKER_HEARTBEAT_TTL_S = 180
 
 
-@celery.task(name=_WORKER_HEARTBEAT_TASK)
-def _worker_heartbeat() -> None:
+@core_cron(_WORKER_HEARTBEAT_TASK, crontab(minute="*/1"))
+def _worker_heartbeat() -> Any:
     async def _set_heartbeat() -> None:
         from datetime import UTC, datetime
 
@@ -369,16 +275,8 @@ def _worker_heartbeat() -> None:
         redis = get_redis()
         await redis.set(_WORKER_HEARTBEAT_KEY, datetime.now(UTC).isoformat(), ex=_WORKER_HEARTBEAT_TTL_S)
 
-    try:
-        run_async(_set_heartbeat())
-    except Exception:
-        log.exception("cron_task_failed", task=_WORKER_HEARTBEAT_TASK)
+    return _set_heartbeat()
 
-
-celery.conf.beat_schedule[_WORKER_HEARTBEAT_TASK] = {
-    "task": _WORKER_HEARTBEAT_TASK,
-    "schedule": crontab(minute="*/1"),
-}
 
 # Normalización de suscripciones vencidas (diaria): pasa `trialing`->`expired` y
 # `active`->`past_due` para que el panel refleje el estado real (ADR-0045). El
@@ -386,20 +284,12 @@ celery.conf.beat_schedule[_WORKER_HEARTBEAT_TASK] = {
 _BILLING_LIFECYCLE_TASK = "core.billing_lifecycle"
 
 
-@celery.task(name=_BILLING_LIFECYCLE_TASK)
-def _billing_lifecycle() -> None:
+@core_cron(_BILLING_LIFECYCLE_TASK, crontab(hour="4", minute="0"))
+def _billing_lifecycle() -> Any:
     from core.tasks.billing_lifecycle import normalize_expired_subscriptions
 
-    try:
-        run_async(normalize_expired_subscriptions())
-    except Exception:
-        log.exception("cron_task_failed", task=_BILLING_LIFECYCLE_TASK)
+    return normalize_expired_subscriptions()
 
-
-celery.conf.beat_schedule[_BILLING_LIFECYCLE_TASK] = {
-    "task": _BILLING_LIFECYCLE_TASK,
-    "schedule": crontab(hour="4", minute="0"),
-}
 
 # Renovación del plan de la plataforma (HU-SH-04, ADR-0123): el cobro del período siguiente
 # BILLING_DIAS_RENOVACION días antes, con aviso por el canal preferido. A las 13:00 UTC
@@ -407,60 +297,48 @@ celery.conf.beat_schedule[_BILLING_LIFECYCLE_TASK] = {
 _BILLING_RENOVACION_TASK = "core.billing_renovacion"
 
 
-@celery.task(name=_BILLING_RENOVACION_TASK)
-def _billing_renovacion() -> None:
+@core_cron(_BILLING_RENOVACION_TASK, crontab(hour="13", minute="0"))
+def _billing_renovacion() -> Any:
     from core.billing.renovacion import renovar_suscripciones
 
-    try:
-        run_async(renovar_suscripciones())
-    except Exception:
-        log.exception("cron_task_failed", task=_BILLING_RENOVACION_TASK)
+    return renovar_suscripciones()
 
-
-celery.conf.beat_schedule[_BILLING_RENOVACION_TASK] = {
-    "task": _BILLING_RENOVACION_TASK,
-    "schedule": crontab(hour="13", minute="0"),
-}
 
 # Conciliación diaria de los dos canales del cobro de la plataforma (HU-SH-04): compara el
 # asistente con el negocio y alerta cada diferencia con su detalle.
 _BILLING_CONCILIACION_TASK = "core.billing_conciliacion"
 
 
-@celery.task(name=_BILLING_CONCILIACION_TASK)
-def _billing_conciliacion() -> None:
+@core_cron(_BILLING_CONCILIACION_TASK, crontab(hour="5", minute="30"))
+def _billing_conciliacion() -> Any:
     from core.billing.conciliacion import conciliar
 
-    try:
-        run_async(conciliar())
-    except Exception:
-        log.exception("cron_task_failed", task=_BILLING_CONCILIACION_TASK)
+    return conciliar()
 
-
-celery.conf.beat_schedule[_BILLING_CONCILIACION_TASK] = {
-    "task": _BILLING_CONCILIACION_TASK,
-    "schedule": crontab(hour="5", minute="30"),
-}
 
 # Despachador del outbox de dominio (HU-SUB-03, ADR-0107): cada 30 s entrega
 # los `domain_events` pendientes vencidos con backoff y DLQ.
 _DOMAIN_EVENTS_DISPATCH_TASK = "core.domain_events_dispatch"
 
 
-@celery.task(name=_DOMAIN_EVENTS_DISPATCH_TASK)
-def _domain_events_dispatch() -> None:
+@core_cron(_DOMAIN_EVENTS_DISPATCH_TASK, 30.0)
+def _domain_events_dispatch() -> Any:
     from core.tasks.domain_events_dispatch import dispatch_domain_events_task
 
-    try:
-        dispatch_domain_events_task()
-    except Exception:
-        log.exception("cron_task_failed", task=_DOMAIN_EVENTS_DISPATCH_TASK)
+    # Síncrono (usa su propio `run_async`): `run_cron` lo llama sin envolverlo.
+    dispatch_domain_events_task()
+
+# Mantenimiento del historial de crons (ADR-0183): borra a los 30 días y cierra las ejecuciones
+# que quedaron colgadas (worker caído a mitad de una tarea).
+_CRON_RUNS_RETENTION_TASK = "core.cron_runs_retention"
 
 
-celery.conf.beat_schedule[_DOMAIN_EVENTS_DISPATCH_TASK] = {
-    "task": _DOMAIN_EVENTS_DISPATCH_TASK,
-    "schedule": 30.0,
-}
+@core_cron(_CRON_RUNS_RETENTION_TASK, crontab(hour="4", minute="20"))
+def _cron_runs_retention() -> Any:
+    from core.admin.crons_service import mantenimiento
+
+    return mantenimiento()
+
 
 
 def _load_plugins() -> None:
@@ -514,4 +392,9 @@ def _load_plugins_on_beat_start(sender: object = None, **_kwargs: object) -> Non
     scheduler = getattr(sender, "scheduler", None)
     if scheduler is not None:
         scheduler.merge_inplace(celery.conf.beat_schedule)
+        # Esa fusión vuelve los horarios al código: reaplicar los reprogramados desde la base
+        # (ADR-0183; solo existe con `-S core.tasks.cron_scheduler:DbOverrideScheduler`).
+        refrescar = getattr(scheduler, "refrescar_overrides", None)
+        if refrescar is not None:
+            refrescar(force=True)
         log.info("beat_schedule_cargado", tareas=sorted(scheduler.schedule))

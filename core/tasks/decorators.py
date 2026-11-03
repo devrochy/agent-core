@@ -12,6 +12,8 @@ El decorador:
 1. Envuelve la corrutina en una tarea Celery síncrona (`run_async`, loop persistente).
 2. La agrega al beat_schedule con el crontab dado.
 3. La tarea NO corre si el plugin está inactivo (guard automático).
+4. Cada ejecución queda en el historial de crons (pausa, lock e historial: ADR-0183). El cron
+   debe estar en `core/tasks/cron_catalog.py`: un test lo exige.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from celery.schedules import crontab
 from core.shared.async_bridge import run_async
 from core.shared.logger import get_logger
 from core.tasks.celery_app import celery
+from core.tasks.cron_catalog import parse_expression
 
 log = get_logger(__name__)
 
@@ -31,14 +34,7 @@ AsyncJob = Callable[[], Awaitable[None]]
 
 
 def _parse_crontab(expression: str) -> crontab:
-    parts = expression.split()
-    if len(parts) != 5:
-        raise ValueError(f"Expresión cron inválida: '{expression}' (se esperan 5 campos)")
-    minute, hour, day_of_month, month, day_of_week = parts
-    return crontab(
-        minute=minute, hour=hour, day_of_month=day_of_month,
-        month_of_year=month, day_of_week=day_of_week,
-    )
+    return parse_expression(expression)
 
 
 def register_cron(plugin_id: str, cron_expression: str) -> Callable[[AsyncJob], AsyncJob]:
@@ -46,23 +42,25 @@ def register_cron(plugin_id: str, cron_expression: str) -> Callable[[AsyncJob], 
         task_name = f"{plugin_id}.{fn.__name__}"
 
         @celery.task(name=task_name)
-        def _celery_task() -> None:
+        def _celery_task(trigger: str = "scheduled", triggered_by: str | None = None) -> None:
             from core.plugin_manager import plugin_manager
+            from core.tasks.cron_runtime import OMITIDA_PLUGIN_INACTIVO, run_cron
 
-            # El worker no pasa por el lifespan de la API: sin esto `_active` está
-            # vacío en el proceso y TODO cron de pack se salteaba (visto al hacer
-            # HU-SUB-04; mismo origen que el arreglo del outbox, ADR-0107).
-            try:
-                run_async(plugin_manager.ensure_process_activation())
-            except Exception:
-                log.exception("cron_activation_failed", plugin=plugin_id, task=task_name)
-            if not plugin_manager.is_active(plugin_id):
-                log.info("cron_skipped_plugin_inactive", plugin=plugin_id, task=task_name)
-                return
-            try:
-                run_async(fn())
-            except Exception:
-                log.exception("cron_task_failed", plugin=plugin_id, task=task_name)
+            def _omitir_si_inactivo() -> str | None:
+                # El worker no pasa por el lifespan de la API: sin esto `_active` está
+                # vacío en el proceso y TODO cron de pack se salteaba (visto al hacer
+                # HU-SUB-04; mismo origen que el arreglo del outbox, ADR-0107).
+                try:
+                    run_async(plugin_manager.ensure_process_activation())
+                except Exception:
+                    log.exception("cron_activation_failed", plugin=plugin_id, task=task_name)
+                if not plugin_manager.is_active(plugin_id):
+                    log.info("cron_skipped_plugin_inactive", plugin=plugin_id, task=task_name)
+                    return OMITIDA_PLUGIN_INACTIVO
+                return None
+
+            # Pausa, lock e historial en `cron_runs` (ADR-0183). Un fallo se registra y no se relanza.
+            run_cron(task_name, fn, trigger=trigger, triggered_by=triggered_by, skip_if=_omitir_si_inactivo)
 
         celery.conf.beat_schedule[task_name] = {
             "task": task_name,

@@ -8,4 +8,4 @@ set -euo pipefail
 
 export AGENT_CORE_ROLE="${AGENT_CORE_ROLE:-beat}"
 
-exec /app/scripts/entrypoint.sh celery -A core.tasks.celery_app:celery beat --loglevel=info
+exec /app/scripts/entrypoint.sh celery -A core.tasks.celery_app:celery beat --loglevel=info -S core.tasks.cron_scheduler:DbOverrideScheduler

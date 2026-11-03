@@ -26811,6 +26811,802 @@
         }
       }
     },
+    "/api/v1/admin/platform/crons": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · crons"
+        ],
+        "summary": "List Crons",
+        "operationId": "list_crons_api_v1_admin_platform_crons_get",
+        "parameters": [
+          {
+            "name": "module",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtra por módulo.",
+              "title": "Module"
+            },
+            "description": "Filtra por módulo."
+          },
+          {
+            "name": "estado",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "paused",
+                    "running",
+                    "failing",
+                    "ok",
+                    "never",
+                    "untracked"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtra por estado.",
+              "title": "Estado"
+            },
+            "description": "Filtra por estado."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Busca por nombre o etiqueta.",
+              "title": "Q"
+            },
+            "description": "Busca por nombre o etiqueta."
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/crons/summary": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · crons"
+        ],
+        "summary": "Crons Summary",
+        "operationId": "crons_summary_api_v1_admin_platform_crons_summary_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/crons/{name}": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · crons"
+        ],
+        "summary": "Get Cron",
+        "operationId": "get_cron_api_v1_admin_platform_crons__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/crons/{name}/runs": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · crons"
+        ],
+        "summary": "List Cron Runs",
+        "operationId": "list_cron_runs_api_v1_admin_platform_crons__name__runs_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "running",
+                    "success",
+                    "failed",
+                    "skipped"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "trigger",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "scheduled",
+                    "manual"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Trigger"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_CronRunOut_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/crons/{name}/run": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · crons"
+        ],
+        "summary": "Run Cron Now",
+        "description": "Encola una ejecución manual. Ignora la pausa; no se solapa con otra en curso (409).",
+        "operationId": "run_cron_now_api_v1_admin_platform_crons__name__run_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronRunQueued"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/crons/{name}/pause": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · crons"
+        ],
+        "summary": "Pause Cron",
+        "operationId": "pause_cron_api_v1_admin_platform_crons__name__pause_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/crons/{name}/resume": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · crons"
+        ],
+        "summary": "Resume Cron",
+        "operationId": "resume_cron_api_v1_admin_platform_crons__name__resume_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/crons/{name}/schedule": {
+      "put": {
+        "tags": [
+          "api",
+          "admin · crons"
+        ],
+        "summary": "Reschedule Cron",
+        "description": "Cambia el horario (5 campos, UTC). El beat lo aplica en ~30 s, sin reiniciar.",
+        "operationId": "reschedule_cron_api_v1_admin_platform_crons__name__schedule_put",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronScheduleIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "api",
+          "admin · crons"
+        ],
+        "summary": "Reset Cron Schedule",
+        "description": "Vuelve al horario por defecto del código.",
+        "operationId": "reset_cron_schedule_api_v1_admin_platform_crons__name__schedule_delete",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/qa/catalog": {
       "get": {
         "tags": [
@@ -50364,6 +51160,42 @@
         ],
         "title": "Page[ConversationSummary]"
       },
+      "Page_CronRunOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CronRunOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "has_more"
+        ],
+        "title": "Page[CronRunOut]"
+      },
       "Page_EscalationItem_": {
         "properties": {
           "items": {
@@ -64330,6 +65162,410 @@
         ],
         "title": "CreditUsage",
         "description": "Crédito mensual del plan (D-35, ADR-0142; medición ADR-0144). `used` en créditos con\ndécimas (1 crédito = COP 10), `percent` sin tope de 100 (puede pasarse: hoy solo se avisa).\n`used`/`percent` son `null` si no se pudo medir: el panel muestra «medición pendiente».\nEl mes de consumo es `[period_start, period_end)`, alineado con el ciclo de la suscripción."
+      },
+      "CronList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CronOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "modules": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Modules",
+            "description": "Módulos en el orden de la pantalla."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "modules"
+        ],
+        "title": "CronList"
+      },
+      "CronModuleSummary": {
+        "properties": {
+          "module": {
+            "type": "string",
+            "title": "Module"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "pausados": {
+            "type": "integer",
+            "title": "Pausados"
+          },
+          "con_fallo": {
+            "type": "integer",
+            "title": "Con Fallo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "module",
+          "total",
+          "pausados",
+          "con_fallo"
+        ],
+        "title": "CronModuleSummary"
+      },
+      "CronOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "module": {
+            "type": "string",
+            "title": "Module"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "default_schedule": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Schedule",
+            "description": "Expresión de 5 campos (UTC) del código."
+          },
+          "interval_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval S",
+            "description": "Segundos, en los crons de intervalo fijo."
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule",
+            "description": "Horario vigente: el reprogramado o el por defecto."
+          },
+          "overridden": {
+            "type": "boolean",
+            "title": "Overridden"
+          },
+          "paused": {
+            "type": "boolean",
+            "title": "Paused"
+          },
+          "critical": {
+            "type": "boolean",
+            "title": "Critical"
+          },
+          "sensitive": {
+            "type": "boolean",
+            "title": "Sensitive"
+          },
+          "reprogramable": {
+            "type": "boolean",
+            "title": "Reprogramable"
+          },
+          "record_success": {
+            "type": "boolean",
+            "title": "Record Success",
+            "description": "False: no se guarda cada ejecución exitosa."
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "paused",
+              "running",
+              "failing",
+              "ok",
+              "never",
+              "untracked"
+            ],
+            "title": "Estado"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "last_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CronRunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success At"
+          },
+          "runs_24h": {
+            "type": "integer",
+            "title": "Runs 24H"
+          },
+          "failures_24h": {
+            "type": "integer",
+            "title": "Failures 24H"
+          },
+          "acciones": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "run",
+                "pause",
+                "resume",
+                "schedule",
+                "reset_schedule"
+              ]
+            },
+            "type": "array",
+            "title": "Acciones",
+            "description": "Acciones válidas para su estado actual."
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "module",
+          "label",
+          "description",
+          "default_schedule",
+          "interval_s",
+          "schedule",
+          "overridden",
+          "paused",
+          "critical",
+          "sensitive",
+          "reprogramable",
+          "record_success",
+          "estado",
+          "next_run_at",
+          "last_run",
+          "last_success_at",
+          "runs_24h",
+          "failures_24h",
+          "acciones",
+          "updated_at"
+        ],
+        "title": "CronOut"
+      },
+      "CronRunOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "success",
+              "failed",
+              "skipped"
+            ],
+            "title": "Status"
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "manual"
+            ],
+            "title": "Trigger"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "error_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Class"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "trigger",
+          "started_at",
+          "finished_at",
+          "duration_ms",
+          "error_class",
+          "detail"
+        ],
+        "title": "CronRunOut"
+      },
+      "CronRunQueued": {
+        "properties": {
+          "queued": {
+            "type": "boolean",
+            "title": "Queued",
+            "default": true
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "CronRunQueued"
+      },
+      "CronScheduleIn": {
+        "properties": {
+          "schedule": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Schedule",
+            "description": "Cinco campos: minuto hora día-del-mes mes día-de-la-semana (UTC)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "schedule"
+        ],
+        "title": "CronScheduleIn"
+      },
+      "CronSummary": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "activos": {
+            "type": "integer",
+            "title": "Activos"
+          },
+          "pausados": {
+            "type": "integer",
+            "title": "Pausados"
+          },
+          "con_fallo": {
+            "type": "integer",
+            "title": "Con Fallo"
+          },
+          "ejecutando": {
+            "type": "integer",
+            "title": "Ejecutando"
+          },
+          "modulos": {
+            "items": {
+              "$ref": "#/components/schemas/CronModuleSummary"
+            },
+            "type": "array",
+            "title": "Modulos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "activos",
+          "pausados",
+          "con_fallo",
+          "ejecutando",
+          "modulos"
+        ],
+        "title": "CronSummary"
       },
       "Body_subir_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents_post": {
         "properties": {
