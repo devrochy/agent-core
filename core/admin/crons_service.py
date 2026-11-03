@@ -202,7 +202,11 @@ class CronView:
 
 def proxima_ejecucion(expression: str, ahora: datetime) -> datetime:
     """Próximo disparo (estrictamente posterior a `ahora`) de una expresión de 5 campos, en UTC."""
-    inicio, delta, _ = parse_expression(expression).remaining_delta(ahora)
+    horario = parse_expression(expression)
+    # `remaining_delta` compara con el reloj de Celery; sin fijarlo a `ahora` el resultado cambia
+    # según la fecha real (pasada la medianoche UTC salta a la hora siguiente).
+    horario.nowfun = lambda: ahora
+    inicio, delta, _ = horario.remaining_delta(ahora)
     return inicio + delta
 
 

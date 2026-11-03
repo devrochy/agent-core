@@ -96,6 +96,15 @@ def test_expresiones_invalidas(expr):
         validate_schedule(expr)
 
 
+def test_proxima_ejecucion_no_depende_de_la_fecha_real():
+    """Con `ahora` en otro día que el real, el resultado es el mismo (Celery comparaba con su reloj)."""
+    from core.admin.crons_service import proxima_ejecucion
+
+    for dia in (datetime(2020, 3, 9, 12, 34, 56, tzinfo=UTC), datetime(2041, 12, 31, 12, 34, 56, tzinfo=UTC)):
+        esperado = dia.replace(minute=45, second=0)
+        assert proxima_ejecucion("*/15 * * * *", dia) == esperado
+
+
 def test_proxima_ejecucion_es_estrictamente_posterior():
     from core.admin.crons_service import proxima_ejecucion
 
