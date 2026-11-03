@@ -233,16 +233,19 @@ class SubscriptionSkill(BaseSkill):
         ]
 
     def _tools_de_inscripcion(self, predicate: Callable[[set[str]], Awaitable[bool]]) -> list[MCPTool]:
-        """Inscribir a un cliente en un plan (SPEC-43, HU-SUB-29/34). Solo las ofrece el motor de procedimientos
-        (`contratar_plan`): el precio, el cliente y la periodicidad los pone el servidor, nunca el modelo."""
+        """Planes e inscripción (SPEC-43, HU-SUB-29/34/37). Las cuatro solo existen con el motor activo. Cotizar,
+        confirmar e inscribir son del procedimiento `contratar_plan` (el precio, el cliente y la periodicidad los pone
+        el servidor, nunca el modelo); `sub_listar_planes` es una consulta de solo lectura que `get_tools()` deja
+        `always_available` (ADR-0185)."""
         codigo = {"type": "string", "description": "SKU del plan, tal cual lo devolvió sub_listar_planes."}
         promo = {"type": "string", "description": "Código de promoción que dijo el cliente (opcional)."}
         return [
             MCPTool(
                 name="sub_listar_planes",
                 description=(
-                    "Lista los planes activos del negocio con su precio y periodicidad, o el detalle de uno "
-                    "si pasás plan_code. No crea nada."
+                    "Lista los planes activos del negocio con su precio, periodicidad y lo que incluyen, o el "
+                    "detalle de uno si pasás plan_code. Úsala cuando el cliente pregunte qué planes hay, cuánto "
+                    "cuestan o qué incluyen. No crea nada ni inicia la contratación."
                 ),
                 parameters={
                     "type": "object",
@@ -550,12 +553,12 @@ async def cotizacion_del_cliente(ctx: ToolContext, plan_code: str, codigo_promoc
     return {"plan_code": str(plan.get("plan_code") or plan_code.strip()), **cotizacion}
 
 
-# Tools que solo ofrece el motor de procedimientos (no son `always_available`).
+# Tools que solo ofrece el motor de procedimientos (no son `always_available`). `sub_listar_planes` no está:
+# es una consulta de solo lectura que el motor ofrece también sin tarea en foco (ADR-0185).
 SOLO_PROCEDIMIENTO = frozenset(
     {
         "sub_cotizar_cambio_plan",
         "sub_aplicar_cambio_plan",
-        "sub_listar_planes",
         "sub_cotizar_inscripcion",
         "sub_confirmar_inscripcion",
         "sub_inscribir",
