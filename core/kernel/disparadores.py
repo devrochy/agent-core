@@ -13,7 +13,7 @@ ejemplos de cada procedimiento (`triggers.examples` de `procedure/1`, más los
    uno solo ("cita"). El del procedimiento es el mejor de sus ejemplos; la descripción cuenta con
    un factor menor (es larga y genérica).
 
-El léxico vive en el playbook (invariante 3). Se mide con `tests/fixtures/ruteo/golden.jsonl`.
+El léxico vive en el playbook (invariante 3). Se mide con `evals/ruteo/golden.jsonl`.
 """
 
 from __future__ import annotations
