@@ -4581,6 +4581,25 @@
             "description": "Claves de `filters` de las que se quieren contadores por opción (se repite el parámetro). Una clave que no declara ningún pack, o que no sabe contar, responde 400 `filtro_invalido`."
           },
           {
+            "name": "resumen",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "valor",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Con `facetas`, suma además una cifra por opción en `sumas`: `valor` es el valor estimado de los leads (HU-CRM-24). Las sumas respetan los mismos filtros que los contadores.",
+              "title": "Resumen"
+            },
+            "description": "Con `facetas`, suma además una cifra por opción en `sumas`: `valor` es el valor estimado de los leads (HU-CRM-24). Las sumas respetan los mismos filtros que los contadores."
+          },
+          {
             "name": "page",
             "in": "query",
             "required": false,
@@ -73155,6 +73174,20 @@
           "total": {
             "type": "integer",
             "title": "Total"
+          },
+          "sumas": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sumas"
           }
         },
         "type": "object",
