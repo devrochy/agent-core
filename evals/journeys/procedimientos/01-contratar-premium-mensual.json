@@ -4,6 +4,7 @@
   "procedimientos": [
     "pack_subscriptions.contratar_plan"
   ],
+  "requiere_motor": true,
   "descripcion": "Gherkin 1 de HU-AOS-07 (contratar_plan, SPEC-43): el cliente simulado compra el Premium mensual con pago en línea. La inscripción queda pendiente de pago por el total del servidor y el link cobra ese total. Para medir pass^4 en vivo (con OK del dueño).",
   "pasos": [
     {

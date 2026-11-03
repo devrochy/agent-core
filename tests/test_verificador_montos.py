@@ -187,6 +187,23 @@ def test_extract_monetary_values_de_lo_que_el_cliente_confirma():
     assert sorted(_extract_monetary_values(cotizacion)) == [80000.0, 300000.0]
 
 
+def test_el_precio_del_listado_de_planes_respalda_el_monto_y_uno_inventado_se_bloquea():
+    """ADR-0185: `sub_listar_planes` devuelve `precio`; con la redacción habitual («$200.000») el verificador
+    lo acepta, y un monto que la tool no devolvió se sigue bloqueando."""
+    from core.orchestrator.verificador.evidencia import Evidencia
+    from core.orchestrator.verificador.verificador import verificar
+
+    listado = {
+        "_tool_name": "sub_listar_planes", "_ok": True, "_current_turn": True, "encontrado": True,
+        "planes": [{"plan_code": "PLAN-BASIC", "nombre": "Basic", "precio": 200000.0, "moneda": "COP", "trial_dias": 0}],
+    }
+    assert _extract_monetary_values(listado) == [200000.0]
+    evidencia = Evidencia.desde([listado])
+    assert verificar("El Plan Basic cuesta $200.000 al mes.", evidencia, []).passed
+    malo = verificar("El Plan Basic cuesta $250.000 al mes.", evidencia, [])
+    assert not malo.passed and malo.motivo == "monto_sin_evidencia"
+
+
 # ---------------------------------------------------------------- `precio` y claves de consulta
 def _planes() -> list[dict]:
     """Forma del listado de planes de pack_subscriptions (`_plan_para_el_modelo`)."""
