@@ -85,9 +85,8 @@ def test_un_golden_mal_formado_dice_el_archivo_y_la_linea(tmp_path: Path) -> Non
 
 def test_el_golden_mide_sin_tarea_ni_inicios_y_separa_lo_no_aplicable() -> None:
     g = evaluar_golden(_Release(EJEMPLOS), CASOS, "web")
-    # `tomar_pedido` no está en la release; «necesito una factura» es de un catálogo cuyos procedimientos la
-    # release no cubre (ni conoce): no aplican. Solo cuentan los tres primeros.
-    assert (g.reporte.turnos, g.no_aplicables) == (3, 2)
+    # Solo `tomar_pedido`, que la release no tiene, no aplica; los negativos sí (el saludo y la factura).
+    assert (g.reporte.turnos, g.no_aplicables, g.sin_dictamen) == (4, 1, 0)
     por = {m.procedure_id: m for m in g.reporte.metricas}
     assert (por[CITA].precision, por[CITA].recall) == (1.0, 1.0)
     assert (por[PLAN].precision, por[PLAN].recall) == (1.0, 1.0)
@@ -95,23 +94,30 @@ def test_el_golden_mide_sin_tarea_ni_inicios_y_separa_lo_no_aplicable() -> None:
 
 
 def test_en_el_golden_ninguno_es_una_etiqueta_no_una_ausencia_de_verdad() -> None:
-    # Una frase que debe quedar sin procedimiento y el router enruta a uno: falso positivo real.
-    casos = [CasoGolden("quiero agendar una demo", None, "c"), CasoGolden("quiero agendar una demo", CITA, "c")]
-    g = evaluar_golden(_Release(EJEMPLOS), casos)
-    # Los procedimientos de la release (CITA y PLAN) ⊆ catálogo «c» solo si «c» los trae: aquí no trae PLAN.
-    assert g.reporte.turnos == 1 and g.no_aplicables == 1
     pares = metricas([(CITA, None), (CITA, CITA)], verdad_completa=True)
     assert pares.metricas[0].sin_verdad == 0 and pares.metricas[0].precision == 0.5
+    # Un golden sin catálogo es del negocio: se pronuncia sobre todo, y enrutar es un falso positivo.
+    g = evaluar_golden(_Release(EJEMPLOS), [CasoGolden("quiero agendar una demo", None), CasoGolden("quiero el plan premium", PLAN)])
+    assert [f[1:] for f in g.fallos] == [(None, CITA)] and g.sin_dictamen == 0
 
 
-def test_un_negativo_aplica_si_la_release_cabe_en_su_catalogo() -> None:
+def test_un_negativo_con_un_procedimiento_ajeno_al_catalogo_queda_sin_verdad() -> None:
+    # El catálogo «c» solo trae PLAN: que el router elija CITA (propio del negocio) no es un falso positivo.
+    casos = [CasoGolden("quiero el plan premium", PLAN, "c"), CasoGolden("quiero agendar una demo para la factura", None, "c")]
+    g = evaluar_golden(_Release(EJEMPLOS), casos)
+    assert (g.reporte.turnos, g.sin_dictamen, g.fallos) == (2, 1, [])
+    por = {m.procedure_id: m for m in g.reporte.metricas}
+    assert (por[CITA].predichos, por[CITA].sin_verdad, por[CITA].precision) == (1, 1, None)
+
+
+def test_un_negativo_dentro_del_catalogo_si_es_un_falso_positivo() -> None:
     casos = [
         CasoGolden("quiero agendar una demo", CITA, "c"),
         CasoGolden("quiero el plan premium", PLAN, "c"),
         CasoGolden("quiero agendar una demo para la factura", None, "c"),  # el router sí enruta a CITA
     ]
     g = evaluar_golden(_Release(EJEMPLOS), casos)
-    assert (g.reporte.turnos, g.no_aplicables) == (3, 0)
+    assert (g.reporte.turnos, g.no_aplicables, g.sin_dictamen) == (3, 0, 0)
     assert [f[1:] for f in g.fallos] == [(None, CITA)]
     por = {m.procedure_id: m for m in g.reporte.metricas}
     assert por[CITA].precision == pytest.approx(0.5) and cumple_meta(g.reporte) is False

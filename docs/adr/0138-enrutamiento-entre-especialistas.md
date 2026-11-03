@@ -136,9 +136,12 @@ quedaba vacío justo al pasar a activo.
    `tests/fixtures/ruteo/` para que viaje en la imagen; `--golden` admite un archivo propio) pasa por el router de
    la **release activa** de cada conexión conversacional viva, sin tarea en foco ni dueño, y la predicción se
    compara con el procedimiento esperado. No depende del tráfico, de `aos_procedures` ni de la bandera: sirve en
-   `off`, `shadow` y `active`. Aplica un caso con procedimiento esperado si la release lo tiene; uno sin
-   procedimiento esperado solo si **todos** los procedimientos de la release están en el catálogo con que se
-   escribió (si no, un procedimiento propio del negocio puede quedarse legítimamente con la frase). Reglas por
+   `off`, `shadow` y `active`. Un caso con procedimiento esperado aplica si la release lo tiene (si no, es «no
+   aplicable»). Uno sin procedimiento esperado («esto no es ningún procedimiento») aplica siempre, pero el
+   golden se escribió con un catálogo de procedimientos: si el router elige uno que ese catálogo no tenía (uno
+   propio del negocio), el autor no se pronunció y el caso queda «sin verdad», no como falso positivo. Un
+   `--golden` propio sin campo `catalogo` se pronuncia sobre todo. Límite: con releases de varios packs, la
+   precisión del golden se apoya sobre todo en las confusiones entre procedimientos esperados. Reglas por
    dato del cliente, etapa u horario no se evalúan sin conversación y se listan. Mide la **configuración de
    ruteo** (ejemplos, reglas, umbrales), no el tráfico.
 2. **Fuente 2, tráfico real**, con el origen de la predicción indicado:

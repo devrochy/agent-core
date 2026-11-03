@@ -7,7 +7,7 @@
 - `agent-core db reporte-ruteo --tenant X [--fuente golden|trafico|ambas] [--golden archivo]` ahora trae dos fuentes,
   cada una rotulada con lo que mide:
   1. **Golden de ruteo** (verdad por escenario) contra la release activa de cada conexión: no depende del tráfico ni
-     del agente, y sirve en `off`, `shadow` y `active`. Lista los casos que fallan y los no aplicables.
+     del agente, y sirve en `off`, `shadow` y `active`. Lista los casos que fallan y los no aplicables. Un caso «ninguno» donde el router elige un procedimiento ajeno al catálogo del golden queda «sin verdad», no como falso positivo.
   2. **Tráfico real** con su origen (`sombra` o `activo`): en activo mide los disparadores (primer candidato) frente a
      lo que inicia el especialista; las reglas no se miden en activo.
 - Una predicción en un turno donde no se inició nada es ahora «sin verdad», no un fallo; la precisión es «no medible»

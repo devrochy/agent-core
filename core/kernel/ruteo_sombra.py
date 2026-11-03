@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -82,12 +82,19 @@ class Reporte:
         return sum(m.reales for m in self.metricas)
 
 
-def metricas(pares: Iterable[tuple[str | None, str | None]], *, verdad_completa: bool = False) -> Reporte:
+def metricas(
+    pares: Iterable[tuple[str | None, str | None]],
+    *,
+    verdad_completa: bool = False,
+    sin_dictamen: Iterable[str] = (),
+) -> Reporte:
     """`(predicho, real)` por turno (None = ninguno) → métricas por procedimiento. Puro.
 
     `verdad_completa=False` (tráfico real): `real = None` es «no se inició nada», que no prueba que
     la predicción fuera falsa → cuenta como `sin_verdad`. `True` (golden): `None` es una etiqueta
-    («no debe enrutar a ningún procedimiento») y una predicción ahí sí es un falso positivo."""
+    («no debe enrutar a ningún procedimiento») y una predicción ahí sí es un falso positivo.
+    `sin_dictamen`: procedimientos predichos en un caso donde el autor no se pronunció: cuentan como
+    predichos y «sin verdad», nunca como falso positivo."""
     tp: dict[str, int] = {}
     pred: dict[str, int] = {}
     real: dict[str, int] = {}
@@ -103,6 +110,10 @@ def metricas(pares: Iterable[tuple[str | None, str | None]], *, verdad_completa:
             real[verdadero] = real.get(verdadero, 0) + 1
         if predicho and predicho == verdadero:
             tp[predicho] = tp.get(predicho, 0) + 1
+    for predicho in sin_dictamen:
+        reporte.turnos += 1
+        pred[predicho] = pred.get(predicho, 0) + 1
+        sv[predicho] = sv.get(predicho, 0) + 1
     for pid in sorted(set(pred) | set(real)):
         reporte.metricas.append(Metrica(pid, tp.get(pid, 0), pred.get(pid, 0), real.get(pid, 0), sv.get(pid, 0)))
     return reporte
@@ -204,50 +215,60 @@ class ReporteGolden:
     canal: str = ""
     reporte: Reporte = field(default_factory=Reporte)
     no_aplicables: int = 0
+    # Casos sin procedimiento esperado donde el router eligió uno que el catálogo del caso no tenía:
+    # el autor del golden no se pronunció, no cuentan como falso positivo.
+    sin_dictamen: int = 0
     # Los casos donde la predicción no fue la esperada: (texto, esperado, predicho).
     fallos: list[tuple[str, str | None, str | None]] = field(default_factory=list)
     # Reglas que el router no evalúa sin una conversación (dato del cliente, etapa, horario).
     no_evaluadas: tuple[str, ...] = ()
 
 
-def _aplicables(casos: Sequence[CasoGolden], procedimientos: Collection[str]) -> list[CasoGolden]:
-    """Los casos que esta release puede responder. Un caso con procedimiento esperado aplica si la
-    release lo tiene. Uno sin procedimiento esperado («esto no es ningún procedimiento») solo aplica si
-    **todos** los procedimientos de la release están en el catálogo con que se escribió (si no, un
-    procedimiento propio del negocio puede legítimamente quedarse con la frase)."""
+def _catalogos(casos: Sequence[CasoGolden]) -> dict[str, set[str]]:
+    """Los procedimientos con que se escribió cada catálogo del golden (los que aparecen como esperados)."""
     catalogo: dict[str, set[str]] = {}
     for c in casos:
         if c.esperado:
             catalogo.setdefault(c.catalogo, set()).add(c.esperado)
-    propios = set(procedimientos)
-    return [
-        c
-        for c in casos
-        if (c.esperado in propios if c.esperado else bool(propios) and propios <= catalogo.get(c.catalogo, set()))
-    ]
+    return catalogo
 
 
 def evaluar_golden(release: Any, casos: Sequence[CasoGolden], canal: str = "") -> ReporteGolden:
     """Pasa cada frase por el router de la release (sin LLM, sin tarea en foco, sin dueño) y la
-    compara con lo esperado. Puro respecto a la base: `release` es una `ReleaseCongelada`."""
+    compara con lo esperado. Puro respecto a la base: `release` es una `ReleaseCongelada`.
+
+    Un caso con procedimiento esperado aplica si la release lo tiene (si no, es «no aplicable»). Uno sin
+    procedimiento esperado («esto no es ningún procedimiento») aplica siempre, pero el autor lo escribió
+    con un catálogo: si el router elige un procedimiento que ese catálogo no tenía (uno propio del
+    negocio), el autor no se pronunció y queda «sin verdad», no como falso positivo. Un golden sin
+    catálogo (`catalogo` vacío) es del negocio y se pronuncia sobre todo."""
     from core.kernel import router
 
     routing = release.ruteo()
-    aplicables = _aplicables(casos, release.procedimientos().keys())
-    pares: list[tuple[str | None, str | None]] = []
-    salida = ReporteGolden(canal=canal, no_aplicables=len(casos) - len(aplicables))
+    propios = set(release.procedimientos().keys())
+    catalogos = _catalogos(casos)
+    salida = ReporteGolden(canal=canal)
     salida.no_evaluadas = tuple(
         r.id for r in routing.rules if r.when.customerFact or r.when.flowStage or r.when.withinHours
     )
-    for caso in aplicables:
+    pares: list[tuple[str | None, str | None]] = []
+    sin_dictamen: list[str] = []
+    for caso in casos:
+        if caso.esperado and caso.esperado not in propios:
+            salida.no_aplicables += 1
+            continue
         ruta = router.decidir(
             release, routing, router.Entrada(texto=caso.texto[: router.MAX_TEXTO], channel=canal), release.foco(None)
         )
         predicho = ruta.procedure_id if ruta.source in _PREDICEN else None
+        if caso.esperado is None and predicho and caso.catalogo and predicho not in catalogos.get(caso.catalogo, set()):
+            sin_dictamen.append(predicho)
+            continue
         pares.append((predicho, caso.esperado))
         if predicho != caso.esperado:
             salida.fallos.append((caso.texto, caso.esperado, predicho))
-    salida.reporte = metricas(pares, verdad_completa=True)
+    salida.sin_dictamen = len(sin_dictamen)
+    salida.reporte = metricas(pares, verdad_completa=True, sin_dictamen=sin_dictamen)
     return salida
 
 

@@ -385,6 +385,7 @@ def reporte_ruteo(
     2. **Tráfico real**: lo que el router predijo frente a lo que se inició (sombra o activo)."""
     import asyncio
 
+    from rich.markup import escape
     from rich.table import Table
 
     from cli.tenant_ref import resolve_tenant
@@ -456,13 +457,16 @@ def reporte_ruteo(
         for g in por_golden:
             console.print(
                 f"Conexión {g.connection_id} ({g.canal or '-'}) · release {g.release_id}: "
-                f"{g.reporte.turnos} casos aplicables, {g.no_aplicables} no aplicables (su procedimiento no está en la release)"
+                f"{g.reporte.turnos} casos medidos, {g.no_aplicables} no aplicables (su procedimiento no está en la release)"
+                + (f", {g.sin_dictamen} con un procedimiento ajeno al catálogo del golden (sin verdad)" if g.sin_dictamen else "")
             )
             if g.reporte.turnos:
                 console.print(_tabla("Golden contra la release activa", g.reporte, "Esperados"))
                 console.print(f"Resultado: {_veredicto(g.reporte)}")
             for texto, esperado, predicho in g.fallos[:10]:
-                console.print(f"  falló: «{texto}» esperado {esperado or 'ninguno'}, predijo {predicho or 'ninguno'}")
+                console.print(
+                    escape(f"  falló: «{texto}» esperado {esperado or 'ninguno'}, predijo {predicho or 'ninguno'}")
+                )
             if g.no_evaluadas:
                 console.print(
                     "  no evaluadas sin conversación (dato del cliente, etapa u horario): " + ", ".join(g.no_evaluadas)
