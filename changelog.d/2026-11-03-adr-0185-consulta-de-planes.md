@@ -1,0 +1,4 @@
+## Diseño: informar planes sin iniciar la contratación (2026-11-03)
+
+- ADR-0185 (propuesto), SPEC-43. Con el motor activo y sin tarea en foco, un cliente que solo pregunta por planes no tiene cómo recibir respuesta: `sub_listar_planes` es solo de procedimiento y el caso hoy se resuelve abriendo una tarea de compra (rodeo del modelo) o escalando (corrida #14 de pass^4). El ADR recomienda ofrecer `sub_listar_planes` como consulta de solo lectura, dejar cotizar, confirmar e inscribir detrás de `contratar_plan`, y agregar `precio` a las claves de dinero del verificador (hoy un «$200.000» tomado del listado se bloquea por `monto_sin_evidencia`).
+- Sin cambios de código: cambiar el conjunto de tools invalida la cassette `suscripciones/01-informar-planes` del gate y regrabarla exige el OK del dueño. Los pasos quedan en HU-SUB-37 (solvershub-docs).
