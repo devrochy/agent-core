@@ -9,8 +9,9 @@ operación, sin duplicar su lógica:
   apagar, el inverso (ADR-0112, ADR-0138).
 - Pasar de legacy a v3 es `migrar_a_v3` con los backfills del negocio (idempotentes y neutros en
   legacy) y, solo si el master lo pide, `construir` (construye y promueve una release nueva: cambia
-  la release activa). Volver a legacy es `migrar_a_v3(volver=True)`. Sus precondiciones fail-closed
-  son los bloqueos (409).
+  la release activa). Desde el panel ya no se vuelve a legacy (`ObjetivoInvalido`, 422): el
+  rollback de emergencia es solo por CLI, `agent-core db migrar-a-v3 --volver`. Sus precondiciones
+  fail-closed son los bloqueos (409).
 - La escritura es una sola llamada a `aos_fijar_banderas` (migración 0097) con el `admin_id` del
   master: la base exige que sea master, valida el orden y deja la fila de `audit_log` en la misma
   transacción. El request del master no abre un engine con el rol dueño (el contenedor de la API
@@ -49,6 +50,10 @@ from core.shared.logger import get_logger
 log = get_logger(__name__)
 
 RUNTIMES = ("legacy", "v3")
+MENSAJE_SIN_LEGACY = (
+    "El Agent OS es el único motor de conversación: desde el panel ya no se vuelve a «legacy». "
+    "El rollback de emergencia es por consola: `agent-core db migrar-a-v3 --volver --tenant <slug>`."
+)
 AVISO_PASS_K = (
     "Antes de encender los procedimientos, mide el pass^4 del negocio (HU-ARCH-28) y anótalo en la "
     "bitácora: si empeora, apágalos."
@@ -198,6 +203,8 @@ async def _correr(
     if actual is None:
         raise NegocioNoEncontrado("negocio no encontrado")
     pasos = planificar(actual, objetivo)  # ObjetivoInvalido → 422
+    if "runtime_legacy" in pasos:
+        raise ObjetivoInvalido(MENSAJE_SIN_LEGACY)
     global_ = bool(get_settings().aos_connection_routing)
     res = Resultado(actual, objetivo, actual, "sin_cambios", global_, pasos=list(pasos))
     if not pasos:
@@ -220,15 +227,12 @@ async def _correr(
         escrito = True
 
     if actual.runtime != objetivo.runtime:
-        volver = objetivo.runtime == "legacy"
         reporte = await migrar_a_v3(
             tenant_ids=[tenant_id],
             dry_run=dry_run,
-            volver=volver,
-            construir=construir and not volver,
-            apagar_procedimientos=volver,
+            construir=construir,
             modules=plugin_manager.list_modules(),
-            backfills=not volver,
+            backfills=True,
             escritor=escritor,
         )
         negocio = reporte.negocios[0] if reporte.negocios else None

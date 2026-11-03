@@ -12,7 +12,7 @@ stack real, sin LLM ni red:
 - **Simular no escribe:** con backfills pendientes responde `por_preparar` con los pasos, y el
   negocio sigue igual (ni agentes, ni releases, ni banderas).
 - **Aplicar:** legacy → v3 corre los backfills del negocio y `migrar-a-v3`; después procedimientos
-  y ruteo; y la vuelta a legacy apaga todo. Cada cambio deja su fila `agent_os.banderas` en
+  y ruteo; y volver a legacy se rechaza desde el panel (solo por CLI). Cada cambio deja su fila `agent_os.banderas` en
   `audit_log` con el actor (quién) y la fecha (cuándo); sin cambios no audita.
 - **Bloqueos:** sin `AOS_CONNECTION_ROUTING` → 409 `agent_os_bloqueado` con los bloqueos y nada
   escrito.
@@ -182,7 +182,7 @@ async def test_sin_la_global_el_cambio_se_bloquea_sin_escribir(app_client, negoc
     assert await _contar(a, "agents") == 0
 
 
-async def test_simular_aplicar_y_volver_con_auditoria_y_sin_tocar_al_otro(app_client, negocios) -> None:  # type: ignore[no-untyped-def]
+async def test_simular_aplicar_y_no_volver_con_auditoria_y_sin_tocar_al_otro(app_client, negocios) -> None:  # type: ignore[no-untyped-def]
     a, b = negocios
     master = await api_headers(app_client, a)
     b_antes = (await _banderas(b), await _contar(b, "agents"), await _contar(b, "connection_releases"))
@@ -215,21 +215,22 @@ async def test_simular_aplicar_y_volver_con_auditoria_y_sin_tocar_al_otro(app_cl
     assert r.status_code == 200 and r.json()["accion"] == "aplicado", r.text
     assert await _banderas(a) == ("v3", True, "shadow")
 
-    # Volver a legacy apaga todo en un solo cambio.
-    r = await app_client.put(_url(a), headers=master, json=_objetivo())
-    assert r.status_code == 200 and r.json()["accion"] == "aplicado", r.text
-    assert r.json()["pasos"][:3] == ["ruteo_off", "procedimientos_off", "runtime_legacy"]
-    assert await _banderas(a) == ("legacy", False, "off")
+    # Desde el panel ya no se vuelve a legacy: 422, sin escribir ni auditar (el rollback es por CLI).
+    for llamada, url in ((app_client.put, _url(a)), (app_client.post, _url(a, simular=True))):
+        r = await llamada(url, headers=master, json=_objetivo())
+        assert (r.status_code, r.json()["error"]["code"]) == (422, "agent_os_orden"), r.text
+        assert "migrar-a-v3 --volver" in r.json()["error"]["message"], r.text
+    assert await _banderas(a) == ("v3", True, "shadow")
 
     # Auditoría: quién y qué, una fila por cambio real, en el negocio operado.
     filas = await _auditoria(a)
-    assert [f[0] for f in filas] == ["admin:admin@local"] * 3
+    assert [f[0] for f in filas] == ["admin:admin@local"] * 2
     assert [(f[2]["runtime"], f[2]["procedures"], f[2]["routing"]) for f in filas] == [
-        ("v3", False, "off"), ("v3", True, "shadow"), ("legacy", False, "off"),
+        ("v3", False, "off"), ("v3", True, "shadow"),
     ]
     estado = (await app_client.get(_url(a), headers=master)).json()
     assert estado["ultimo_cambio"]["actor"] == "admin:admin@local" and estado["ultimo_cambio"]["fecha"]
-    assert (estado["runtime"], estado["procedures"], estado["routing"]) == ("legacy", False, "off")
+    assert (estado["runtime"], estado["procedures"], estado["routing"]) == ("v3", True, "shadow")
 
     # El otro negocio, intacto.
     assert (await _banderas(b), await _contar(b, "agents"), await _contar(b, "connection_releases")) == b_antes

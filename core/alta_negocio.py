@@ -151,7 +151,10 @@ async def _runtime_al_alta(tenant_id: uuid.UUID) -> str:
 
     if not get_settings().aos_connection_routing:
         log.info("alta_runtime_pendiente", tenant_id=str(tenant_id), motivo="AOS_CONNECTION_ROUTING apagada")
-        return "runtime v3 pendiente (AOS_CONNECTION_ROUTING apagada en este entorno)"
+        return (
+            "runtime v3 pendiente (AOS_CONNECTION_ROUTING apagada en este entorno): el negocio queda en legacy y "
+            "su dueño no podrá crear agentes hasta migrarlo con `agent-core db migrar-a-v3`"
+        )
     try:
         from core.releases.migracion_v3 import migrar_a_v3
 
@@ -166,7 +169,7 @@ async def _runtime_al_alta(tenant_id: uuid.UUID) -> str:
         log.warning("alta_runtime_fallo", tenant_id=str(tenant_id), error=type(exc).__name__, exc_info=True)
         motivo = type(exc).__name__
     log.warning("alta_runtime_pendiente", tenant_id=str(tenant_id), motivo=motivo)
-    return f"runtime v3 pendiente ({motivo})"
+    return f"runtime v3 pendiente ({motivo}): el negocio queda en legacy; migrarlo con `agent-core db migrar-a-v3`"
 
 
 async def onboard_tenant(

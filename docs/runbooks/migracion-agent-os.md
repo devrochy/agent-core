@@ -1,5 +1,7 @@
 # Migración al Agent OS (runbook de HU-AOS-15)
 
+> **D-60 (2026-11-03):** el Agent OS es el único motor. El panel del master ya no vuelve un negocio a `legacy` (422); el rollback de emergencia es solo por consola, `agent-core db migrar-a-v3 --volver --tenant <slug>`, mientras no se aplique el *contract*. Los negocios nuevos nacen en v3 si `AOS_CONNECTION_ROUTING=true`.
+
 Cómo pasar un negocio del runtime anterior (`legacy`) al runtime por releases (`v3`), encender el motor de procedimientos y, al final de todo, cerrar la migración con el *contract*. Es el runbook que pide la
 [HU-AOS-15](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-26-agent-os/hu/HU-AOS-15-migracion-sin-regresion.md); las decisiones están en ADR-0112 (banderas), ADR-0115 (conexión canónica y contract),
 ADR-0117 (releases) y ADR-0119 (pass^k).
