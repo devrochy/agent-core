@@ -305,7 +305,7 @@ Antes de los guardrails de los packs corre el **verificador de afirmaciones** de
   `core.shared.dinero.MONEY_KEYS` (`price`, `unit_price`, `line_total`, `subtotal`, `total`,
   `discount`, `monto`, `valor_periodo`, y de la cotización de un plan con promoción: `precio_lista`, `descuento`,
   `total_primer_cargo`, `precio_periodo_siguiente`, `monto_bruto`; y de la inscripción y el cambio de plan:
-  `monto_a_pagar`, `precio_nuevo`). Un monto que el LLM pasó como argumento (`amount`)
+  `monto_a_pagar`, `precio_nuevo`; y de las tools de consulta: `precio`, `saldo`, `saldo_total`, `total_vigente`). Un monto que el LLM pasó como argumento (`amount`)
   no cuenta.
 - **Links:** una URL que no devolvió una tool del turno ni está en el contexto (prompt o
   mensajes del cliente) se quita del texto. El link exacto se entrega con `_safe_append`.

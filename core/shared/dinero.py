@@ -32,6 +32,11 @@ MONEY_KEYS = {
     # SPEC-43 (HU-SUB-29/34): lo que el cliente confirma en la inscripción y en el cambio de plan. Las cotizaciones
     # ya los devolvían sin verificarse, aunque `cambiar_plan.json` hace `mustMatch` sobre ambos.
     "monto_a_pagar", "precio_nuevo",
+    # Montos que devuelven las tools de consulta: `precio` del listado de planes
+    # (pack-subscriptions, ADR-0185) -- sin él «$200.000» daba `monto_sin_evidencia` aunque el precio
+    # saliera de la tool --, `saldo`/`saldo_total` de cobranza y `total_vigente` de la cotización en
+    # curso de comercio. `valor` queda fuera a propósito: es demasiado genérico (un filtro, un contador).
+    "precio", "saldo", "saldo_total", "total_vigente",
 }
 
 
