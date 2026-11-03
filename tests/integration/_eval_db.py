@@ -29,6 +29,11 @@ def urls() -> tuple[str, str]:
     return runtime, dueno
 
 
+# Candado de sesión de Postgres para que, con xdist, un solo worker cree y migre la base (los demás esperan y
+# la encuentran lista). Sin él, varios `db migrate` corrían a la vez y chocaban (`pg_type_typname_nsp_index`).
+_CANDADO = 7_340_217
+
+
 async def asegurar() -> tuple[str, str]:
     """Crea y migra la base si hace falta. Devuelve sus URLs `(runtime, dueño)`."""
     runtime, dueno = urls()
@@ -37,11 +42,20 @@ async def asegurar() -> tuple[str, str]:
     )
     try:
         async with admin.connect() as conn:
-            existe = (await conn.execute(text("select 1 from pg_database where datname = :n"), {"n": NOMBRE})).first()
-            if existe is None:
-                await conn.execute(text(f'create database "{NOMBRE}"'))
+            await conn.execute(text("select pg_advisory_lock(:k)"), {"k": _CANDADO})
+            try:
+                existe = (await conn.execute(text("select 1 from pg_database where datname = :n"), {"n": NOMBRE})).first()
+                if existe is None:
+                    await conn.execute(text(f'create database "{NOMBRE}"'))
+                await _migrar_si_falta(runtime, dueno)
+            finally:
+                await conn.execute(text("select pg_advisory_unlock(:k)"), {"k": _CANDADO})
     finally:
         await admin.dispose()
+    return runtime, dueno
+
+
+async def _migrar_si_falta(runtime: str, dueno: str) -> None:
     motor = create_async_engine(dueno)
     try:
         async with motor.connect() as conn:
@@ -54,4 +68,3 @@ async def asegurar() -> tuple[str, str]:
             [sys.executable, "-m", "cli.main", "db", "migrate"], env=entorno, cwd=RAIZ, capture_output=True, text=True, timeout=900
         )
         assert resultado.returncode == 0, resultado.stdout[-500:] + resultado.stderr[-500:]
-    return runtime, dueno
