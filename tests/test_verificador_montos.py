@@ -202,3 +202,54 @@ def test_el_precio_del_listado_de_planes_respalda_el_monto_y_uno_inventado_se_bl
     assert verificar("El Plan Basic cuesta $200.000 al mes.", evidencia, []).passed
     malo = verificar("El Plan Basic cuesta $250.000 al mes.", evidencia, [])
     assert not malo.passed and malo.motivo == "monto_sin_evidencia"
+
+
+# ---------------------------------------------------------------- `precio` y claves de consulta
+def _planes() -> list[dict]:
+    """Forma del listado de planes de pack_subscriptions (`_plan_para_el_modelo`)."""
+    return [{"planes": [{"plan_code": "pro", "nombre": "Pro", "precio": 200000, "moneda": "COP"}]}]
+
+
+def _verificar_texto(texto: str, resultados: list[dict]):
+    from core.orchestrator.verificador import Evidencia, verificar
+
+    return verificar(texto, Evidencia.desde(resultados), [])
+
+
+@pytest.mark.parametrize("clave", ["precio", "saldo", "saldo_total", "total_vigente"])
+def test_claves_de_consulta_cuentan_como_monto(clave: str) -> None:
+    assert _extract_monetary_values({"x": [{clave: 200000}]}) == [200000.0]
+
+
+@pytest.mark.parametrize("texto", ["El plan Pro cuesta $200.000.", "El plan Pro cuesta $ 200.000 al mes.", "Pro: COP 200.000"])
+def test_precio_del_listado_de_planes_es_evidencia(texto: str) -> None:
+    veredicto = _verificar_texto(texto, _planes())
+    assert veredicto.passed, veredicto.motivo
+
+
+@pytest.mark.parametrize("texto", ["El plan Pro cuesta $200.000.", "Pro: COP 200.000"])
+def test_precio_sin_evidencia_se_bloquea(texto: str) -> None:
+    """Sin la tool que lo respalde, el mismo monto sigue bloqueado."""
+    veredicto = _verificar_texto(texto, [])
+    assert not veredicto.passed
+    assert veredicto.motivo == "monto_sin_evidencia"
+
+
+@pytest.mark.parametrize("texto", ["El plan Pro cuesta $250.000.", "Pro: COP 20.000", "Pro: $2.000.000"])
+def test_monto_inventado_sigue_bloqueado_con_el_listado_de_planes(texto: str) -> None:
+    """Que `precio` sea evidencia no abre la puerta a cualquier cifra: solo a las que la tool devolvió."""
+    veredicto = _verificar_texto(texto, _planes())
+    assert not veredicto.passed
+    assert veredicto.motivo == "monto_sin_evidencia"
+
+
+def test_precio_de_un_turno_anterior_respalda_la_repeticion() -> None:
+    resultados = [{**_planes()[0], "_current_turn": False}]
+    assert _verificar_texto("Recuerda que el plan Pro vale $200.000.", resultados).passed
+
+
+def test_monto_con_cop_al_final_no_se_detecta() -> None:
+    """Limitación conocida (fuera de este arreglo): el detector solo mira `$` o `COP` ANTES de la cifra,
+    así que «200.000 COP» pasa con o sin evidencia. Si se amplía el detector, este test debe invertirse."""
+    assert _verificar_texto("El plan Pro cuesta 200.000 COP.", _planes()).passed
+    assert _verificar_texto("El plan Pro cuesta 200.000 COP.", []).passed
