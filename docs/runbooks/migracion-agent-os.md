@@ -73,9 +73,23 @@ Si el pass^4 del negocio (§ 3.5) o el comportamiento empeoran, vuelve a `legacy
 
 ```bash
 agent-core db ruteo --tenant <slug> --modo shadow       # decide y registra, sin cambiar quién atiende
-agent-core db reporte-ruteo --tenant <slug> --dias 7     # meta de R3: precisión ≥ 0,90 y recall ≥ 0,85 durante 7 días
+agent-core db reporte-ruteo --tenant <slug> --dias 7     # meta de R3: precisión ≥ 0,90 y recall ≥ 0,85
 agent-core db ruteo --tenant <slug> --modo active
 ```
+
+`reporte-ruteo` trae **dos fuentes** y rotula qué mide cada una (`--fuente golden|trafico|ambas`, por defecto ambas):
+
+1. **Golden de ruteo** (verdad por escenario, `evals/ruteo/golden.jsonl`; `--golden <archivo>` para uno propio del negocio). Pasa cada frase por el router de la **release activa** de cada conexión y la compara con el procedimiento esperado. **No depende del tráfico ni de que el agente inicie nada**, y sirve igual con el ruteo en `off`, `shadow` o `active`. Es la fuente para decidir pasar a `active`: mide la configuración de ruteo (ejemplos, reglas, umbrales). Lista los casos que fallan y los «no aplicables» (su procedimiento no está en la release). Costo cero, sin LLM.
+2. **Tráfico real**: lo que el router predijo en turnos reales (sin tarea en foco) frente al primer procedimiento que se inició en esa conversación hasta el siguiente turno. Cada turno lleva su **origen**: `sombra` (`shadow_route`) o `activo`.
+
+Cómo leer el tráfico real:
+
+- **En `shadow` el router no inicia nada**: lo inicia el agente por defecto con `iniciar_procedimiento`. Si no lo hace, la predicción queda **«Sin verdad»** (no se puede saber si era falsa) y la precisión sale **«no medible»**, no 0,00. Falso positivo = un turno donde se inició *otro* procedimiento. Recall = aciertos entre los inicios reales.
+- Solo hay verdad con **`aos_procedures` encendida**; el reporte lo avisa si está apagada. Y como `iniciar_procedimiento` ofrece solo los procedimientos del agente en foco, el tráfico es justo si el agente por defecto los declara todos (el General).
+- **En `active` no se escribe `shadow_route`**, así que ya no hay sombra que leer. El reporte usa los turnos enrutados por **disparador** (`route_source = 'trigger'`, su procedimiento es el primer candidato) frente a lo que inicia el especialista al que se enrutó. Las **reglas no se miden** en activo (la `start` la inicia el motor, acierta por construcción; la de agente no predice un procedimiento): se cuentan aparte. Si en la ventana no hubo disparadores, la tabla sale vacía y la leyenda lo dice; la sombra de antes de activar sigue contando mientras caiga en la ventana.
+- Un reporte vacío o «sin verdad» no es un fallo del router: mide con el golden.
+
+Para cerrar R3: el golden en `CUMPLE` y, en `shadow`, durante 7 días el tráfico real sin falsos positivos (turnos donde se inició otro procedimiento).
 
 ### 3.5 pass^4 antes de encender `aos_procedures`
 

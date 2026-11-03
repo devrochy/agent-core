@@ -173,9 +173,16 @@ def test_metricas_de_la_sombra() -> None:
     reporte = metricas([(CITA, CITA), (CITA, None), (None, PLAN), (PLAN, PLAN), (None, None)])
     por = {m.procedure_id: m for m in reporte.metricas}
     assert reporte.turnos == 5
-    assert (por[CITA].precision, por[CITA].recall) == (0.5, 1.0)
+    # Predicho y no iniciado nada = sin verdad (no un falso positivo): la precisión es sobre lo que tiene verdad.
+    assert (por[CITA].predichos, por[CITA].sin_verdad, por[CITA].precision, por[CITA].recall) == (2, 1, 1.0, 1.0)
     assert (por[PLAN].precision, por[PLAN].recall) == (1.0, 0.5)
     assert metricas([]).metricas == []
+
+
+def test_un_inicio_distinto_si_es_un_falso_positivo() -> None:
+    por = {m.procedure_id: m for m in metricas([(CITA, PLAN), (CITA, CITA)]).metricas}
+    assert (por[CITA].precision, por[CITA].recall) == (0.5, 1.0)
+    assert por[PLAN].recall == 0.0 and por[PLAN].precision is None
 
 
 def test_payload_en_redis_con_el_negocio_primero(monkeypatch: Any) -> None:

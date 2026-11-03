@@ -48,7 +48,7 @@ embeddings en producción (P-19, R-AOS-11) y la tanda no permite gastar LLM.
    `disparadores` (invariante 3), raíz de 5 letras, pesos IDF y media geométrica 0,6/0,4 de cuánto del ejemplo
    dice el texto y cuánto del texto explica el ejemplo. `triggers.embeddings = true` del contrato se ignora y
    `trigger_embeddings` sigue vacía. El índice se arma una vez por release (inmutable, en la caché de
-   `ReleaseCongelada`). Golden `tests/fixtures/ruteo/golden.jsonl` (80 casos, 11 escritos después del ajuste):
+   `ReleaseCongelada`). Golden `evals/ruteo/golden.jsonl` (80 casos, 11 escritos después del ajuste):
    precisión 1,00 en los cinco procedimientos; recall 0,85–1,00 (contratar_plan 11/13 = 0,846, bajo la meta de
    0,85 de R3 por nombres de plan que ningún ejemplo trae). Se sube con ejemplos en el pack o en el agente.
 3. **Coprocesador no implementado**: exige LLM; con los valores por defecto (`whenCandidatesAbove` 8 >
@@ -121,3 +121,40 @@ Fuente única: el **KernelSpec del Coordinador** (`kernelspec/1`, `routing`), qu
 - **Pendientes:** embeddings y `trigger_embeddings` por release (P-19, cuando el golden lo justifique); coprocesador
   (P-16); la ventana de 7 días en sombra (operación); el DDL de design §4.3 (`shadow_route`, `aos_routing`) en
   solvershub-docs; ~~panel del master para la bandera~~ (hecho: adenda HU-AOS-15 de ADR-0112, 2026-10-20).
+
+## Adenda 2026-11-03 — el reporte mide con dos fuentes y no depende de que el agente inicie nada
+
+**Problema.** El §5 comparaba lo que predijo el router con la primera tarea iniciada en esa conversación. En
+`shadow` el router no inicia nada: lo inicia el agente por defecto con `iniciar_procedimiento`. Si no lo hace,
+«Reales» sale 0 y la precisión 0,00 aunque la predicción sea correcta (visto en `solvershub`: 7 predicciones
+correctas, 0 falsas, Reales = 0). Y con `aos_routing = active` no se escribe `shadow_route`, así que el reporte
+quedaba vacío justo al pasar a activo.
+
+**Decisión** (`agent-core db reporte-ruteo`, sin cambio de esquema ni de lo que se escribe en `core_decisions`):
+
+1. **Fuente 1, golden de ruteo (verdad por escenario).** Cada frase de `evals/ruteo/golden.jsonl` (movido desde
+   `tests/fixtures/ruteo/` para que viaje en la imagen; `--golden` admite un archivo propio) pasa por el router de
+   la **release activa** de cada conexión conversacional viva, sin tarea en foco ni dueño, y la predicción se
+   compara con el procedimiento esperado. No depende del tráfico, de `aos_procedures` ni de la bandera: sirve en
+   `off`, `shadow` y `active`. Aplica un caso con procedimiento esperado si la release lo tiene; uno sin
+   procedimiento esperado solo si **todos** los procedimientos de la release están en el catálogo con que se
+   escribió (si no, un procedimiento propio del negocio puede quedarse legítimamente con la frase). Reglas por
+   dato del cliente, etapa u horario no se evalúan sin conversación y se listan. Mide la **configuración de
+   ruteo** (ejemplos, reglas, umbrales), no el tráfico.
+2. **Fuente 2, tráfico real**, con el origen de la predicción indicado:
+   - `sombra`: `shadow_route` (como antes);
+   - `activo`: un turno `route_source = 'trigger'` (su procedimiento es el primer candidato de
+     `core_decisions.candidates`, que ordena por puntaje; el elegido siempre es el primero) frente a lo que inicia
+     el especialista al que se enrutó. Las reglas no se miden en activo: la `start` la inicia el motor por
+     construcción (acierta por definición) y la de agente no predice un procedimiento; el reporte las cuenta
+     aparte. Los turnos de sombra anteriores en la ventana siguen contando.
+3. **«Sin verdad».** En el tráfico real, la verdad es un inicio del agente. Una predicción en un turno donde no se
+   inició nada ya no es un fallo: es «sin verdad». La precisión es aciertos entre predicciones **con** verdad
+   (no medible si no hay ninguna) y el recall sigue siendo aciertos entre los inicios reales. Un falso positivo es
+   un turno donde se inició **otro** procedimiento. Límite aceptado: un falso positivo cuyo agente tampoco inicia
+   nada pasa por «sin verdad»; para eso está el golden.
+4. El reporte imprime las banderas del negocio y una leyenda que dice qué mide cada fuente y por qué una puede
+   salir vacía o sin verdad (ruteo apagado; `active`; `aos_procedures` apagada; ninguna conversación inició nada).
+
+La meta de R3 (precisión ≥ 0,90 y recall ≥ 0,85) se evalúa con el golden; el tráfico real es la evidencia de la
+conducta y de que el golden se parece al tráfico.

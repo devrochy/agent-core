@@ -1,6 +1,6 @@
 """HU-AOS-17 · puntaje léxico de disparadores contra el golden de ruteo (sin LLM ni embeddings).
 
-El golden (`tests/fixtures/ruteo/golden.jsonl`, ≥ 60 casos) usa los ejemplos que publican hoy los
+El golden (`evals/ruteo/golden.jsonl`, ≥ 60 casos) usa los ejemplos que publican hoy los
 packs. Por catálogo (los procedimientos que tendría una release) se puntúa cada texto y la ruta es
 el candidato fuerte con los umbrales por defecto del KernelSpec (0,80 y margen 0,15). La meta de
 R3 (design §8): precisión ≥ 0,90 y recall ≥ 0,85 por procedimiento.
@@ -26,7 +26,7 @@ from core.kernel.disparadores import (
 from core.kernel.tarjeta import RotulosInvalidos
 
 RAIZ = Path(__file__).resolve().parents[1]
-GOLDEN = RAIZ / "tests" / "fixtures" / "ruteo" / "golden.jsonl"
+GOLDEN = RAIZ / "evals" / "ruteo" / "golden.jsonl"
 PLAN = "pack_subscriptions.contratar_plan"
 CAMBIO = "pack_subscriptions.cambiar_plan"
 CITA = "pack_calendar.agendar_cita"
