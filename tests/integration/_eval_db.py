@@ -30,18 +30,35 @@ def urls() -> tuple[str, str]:
 
 
 async def asegurar() -> tuple[str, str]:
-    """Crea y migra la base si hace falta. Devuelve sus URLs `(runtime, dueño)`."""
+    """Crea y migra la base si hace falta. Devuelve sus URLs `(runtime, dueño)`.
+
+    Bajo pytest-xdist varios workers llaman a esto a la vez sobre una base que aún no existe (en CI el
+    Postgres de cada job es nuevo). Sin exclusión, todos creaban y migraban la misma base y los que perdían
+    la carrera fallaban en el `db migrate` (visto 4 veces el 2026-11-02, siempre en los tests del gate).
+    Un candado de aviso de Postgres (`pg_advisory_lock`) serializa crear + comprobar + migrar: el primero
+    migra y los demás, al entrar, ven la base ya migrada. Se toma en la base `postgres`, común a todos; si
+    el proceso muere, Postgres lo suelta al cerrarse la conexión.
+    """
     runtime, dueno = urls()
     admin = create_async_engine(
         make_url(dueno).set(database="postgres").render_as_string(hide_password=False), isolation_level="AUTOCOMMIT"
     )
     try:
         async with admin.connect() as conn:
-            existe = (await conn.execute(text("select 1 from pg_database where datname = :n"), {"n": NOMBRE})).first()
-            if existe is None:
-                await conn.execute(text(f'create database "{NOMBRE}"'))
+            await conn.execute(text("select pg_advisory_lock(hashtext(:n))"), {"n": NOMBRE})
+            try:
+                existe = (await conn.execute(text("select 1 from pg_database where datname = :n"), {"n": NOMBRE})).first()
+                if existe is None:
+                    await conn.execute(text(f'create database "{NOMBRE}"'))
+                await _migrar_si_falta(runtime, dueno)
+            finally:
+                await conn.execute(text("select pg_advisory_unlock(hashtext(:n))"), {"n": NOMBRE})
     finally:
         await admin.dispose()
+    return runtime, dueno
+
+
+async def _migrar_si_falta(runtime: str, dueno: str) -> None:
     motor = create_async_engine(dueno)
     try:
         async with motor.connect() as conn:
@@ -54,4 +71,3 @@ async def asegurar() -> tuple[str, str]:
             [sys.executable, "-m", "cli.main", "db", "migrate"], env=entorno, cwd=RAIZ, capture_output=True, text=True, timeout=900
         )
         assert resultado.returncode == 0, resultado.stdout[-500:] + resultado.stderr[-500:]
-    return runtime, dueno
