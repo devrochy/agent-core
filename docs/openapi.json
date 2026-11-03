@@ -43063,6 +43063,14 @@
             },
             "type": "array",
             "title": "Kpis"
+          },
+          "serie": {
+            "items": {
+              "$ref": "#/components/schemas/PuntoActividadOut"
+            },
+            "type": "array",
+            "title": "Serie",
+            "description": "Serie diaria cero-rellena de todo el negocio (todos los agentes, el Coordinador y lo no atribuido); vacía sin la sección `agents`."
           }
         },
         "type": "object",

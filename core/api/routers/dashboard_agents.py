@@ -96,6 +96,13 @@ class AgenteResumen(BaseModel):
 
 class BloqueGeneral(BaseModel):
     kpis: list[KpiOut]
+    serie: list[PuntoActividadOut] = Field(
+        default_factory=list,
+        description=(
+            "Serie diaria cero-rellena de todo el negocio (todos los agentes, el Coordinador y lo "
+            "no atribuido); vacía sin la sección `agents`."
+        ),
+    )
 
 
 class PeriodoOut(BaseModel):

@@ -195,6 +195,15 @@ async def test_ventana_de_7_dias_y_serie_diaria_por_agente(app_client) -> None:
     assert len(general["serie"]) == 7
     assert sum(p["turnos"] for p in general["serie"]) == 1
 
+    # `general.serie` es el negocio entero: la suma de todos los agentes (el General incluido).
+    assert len(datos["general"]["serie"]) == 7
+    assert [p["fecha"] for p in datos["general"]["serie"]] == [p["fecha"] for p in ventas["serie"]]
+    for campo in ("turnos", "conversaciones"):
+        assert sum(p[campo] for p in datos["general"]["serie"]) == sum(
+            p[campo] for a in datos["agentes"] for p in a["serie"]
+        )
+    assert all(p["costo"] is not None for p in datos["general"]["serie"])
+
 
 async def test_ventanas_de_15_y_30_dias_cambian_kpis_textos_y_serie(app_client) -> None:
     e = await _escenario()
@@ -210,9 +219,15 @@ async def test_ventanas_de_15_y_30_dias_cambian_kpis_textos_y_serie(app_client) 
     assert _kpis(ventas15)["turnos"]["hint"] == "Últimos 15 días"
     assert _kpis(ventas15)["turnos"]["versus"] == "los 15 días anteriores"
 
+    assert len(datos15["general"]["serie"]) == 15
+    assert sum(p["turnos"] for p in datos15["general"]["serie"]) == sum(
+        p["turnos"] for a in datos15["agentes"] for p in a["serie"]
+    )
+
     datos30 = (await app_client.get(f"{_URL}?dias=30", headers=h)).json()
     assert datos30["periodo"]["dias"] == 30
     assert len(_agente_por_key(datos30, "ventas")["serie"]) == 30
+    assert len(datos30["general"]["serie"]) == 30
 
 
 async def test_ventana_invalida_devuelve_422(app_client) -> None:
@@ -228,6 +243,7 @@ async def test_sin_permiso_de_costos_la_serie_no_expone_el_costo(app_client) -> 
     )
     datos = (await app_client.get(_URL, headers=h)).json()
     assert all(p["costo"] is None for a in datos["agentes"] for p in a["serie"])
+    assert all(p["costo"] is None for p in datos["general"]["serie"])
 
 
 async def test_permisos_omiten_el_kpi_en_vez_de_mostrar_cero(app_client) -> None:
@@ -247,6 +263,7 @@ async def test_permisos_omiten_el_kpi_en_vez_de_mostrar_cero(app_client) -> None
     )
     datos = (await app_client.get(_URL, headers=sin_agentes)).json()
     assert datos["agentes"] == []
+    assert datos["general"]["serie"] == []  # la serie sale de la sección `agents`
     assert {"tasa_escalamiento", "consistencia"}.isdisjoint(_kpis(datos["general"]))
     assert "conversaciones" in _kpis(datos["general"])
 

@@ -650,6 +650,10 @@ async def resumen(
             "dias": p.dias,
         },
         "runtime": runtime,
-        "general": {"kpis": [_kpi_a_dict(k, p.dias) for k in general]},
+        "general": {
+            "kpis": [_kpi_a_dict(k, p.dias) for k in general],
+            # Todo el negocio: cada clave de `puntos` (agentes, Coordinador y lo no atribuido).
+            "serie": _serie_de(puntos, list(puntos), dias_serie, acceso.costos),
+        },
         "agentes": salida,
     }
