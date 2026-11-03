@@ -298,6 +298,26 @@ def modo_de_runtime(negocio: dict[str, Any], runtime: str | None) -> tuple[bool 
     return False, runtime == "v3"
 
 
+def separar_los_que_requieren_motor(
+    rutas: list[Path], negocio: dict[str, Any], runtime: str | None
+) -> tuple[list[Path], list[str]]:
+    """`(a correr, omitidos)` según `--runtime`. Un journey con `"requiere_motor": true` ejercita un
+    procedimiento cuyas acciones el core solo ofrece con el motor encendido (`solo_con_motor_activo`:
+    `contratar_plan` y `cambiar_plan`, SPEC-43 / HU-AOS-08): sin él no hay camino a cumplirlo, así
+    que medirlo como línea base daría 0 % por diseño y no diría nada del modelo. Solo aplica a
+    `--runtime legacy` sobre un set con motor; con `v3` o sin `--runtime` corren todos."""
+    if runtime != "legacy" or not negocio.get("motor_de_procedimientos"):
+        return rutas, []
+    a_correr: list[Path] = []
+    omitidos: list[str] = []
+    for ruta in rutas:
+        if json.loads(ruta.read_text(encoding="utf-8")).get("requiere_motor"):
+            omitidos.append(ruta.stem)
+        else:
+            a_correr.append(ruta)
+    return a_correr, omitidos
+
+
 def _exigir_base_local(*urls: str | None, que: str) -> None:
     """Las escrituras de banderas y conexiones van por la URL del dueño Y por la de la app:
     las dos tienen que ser locales (si no, la corrida escribiría en una base real)."""
@@ -1084,6 +1104,12 @@ async def main(argv: list[str] | None = None) -> int:
     if not rutas:
         print(f"No hay journeys que matcheen '{args.patron}' en {carpeta or JOURNEYS_DIR / args.set}")
         return 1
+    rutas, args.omitidos = separar_los_que_requieren_motor(rutas, negocio, args.runtime)
+    for omitido in args.omitidos:
+        print(f"Omitido en {args.runtime}: {omitido} (necesita el motor de procedimientos; no hay línea base sin él).")
+    if not rutas:
+        print(f"Nada que medir en {set_id}@{args.runtime}: todos los journeys piden el motor.")
+        return 0
     k = max(1, args.k)
     # Antes de la réplica: `preparar_replica` cambia TENANTS_ROOT a un temporal que se borra.
     args.raiz_grabaciones = grabaciones.raiz(args.grabaciones, carpeta.parent if carpeta else None) / "journeys"
@@ -1150,6 +1176,10 @@ async def _correr_set(args: argparse.Namespace, set_id: str, rutas: list[Path], 
 
     resumen = resumir(resultados, k)
     print("\n" + texto_resumen(f"Journeys {set_id}", resumen, args.umbral))
+    omitidos: list[str] = getattr(args, "omitidos", [])
+    if omitidos:
+        # El cruce con v3 es sobre los journeys que ambos pueden cumplir: lo dice el log, no se infiere.
+        print(f"Omitidos (piden el motor): {len(omitidos)} · {', '.join(omitidos)}")
     simulador = {"k": k, "semillas": list(range(k))}
     # En replay se repite lo grabado: no mide la consistencia del modelo y no se guarda (ADR-0119).
     if cassette.modo_activo() != "replay":
@@ -1158,6 +1188,7 @@ async def _correr_set(args: argparse.Namespace, set_id: str, rutas: list[Path], 
         datos = reporte(set_id, resultados, k, simulador)
         # Lo que de verdad corrió el negocio (no solo lo pedido con `--runtime`).
         datos["runtime"] = {"pedido": getattr(args, "runtime", None), **await runtime_efectivo(tenant_id)}
+        datos["omitidos"] = omitidos
         escribir_reporte(args.reporte, datos)
     # El gate del 0A no cambia (ADR-0119): se mide sobre pass@1; pass^k se reporta.
     return 0 if resumen.pass_1 >= args.umbral else 1

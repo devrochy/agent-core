@@ -9,7 +9,7 @@
     {
       "nota": "el cliente simulado agenda una demo",
       "simulado": {
-        "objetivo": "Agendar una demo del Plan Premium para la próxima semana. Elige uno de los horarios que te ofrezcan (no inventes otro). Da tu correo solo cuando te lo pidan y confirma la cita cuando te la resuman. Tu objetivo se cumple cuando te dicen que la cita quedó agendada.",
+        "objetivo": "Agendar una demo para la próxima semana. Es lo único que quieres: no preguntes por planes, precios ni condiciones. Elige uno de los horarios que te ofrezcan (no inventes otro). Da tu correo solo cuando te lo pidan y confirma la cita cuando te la resuman. Tu objetivo se cumple cuando te dicen que la cita quedó agendada.",
         "datos": {
           "nombre": "Ana Gómez",
           "correo": "ana+{cliente.id}@example.com",
