@@ -14,6 +14,9 @@
   negocio con este binario: `{id, range, resolved_version | null, problem | null}`. Lo que
   congela una release puede diferir (otra versión del pack o instalaciones por conexión).
 
+- `GET /api/v1/admin/agents/retired-references` y `GET /api/v1/admin/agents/{id}/retired-references` —
+  aviso en palabras simples de lo que el agente nombra y ya no existe (HU-AOS-59, ADR-0184). Solo lectura.
+
 Permisos: sección `settings` (lectura; `write` para escribir). Mientras el runtime del negocio
 sea `legacy` (ADR-0112) un agente no hace nada, así que las escrituras quedan para el master o
 para los negocios con `aos_runtime = 'v3'` (403 `aos_runtime_legacy` si no). Las keys del lector
@@ -33,6 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from core.admin.roles import actua_como_master
 from core.agents import versiones as svc
+from core.agents.aviso_retiros import CODIGO_AVISO, problemas_de_publicacion
 from core.agents.contrato_v3 import MAX_SPEC_BYTES
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
@@ -147,6 +151,61 @@ _DRAFT_BODY = {
 }
 
 
+# ------------------------------------------------------------------ referencias retiradas (HU-AOS-59)
+class RetiredNotice(BaseModel):
+    """Una cosa que el agente nombra y ya no existe, con el texto para el dueño (sin códigos internos)."""
+
+    scope: Literal["draft", "published", "in_use"] = Field(
+        description="`draft`: está en el borrador (publicar falla hasta corregirlo). `published`: está en la "
+        "última versión publicada. `in_use`: lo que corre hoy en una conexión lo nombra, aunque el borrador y la "
+        "última versión ya estén limpios."
+    )
+    field: str = Field(
+        description="Dónde del contenido del agente está (p. ej. `tools[3].tool`), para señalar el control en el "
+        "editor. Es un localizador técnico: no se muestra al dueño."
+    )
+    kind: Literal["action", "procedure"]
+    name: str = Field(description="Cómo se llamaba lo retirado (p. ej. `informar_plan`).")
+    message: str = Field(description="Qué ya no existe y qué hacer, en palabras simples. Es el texto que se muestra.")
+
+
+class AgentRetiredNotices(BaseModel):
+    agent_id: uuid.UUID
+    key: str
+    name: str
+    published_version: int | None = Field(description="Número de la última versión publicada (null si nunca se publicó).")
+    in_use: bool = Field(description="Una conexión viva de tu negocio corre hoy algo que nombra lo retirado.")
+    blocks_publish: bool = Field(description="El borrador nombra algo retirado: publicar da 422 hasta corregirlo.")
+    notices: list[RetiredNotice]
+
+
+class RetiredReferencesOut(BaseModel):
+    affected_agents: int
+    agents: list[AgentRetiredNotices] = Field(description="Solo los agentes con al menos un aviso.")
+
+
+def _avisos_out(a: Any) -> AgentRetiredNotices:
+    return AgentRetiredNotices(
+        agent_id=a.agent_id,
+        key=a.key,
+        name=a.name,
+        published_version=a.version_publicada,
+        in_use=a.en_uso,
+        blocks_publish=a.bloquea_publicar,
+        notices=[
+            RetiredNotice(scope=x.ambito, field=x.campo, kind=x.tipo, name=x.nombre, message=x.texto)
+            for x in a.avisos
+        ],
+    )
+
+
+async def _avisos(tid: uuid.UUID, agent_id: uuid.UUID | None = None) -> list[Any]:
+    from core.releases.avisos_referencias import avisos_del_negocio
+
+    nombres = {a.id: a.name for a, _ in await svc.listar_agentes(tid)}
+    return await avisos_del_negocio(tid, nombres, agent_id=agent_id)
+
+
 # ------------------------------------------------------------------ utilidades
 def _summary(agente: Any, ultima: int | None) -> AgentSummary:
     return AgentSummary(
@@ -202,7 +261,24 @@ def _contrato_422(issues: list[Issue]) -> ApiError:
     campos: dict[str, str] = {}
     for issue in issues:
         campos[issue.path] = f"{campos[issue.path]} {issue.message}" if issue.path in campos else issue.message
-    return ApiError(422, "invalid_spec", f"El spec tiene {len(issues)} problema(s) del contrato.", fields=campos)
+    retiradas = [i for i in issues if i.code == CODIGO_AVISO]
+    if not retiradas:
+        return ApiError(422, "invalid_spec", f"El spec tiene {len(issues)} problema(s) del contrato.", fields=campos)
+    # HU-AOS-59: lo retirado va en palabras simples (qué ya no existe y qué hacer), con el mismo texto
+    # que el aviso del editor. Mismo 422 `invalid_spec` y mismo `fields`; el aviso suma `details`.
+    if len(retiradas) == len(issues) == 1:
+        mensaje = retiradas[0].message
+    elif len(retiradas) == len(issues):
+        mensaje = f"Este agente usa {len(retiradas)} cosas que ya no existen. Revisa cada punto marcado y vuelve a publicar."
+    else:
+        mensaje = f"El spec tiene {len(issues)} problema(s) del contrato; revisa también lo que ya no existe, marcado abajo."
+    return ApiError(
+        422,
+        "invalid_spec",
+        mensaje,
+        fields=campos,
+        details={"retired_references": [{"field": i.path, "message": i.message} for i in retiradas]},
+    )
 
 
 async def _exigir_enfoque(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> None:
@@ -228,6 +304,18 @@ async def _exigir_enfoque(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> None:
     ]
     if issues:
         raise svc.ErroresDeContrato(issues)
+
+
+async def _exigir_sin_retiradas(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> None:
+    """HU-AOS-59: publicar un borrador que nombra algo retirado da 422 con el aviso en palabras
+    simples. Un procedimiento retirado no lo detecta el linter del contrato: sin esto la versión
+    saldría publicada y el build de la release fallaría después."""
+    from core.agents.referencias_retiradas import binario_de
+
+    borrador = await svc.obtener_borrador(tenant_id, agent_id)
+    problemas = problemas_de_publicacion(borrador.content, binario_de(plugin_manager.list_modules()))
+    if problemas:
+        raise svc.ErroresDeContrato(problemas)
 
 
 def _no_finito(valor: str) -> Any:
@@ -285,6 +373,17 @@ async def create_agent(
     except svc.Conflicto as exc:
         raise ApiError(409, "conflict", str(exc), fields={"key": str(exc)}) from None
     return _summary(agente, None)
+
+
+# Antes de `/{agent_id}`: un `UUID` capturaría `retired-references` y daría 422.
+@router.get("/retired-references", response_model=RetiredReferencesOut)
+async def list_retired_references(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> RetiredReferencesOut:
+    """Avisos del negocio (HU-AOS-59, ADR-0184): por agente, lo que nombra y ya no existe, en palabras
+    simples. Solo lectura; solo ve los agentes de su negocio. Solo salen los agentes con avisos."""
+    afectados = [a for a in await _avisos(_tenant(principal)) if a.avisos]
+    return RetiredReferencesOut(affected_agents=len(afectados), agents=[_avisos_out(a) for a in afectados])
 
 
 @router.get("/{agent_id}", response_model=AgentDetail)
@@ -366,6 +465,23 @@ async def save_draft(
     return _draft(borrador)
 
 
+@router.get("/{agent_id}/retired-references", response_model=AgentRetiredNotices)
+async def get_retired_references(
+    agent_id: uuid.UUID, principal: Annotated[Principal, Depends(require("settings"))]
+) -> AgentRetiredNotices:
+    """Aviso de un agente para el editor y el flujo de publicar (mismo texto que el 422 de publicar).
+    Sin avisos, `notices` viene vacío y `blocks_publish` en false. 404 si no es un agente del negocio."""
+    tid = _tenant(principal)
+    try:
+        await svc.obtener_agente(tid, agent_id)
+    except svc.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    encontrados = await _avisos(tid, agent_id)
+    if not encontrados:  # archivado: no se audita
+        raise ApiError.not_found("Agente no encontrado.")
+    return _avisos_out(encontrados[0])
+
+
 @router.get("/{agent_id}/versions", response_model=list[AgentVersionSummary])
 async def list_versions(
     agent_id: uuid.UUID, principal: Annotated[Principal, Depends(require("settings"))]
@@ -385,6 +501,7 @@ async def publish_version(
     tid = await _puede_escribir(principal)
     try:
         await _exigir_enfoque(tid, agent_id)
+        await _exigir_sin_retiradas(tid, agent_id)
         version, creada = await svc.publicar(
             tid,
             agent_id,

@@ -75,3 +75,9 @@ una versión publicada hace un año puede seguir nombrando lo retirado.
 - **`ya_activa` / `ya_estaba`:** la release construida ya era la activa; no es un error.
 - **Un build falla con otro código distinto de `contrato_invalido` por lo retirado:** no es de esta
   herramienta (falta una habilidad, un playbook, un flujo roto…): se resuelve con el mensaje del build.
+
+## 5. Dónde lo ve el panel (solo lectura)
+
+- Master: `GET /api/v1/admin/platform/tenants/{tenant_id}/retired-references` (mismo contenido que `auditar-referencias --tenant`).
+- Dueño: `GET /api/v1/admin/agents/retired-references` y `GET /api/v1/admin/agents/{id}/retired-references`, en palabras simples.
+- Publicar un agente que nombra algo retirado da 422 `invalid_spec` con el mismo texto; corregirlo sigue siendo `migrar-referencias`.

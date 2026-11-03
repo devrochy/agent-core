@@ -540,6 +540,120 @@ async def put_agent_os(
     return await _agent_os(tenant_id, payload, principal, aplicar=True)
 
 
+# ---------------------------------------------------------------- referencias retiradas (HU-AOS-59, ADR-0184)
+class RetiredReferenceRow(BaseModel):
+    """Una referencia retirada, con el mismo contenido que una fila de `auditar-referencias`."""
+
+    scope: Literal["version", "draft", "release"] = Field(
+        description="`version`: la última versión publicada del agente. `draft`: el borrador, si difiere de esa "
+        "versión (se avisa, no cuenta como falla). `release`: el manifiesto de una release activa."
+    )
+    agent: str = Field(description="Key del agente.")
+    version: int | None = Field(description="Número de versión (null en el borrador).")
+    path: str = Field(description="Ruta en el contenido (p. ej. `tools[3].tool`).")
+    code: str = Field(description="`accion_inexistente` o `procedimiento_inexistente` (código interno: solo para el equipo).")
+    kind: Literal["action", "procedure"]
+    name: str
+    destination: str = Field(description="Lo que haría `migrar-referencias`: «quitar» o «reemplazar por <id> <rango>».")
+    message: str = Field(description="El mismo aviso en palabras simples que ve el dueño.")
+    where: list[str] = Field(description="Releases activas que lo contienen («conexión <id> release #n»).")
+
+
+class RetiredAsideConnection(BaseModel):
+    """Conexión borrada o que no produce conversaciones: se reporta aparte y no cuenta como falla."""
+
+    connection_id: uuid.UUID
+    reason: Literal["borrada", "playground", "integracion"]
+    release: int | None
+    rows: list[RetiredReferenceRow]
+
+
+class RetiredAffectedConnection(BaseModel):
+    connection_id: uuid.UUID
+    release: int = Field(description="Número de la release activa afectada.")
+
+
+class RetiredReferencesReport(BaseModel):
+    tenant_id: uuid.UUID
+    slug: str
+    affected: bool = Field(description="Hay versiones o releases activas con referencias retiradas (lo que pone el exit code del CLI).")
+    agents_affected: int
+    releases_affected: int
+    rows: list[RetiredReferenceRow] = Field(description="Versiones publicadas y releases activas: lo que cuenta.")
+    drafts: list[RetiredReferenceRow] = Field(description="Borradores con referencias retiradas: se avisan, no cuentan.")
+    affected_connections: list[RetiredAffectedConnection]
+    aside: list[RetiredAsideConnection]
+    error: str | None = Field(description="Si la auditoría de este negocio falló, por qué; el resto del informe puede estar vacío.")
+
+
+def _fila_retirada(f: Any) -> RetiredReferenceRow:
+    from core.agents.aviso_retiros import texto_de, tipo_api, tipo_de
+
+    tipo = tipo_de(f.codigo)
+    return RetiredReferenceRow(
+        scope="draft" if f.ambito == "borrador" else f.ambito,
+        agent=f.agente,
+        version=f.version,
+        path=f.ruta,
+        code=f.codigo,
+        kind=tipo_api(tipo),
+        name=f.nombre,
+        destination=f.destino,
+        message=texto_de(f.ruta, tipo, f.nombre, en_uso=f.ambito == "release"),
+        where=list(f.donde),
+    )
+
+
+_ERRORES_RETIRADAS: dict[int | str, dict[str, Any]] = {
+    403: {"model": OpcionesErrorOut, "description": "No es el admin master (tampoco el tester ni un colaborador)."},
+    404: {"model": OpcionesErrorOut, "description": "El negocio no existe o está borrado."},
+}
+
+
+@router.get(
+    "/tenants/{tenant_id}/retired-references",
+    response_model=RetiredReferencesReport,
+    responses=_ERRORES_RETIRADAS,
+)
+async def get_retired_references(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> RetiredReferencesReport:
+    """Agentes, versiones, rutas, códigos y releases activas de este negocio que nombran algo que el
+    binario ya retiró: el mismo contenido que `agent-core db auditar-referencias --tenant <slug>`.
+    Solo lectura: no escribe nada ni corrige. Solo el master (ni el tester ni un colaborador)."""
+    _require_master_agent_os(principal)
+    from core.plugin_manager import plugin_manager
+    from core.releases.referencias_retiradas import auditar
+
+    reporte = await auditar(tenant_ids=[tenant_id], modules=plugin_manager.list_modules())
+    if not reporte.negocios:
+        raise ApiError.not_found("Negocio no encontrado.")
+    n = reporte.negocios[0]
+    return RetiredReferencesReport(
+        tenant_id=n.tenant_id,
+        slug=n.slug,
+        affected=n.afectado,
+        agents_affected=n.agentes_afectados,
+        releases_affected=n.releases_afectadas,
+        rows=[_fila_retirada(f) for f in n.filas],
+        drafts=[_fila_retirada(f) for f in n.borradores],
+        affected_connections=[
+            RetiredAffectedConnection(connection_id=cid, release=numero) for cid, numero in n.conexiones_afectadas.items()
+        ],
+        aside=[
+            RetiredAsideConnection(
+                connection_id=c.conexion_id,
+                reason=c.motivo,  # type: ignore[arg-type]
+                release=c.release,
+                rows=[_fila_retirada(f) for f in c.filas],
+            )
+            for c in n.aparte
+        ],
+        error=n.error,
+    )
+
+
 # ---------------------------------------------------------------- gate de pass^k (HU-AOS-21 parte 4)
 class GateBandera(BaseModel):
     cerrado: bool = Field(description="Con el gate cerrado, una versión sin veredicto no se activa (409 `gate_pendiente`).")
