@@ -98,7 +98,7 @@ def _exigir_scope(tenant_id: uuid.UUID) -> None:
 # Exenciones del gate (adenda HU-AOS-21 de ADR-0117): las pasan los llamadores internos por
 # palabra clave; la API nunca las envía y sus motivos están reservados en el router. Release 1
 # no está aquí: se reconoce porque la conexión no tiene release activa.
-EXENCIONES = frozenset({"migrar_a_v3", "qa_datos", "hotfix_yanked"})
+EXENCIONES = frozenset({"migrar_a_v3", "migrar_referencias", "qa_datos", "hotfix_yanked"})
 # Tope de motivos anotados en el evento (el detalle completo irá en el veredicto, parte 3).
 _MAX_TOCADOS_EN_EVENTO = 50
 
@@ -290,8 +290,8 @@ async def promover(
     """Activa la release (promoción total). 409 si ya es la activa, el gate la rechaza o hay un
     canary en curso (HU-AOS-32; las exenciones lo detienen con `reemplazado`).
 
-    `exencion` solo la pasan los llamadores internos (`migrar_a_v3`, `qa_datos`,
-    `hotfix_yanked`); la API nunca la envía. `forzado_por_master` es el motivo escrito con el
+    `exencion` solo la pasan los llamadores internos (`migrar_a_v3`, `migrar_referencias`,
+    `qa_datos`, `hotfix_yanked`); la API nunca la envía. `forzado_por_master` es el motivo escrito con el
     que un master salta el gate (la API lo exige de un master); queda en el evento."""
     _exigir_scope(tenant_id)
     async with get_session() as session:
