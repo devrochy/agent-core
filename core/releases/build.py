@@ -323,6 +323,20 @@ async def _efectivas(tenant_id: uuid.UUID, connection_id: uuid.UUID, del_negocio
     return set(propias)
 
 
+async def habilidades_efectivas(tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None) -> set[str]:
+    """Habilidades que un build usaría hoy: las del scope de la conexión (`_efectivas`) o, sin
+    conexión, las habilitadas del negocio. Lectura pura; `ErrorDelBuild` si una instalación de
+    conexión no está habilitada en el negocio (el mismo fail-closed del build)."""
+    from core.agents.spec import enabled_business_packs, leer_spec_activo
+
+    _exigir_scope(tenant_id)
+    leido = await leer_spec_activo(tenant_id)
+    del_negocio = set(enabled_business_packs(leido[1])) if leido else set()
+    if connection_id is None:
+        return del_negocio
+    return await _efectivas(tenant_id, connection_id, del_negocio)
+
+
 def _publicados(pack: Any) -> list[Any]:
     """Los `procedure/1` del manifiesto de la versión del pack (los mismos bytes que registra
     `pack_versions`, ya comprobado el hash), validados; uno inválido se salta con log."""
@@ -793,6 +807,7 @@ __all__ = [
     "ResultadoBuild",
     "armar_manifiesto",
     "construir",
+    "habilidades_efectivas",
     "refrescar_desde_v2",
     "registrar_evento",
 ]

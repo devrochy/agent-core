@@ -290,6 +290,142 @@ def migrar_a_v3(
         raise typer.Exit(1)
 
 
+@app.command("auditar-referencias")
+def auditar_referencias(
+    tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
+    todos: bool = typer.Option(False, "--todos", help="Todos los negocios vivos."),
+) -> None:
+    """Agent OS (HU-AOS-59): lista las acciones y procedimientos que el binario ya no trae y que
+    todavía nombran la última versión publicada de un agente o la release activa de una conexión
+    (borradores y conexiones borradas, de pruebas o de integración, aparte). Solo lectura. Exit
+    code distinto de cero si hay afectados: córrelo con `--todos` tras migrar la base de cada
+    despliegue (runbook `docs/runbooks/referencias-retiradas.md`)."""
+    import asyncio
+
+    from rich.table import Table
+
+    from cli.tenant_ref import resolve_tenant
+    from core.plugin_manager import plugin_manager
+    from core.releases.referencias_retiradas import Fila, ReporteAuditoria, auditar
+
+    if bool(tenant) == todos:
+        raise typer.BadParameter("Indica --tenant <slug> o --todos (uno de los dos).")
+
+    async def _run() -> ReporteAuditoria:
+        ids = [await resolve_tenant(tenant)] if tenant else None
+        return await auditar(tenant_ids=ids, modules=plugin_manager.scan())
+
+    reporte = asyncio.run(_run())
+    resumen = Table(title="Referencias retiradas (solo lectura: no se escribió nada)")
+    for columna in ("Negocio", "Agentes afectados", "Releases afectadas", "Borradores", "Aparte"):
+        resumen.add_column(columna)
+    for n in reporte.negocios:
+        resumen.add_row(
+            n.slug if not n.error else f"{n.slug} (ERROR)",
+            str(n.agentes_afectados),
+            str(n.releases_afectadas),
+            str(len({f.agente for f in n.borradores})),
+            str(len(n.aparte)),
+        )
+    console.print(resumen)
+
+    def _detalle(titulo: str, filas: list[Fila]) -> None:
+        tabla = Table(title=titulo)
+        for columna in ("Ámbito", "Agente", "Versión", "Ruta", "Código", "Nombre", "Qué hará migrar-referencias", "Dónde corre"):
+            tabla.add_column(columna)
+        for f in filas:
+            tabla.add_row(
+                f.ambito, f.agente, str(f.version or "—"), f.ruta, f.codigo, f.nombre, f.destino, "\n".join(f.donde) or "—"
+            )
+        console.print(tabla)
+
+    for n in reporte.negocios:
+        if n.error:
+            console.print(f"[red]Error:[/red] {n.slug}: {n.error}")
+        if not tenant:
+            continue  # con --todos solo el resumen: el detalle de un negocio es `--tenant <slug>`
+        if n.filas:
+            _detalle(f"{n.slug}: afectados", n.filas)
+        if n.borradores:
+            _detalle(f"{n.slug}: borradores con referencias retiradas (se avisan; no cuentan)", n.borradores)
+        for a in n.aparte:
+            console.print(
+                f"[dim]{n.slug}: conexión {a.conexion_id} ({a.motivo}, release #{a.release}) "
+                f"nombra {len(a.filas)} referencia(s) retirada(s): no cuenta como falla.[/dim]"
+            )
+    if reporte.fallo:
+        console.print(
+            "[red]Hay agentes o releases con referencias retiradas.[/red] Detalle: `auditar-referencias --tenant <slug>`; "
+            "corrección: `agent-core db migrar-referencias --tenant <slug>`."
+        )
+        raise typer.Exit(1)
+    console.print("✓ [green]Sin referencias retiradas en versiones ni releases activas.[/green]")
+
+
+@app.command("migrar-referencias")
+def migrar_referencias(
+    tenant: str = typer.Option(..., "--tenant", help="El negocio (slug o UUID). Nunca en masa."),
+    aplicar: bool = typer.Option(
+        False, "--aplicar", help="Publica las versiones nuevas y reconstruye las releases. Sin esto solo informa (dry-run)."
+    ),
+) -> None:
+    """Agent OS (HU-AOS-59): aplica el registro de retiros (`core/agents/retiros.py`) a un negocio. Cada
+    agente afectado publica una versión nueva (etiqueta y nota) partiendo de su última versión
+    PUBLICADA, nunca del borrador; luego se reconstruye y promueve la release de cada conexión
+    afectada, igual que `migrar-a-v3 --construir` (con un canary en curso se construye pero no se
+    promueve). El reemplazo de un procedimiento solo se agrega si el negocio tiene su habilidad.
+    Idempotente. Cambia agentes en vivo: se revierte desde las versiones del panel (HU-AOS-27)."""
+    import asyncio
+
+    from rich.table import Table
+
+    from cli.tenant_ref import resolve_tenant
+    from core.plugin_manager import plugin_manager
+    from core.releases.referencias_retiradas import ReporteMigracion, migrar
+
+    async def _run() -> ReporteMigracion:
+        return await migrar(tenant_id=await resolve_tenant(tenant), aplicar=aplicar, modules=plugin_manager.scan())
+
+    reporte = asyncio.run(_run())
+    if not reporte.negocios:
+        console.print(f"[red]No se encontró un negocio vivo para '{tenant}'.[/red]")
+        raise typer.Exit(1)
+    sufijo = "" if aplicar else " (dry-run: no se escribió nada; usa --aplicar)"
+    for n in reporte.negocios:
+        if n.sin_cambios:
+            console.print(f"✓ [green]{n.slug}: sin referencias retiradas que migrar.[/green]")
+        if n.agentes:
+            tabla = Table(title=f"{n.slug}: agentes{sufijo}")
+            for columna in ("Agente", "Parte de", "Resultado", "Versión nueva", "Cambios"):
+                tabla.add_column(columna)
+            for a in n.agentes:
+                tabla.add_row(
+                    a.agente, f"v{a.version_desde}", a.accion, str(a.version_nueva or "—"), "\n".join(a.cambios) or "—"
+                )
+            console.print(tabla)
+        for a in n.agentes:
+            for aviso in a.avisos:
+                console.print(f"[yellow]Aviso:[/yellow] {n.slug}/{a.agente}: {aviso}")
+            for bloqueo in a.bloqueos:
+                console.print(f"[red]Bloqueado:[/red] {n.slug}/{a.agente}: {bloqueo}")
+        if n.conexiones:
+            tabla = Table(title=f"{n.slug}: releases{sufijo}")
+            for columna in ("Conexión", "Release activa", "Resultado", "Release nueva", "Detalle"):
+                tabla.add_column(columna)
+            for c in n.conexiones:
+                tabla.add_row(str(c.conexion_id), f"#{c.release_anterior}", c.accion, str(c.release_nueva or "—"), c.detalle or "—")
+            console.print(tabla)
+        for borrador in n.borradores:
+            console.print(
+                f"[yellow]Borrador con referencias retiradas:[/yellow] {n.slug}/{borrador.agente}: "
+                f"{borrador.ruta} nombra '{borrador.nombre}' (no se toca; avisa a su dueño)."
+            )
+        for aviso in n.avisos:
+            console.print(f"[yellow]Aviso:[/yellow] {n.slug}: {aviso}")
+    if reporte.fallo:
+        raise typer.Exit(1)
+
+
 @app.command("contract-aos")
 def contract_aos(
     aplicar: bool = typer.Option(False, "--aplicar", help="Aplica el contract. Sin esta opción solo reporta (en seco)."),

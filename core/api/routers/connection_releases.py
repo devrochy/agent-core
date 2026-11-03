@@ -59,7 +59,7 @@ log = get_logger(__name__)
 # aunque la exención no se deduce del motivo sino de un parámetro que la API nunca envía.
 _MOTIVOS_RESERVADOS = frozenset(
     {
-        "rollback", "release_1", "yanked", "hotfix_yanked", "migrar_a_v3", "qa_datos",
+        "rollback", "release_1", "yanked", "hotfix_yanked", "migrar_a_v3", "migrar_referencias", "qa_datos",
         # HU-AOS-32: los del canary.
         "canary", "no_inferioridad", "senal_dura", "reemplazado", "habilidad_retirada",
     }
