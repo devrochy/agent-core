@@ -91,8 +91,15 @@ def _config(**campos):
 
 
 async def test_con_la_config_por_defecto_un_lead_inactivo_dentro_de_la_ventana_recibe_el_reenganche(monkeypatch) -> None:
-    config = _config()  # sin tocar nada: lo que obtiene un negocio que nunca abrió ese ajuste
+    """Config tal como la deja el alta (`save_config(pack, {})`) y cargada como la carga el cron."""
+    from pack_commerce.jobs import _config_del_negocio
+
+    from core.shared.tenant import tenant_scope
+
     tid = await _negocio()
+    async with tenant_scope(tid):
+        config = await _config_del_negocio(tid, "lead")
+    assert config is not None, "un negocio recién dado de alta tiene config: el cron no lo salta"
     conv = await _lead_inactivo(tid, horas=config.follow_up_hours + 1)
 
     (candidatos, enviados_n), enviados = await _reenganchar(monkeypatch, tid, config)
@@ -128,16 +135,18 @@ async def test_un_lead_con_menos_horas_de_inactividad_que_las_configuradas_esper
     assert (candidatos, enviados) == (0, [])
 
 
-@pytest.mark.parametrize("horas", [24, 8760])
-async def test_follow_up_hours_de_24_o_mas_se_trata_como_el_ultimo_tramo_de_la_ventana(monkeypatch, horas: int) -> None:
-    """Un negocio que guardó 24 (el valor viejo) no queda con el seguimiento muerto: 24 se lee como 23 h."""
+@pytest.mark.parametrize("horas", [0, 24, 8760])
+async def test_una_espera_que_no_cabe_en_la_ventana_se_lee_como_el_valor_por_defecto(monkeypatch, horas: int) -> None:
+    """Un negocio que guardó 24 (el default anterior) recupera el seguimiento: nunca había enviado nada."""
+    from pack_commerce.config import FOLLOW_UP_HORAS_POR_DEFECTO
+
     tid = await _negocio()
-    conv = await _lead_inactivo(tid, horas=23.5)
-    await _lead_inactivo(tid, horas=22)  # aún no cumple las 23 h
+    conv = await _lead_inactivo(tid, horas=FOLLOW_UP_HORAS_POR_DEFECTO + 1)
+    await _lead_inactivo(tid, horas=FOLLOW_UP_HORAS_POR_DEFECTO - 1)  # aún no cumple la espera
 
     (candidatos, enviados_n), enviados = await _reenganchar(monkeypatch, tid, _config(follow_up_hours=horas))
 
-    assert (candidatos, enviados_n, enviados) == (1, 1, [conv])
+    assert (candidatos, enviados_n, enviados) == (1, 1, [conv]), f"follow_up_hours={horas}"
 
 
 @pytest.mark.parametrize(

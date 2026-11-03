@@ -33,7 +33,7 @@ class CRMConfig(BasePluginConfig):
         description="Crear un lead automáticamente cuando inicia una conversación nueva",
     )
     # `le=8760` se mantiene: negocios que guardaron 24 (el default anterior) tienen que seguir cargando
-    # su config; el cron lo recorta a `FOLLOW_UP_HORAS_MAX`. 0 = el valor por defecto.
+    # su config; fuera de 1..`FOLLOW_UP_HORAS_MAX` el cron usa el valor por defecto.
     follow_up_hours: int = Field(
         default=FOLLOW_UP_HORAS_POR_DEFECTO, ge=0, le=8760,
         description=(

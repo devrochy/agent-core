@@ -100,12 +100,11 @@ async def _follow_up_leads_del_negocio(tenant_id: uuid.UUID, config) -> tuple[in
 
     total_candidates = 0
     total_sent = 0
-    # Dentro de la ventana de 24h de WhatsApp hay un tramo [window_limit, threshold): con una espera de 24h o
-    # más estaría vacío. Una config vieja con 24 se lee como la última hora de la ventana.
-    follow_up_hours = min(
-        getattr(config, "follow_up_hours", FOLLOW_UP_HORAS_POR_DEFECTO) or FOLLOW_UP_HORAS_POR_DEFECTO,
-        FOLLOW_UP_HORAS_MAX,
-    )
+    # Dentro de la ventana de 24h de WhatsApp el tramo [window_limit, threshold) solo existe si la espera es
+    # menor que 24h. Una config vieja con 24 o más (nunca envió nada) se lee como el valor por defecto.
+    follow_up_hours = getattr(config, "follow_up_hours", FOLLOW_UP_HORAS_POR_DEFECTO)
+    if not 0 < follow_up_hours <= FOLLOW_UP_HORAS_MAX:
+        follow_up_hours = FOLLOW_UP_HORAS_POR_DEFECTO
     now = datetime.now(UTC)
     threshold = now - timedelta(hours=follow_up_hours)
     window_limit = now - timedelta(hours=24)
