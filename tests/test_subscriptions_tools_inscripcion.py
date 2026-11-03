@@ -138,15 +138,52 @@ async def test_inscribir_sin_monto_responde_monto_distinto(cap) -> None:
     assert e.value.code == "monto_distinto" and cap.inscripciones == []
 
 
-def test_las_tools_de_inscripcion_son_solo_del_procedimiento() -> None:
+def test_cotizar_confirmar_e_inscribir_son_solo_del_procedimiento() -> None:
     tools = {t.name: t for t in tools_mod.SubscriptionSkill().get_tools()}
-    nuevas = {"sub_listar_planes", "sub_cotizar_inscripcion", "sub_confirmar_inscripcion", "sub_inscribir"}
+    nuevas = {"sub_cotizar_inscripcion", "sub_confirmar_inscripcion", "sub_inscribir"}
     assert nuevas <= set(tools_mod.SOLO_PROCEDIMIENTO)
     assert not any(tools[n].always_available for n in nuevas)
-    assert tools["sub_listar_planes"].solo_lectura is True
     # El LLM no puede mandar cliente, precio ni periodicidad: no están en el schema.
     props = tools["sub_inscribir"].parameters["properties"]
     assert not ({"customer_id", "precio", "periodicidad", "price"} & set(props))
+
+
+def test_listar_planes_es_una_consulta_de_solo_lectura_que_solo_ofrece_el_motor() -> None:
+    """ADR-0185: informar planes no es una puerta. Siempre disponible (sin tarea en foco también), de solo lectura
+    y con la bandera del motor: sin ella no se ofrece, así que nada cambia para un negocio sin motor."""
+    tools = {t.name: t for t in tools_mod.SubscriptionSkill().get_tools()}
+    listar = tools["sub_listar_planes"]
+    assert "sub_listar_planes" not in tools_mod.SOLO_PROCEDIMIENTO
+    assert listar.always_available is True and listar.solo_lectura is True
+    assert listar.connection_predicate is not None  # `solo_con_motor_activo`
+    assert listar.parameters["required"] == []
+    assert "no inicia la contratación" in listar.description.lower() or "ni inicia la contratación" in listar.description.lower()
+
+
+async def test_listar_planes_solo_se_ofrece_con_el_motor_activo(monkeypatch) -> None:
+    """El predicado REAL de la tool: proveedor habilitado Y bandera del motor. Sin bandera (o sin poder leerla)
+    no se ofrece; sin proveedor tampoco."""
+    import core.agents.spec as spec_mod
+    from core.kernel import oferta
+
+    listar = {t.name: t for t in tools_mod.SubscriptionSkill().get_tools()}["sub_listar_planes"]
+    estado: dict[str, bool | None] = {"motor": False, "proveedor": True}
+
+    async def motor() -> bool | None:
+        return estado["motor"]
+
+    async def spec():
+        return object()
+
+    monkeypatch.setattr(oferta, "motor_activo", motor)
+    monkeypatch.setattr(tools_mod.subscription_registry, "registered_provider_ids", lambda: ["pack_subscriptions"])
+    monkeypatch.setattr(spec_mod, "load_active_spec", spec)
+    monkeypatch.setattr(spec_mod, "enabled_packs", lambda _spec: {"pack_subscriptions"} if estado["proveedor"] else set())
+    for motor_activo, proveedor, ofrece in (
+        (False, True, False), (None, True, False), (True, True, True), (True, False, False),
+    ):
+        estado["motor"], estado["proveedor"] = motor_activo, proveedor
+        assert await listar.connection_predicate(set()) is ofrece, (motor_activo, proveedor)
 
 
 async def test_el_cambio_de_plan_pasa_el_codigo_de_promocion_solo_si_el_cliente_lo_dio(monkeypatch) -> None:

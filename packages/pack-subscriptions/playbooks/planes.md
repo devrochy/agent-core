@@ -5,8 +5,12 @@ cliente los pone el servidor: tú solo mandas el código del plan, los datos que
 pide el procedimiento y si el cliente aceptó los términos.
 
 ## Informar planes
-- Para listar los planes o dar el detalle de uno, usa `sub_listar_planes` (con
-  `plan_code` para uno solo). Nunca des un precio que esa tool no devolvió.
+- Si el cliente solo pregunta (qué planes hay, cuánto cuestan, qué incluyen, si hay
+  prueba), llama `sub_listar_planes` directamente (con `plan_code` para uno solo) y
+  responde con lo que devolvió. No inicies `contratar_plan` solo para informar: el
+  procedimiento se inicia cuando el cliente dice que quiere un plan.
+- Nunca des un precio, un límite o una prueba que esa tool no devolvió. Si no hay
+  planes publicados (`encontrado: false`), dilo y no inventes ninguno.
 - Si el cliente trae un código de promoción, mándalo en `codigo_promocion` al
   cotizar; el descuento y el total los calcula el servidor.
 

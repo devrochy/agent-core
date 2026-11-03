@@ -33,7 +33,7 @@ PUBLICADOS = {
 }
 SOLO_PROCEDIMIENTO = {
     "sub_cotizar_cambio_plan", "sub_aplicar_cambio_plan", "cob_registrar_promesa_saldo", "cob_opciones_promesa",
-    "sub_listar_planes", "sub_cotizar_inscripcion", "sub_confirmar_inscripcion", "sub_inscribir",
+    "sub_cotizar_inscripcion", "sub_confirmar_inscripcion", "sub_inscribir",
 }
 
 
@@ -164,7 +164,8 @@ def test_los_bindings_del_general_no_cambian(catalogo, monkeypatch) -> None:
     spec = types.SimpleNamespace(packs=["pack_subscriptions", "pack_cobranza", "pack_calendar"])
     _candidatas, siempre = candidatas_del_spec(spec, catalogo)  # type: ignore[arg-type]
     assert not (SOLO_PROCEDIMIENTO & siempre)
-    assert {"sub_consultar", "sub_cambiar_plan", "escalate_to_human"} <= siempre
+    # Informar planes es una consulta del General (ADR-0185); cotizar, confirmar e inscribir no.
+    assert {"sub_consultar", "sub_cambiar_plan", "sub_listar_planes", "escalate_to_human"} <= siempre
 
 
 async def test_oferta_segun_el_motor(monkeypatch) -> None:

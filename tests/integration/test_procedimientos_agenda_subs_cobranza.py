@@ -765,6 +765,71 @@ async def test_con_la_bandera_apagada_las_acciones_nuevas_no_se_ofrecen(packs_re
     assert "sub_cambiar_plan" in ofrecidas and "cob_registrar_promesa_pago" in ofrecidas
     assert not (SOLO_PROCEDIMIENTO & ofrecidas)
     assert not ({"iniciar_procedimiento", "actualizar_tarea"} & ofrecidas)
+    # Informar planes solo lo ofrece el motor (ADR-0185): sin la bandera el conjunto no cambia.
+    assert not ({"sub_listar_planes", "sub_cotizar_inscripcion", "sub_confirmar_inscripcion", "sub_inscribir"} & ofrecidas)
+
+
+# ---------------------------------------------------------------- informar planes sin comprar (ADR-0185)
+
+
+async def _crear_plan(tid: uuid.UUID, codigo: str, nombre: str, precio: int) -> None:
+    from pack_subscriptions import planes
+
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        await planes.crear(planes.DatosDePlan(codigo=codigo, nombre=nombre, precio=Decimal(precio), periodicidad="mensual"))
+
+
+async def _tareas_abiertas(conv: Any) -> int:
+    from core.db.models import ConversationTask
+
+    async with _scope(conv.tenant_id) as s:
+        filas = (
+            await s.execute(
+                select(ConversationTask).where(
+                    ConversationTask.tenant_id == conv.tenant_id, ConversationTask.conversation_id == conv.id
+                )
+            )
+        ).scalars().all()
+    return len(filas)
+
+
+async def test_informar_planes_sin_foco_se_ofrece_y_no_abre_tarea(packs_registrados, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Motor activo y sin tarea en foco: `sub_listar_planes` se ofrece (consulta); cotizar, confirmar e inscribir
+    siguen siendo del procedimiento. Responder desde el catálogo no deja ninguna tarea."""
+    tid = await _negocio(["pack_subscriptions"])
+    await _crear_plan(tid, "PLAN-PREMIUM", "Premium", 600000)
+    await _banderas(tid, True)
+    try:
+        conv = await _conversacion(tid)
+        guion = _Guion([("sub_listar_planes", {}), "El Premium cuesta COP 600.000 al mes."])
+        await _turno(conv, guion, monkeypatch, "¿qué incluye el Premium?")
+        primera = guion.tools[0]
+        assert "sub_listar_planes" in primera
+        assert not ({"sub_cotizar_inscripcion", "sub_confirmar_inscripcion", "sub_inscribir"} & primera)
+        assert "Premium" in guion.vistos[1] and "600000" in guion.vistos[1]  # el modelo vio el catálogo real
+        assert await _tareas_abiertas(conv) == 0
+    finally:
+        await _banderas(tid, False)
+
+
+async def test_informar_planes_no_cruza_negocios(packs_registrados, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    a = await _negocio(["pack_subscriptions"])
+    b = await _negocio(["pack_subscriptions"])
+    await _crear_plan(a, "PLAN-SOLO-A", "Exclusivo A", 111000)
+    await _crear_plan(b, "PLAN-SOLO-B", "Exclusivo B", 222000)
+    await _banderas(a, True)
+    await _banderas(b, True)
+    try:
+        conv = await _conversacion(b)
+        guion = _Guion([("sub_listar_planes", {}), "Hay un plan."])
+        await _turno(conv, guion, monkeypatch, "¿qué planes tienen?")
+        visto = guion.vistos[1]
+        assert "Exclusivo B" in visto and "Exclusivo A" not in visto and "111000" not in visto
+    finally:
+        await _banderas(a, False)
+        await _banderas(b, False)
 
 
 # ---------------------------------------------------------------- aislamiento entre negocios
