@@ -206,6 +206,18 @@ async def _limites_de_hoy(tid: uuid.UUID) -> _seg.Limites:
     return _seg.limites(zona)
 
 
+async def _medida_query(medida: str) -> Select[Any] | None:
+    """`(customer_id, monto)` de cada cliente para la suma `medida`, a lo sumo una fila por cliente (HU-CRM-24).
+
+    `valor` es el valor estimado de su último lead, el mismo que filtra y ordena la lista; un cliente sin
+    valor aporta `NULL` y no suma.
+    """
+    if medida == "valor":
+        ultimo = _ultimo_lead(get_current_tenant_id()).subquery()
+        return select(ultimo.c.customer_id.label("customer_id"), ultimo.c.estimated_value.label("monto"))
+    return None
+
+
 async def _sort_query(orden: str) -> Select[Any] | None:
     """`(customer_id, valor)` para ordenar la lista: por seguimiento (el más atrasado primero) o por valor
     estimado (`valor`, `valor_desc`). El core aplica el sentido y deja los nulos al final."""
@@ -660,6 +672,7 @@ lead_registry.register(
     filter_query=_filter_query,
     facet_query=_facet_query,
     sort_query=_sort_query,
+    medida_query=_medida_query,
     timeline=_timeline,
     edicion=LeadEdicion(
         campos=(

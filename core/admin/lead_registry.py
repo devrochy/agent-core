@@ -45,6 +45,10 @@ Contadores por opción (HU-CRM-17): un pack puede aportar `facet_query(clave)`, 
 valor` con el valor que cada cliente tiene para el filtro `clave` (a lo sumo una fila por cliente). El core
 lo agrupa en una sola consulta acotada a los clientes de la lista y devuelve cuántos hay por opción, sin
 conocer las tablas del pack. Los clientes sin fila cuentan como «sin valor».
+
+Sumas por opción (HU-CRM-24): un pack puede aportar `medida_query(medida)`, un `SELECT customer_id, monto`
+con la cifra que cada cliente aporta a una suma (a lo sumo una fila por cliente). Con `resumen=<medida>` el
+core la une a `facet_query` y devuelve cuánto suma cada opción, con las mismas reglas de los contadores.
 """
 
 from __future__ import annotations
@@ -61,6 +65,7 @@ LeadResolver = Callable[[list[uuid.UUID]], Awaitable[dict[uuid.UUID, dict[str, A
 LeadFilterQuery = Callable[[str, str], Awaitable[Any]]  # (clave, valor) -> Select[customer_id]
 LeadFacetQuery = Callable[[str], Awaitable[Any]]  # (clave) -> Select[customer_id, valor]
 LeadSortQuery = Callable[[str], Awaitable[Any]]  # (orden) -> Select[customer_id, valor] o None si no es suyo
+LeadMedidaQuery = Callable[[str], Awaitable[Any]]  # (medida) -> Select[customer_id, monto] o None si no es suya
 
 Cursor = tuple[datetime, str, str]  # (at, source, id) del último evento de la página anterior
 
@@ -163,6 +168,8 @@ class LeadProvider:
     facet_query: LeadFacetQuery | None = None
     # Órdenes extra de la lista que sabe resolver el pack (p. ej. `seguimiento`, HU-CRM-21).
     sort_query: LeadSortQuery | None = None
+    # Cifras que el pack sabe sumar por opción de un filtro (p. ej. `valor`, HU-CRM-24).
+    medida_query: LeadMedidaQuery | None = None
 
 
 class LeadRegistry:
@@ -185,6 +192,7 @@ class LeadRegistry:
         relacion: LeadRelacion | None = None,
         facet_query: LeadFacetQuery | None = None,
         sort_query: LeadSortQuery | None = None,
+        medida_query: LeadMedidaQuery | None = None,
     ) -> None:
         """Idempotente: registrar dos veces el mismo pack reemplaza la entrada."""
         self._providers[plugin_id] = LeadProvider(
@@ -201,6 +209,7 @@ class LeadRegistry:
             relacion,
             facet_query,
             sort_query,
+            medida_query,
         )
 
     def providers_for(self, enabled: set[str] | None) -> list[LeadProvider]:

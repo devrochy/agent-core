@@ -151,6 +151,9 @@ class LeadFacetaOut(BaseModel):
     counts: dict[str, int]
     sin_valor: int  # clientes de la lista que no tienen valor para este filtro (p. ej. sin lead de venta)
     total: int
+    # Con `resumen=<medida>`: cuánto suma cada opción (p. ej. el valor estimado de las etapas); los clientes
+    # sin cifra no suman. `None` si no se pidió o el pack de este filtro no sabe sumarla.
+    sumas: dict[str, float] | None = None
 
 
 class LeadsResponse(BaseModel):
@@ -561,6 +564,15 @@ FacetasQuery = Annotated[
 ]
 
 
+ResumenQuery = Annotated[
+    Literal["valor"] | None,
+    Query(
+        description="Con `facetas`, suma además una cifra por opción en `sumas`: `valor` es el valor estimado de los "
+        "leads (HU-CRM-24). Las sumas respetan los mismos filtros que los contadores."
+    ),
+]
+
+
 def _ultima_actividad(tenant_id: uuid.UUID, customer_ids: list[uuid.UUID] | None = None) -> Select[Any]:
     """`(customer_id, ultima)`: el último mensaje de cada cliente, por el índice de `messages`."""
     query = (
@@ -610,6 +622,7 @@ async def _facetas(
     connection_id: uuid.UUID | None,
     filtro: list[str] | None,
     agente: str | None,
+    resumen: str | None = None,
 ) -> list[LeadFacetaOut]:
     """Contadores por opción de cada filtro pedido: una consulta agrupada por clave."""
     salida: list[LeadFacetaOut] = []
@@ -635,6 +648,7 @@ async def _facetas(
         ids_base = select(base.subquery().c.id)
         valores = pares.subquery()
         opciones = [v for v, _ in definicion.options]
+        medida = await provider.medida_query(resumen) if resumen and provider.medida_query is not None else None
         async with get_session() as session:
             total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
             filas = (
@@ -644,10 +658,29 @@ async def _facetas(
                     .group_by(valores.c.valor)
                 )
             ).all()
+            sumas = None
+            if medida is not None:
+                montos = medida.subquery()
+                filas_suma = (
+                    await session.execute(
+                        select(valores.c.valor, func.coalesce(func.sum(montos.c.monto), 0))
+                        .select_from(valores.join(montos, montos.c.customer_id == valores.c.customer_id))
+                        .where(valores.c.customer_id.in_(ids_base), valores.c.valor.in_(opciones))
+                        .group_by(valores.c.valor)
+                    )
+                ).all()
+                sumas = {v: 0.0 for v in opciones}
+                sumas.update({str(valor): float(monto) for valor, monto in filas_suma})
         counts = {v: 0 for v in opciones}
         counts.update({str(valor): int(n) for valor, n in filas})
         salida.append(
-            LeadFacetaOut(key=clave, counts=counts, sin_valor=max(int(total) - sum(counts.values()), 0), total=int(total))
+            LeadFacetaOut(
+                key=clave,
+                counts=counts,
+                sin_valor=max(int(total) - sum(counts.values()), 0),
+                total=int(total),
+                sumas=sumas,
+            )
         )
     return salida
 
@@ -746,6 +779,7 @@ async def list_leads(
     agente: AgenteQuery = None,
     orden: OrdenQuery = "alta",
     facetas: FacetasQuery = None,
+    resumen: ResumenQuery = None,
 ) -> LeadsResponse:
     tenant_id = principal.tenant_id
     enabled, providers = await _providers()
@@ -789,6 +823,7 @@ async def list_leads(
             connection_id=connection_id,
             filtro=filtro,
             agente=agente,
+            resumen=resumen,
         )
         if facetas
         else []
