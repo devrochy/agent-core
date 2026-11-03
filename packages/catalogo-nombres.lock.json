@@ -3,6 +3,7 @@
     "actualizar_lead",
     "agregar_item_pedido",
     "aplicar_promocion",
+    "buscar_conocimiento",
     "calificar_lead",
     "cancel_calendar_event",
     "check_availability",
