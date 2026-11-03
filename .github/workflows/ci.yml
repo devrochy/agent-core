@@ -247,7 +247,7 @@ jobs:
 
       - name: Duraciones de la integración (junit)
         if: always() && steps.nivel.outputs.relevante == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: integracion-junit
           path: ${{ runner.temp }}/integracion-junit.xml
