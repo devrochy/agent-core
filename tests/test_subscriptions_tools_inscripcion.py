@@ -110,6 +110,10 @@ async def test_confirmar_compara_el_monto_con_el_del_servidor(cap) -> None:
         with pytest.raises(SubscriptionError) as e:
             await skill.confirmar_inscripcion({"plan_code": "PREMIUM", "codigo_promocion": "LANZA", "monto_a_pagar": malo}, _ctx())
         assert e.value.code == "monto_distinto"
+        if malo == 1000:
+            # El error le dice al modelo qué hacer (cotizar de nuevo ese plan): sin esto repetía el monto viejo
+            # de otro plan en cada turno (corrida de pass^4 del 2026-11-04, cambio de plan antes de confirmar).
+            assert "sub_cotizar_inscripcion" in str(e.value) and "PREMIUM" in str(e.value)
 
 
 async def test_inscribir_toma_el_cliente_del_contexto_y_no_deja_fijar_precio_ni_periodicidad(cap) -> None:

@@ -225,7 +225,9 @@ async def nombre_de_negocio(valor: Any, ctx: ToolContext, datos: dict[str, Any])
 def _nombre_de_plan(nombre: str, periodicidad: str | None) -> str:
     """"Plan Premium" + "mensual" → "Premium mensual": el rótulo ya dice que es un plan."""
     limpio = re.sub(r"^\s*plan\s+", "", nombre or "", flags=re.IGNORECASE).strip() or (nombre or "").strip()
-    return f"{limpio} {periodicidad}".strip() if periodicidad else limpio
+    if not periodicidad or limpio.lower().endswith(str(periodicidad).lower()):
+        return limpio  # «Premium anual» ya dice la periodicidad: no «Premium anual anual»
+    return f"{limpio} {periodicidad}".strip()
 
 
 async def resumen_de_inscripcion(args: dict[str, Any], ctx: ToolContext) -> list[DatoDeResumen] | None:
