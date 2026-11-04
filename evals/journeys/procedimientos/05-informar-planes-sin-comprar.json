@@ -1,0 +1,43 @@
+{
+  "nombre": "informar-planes-sin-comprar",
+  "semilla": 17,
+  "procedimientos": [
+    "pack_subscriptions.contratar_plan"
+  ],
+  "requiere_motor": true,
+  "descripcion": "ADR-0185 / HU-SUB-37: el cliente solo pregunta por los planes y precios. Con el motor activo el asistente los consulta con sub_listar_planes, responde con las cifras del catálogo y no inicia el procedimiento de compra ni deja una tarea abierta.",
+  "pasos": [
+    {
+      "nota": "solo pregunta, no quiere comprar",
+      "usuario": "Hola, ¿qué planes tienen y cuánto cuestan? Solo estoy mirando por ahora.",
+      "espera": {
+        "alguna_herramienta": [
+          "sub_listar_planes"
+        ],
+        "sin_herramientas": [
+          "iniciar_procedimiento"
+        ],
+        "texto_contiene": [
+          "Basic"
+        ],
+        "texto_contiene_alguno": [
+          "200.000",
+          "200,000",
+          "200000",
+          "200 mil"
+        ],
+        "escala": false
+      }
+    },
+    {
+      "nota": "ninguna tarea de compra quedó abierta para quien solo preguntó",
+      "verifica": {
+        "tabla": "conversation_tasks",
+        "donde": {
+          "conversation_id": "{conversacion.id}"
+        },
+        "filas": 0
+      }
+    }
+  ]
+}
