@@ -281,6 +281,22 @@ def _contrato_422(issues: list[Issue]) -> ApiError:
     )
 
 
+def _con_avisos_simples(issues: list[Issue], contenido: Any) -> list[Issue]:
+    """HU-AOS-59: guardar un borrador que nombra algo retirado da el mismo aviso en palabras simples que
+    publicar (qué ya no existe y qué hacer), no el código técnico del linter (`accion_inexistente`)."""
+    from core.agents.referencias_retiradas import CODIGO_ACCION, CODIGO_PROCEDIMIENTO, binario_de
+
+    if not isinstance(contenido, dict):
+        return issues
+    simples = {
+        i.path: i for i in problemas_de_publicacion(contenido, binario_de(plugin_manager.list_modules()))
+    }
+    return [
+        simples[i.path] if i.code in (CODIGO_ACCION, CODIGO_PROCEDIMIENTO) and i.path in simples else i
+        for i in issues
+    ]
+
+
 async def _exigir_enfoque(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> None:
     """HU-AOS-51: publicar por esta ruta respeta el enfoque del agente igual que el editor (ADR-0155):
     un superpoder fuera de la plantilla del agente da 422 `superpoder_fuera_de_enfoque` por campo.
@@ -459,7 +475,7 @@ async def save_draft(
     except svc.AgenteNoEncontrado:
         raise ApiError.not_found("Agente no encontrado.") from None
     except svc.ErroresDeContrato as exc:
-        raise _contrato_422(exc.issues) from None
+        raise _contrato_422(_con_avisos_simples(exc.issues, cuerpo["content"])) from None
     except svc.Conflicto as exc:
         raise ApiError(409, "stale_lock_version", str(exc), fields={"lock_version": str(exc.lock_version)}) from None
     return _draft(borrador)
