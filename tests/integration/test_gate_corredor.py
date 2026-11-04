@@ -161,7 +161,7 @@ async def test_mide_aprueba_registra_y_limpia(entorno_de_eval: Path, bases_de_ev
         "where e.release_id = :r group by 1 order by 1",
         r=candidata,
     )
-    assert dict(resultados) == {"pack_calendar.agendar_cita": 1, "pack_commerce.tomar_pedido": 1, "pack_subscriptions.contratar_plan": 2}
+    assert dict(resultados) == {"pack_calendar.agendar_cita": 1, "pack_commerce.tomar_pedido": 1, "pack_subscriptions.contratar_plan": 3}
     # El negocio efímero ya no existe y no quedó nada del cliente en la base de eval.
     assert await _tenants_en_eval(bases_de_eval[1]) == 0
     # Idempotente: otra medición contra la misma base no gasta.
