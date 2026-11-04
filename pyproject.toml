@@ -27,6 +27,9 @@ dependencies = [
     # Cache / colas
     "redis>=5.0",
     "celery>=5.4",
+    # kombu 5.7.0 importa `packaging` (transporte de redis) sin declararlo; la imagen instala con pip
+    # sin lock y quedaba sin él (2026-11-03: worker y beat de test en bucle de reinicios).
+    "packaging>=24.0",
     # Config / validación
     "pydantic>=2.8",
     "pydantic-settings>=2.4",
