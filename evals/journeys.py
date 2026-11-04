@@ -137,6 +137,7 @@ class Contexto:
             **self.variables,
             "negocio": {"id": str(self.tenant_id)},
             "cliente": {"id": str(self.customer_id), **datos_unicos(self.customer_id)},
+            "conversacion": {"id": str(self.conversation_id)},
             "ahora": self.ahora.isoformat(),
             "pagos": {"ultimo": self.pagos.links[-1] if self.pagos.links else {}},
             "correos": {"ultimo": CORREOS.enviados[-1] if CORREOS.enviados else {}},

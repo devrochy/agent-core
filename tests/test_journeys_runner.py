@@ -206,7 +206,11 @@ def test_sin_el_motor_se_omiten_los_journeys_que_lo_requieren() -> None:
     # línea base darían 0 % por diseño. Solo `--runtime legacy` sobre un set con motor los omite.
     negocio, rutas = journeys.rutas_del_set("procedimientos", [""])
     requieren = {r.stem for r in rutas if json.loads(r.read_text(encoding="utf-8")).get("requiere_motor")}
-    assert requieren == {"01-contratar-premium-mensual", "02-cambia-de-plan-antes-de-confirmar"}
+    assert requieren == {
+        "01-contratar-premium-mensual",
+        "02-cambia-de-plan-antes-de-confirmar",
+        "05-informar-planes-sin-comprar",  # sub_listar_planes solo se ofrece con el motor (ADR-0185)
+    }
 
     a_correr, omitidos = journeys.separar_los_que_requieren_motor(rutas, negocio, "legacy")
     assert set(omitidos) == requieren
