@@ -1,1 +1,3 @@
+## El verificador detecta montos con COP al final (2026-11-04)
+
 - El verificador de afirmaciones ahora detecta montos escritos con la moneda al final («200.000 COP»), no solo `$ 200.000` o `COP 200.000`: una cifra sin respaldo en las tools se bloquea igual (antes pasaba con o sin evidencia).
