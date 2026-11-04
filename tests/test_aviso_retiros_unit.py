@@ -25,6 +25,7 @@ from core.agents.referencias_retiradas import (
     CODIGO_ACCION,
     CODIGO_PROCEDIMIENTO,
     Binario,
+    hallazgos_de_contenido,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "agents"
@@ -177,3 +178,25 @@ def test_un_problema_comun_del_contrato_sigue_igual() -> None:
     assert error.message == "El spec tiene 1 problema(s) del contrato."
     assert error.fields == {"tools": "La acción 'x' tiene más de un binding."}
     assert error.details is None
+
+
+def test_guardar_borrador_traduce_lo_retirado_a_palabras_simples(binario: Binario, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`PUT /draft` también habla en palabras simples: el 422 del linter (`accion_inexistente`) se cambia por
+    el mismo aviso de publicar; lo que no es una referencia retirada queda igual."""
+    from core.api.routers import agents as router
+    from core.kernel.procedures import Issue
+
+    monkeypatch.setattr("core.agents.referencias_retiradas.binario_de", lambda _modulos: binario)
+    monkeypatch.setattr(router.plugin_manager, "list_modules", lambda: [])
+    contenido = _ventas()
+    ruta = next(h.ruta for h in hallazgos_de_contenido(contenido, binario) if h.nombre == "informar_plan")
+    tecnico = Issue(CODIGO_ACCION, ruta, "la acción «informar_plan» no existe en el catálogo")
+    otro = Issue("campo_obligatorio", "name", "Falta el nombre.")
+
+    resultado = router._con_avisos_simples([tecnico, otro], contenido)
+
+    assert resultado[0].code == CODIGO_AVISO
+    assert "informar_plan" in resultado[0].message and "ya no existe" in resultado[0].message
+    assert not any(c in resultado[0].message for c in ("accion_inexistente", "procedimiento_inexistente"))
+    assert resultado[1] is otro
+    assert router._con_avisos_simples([tecnico], "no es un dict") == [tecnico]
