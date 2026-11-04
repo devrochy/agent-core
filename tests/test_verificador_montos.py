@@ -248,8 +248,20 @@ def test_precio_de_un_turno_anterior_respalda_la_repeticion() -> None:
     assert _verificar_texto("Recuerda que el plan Pro vale $200.000.", resultados).passed
 
 
-def test_monto_con_cop_al_final_no_se_detecta() -> None:
-    """Limitación conocida (fuera de este arreglo): el detector solo mira `$` o `COP` ANTES de la cifra,
-    así que «200.000 COP» pasa con o sin evidencia. Si se amplía el detector, este test debe invertirse."""
-    assert _verificar_texto("El plan Pro cuesta 200.000 COP.", _planes()).passed
-    assert _verificar_texto("El plan Pro cuesta 200.000 COP.", []).passed
+@pytest.mark.parametrize("texto", ["El plan Pro cuesta 200.000 COP.", "Pro: 200.000COP al mes", "Pro vale 200.000,00 COP"])
+def test_monto_con_cop_al_final_con_evidencia_pasa(texto: str) -> None:
+    assert _verificar_texto(texto, _planes()).passed
+
+
+@pytest.mark.parametrize("texto", ["El plan Pro cuesta 250.000 COP.", "El plan Pro cuesta 200.000 COP."])
+def test_monto_con_cop_al_final_sin_evidencia_se_bloquea(texto: str) -> None:
+    """Antes «200.000 COP» pasaba con o sin evidencia (el detector solo miraba `$`/`COP` antes de la cifra)."""
+    veredicto = _verificar_texto(texto, [])
+    assert not veredicto.passed
+    assert veredicto.motivo == "monto_sin_evidencia"
+
+
+def test_monto_con_cop_al_final_distinto_de_la_evidencia_se_bloquea() -> None:
+    veredicto = _verificar_texto("El plan Pro cuesta 250.000 COP.", _planes())
+    assert not veredicto.passed
+    assert veredicto.motivo == "monto_sin_evidencia"

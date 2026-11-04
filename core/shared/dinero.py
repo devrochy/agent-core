@@ -13,7 +13,8 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-MONEY_IN_TEXT = re.compile(r"\$\s?[\d][\d.,]*|\bCOP\s?[\d][\d.,]*")
+# `$ 200.000`, `COP 200.000` y `200.000 COP` (la moneda al final también es un monto afirmado).
+MONEY_IN_TEXT = re.compile(r"\$\s?[\d][\d.,]*|\bCOP\s?[\d][\d.,]*|\b\d[\d.,]*\s?COP\b")
 
 # Claves bajo las que un resultado de tool puede traer un monto real (puerto
 # directo de MONEY_KEYS/walkForKeys de agent-sale, src/shared/observability/
