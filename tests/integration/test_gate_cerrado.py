@@ -41,6 +41,7 @@ TODOS = {
     "02-cambia-de-plan-antes-de-confirmar": [True] * 4,
     "03-pedido-a-domicilio": [True] * 4,
     "04-agendar-una-demo": [True] * 4,
+    "05-informar-planes-sin-comprar": [True] * 4,
 }
 
 
