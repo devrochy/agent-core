@@ -1053,9 +1053,12 @@ async def _preparar_proceso() -> None:
 
     plugin_manager.scan()
     await plugin_manager.sync_registry()
+    # Primero las tools del core, como `core/main.py` (las registra al importar): el resumen de confirmación de un
+    # pack sobre una tool del core (`sub_confirmar_inscripcion`) solo se registra si la tool ya existe al activar el pack.
+    # Al revés, el journey confirmaba con el texto de respaldo y el total que firmó el modelo (corrida #17).
+    register_core_skills(mcp_host)
     await plugin_manager.activate_all_configured()
     await plugin_manager.ensure_process_activation()
-    register_core_skills(mcp_host)
     # Handlers del core del outbox (alta automática, cobro de plataforma): el paso
     # `outbox` los necesita como el despachador del worker.
     ensure_core_handlers()
