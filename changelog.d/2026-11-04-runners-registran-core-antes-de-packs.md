@@ -1,0 +1,3 @@
+## Los runners de evals registran las tools del core antes de activar los packs (2026-11-04)
+
+- `evals/journeys.py` y `evals/runner.py` activaban los packs antes de registrar las tools del core, así que el resumen de confirmación de `pack_subscriptions` sobre `sub_confirmar_inscripcion` no se registraba y los journeys confirmaban con el texto de respaldo y el `monto_a_pagar` que firmó el modelo (tras cambiar de plan salía el anual con el total del mensual; corrida #17 de pass^4, `cambia-de-plan-antes-de-confirmar` 3/4). Ahora el orden es el de `core/main.py`. Prueba de guardia en `tests/test_resumen_del_pack_orden_runners.py`. La app real no estaba afectada.

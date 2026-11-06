@@ -363,13 +363,14 @@ async def main() -> int:
 
     plugin_manager.scan()
     await plugin_manager.sync_registry()
-    await plugin_manager.activate_all_configured()
     # Tools del core (escalamiento, memoria, `sub_*`…): el loop real las tiene porque
-    # `core/main.py` las registra al importar; el runner no importa `core.main`.
+    # `core/main.py` las registra al importar; el runner no importa `core.main`. Van ANTES de activar los
+    # packs: el resumen de confirmación de un pack sobre una tool del core solo se registra si la tool ya existe.
     from core.mcp.host import mcp_host as _host
     from core.tools.core_skill import register_core_skills
 
     register_core_skills(_host)
+    await plugin_manager.activate_all_configured()
 
     spec = _load_spec(args.tenant)
     paths = _scenario_paths(args.tenant, patterns)
