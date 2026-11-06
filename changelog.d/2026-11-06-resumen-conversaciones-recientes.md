@@ -1,0 +1,1 @@
+- `GET /admin/dashboard`: cada conversación de `recent` suma `channel` y `started_at` (opcionales, sin migración). El Resumen del panel los usa para el avatar y el «hace X» de «Conversaciones recientes».

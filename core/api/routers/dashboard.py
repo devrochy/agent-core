@@ -58,6 +58,9 @@ class RecentConversation(BaseModel):
     customer_name: str | None
     external_id: str | None
     status: str
+    # Opcionales: las apps viejas no los leen; el Resumen los usa para el avatar y el «hace X».
+    channel: str | None = None
+    started_at: datetime | None = None
 
 
 class DashboardResponse(BaseModel):
@@ -162,6 +165,8 @@ async def get_dashboard(
                 customer_name=cust.name,
                 external_id=cust.external_id,
                 status=conv.status,
+                channel=conv.channel,
+                started_at=conv.started_at,
             )
             for conv, cust in recent_rows
         ],
