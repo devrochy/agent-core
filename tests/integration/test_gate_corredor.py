@@ -36,6 +36,7 @@ ESCENARIOS = {
     "02-cambia-de-plan-antes-de-confirmar": "pack_subscriptions.contratar_plan",
     "03-pedido-a-domicilio": "pack_commerce.tomar_pedido",
     "04-agendar-una-demo": "pack_calendar.agendar_cita",
+    "05-informar-planes-sin-comprar": "pack_subscriptions.contratar_plan",
 }
 INTENTOS = len(ESCENARIOS) * 4
 
@@ -160,7 +161,7 @@ async def test_mide_aprueba_registra_y_limpia(entorno_de_eval: Path, bases_de_ev
         "where e.release_id = :r group by 1 order by 1",
         r=candidata,
     )
-    assert dict(resultados) == {"pack_calendar.agendar_cita": 1, "pack_commerce.tomar_pedido": 1, "pack_subscriptions.contratar_plan": 2}
+    assert dict(resultados) == {"pack_calendar.agendar_cita": 1, "pack_commerce.tomar_pedido": 1, "pack_subscriptions.contratar_plan": 3}
     # El negocio efímero ya no existe y no quedó nada del cliente en la base de eval.
     assert await _tenants_en_eval(bases_de_eval[1]) == 0
     # Idempotente: otra medición contra la misma base no gasta.
@@ -178,7 +179,8 @@ async def test_un_escenario_inestable_rechaza_y_bloquea_la_promocion(entorno_de_
     tid, cid, _activa, candidata = await _negocio_y_candidata()
     r = await _medir(tid, cid, candidata)
     assert r.estado == "rechazada"
-    assert r.por_procedimiento["pack_subscriptions.contratar_plan"]["pass_k"] == 0.5
+    # contratar_plan tiene 3 escenarios (01, 02 y 05): falla solo el 02, así que pasan 2 de 3.
+    assert r.por_procedimiento["pack_subscriptions.contratar_plan"]["pass_k"] == pytest.approx(2 / 3, abs=1e-3)
     assert r.por_procedimiento["pack_subscriptions.contratar_plan"]["ok"] is False
     async with tenant_scope(tid):
         with pytest.raises(ConflictoDeRelease) as exc:

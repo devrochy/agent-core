@@ -425,7 +425,12 @@ class SubscriptionSkill(BaseSkill):
             ctx, str(arguments.get("plan_code") or ""), arguments.get("codigo_promocion")
         )
         if not _mismo_monto(arguments.get("monto_a_pagar"), cotizacion["total_primer_cargo"]):
-            raise SubscriptionError("El monto confirmado no coincide con el del sistema.", code="monto_distinto")
+            raise SubscriptionError(
+                "El monto confirmado no coincide con el total vigente del plan "
+                f"{cotizacion['plan_code']}: llama sub_cotizar_inscripcion para ese plan y usa el monto_a_pagar que devuelva "
+                "(no el de una cotización anterior, p. ej. de otro plan).",
+                code="monto_distinto",
+            )
         resultado: dict[str, Any] = {
             "plan_code": cotizacion["plan_code"],
             "confirmada": True,
