@@ -855,6 +855,38 @@ async def _permisos_de(session, tenant_id: uuid.UUID, payload: dict[str, Any]) -
     return [{"permiso": p, "habilitado": bool(habilitados.get(p, False))} for p in GESTOR_PERMISOS]
 
 
+class SinPermiso(PermissionError):
+    """El gestor no tiene habilitado el permiso que exige la acción (cola offline)."""
+
+    def __init__(self, permiso: str) -> None:
+        super().__init__(f"sin permiso: {permiso}")
+        self.permiso = permiso
+
+
+async def _permisos_habilitados(session, tenant_id: uuid.UUID, payload: dict[str, Any]) -> frozenset[str]:
+    """Permisos de la matriz que el token puede usar. El servidor aplica la matriz (agent-core#690):
+    el gestor solo lo que tiene habilitado (sin fila = denegado); propietario y master, todo."""
+    return frozenset(p["permiso"] for p in await _permisos_de(session, tenant_id, payload) if p["habilitado"])
+
+
+async def _exigir_permiso(session, tenant_id: uuid.UUID, payload: dict[str, Any], permiso: str) -> JSONResponse | None:
+    """`None` si el token tiene el permiso; si no, el 403 que la ruta devuelve sin escribir nada.
+    Se llama DESPUÉS de comprobar la cartera (un id ajeno sigue siendo 404) y antes de cualquier escritura."""
+    if payload.get("rol") != "gestor":
+        return None
+    if permiso in await _permisos_habilitados(session, tenant_id, payload):
+        return None
+    return JSONResponse({"error": "sin permiso", "permiso": permiso}, status_code=403)
+
+
+def _permiso_de_visita(data: dict[str, Any]) -> str:
+    """Permiso que exige aplicar `data` con `_aplicar_visita`, según la acción EFECTIVA (no la URL):
+    sin `resultado: pago` la visita se aplica como no pago (y puede crear una promesa)."""
+    if str(data.get("resultado") or "no_pago") != "pago":
+        return "registrar_no_pago"
+    return "registrar_abono" if str(data.get("tipoPago") or "cuota") == "abono" else "registrar_pago"
+
+
 def _config_public(cartera_id: uuid.UUID, cfg: CarteraConfig | None) -> dict[str, Any]:
     def g(attr: str, default: Any) -> Any:
         return getattr(cfg, attr, default) if cfg is not None else default
@@ -1427,6 +1459,8 @@ async def crear_nota(cartera_id: str, request: Request, authorization: str | Non
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "anotar_notas_cartera")) is not None:
+                return denegado
             n = CarteraNota(tenant_id=tenant_id, cartera_id=cid, nota=nota, creado_por_rol="gestor", creado_por_id=uuid.UUID(str(payload["admin_id"])) if payload.get("admin_id") else None)
             session.add(n)
             await session.flush()
@@ -1572,6 +1606,8 @@ async def editar_cliente(cartera_id: str, cliente_id: str, request: Request, aut
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "actualizar_cliente")) is not None:
+                return denegado
             c = await _cliente_o_404(session, tenant_id, cid, clid)
             if c is None:
                 return JSONResponse({"error": "cliente no encontrado"}, status_code=404)
@@ -1632,6 +1668,8 @@ async def agregar_evidencias(cartera_id: str, cliente_id: str, request: Request,
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "actualizar_cliente")) is not None:
+                return denegado
             if await _cliente_o_404(session, tenant_id, cid, clid) is None:
                 return JSONResponse({"error": "cliente no encontrado"}, status_code=404)
             await _guardar_evidencias_cliente(session, tenant_id, clid, form)
@@ -1696,6 +1734,8 @@ async def visita_pago(cartera_id: str, request: Request, authorization: str | No
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, _permiso_de_visita(body))) is not None:
+                return denegado
             p = await get_owned(session, Prestamo, pid)
             if p is None or p.cartera_id != cid or p.cliente_id != clid:
                 return JSONResponse({"error": "préstamo no encontrado"}, status_code=404)
@@ -1726,6 +1766,8 @@ async def visita_no_pago(cartera_id: str, request: Request, authorization: str |
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "registrar_no_pago")) is not None:
+                return denegado
             visita = await _aplicar_visita(session, tenant_id, cid, {**body, "resultado": "no_pago"})
             out = _visita_public(visita, pid)
     return JSONResponse(out, status_code=201)
@@ -1750,6 +1792,8 @@ async def registrar_gasto(cartera_id: str, request: Request, authorization: str 
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "registrar_gasto")) is not None:
+                return denegado
             g = Gasto(tenant_id=tenant_id, cartera_id=cid, descripcion=descripcion, valor=Decimal(str(valor)), creado_por=uuid.UUID(str(payload["admin_id"])) if payload.get("admin_id") else None)
             session.add(g)
             await session.flush()
@@ -1795,6 +1839,8 @@ async def crear_prestamo(cartera_id: str, request: Request, authorization: str |
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "registrar_prestamo")) is not None:
+                return denegado
             if await _cliente_o_404(session, tenant_id, cid, clid) is None:
                 return JSONResponse({"error": "cliente no encontrado"}, status_code=404)
             total = (valor * (Decimal(1) + interes / Decimal(100))).quantize(Decimal("1"))
@@ -1883,6 +1929,8 @@ async def _eliminar_movimiento(request: Request, authorization: str | None, cart
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, f"eliminar_{entidad}")) is not None:
+                return denegado
             if not await _password_ok(session, payload, str(body.get("password") or "")):
                 return JSONResponse({"error": "contraseña incorrecta"}, status_code=403)
             obj = await get_owned(session, modelo, rid)
@@ -1938,6 +1986,8 @@ async def generar_liquidacion(cartera_id: str, request: Request, authorization: 
             cartera = await _cartera_visible(session, tenant_id, payload, cid)
             if cartera is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "generar_reporte")) is not None:
+                return denegado
             cfg = (await session.execute(select(CarteraConfig).where(CarteraConfig.tenant_id == tenant_id, CarteraConfig.cartera_id == cid))).scalar_one_or_none()
             periodo = cfg.periodo_liquidacion if cfg is not None else "diario"
         await _generar_liquidacion(cid, periodo)
@@ -2041,7 +2091,14 @@ async def _cartera_de_evento(session, tenant_id: uuid.UUID, payload: dict[str, A
     return carteras[0].id if len(carteras) == 1 else None
 
 
-async def _aplicar_evento_offline(session, tenant_id: uuid.UUID, payload: dict[str, Any], tipo: str, data: dict[str, Any]) -> None:
+def _exigir_habilitado(habilitados: frozenset[str] | None, permiso: str) -> None:
+    """La cola offline aplica la misma matriz que las rutas (agent-core#690). `None` = sin matriz
+    (propietario y master: todo habilitado)."""
+    if habilitados is not None and permiso not in habilitados:
+        raise SinPermiso(permiso)
+
+
+async def _aplicar_evento_offline(session, tenant_id: uuid.UUID, payload: dict[str, Any], tipo: str, data: dict[str, Any], habilitados: frozenset[str] | None = None) -> None:
     if tipo in ("visita", "pago", "abono"):
         cid = await _cartera_de_evento(session, tenant_id, payload, data)
         if cid is None:
@@ -2051,8 +2108,10 @@ async def _aplicar_evento_offline(session, tenant_id: uuid.UUID, payload: dict[s
             d["resultado"], d["tipoPago"] = "pago", "cuota"
         elif tipo == "abono":
             d["resultado"], d["tipoPago"] = "pago", "abono"
+        _exigir_habilitado(habilitados, _permiso_de_visita(d))
         await _aplicar_visita(session, tenant_id, cid, d)
     elif tipo == "gasto":
+        _exigir_habilitado(habilitados, "registrar_gasto")
         cid = await _cartera_de_evento(session, tenant_id, payload, data)
         if cid is None:
             raise ValueError("no se pudo resolver la cartera del gasto")
@@ -2075,6 +2134,7 @@ async def _aplicar_evento_offline(session, tenant_id: uuid.UUID, payload: dict[s
             raise ValueError("no se pudo resolver la cartera de la trayectoria")
         session.add(CarteraOptimizadaLog(tenant_id=tenant_id, cartera_id=cid, fecha=date.today(), orden_clientes=data.get("puntos") or [], tipo="real"))
     elif tipo == "cambio_cliente":
+        _exigir_habilitado(habilitados, "actualizar_cliente")
         clid = uuid.UUID(str(data.get("clienteId")))
         campos = data.get("input") or data.get("campos") or {}
         session.add(CambioCliente(tenant_id=tenant_id, cliente_id=clid, campos_propuestos=campos, estado="pendiente", solicitado_por_rol="gestor"))
@@ -2095,6 +2155,7 @@ async def sync_offline(request: Request, authorization: str | None = Header(defa
     tipos_aplicados: list[str] = []
     async with tenant_scope(tenant_id):
         async with get_session() as session:
+            habilitados = await _permisos_habilitados(session, tenant_id, payload) if payload.get("rol") == "gestor" else None
             for ev in eventos:
                 eid = str(ev.get("eventoIdCliente") or "").strip()
                 tipo = str(ev.get("tipoEvento") or "").strip()
@@ -2108,10 +2169,14 @@ async def sync_offline(request: Request, authorization: str | None = Header(defa
                     continue
                 try:
                     async with session.begin_nested():
-                        await _aplicar_evento_offline(session, tenant_id, payload, tipo, data)
+                        await _aplicar_evento_offline(session, tenant_id, payload, tipo, data, habilitados)
                     session.add(SyncEvento(tenant_id=tenant_id, evento_id_cliente=eid, tipo=tipo, payload=data))
                     acks.append(_ack(eid, "sincronizado"))
                     tipos_aplicados.append(tipo)
+                except SinPermiso as exc:
+                    # Sin permiso no se registra el evento: la app lo conserva para reintentar y, si el
+                    # propietario habilita el permiso, el mismo evento se aplica (no queda como duplicado).
+                    acks.append(_ack(eid, "error", str(exc)))
                 except Exception as exc:  # evento inválido: no tumba el lote
                     session.add(SyncEvento(tenant_id=tenant_id, evento_id_cliente=eid, tipo=tipo, payload=data, estado="error"))
                     log.warning("sync_offline_error", tipo=tipo, error=type(exc).__name__)
