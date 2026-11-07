@@ -63,6 +63,8 @@ MAX_CANDIDATOS = 5000
 LOTE = 25
 PREFIJO = "segmento"
 PROPOSITO = "promociones"
+# Bajas que no se deshacen desde la ficha (D-SPEC-33-9): la pidió el cliente o la impuso Meta.
+ORIGENES_DE_BAJA_DEL_CLIENTE = frozenset({"palabra_de_baja", "meta_131050"})
 MAX_NOMBRE = 60  # el nombre lo puede escribir el agente: se acota como en ADR-0108
 
 MOTIVOS = {
@@ -185,21 +187,53 @@ async def registrar_consentimiento(
     evidencia: str = "",
     actor_admin_id: uuid.UUID | None = None,
     actor_label: str = "",
+    respetar_baja_del_cliente: bool = False,
 ) -> CustomerConsent:
-    """Agrega una fila de consentimiento (nunca edita). El cliente tiene que ser del negocio."""
+    """Agrega una fila de consentimiento (nunca edita). El cliente tiene que ser del negocio.
+
+    Con `respetar_baja_del_cliente` (D-SPEC-33-9, opción C) la baja que dejó el propio cliente
+    (`palabra_de_baja`) o Meta (`meta_131050`) no se toca desde la ficha: `otorgado` se rechaza con
+    409 `baja_del_cliente`, y `revocado` no agrega fila (ya está de baja; si agregara una de origen
+    `ficha`, taparía la baja y la siguiente reactivación pasaría). La última fila se lee con el
+    cliente bloqueado, igual que la inserción: una baja que llega al mismo tiempo (que también pasa
+    por aquí) no queda detrás de una reactivación."""
     async with get_session() as session:
         existe = (
             await session.execute(
-                select(Customer.id).where(
+                select(Customer.id)
+                .where(
                     Customer.id == customer_id,
                     Customer.tenant_id == tenant_id,
                     Customer.deleted_at.is_(None),
                     Customer.channel != TEST_CHANNEL,
                 )
+                .with_for_update(key_share=True)
             )
         ).scalar_one_or_none()
         if existe is None:
             raise EnvioError(404, "not_found", "Cliente no encontrado.")
+        if respetar_baja_del_cliente:
+            anterior = (
+                await session.execute(
+                    select(CustomerConsent)
+                    .where(
+                        CustomerConsent.tenant_id == tenant_id,
+                        CustomerConsent.customer_id == customer_id,
+                        CustomerConsent.proposito == PROPOSITO,
+                    )
+                    .order_by(CustomerConsent.created_at.desc(), CustomerConsent.id.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if anterior is not None and anterior.origen in ORIGENES_DE_BAJA_DEL_CLIENTE:
+                if estado == "revocado":
+                    return anterior
+                raise EnvioError(
+                    409,
+                    "baja_del_cliente",
+                    "El cliente pidió dejar de recibir promociones (o WhatsApp ya no le entrega "
+                    "marketing); solo él puede volver a aceptarlas, no se puede marcar desde la ficha.",
+                )
         fila = CustomerConsent(
             tenant_id=tenant_id,
             customer_id=customer_id,

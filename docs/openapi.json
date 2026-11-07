@@ -35297,7 +35297,7 @@
           "admin · leads"
         ],
         "summary": "Registrar Consentimiento",
-        "description": "Marca que el cliente aceptó (o ya no acepta) recibir promociones. Se guarda cómo se obtuvo\ny quién lo marcó; nunca se edita una fila anterior (ADR-0150).",
+        "description": "Marca que el cliente aceptó (o ya no acepta) recibir promociones. Se guarda cómo se obtuvo\ny quién lo marcó; nunca se edita una fila anterior (ADR-0150).\n\nRegistrar que **aceptó** es solo del propietario o el master (D-SPEC-33-9): es la autorización\nque responde ante Meta y la Ley 1581 y la que gasta créditos del propietario. Y nadie la\nregistra sobre una baja pedida por el cliente (`palabra_de_baja`) o impuesta por Meta\n(`meta_131050`): 409 `baja_del_cliente`. Registrar que **ya no acepta** sigue abierto a quien\ntiene Clientes en escritura (es el sentido seguro).",
         "operationId": "registrar_consentimiento_api_v1_admin_leads__lead_id__consentimiento_post",
         "parameters": [
           {
