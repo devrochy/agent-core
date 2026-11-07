@@ -7,6 +7,8 @@
 - `POST /admin/leads/acciones/plantilla/{envio_id}/confirmar` (`Idempotency-Key`): lo confirma.
 - `GET  /admin/leads/acciones/plantilla/{envio_id}`: estado del envío.
 - `GET/POST /admin/leads/{lead_id}/consentimiento`: consentimiento del cliente para promociones.
+  Registrar que aceptó es solo del propietario o el master y no se puede sobre una baja del
+  cliente (D-SPEC-33-9); registrar que ya no acepta es de quien tiene Clientes en escritura.
 - `GET /admin/leads/{lead_id}/consentimiento-datos` y `POST …/revocar`: aviso de datos; retirar es solo del
   propietario o un admin de plataforma (agent-core#692).
 
@@ -341,7 +343,16 @@ async def registrar_consentimiento(
     principal: Annotated[Principal, Depends(require("leads", write=True))],
 ) -> ConsentimientoOut:
     """Marca que el cliente aceptó (o ya no acepta) recibir promociones. Se guarda cómo se obtuvo
-    y quién lo marcó; nunca se edita una fila anterior (ADR-0150)."""
+    y quién lo marcó; nunca se edita una fila anterior (ADR-0150).
+
+    Registrar que **aceptó** es solo del propietario o el master (D-SPEC-33-9): es la autorización
+    que responde ante Meta y la Ley 1581 y la que gasta créditos del propietario. Y nadie la
+    registra sobre una baja pedida por el cliente (`palabra_de_baja`) o impuesta por Meta
+    (`meta_131050`): 409 `baja_del_cliente`. Registrar que **ya no acepta** sigue abierto a quien
+    tiene Clientes en escritura (es el sentido seguro)."""
+    # Se comprueba antes de leer nada: un colaborador recibe 403 igual con cualquier cliente (#698).
+    if body.estado == "otorgado" and not es_owner_o_master(principal):
+        raise ApiError.forbidden("Solo el propietario del negocio puede registrar que un cliente aceptó recibir promociones.")
     evidencia = f"{_COMO[body.como]}" + (f": {body.evidencia}" if body.evidencia else "")
     if body.estado == "otorgado" and body.como == "otro" and not body.evidencia:
         raise ApiError.bad_request("Cuenta cómo lo obtuviste.", "evidencia_requerida")
@@ -354,6 +365,7 @@ async def registrar_consentimiento(
             evidencia=evidencia,
             actor_admin_id=principal.admin.id,
             actor_label=_quien(principal),
+            sin_reactivar_baja_del_cliente=body.estado == "otorgado",
         )
     except envios.EnvioError as exc:
         raise _error(exc) from exc

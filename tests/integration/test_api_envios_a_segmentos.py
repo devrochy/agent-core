@@ -363,6 +363,133 @@ async def test_consentimiento_desde_la_ficha_y_baja_por_palabra(app_client) -> N
     assert cuerpo["historial"][0]["origen"] == "palabra_de_baja" and cuerpo["historial"][0]["quien"] == "el cliente"
 
 
+async def _fila_de_consentimiento(tid: uuid.UUID, cliente: uuid.UUID, estado: str, origen: str) -> None:
+    from core.db.models import CustomerConsent
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid), get_session() as session:
+        session.add(CustomerConsent(tenant_id=tid, customer_id=cliente, estado=estado, origen=origen))
+
+
+async def _filas_de_promociones(tid: uuid.UUID, cliente: uuid.UUID) -> int:
+    from sqlalchemy import func, select
+
+    from core.db.models import CustomerConsent
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid), get_session() as session:
+        return (
+            await session.execute(
+                select(func.count()).where(
+                    CustomerConsent.tenant_id == tid, CustomerConsent.customer_id == cliente
+                )
+            )
+        ).scalar_one()
+
+
+async def test_aceptar_promociones_es_del_propietario_y_revocar_sigue_abierto(app_client) -> None:
+    """D-SPEC-33-9 (opción C): un colaborador con Clientes en escritura no registra `otorgado`
+    (403 antes de leer nada) pero sí `revocado`; propietario y master registran ambos."""
+    tid = await _negocio()
+    ids = await _escenario(tid)
+    colab = await api_headers(app_client, tid, email=await _colaborador(tid), password=PASSWORD)
+    beto = ids["beto"]
+    cuerpo = {"estado": "otorgado", "como": "en_el_local", "evidencia": "firmó la planilla"}
+
+    antes = await _filas_de_promociones(tid, beto)
+    r = await app_client.post(f"{URL}/{beto}/consentimiento", json=cuerpo, headers=colab)
+    assert r.status_code == 403, r.text
+    assert "propietario" in r.json()["error"]["message"]
+    # Sin leer nada: un cliente inexistente responde igual, y no se escribió ninguna fila.
+    r = await app_client.post(f"{URL}/{uuid.uuid4()}/consentimiento", json=cuerpo, headers=colab)
+    assert r.status_code == 403, r.text
+    assert await _filas_de_promociones(tid, beto) == antes
+
+    # Quitar el permiso (el sentido seguro) sigue abierto al colaborador.
+    r = await app_client.post(f"{URL}/{ids['ana']}/consentimiento", json={"estado": "revocado", "como": "por_telefono"}, headers=colab)
+    assert r.status_code == 201, r.text
+    assert r.json()["estado"] == "revocado"
+    # Ver el estado sigue siendo de lectura.
+    assert (await app_client.get(f"{URL}/{beto}/consentimiento", headers=colab)).status_code == 200
+
+    # Propietario y master sí registran `otorgado` sobre un cliente sin registro.
+    master = await api_headers(app_client, tid)
+    r = await app_client.post(f"{URL}/{beto}/consentimiento", json=cuerpo, headers=master)
+    assert r.status_code == 201, r.text
+    assert r.json()["estado"] == "otorgado"
+
+
+async def test_aceptar_promociones_el_propietario_del_negocio(app_client) -> None:
+    from core.admin.auth import hash_password
+    from core.db.models import Admin, TenantUser
+    from core.db.session import get_session
+
+    tid = await _negocio()
+    ids = await _escenario(tid)
+    email = f"{uniq('dueno')}@example.test"
+    async with get_session() as session:
+        admin = Admin(email=email, password_hash=hash_password(PASSWORD), role="colaborador")
+        session.add(admin)
+        await session.flush()
+        session.add(TenantUser(tenant_id=tid, admin_id=admin.id, role="owner"))
+    dueno = await api_headers(app_client, tid, email=email, password=PASSWORD)
+    r = await app_client.post(
+        f"{URL}/{ids['beto']}/consentimiento",
+        json={"estado": "otorgado", "como": "por_escrito", "evidencia": "correo del 5 de nov"},
+        headers=dueno,
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["historial"][0]["quien"] == email
+
+
+@pytest.mark.parametrize("origen", ["palabra_de_baja", "meta_131050"])
+async def test_nadie_reactiva_desde_la_ficha_una_baja_del_cliente(app_client, origen) -> None:
+    """Tras una baja del cliente (o el 131050 de Meta) `otorgado` es 409 `baja_del_cliente`, también
+    para el master; la baja se mantiene y no se agrega ninguna fila. Tras una baja hecha por el
+    equipo (origen `ficha`) y sin registro, el propietario sí puede."""
+    tid = await _negocio()
+    ids = await _escenario(tid)
+    master = await api_headers(app_client, tid)
+    beto, caro = ids["beto"], ids["caro"]  # caro: su última fila es `revocado` con origen `ficha`
+    cuerpo = {"estado": "otorgado", "como": "por_telefono", "evidencia": "llamó al local"}
+
+    await _fila_de_consentimiento(tid, beto, "revocado", origen)
+    antes = await _filas_de_promociones(tid, beto)
+    r = await app_client.post(f"{URL}/{beto}/consentimiento", json=cuerpo, headers=master)
+    assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "baja_del_cliente"
+    assert await _filas_de_promociones(tid, beto) == antes
+    actual = (await app_client.get(f"{URL}/{beto}/consentimiento", headers=master)).json()
+    assert actual["estado"] == "revocado" and actual["historial"][0]["origen"] == origen
+
+    # Revocar de nuevo sigue permitido (no cambia nada útil, pero no es un error de permiso).
+    r = await app_client.post(f"{URL}/{beto}/consentimiento", json={"estado": "revocado", "como": "otro", "evidencia": "x"}, headers=master)
+    assert r.status_code == 201, r.text
+
+    # Baja del equipo (`ficha`): el propietario sí la puede deshacer.
+    r = await app_client.post(f"{URL}/{caro}/consentimiento", json=cuerpo, headers=master)
+    assert r.status_code == 201, r.text
+    assert r.json()["estado"] == "otorgado"
+
+
+async def test_baja_del_cliente_otro_negocio_no_bloquea_ni_se_ve(app_client) -> None:
+    """La baja es por cliente y por negocio: la de un cliente de otro negocio no afecta, y el otro
+    negocio no ve ni toca la ficha (404, como siempre)."""
+    tid = await _negocio()
+    otro = await _negocio()
+    ids = await _escenario(tid)
+    ajenos = await _escenario(otro)
+    await _fila_de_consentimiento(tid, ids["beto"], "revocado", "palabra_de_baja")
+    master_otro = await api_headers(app_client, otro)
+    cuerpo = {"estado": "otorgado", "como": "en_el_local", "evidencia": "ok"}
+    r = await app_client.post(f"{URL}/{ids['beto']}/consentimiento", json=cuerpo, headers=master_otro)
+    assert r.status_code == 404, r.text
+    r = await app_client.post(f"{URL}/{ajenos['beto']}/consentimiento", json=cuerpo, headers=master_otro)
+    assert r.status_code == 201, r.text
+
+
 async def test_aislamiento_entre_negocios(app_client) -> None:
     tid = await _negocio()
     otro = await _negocio()
