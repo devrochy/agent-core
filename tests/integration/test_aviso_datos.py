@@ -385,7 +385,7 @@ async def test_la_ficha_muestra_el_estado_y_el_dueno_puede_revocar(app_client) -
 
 
 async def _usuario_del_negocio(app_client, tid, *, rol: str, leads: str | None) -> dict:
-    """Sesión de una cuenta del negocio: `rol` es el de `tenant_users` (owner o member)."""
+    """Sesión de una cuenta del negocio: `rol` es el de `tenant_users` (owner o colaborador)."""
     from core.admin.auth import hash_password
     from core.db.models import Admin, AdminPermission, TenantUser
     from core.db.session import get_session
@@ -427,12 +427,12 @@ async def test_retirar_los_datos_es_solo_del_propietario_o_el_master(app_client)
     url = f"/api/v1/admin/leads/{cliente.id}/consentimiento-datos/revocar"
 
     # Colaborador con Clientes en lectura: lo frena el permiso de sección.
-    lector = await _usuario_del_negocio(app_client, tid, rol="member", leads="read")
+    lector = await _usuario_del_negocio(app_client, tid, rol="colaborador", leads="read")
     r = await app_client.post(url, headers=lector)
     assert r.status_code == 403 and "leads" in r.json()["error"]["message"], r.text
 
     # Colaborador con Clientes en escritura: lo frena la comprobación de propietario.
-    escritor = await _usuario_del_negocio(app_client, tid, rol="member", leads="write")
+    escritor = await _usuario_del_negocio(app_client, tid, rol="colaborador", leads="write")
     r = await app_client.post(url, headers=escritor)
     assert r.status_code == 403, r.text
     assert r.json()["error"]["message"] == "Solo el propietario del negocio puede retirar los datos de un cliente."
@@ -450,6 +450,17 @@ async def test_retirar_los_datos_es_solo_del_propietario_o_el_master(app_client)
     assert n == 0
     # Ver el estado (lectura) sigue permitido al colaborador.
     assert (await app_client.get(url.rsplit("/", 1)[0], headers=escritor)).status_code == 200
+
+    # Un cliente inexistente no se distingue: el colaborador recibe 403, no 404.
+    r = await app_client.post(f"/api/v1/admin/leads/{uuid.uuid4()}/consentimiento-datos/revocar", headers=escritor)
+    assert r.status_code == 403, r.text
+
+    # El rol es el del negocio activo: propietario de otro negocio no basta aquí.
+    otro = await _negocio()
+    ajeno = await _usuario_del_negocio(app_client, otro, rol="owner", leads=None)
+    r = await app_client.post(url, headers={**ajeno, "X-Tenant-Id": str(tid)})
+    assert r.status_code in (403, 404), r.text
+    assert [f[0] for f in await _filas(tid, cliente.id)] == ["informado", "otorgado"]
 
     # El propietario del negocio sí puede, aunque no tenga una fila de permisos propia.
     dueno = await _usuario_del_negocio(app_client, tid, rol="owner", leads=None)
