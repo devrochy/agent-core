@@ -133,6 +133,20 @@ async def _colaborador(tid: uuid.UUID) -> str:
     return email
 
 
+async def _dueno(tid: uuid.UUID) -> str:
+    from core.admin.auth import hash_password
+    from core.db.models import Admin, TenantUser
+    from core.db.session import get_session
+
+    email = f"{uniq('dueno')}@example.test"
+    async with get_session() as session:
+        admin = Admin(email=email, password_hash=hash_password(PASSWORD), role="colaborador")
+        session.add(admin)
+        await session.flush()
+        session.add(TenantUser(tenant_id=tid, admin_id=admin.id, role="owner"))
+    return email
+
+
 async def _enviar_falso(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Reemplaza el sender: crea el `Message` como lo haría (con el id estable) sin Meta ni Celery."""
     from core.db.models import Message
@@ -422,18 +436,9 @@ async def test_aceptar_promociones_es_del_propietario_y_revocar_sigue_abierto(ap
 
 
 async def test_aceptar_promociones_el_propietario_del_negocio(app_client) -> None:
-    from core.admin.auth import hash_password
-    from core.db.models import Admin, TenantUser
-    from core.db.session import get_session
-
     tid = await _negocio()
     ids = await _escenario(tid)
-    email = f"{uniq('dueno')}@example.test"
-    async with get_session() as session:
-        admin = Admin(email=email, password_hash=hash_password(PASSWORD), role="colaborador")
-        session.add(admin)
-        await session.flush()
-        session.add(TenantUser(tenant_id=tid, admin_id=admin.id, role="owner"))
+    email = await _dueno(tid)
     dueno = await api_headers(app_client, tid, email=email, password=PASSWORD)
     r = await app_client.post(
         f"{URL}/{ids['beto']}/consentimiento",
@@ -464,9 +469,20 @@ async def test_nadie_reactiva_desde_la_ficha_una_baja_del_cliente(app_client, or
     actual = (await app_client.get(f"{URL}/{beto}/consentimiento", headers=master)).json()
     assert actual["estado"] == "revocado" and actual["historial"][0]["origen"] == origen
 
-    # Revocar de nuevo sigue permitido (no cambia nada útil, pero no es un error de permiso).
+    # Revocar encima sigue permitido, pero no agrega fila: una fila `ficha` taparía la baja y la
+    # siguiente reactivación pasaría (revocar y luego otorgar).
     r = await app_client.post(f"{URL}/{beto}/consentimiento", json={"estado": "revocado", "como": "otro", "evidencia": "x"}, headers=master)
     assert r.status_code == 201, r.text
+    assert r.json()["estado"] == "revocado" and r.json()["historial"][0]["origen"] == origen
+    assert await _filas_de_promociones(tid, beto) == antes
+    r = await app_client.post(f"{URL}/{beto}/consentimiento", json=cuerpo, headers=master)
+    assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "baja_del_cliente"
+
+    # También el propietario del negocio (no solo el master).
+    dueno = await _dueno(tid)
+    r = await app_client.post(f"{URL}/{beto}/consentimiento", json=cuerpo, headers=await api_headers(app_client, tid, email=dueno, password=PASSWORD))
+    assert r.status_code == 409 and r.json()["error"]["code"] == "baja_del_cliente", r.text
 
     # Baja del equipo (`ficha`): el propietario sí la puede deshacer.
     r = await app_client.post(f"{URL}/{caro}/consentimiento", json=cuerpo, headers=master)

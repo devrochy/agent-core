@@ -348,8 +348,9 @@ async def registrar_consentimiento(
     Registrar que **aceptó** es solo del propietario o el master (D-SPEC-33-9): es la autorización
     que responde ante Meta y la Ley 1581 y la que gasta créditos del propietario. Y nadie la
     registra sobre una baja pedida por el cliente (`palabra_de_baja`) o impuesta por Meta
-    (`meta_131050`): 409 `baja_del_cliente`. Registrar que **ya no acepta** sigue abierto a quien
-    tiene Clientes en escritura (es el sentido seguro)."""
+    (`meta_131050`): 409 `baja_del_cliente` (y registrar que ya no acepta sobre esa baja no agrega
+    fila). Registrar que **ya no acepta** sigue abierto a quien tiene Clientes en escritura (es el
+    sentido seguro)."""
     # Se comprueba antes de leer nada: un colaborador recibe 403 igual con cualquier cliente (#698).
     if body.estado == "otorgado" and not es_owner_o_master(principal):
         raise ApiError.forbidden("Solo el propietario del negocio puede registrar que un cliente aceptó recibir promociones.")
@@ -365,7 +366,7 @@ async def registrar_consentimiento(
             evidencia=evidencia,
             actor_admin_id=principal.admin.id,
             actor_label=_quien(principal),
-            sin_reactivar_baja_del_cliente=body.estado == "otorgado",
+            respetar_baja_del_cliente=True,
         )
     except envios.EnvioError as exc:
         raise _error(exc) from exc

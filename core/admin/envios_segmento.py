@@ -187,15 +187,16 @@ async def registrar_consentimiento(
     evidencia: str = "",
     actor_admin_id: uuid.UUID | None = None,
     actor_label: str = "",
-    sin_reactivar_baja_del_cliente: bool = False,
+    respetar_baja_del_cliente: bool = False,
 ) -> CustomerConsent:
     """Agrega una fila de consentimiento (nunca edita). El cliente tiene que ser del negocio.
 
-    Con `sin_reactivar_baja_del_cliente` (D-SPEC-33-9, opción C) se rechaza con 409
-    `baja_del_cliente` si la última fila la dejó el propio cliente (`palabra_de_baja`) o Meta
-    (`meta_131050`): quien se dio de baja por su cuenta solo vuelve por una vía suya. La fila del
-    cliente se bloquea antes de leer la última, así una baja que llega al mismo tiempo (que también
-    pasa por aquí) no se pierde detrás de una reactivación."""
+    Con `respetar_baja_del_cliente` (D-SPEC-33-9, opción C) la baja que dejó el propio cliente
+    (`palabra_de_baja`) o Meta (`meta_131050`) no se toca desde la ficha: `otorgado` se rechaza con
+    409 `baja_del_cliente`, y `revocado` no agrega fila (ya está de baja; si agregara una de origen
+    `ficha`, taparía la baja y la siguiente reactivación pasaría). La última fila se lee con el
+    cliente bloqueado, igual que la inserción: una baja que llega al mismo tiempo (que también pasa
+    por aquí) no queda detrás de una reactivación."""
     async with get_session() as session:
         existe = (
             await session.execute(
@@ -211,10 +212,10 @@ async def registrar_consentimiento(
         ).scalar_one_or_none()
         if existe is None:
             raise EnvioError(404, "not_found", "Cliente no encontrado.")
-        if sin_reactivar_baja_del_cliente:
-            origen_anterior = (
+        if respetar_baja_del_cliente:
+            anterior = (
                 await session.execute(
-                    select(CustomerConsent.origen)
+                    select(CustomerConsent)
                     .where(
                         CustomerConsent.tenant_id == tenant_id,
                         CustomerConsent.customer_id == customer_id,
@@ -224,7 +225,9 @@ async def registrar_consentimiento(
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            if origen_anterior in ORIGENES_DE_BAJA_DEL_CLIENTE:
+            if anterior is not None and anterior.origen in ORIGENES_DE_BAJA_DEL_CLIENTE:
+                if estado == "revocado":
+                    return anterior
                 raise EnvioError(
                     409,
                     "baja_del_cliente",
