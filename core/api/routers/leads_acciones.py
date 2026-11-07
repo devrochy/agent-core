@@ -345,7 +345,8 @@ async def registrar_consentimiento(
     """Marca que el cliente aceptó (o ya no acepta) recibir promociones. Se guarda cómo se obtuvo
     y quién lo marcó; nunca se edita una fila anterior (ADR-0150).
 
-    Registrar que **aceptó** es solo del propietario o el master (D-SPEC-33-9): es la autorización
+    Registrar que **aceptó** exige evidencia con cualquier forma de obtenerlo (400 `evidencia_requerida`
+    si viene vacía o solo con espacios) y es solo del propietario o el master (D-SPEC-33-9): es la autorización
     que responde ante Meta y la Ley 1581 y la que gasta créditos del propietario. Y nadie la
     registra sobre una baja pedida por el cliente (`palabra_de_baja`) o impuesta por Meta
     (`meta_131050`): 409 `baja_del_cliente` (y registrar que ya no acepta sobre esa baja no agrega
@@ -355,7 +356,9 @@ async def registrar_consentimiento(
     if body.estado == "otorgado" and not es_owner_o_master(principal):
         raise ApiError.forbidden("Solo el propietario del negocio puede registrar que un cliente aceptó recibir promociones.")
     evidencia = f"{_COMO[body.como]}" + (f": {body.evidencia}" if body.evidencia else "")
-    if body.estado == "otorgado" and body.como == "otro" and not body.evidencia:
+    # Después del 403 por rol y antes del 409 por baja del cliente. `strip_whitespace` ya dejó la
+    # evidencia de solo espacios en "".
+    if body.estado == "otorgado" and not body.evidencia:
         raise ApiError.bad_request("Cuenta cómo lo obtuviste.", "evidencia_requerida")
     try:
         await envios.registrar_consentimiento(
