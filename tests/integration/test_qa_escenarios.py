@@ -70,11 +70,17 @@ async def _proceso() -> None:
     from core.mcp.host import mcp_host
     from core.plugin_manager import plugin_manager
     from core.releases.packs import sync_packs
+    from core.shared.tenant import default_tenant, tenant_scope
     from core.tools.core_skill import register_core_skills
 
     reporte = await sync_packs(plugin_manager.scan())
     assert not reporte.fallo, reporte
     await plugin_manager.sync_registry()
+    # `pack_subscriptions` pide configuración: en una base recién migrada queda `detected` y sus
+    # procedimientos (`contratar_plan`) no se registran, salvo que otro test ya lo haya configurado
+    # (el orden de la suite lo decidía). La tarjeta «En curso» necesita su definición.
+    async with tenant_scope(await default_tenant()):
+        await plugin_manager.save_config("pack_subscriptions", {})
     await plugin_manager.activate_all_configured()
     await plugin_manager.ensure_process_activation()
     register_core_skills(mcp_host)
