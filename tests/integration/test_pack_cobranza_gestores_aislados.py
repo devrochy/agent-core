@@ -289,3 +289,76 @@ async def test_export_pdf_escapa_el_nombre_de_la_cartera(app_client) -> None:
 
     assert r.status_code == 200, r.text
     assert "<script>" not in r.text and "&lt;script&gt;" in r.text
+
+
+# ------------------------------------------------------------------ lecturas de otra cartera
+async def test_lecturas_de_otra_cartera_dan_404_y_las_propias_siguen(app_client) -> None:
+    esc, o = await _listos(app_client)
+    ajeno_prestamos = f"{esc.ruta}/clientes/{o.cliente_id}/prestamos"
+    ajeno_cuota = f"{esc.ruta}/prestamos/{o.prestamo_id}/cuotas/{o.cuota_ids[0]}/detalle"
+    propio_prestamos = f"{esc.ruta}/clientes/{esc.cliente_id}/prestamos"
+    propia_cuota = f"{esc.ruta}/prestamos/{esc.prestamo_id}/cuotas/{esc.cuota_ids[0]}/detalle"
+
+    assert (await app_client.get(ajeno_prestamos, headers=esc.h())).status_code == 404
+    assert (await app_client.get(ajeno_cuota, headers=esc.h())).status_code == 404
+    assert (await app_client.get(propio_prestamos, headers=esc.h())).status_code == 200
+    assert (await app_client.get(propia_cuota, headers=esc.h())).status_code == 200
+    # El propietario ve la cartera del otro por su propia ruta.
+    assert (await app_client.get(f"{o.ruta}/clientes/{o.cliente_id}/prestamos", headers=esc.h(esc.token_owner))).status_code == 200
+
+
+# ------------------------------------------------------------------ casos de borde que no se rompen
+async def test_pago_sin_prestamo_lo_borra_quien_ve_la_cartera_del_cliente(app_client) -> None:
+    """Un pago de suscripción (sin préstamo) se resuelve por la cartera del cliente."""
+    from pack_cobranza.models import Pago
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    esc, o = await _listos(app_client)
+    async with tenant_scope(esc.tid):
+        async with get_session() as session:
+            pagos = [
+                Pago(tenant_id=esc.tid, cliente_id=esc.cliente_id, prestamo_id=None, valor=Decimal(500), metodo_pago="efectivo", registrado_por="gestor")
+                for _ in range(3)
+            ]
+            session.add_all(pagos)
+            await session.flush()
+            ids = [p.id for p in pagos]
+
+    # otro gestor, por su cartera o por la ajena → 404
+    for ruta in (o.ruta, esc.ruta):
+        r = await app_client.request("DELETE", f"{ruta}/pagos/{ids[0]}", json={"password": PW}, headers={"Authorization": f"Bearer {o.token}"})
+        assert r.status_code == 404, r.text
+    # el gestor de la cartera y el propietario → 200
+    r = await app_client.request("DELETE", f"{esc.ruta}/pagos/{ids[0]}", json={"password": PW}, headers=esc.h())
+    assert r.status_code == 200, r.text
+    r = await app_client.request("DELETE", f"{esc.ruta}/pagos/{ids[1]}", json={"password": PW}, headers=esc.h(esc.token_owner))
+    assert r.status_code == 200, r.text
+
+
+async def test_promesa_con_fecha_mal_formada_no_deja_la_visita(app_client) -> None:
+    from pack_cobranza.models import Promesa, Visita
+
+    esc, _ = await _listos(app_client)
+    visitas = await _contar(esc, Visita, cartera_id=esc.cartera_id)
+    promesas = await _contar(esc, Promesa, prestamo_id=esc.prestamo_id)
+
+    r = await app_client.post(f"{esc.ruta}/visitas/no-pago", json=_no_pago(esc, fechaPrometida="no-es-fecha"), headers=esc.h())
+
+    assert r.status_code == 400, r.text
+    assert await _contar(esc, Visita, cartera_id=esc.cartera_id) == visitas
+    assert await _contar(esc, Promesa, prestamo_id=esc.prestamo_id) == promesas
+
+
+async def test_cambio_de_cliente_propio_sigue_aplicandose(app_client) -> None:
+    from pack_cobranza.models import CambioCliente
+
+    esc, _ = await _listos(app_client)
+    antes = await _contar(esc, CambioCliente, cliente_id=esc.cliente_id)
+    ev = {"eventoIdCliente": uniq("ev-cc"), "tipoEvento": "cambio_cliente", "payload": {"clienteId": str(esc.cliente_id), "input": {"nombre": "Nuevo"}}}
+
+    r = await app_client.post(f"{BASE}/sync-offline/eventos", json={"eventos": [ev]}, headers=esc.h())
+
+    assert r.json()[0]["estado"] == "sincronizado", r.text
+    assert await _contar(esc, CambioCliente, cliente_id=esc.cliente_id) == antes + 1

@@ -1176,6 +1176,8 @@ async def prestamos_de_cliente(cartera_id: str, cliente_id: str, authorization: 
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if await _cliente_o_404(session, tenant_id, cid, clid) is None:
+                return JSONResponse({"error": "cliente no encontrado"}, status_code=404)
             prestamos = await _prestamos_de(session, tenant_id, clid)
             out = []
             for p in prestamos:
@@ -1242,7 +1244,8 @@ async def detalle_cuota(cartera_id: str, prestamo_id: str, cuota_id: str, author
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
             cuota = await get_owned(session, Cuota, quid)
-            if cuota is None or cuota.prestamo_id != pid:
+            prestamo = await get_owned(session, Prestamo, pid)
+            if cuota is None or cuota.prestamo_id != pid or prestamo is None or prestamo.cartera_id != cid:
                 return JSONResponse({"error": "cuota no encontrada"}, status_code=404)
             pagos = (await session.execute(select(Pago).where(Pago.tenant_id == tenant_id, Pago.cuota_id == quid, Pago.deleted_at.is_(None)).order_by(Pago.fecha_hora))).scalars().all()
             abonos = (await session.execute(select(Abono).where(Abono.tenant_id == tenant_id, Abono.prestamo_id == pid, Abono.deleted_at.is_(None)).order_by(Abono.fecha_hora))).scalars().all()
@@ -1711,10 +1714,14 @@ async def _aplicar_visita(session, tenant_id: uuid.UUID, cid: uuid.UUID, data: d
         await session.flush()
         _auditar(session, tenant_id, "visita", visita.id, "crear", despues={"resultado": "pago", "valor": float(valor), "tipo": tipo_pago})
         return visita
+    promesa: tuple[date, Decimal] | None = None
+    if data.get("fechaPrometida") and data.get("valorPrometido"):
+        # Se valida antes de crear la visita: un dato mal formado no deja la visita a medias.
+        promesa = (date.fromisoformat(str(data["fechaPrometida"])), Decimal(str(data["valorPrometido"])))
     visita = Visita(tenant_id=tenant_id, cartera_id=cid, cliente_id=clid, fecha=date.today(), resultado="no_pago", motivo_no_pago=data.get("motivoNoPago"), creado_por="gestor")
     session.add(visita)
-    if data.get("fechaPrometida") and data.get("valorPrometido"):
-        session.add(Promesa(tenant_id=tenant_id, prestamo_id=pid, cliente_id=clid, fecha_prometida=date.fromisoformat(str(data["fechaPrometida"])), valor_prometido=Decimal(str(data["valorPrometido"])), creado_por="gestor"))
+    if promesa is not None:
+        session.add(Promesa(tenant_id=tenant_id, prestamo_id=pid, cliente_id=clid, fecha_prometida=promesa[0], valor_prometido=promesa[1], creado_por="gestor"))
     await session.flush()
     _auditar(session, tenant_id, "visita", visita.id, "crear", despues={"resultado": "no_pago"})
     return visita
@@ -1947,8 +1954,8 @@ async def _eliminar_movimiento(request: Request, authorization: str | None, cart
             if not await _password_ok(session, payload, str(body.get("password") or "")):
                 return JSONResponse({"error": "contraseña incorrecta"}, status_code=403)
             obj = await get_owned(session, modelo, rid)
-            prestamo = await get_owned(session, Prestamo, obj.prestamo_id) if obj is not None and obj.prestamo_id else None
-            if obj is None or prestamo is None or prestamo.cartera_id != cid:
+            cliente = await get_owned(session, Cliente, obj.cliente_id) if obj is not None else None
+            if obj is None or cliente is None or cliente.cartera_id != cid:
                 return JSONResponse({"error": "no encontrado"}, status_code=404)  # también el de otra cartera (agent-core#701)
             obj.deleted_at = datetime.now(UTC)
             _auditar(session, tenant_id, entidad, obj.id, "eliminar", antes={"valor": _f(obj.valor)}, motivo=body.get("motivo"))
@@ -2160,7 +2167,7 @@ async def _aplicar_evento_offline(session, tenant_id: uuid.UUID, payload: dict[s
         _exigir_habilitado(habilitados, "actualizar_cliente")
         clid = uuid.UUID(str(data.get("clienteId")))
         cli = await get_owned(session, Cliente, clid)
-        if cli is None or await _cartera_visible(session, tenant_id, payload, cli.cartera_id) is None:
+        if cli is None or cli.deleted_at is not None or await _cartera_visible(session, tenant_id, payload, cli.cartera_id) is None:
             raise ValueError("cliente no encontrado")
         campos = data.get("input") or data.get("campos") or {}
         session.add(CambioCliente(tenant_id=tenant_id, cliente_id=clid, campos_propuestos=campos, estado="pendiente", solicitado_por_rol="gestor"))

@@ -6,5 +6,7 @@
   - `POST …/visitas/no-pago`: valida `prestamoId` y `clienteId` contra la cartera (404) y un `clienteId` ausente ya no da 500 sino 400.
   - `GET /clientes/{id}/evidencia/{ev}`: solo si el cliente es de una cartera visible.
   - Un `cuotaId` que no es del préstamo ya no se enlaza al pago ni se marca pagada.
+  - `GET …/clientes/{id}/prestamos` y `…/cuotas/{id}/detalle`: el cliente / el préstamo deben ser de la cartera de la ruta (404 si no).
+  - Una fecha prometida mal formada da 400 sin dejar la visita a medias.
   - El HTML de la liquidación escapa el nombre de la cartera y el periodo.
 - Propietario y master siguen viendo todas las carteras. Sin migración ni cambios en `docs/openapi.json`.
