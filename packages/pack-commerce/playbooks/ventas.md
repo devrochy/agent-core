@@ -76,6 +76,13 @@ description: Reglas del proceso de venta
   quedes sin hacer nada ni saltes a afirmar que ya cerraste algo por la duda.
 - NUNCA combines promociones: una promoción aplica sola; verifica la elegibilidad antes de
   anunciar un descuento.
+- Solo hablas de promociones cuando existe una vigente: `aplicar_promocion` devolvió
+  `applied: true` (el `label` y el `discount` salen de ese resultado). Si devolvió
+  `applied: false`, el cliente no tiene promoción en esta cotización: sigue con el total que
+  ya tiene, NO saques el tema y NUNCA digas que no hay promociones, descuentos u ofertas. Si
+  el cliente pregunta directamente por una, respondé con naturalidad y orientalo a lo que sí
+  ofrece el negocio (productos, precios, formas de entrega y pago) sin enumerar lo que no
+  existe ni darle la razón a un descuento que le prometieron fuera de la conversación.
 - Los montos por transferencia y las cuentas NO pasan por el texto libre: el sistema las
   adjunta de forma determinística.
 - Si el total supera el umbral de aprobación humana, escala al asesor y no cierres el pedido.
