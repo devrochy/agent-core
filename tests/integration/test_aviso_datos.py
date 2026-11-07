@@ -384,6 +384,100 @@ async def test_la_ficha_muestra_el_estado_y_el_dueno_puede_revocar(app_client) -
     assert n == 1
 
 
+async def _usuario_del_negocio(app_client, tid, *, rol: str, leads: str | None) -> dict:
+    """Sesión de una cuenta del negocio: `rol` es el de `tenant_users` (owner o colaborador)."""
+    from core.admin.auth import hash_password
+    from core.db.models import Admin, AdminPermission, TenantUser
+    from core.db.session import get_session
+
+    email = f"{uniq('retira')}@example.test"
+    async with get_session() as session:
+        admin = Admin(email=email, password_hash=hash_password(PASSWORD), role="colaborador")
+        session.add(admin)
+        await session.flush()
+        session.add(TenantUser(tenant_id=tid, admin_id=admin.id, role=rol))
+        if leads:
+            session.add(AdminPermission(admin_id=admin.id, section="leads", access=leads, tenant_id=tid))
+    return await api_headers(app_client, tid, email=email, password=PASSWORD)
+
+
+async def _cliente_que_acepto_con_datos(app_client, tid):
+    from core.datos_cliente.aviso_chat import responder
+    from core.datos_cliente.guardar import guardar
+    from core.shared.tenant import tenant_scope
+
+    await _activar_aviso(app_client, tid)
+    cliente, conv = await _cliente_y_conversacion(tid)
+    async with tenant_scope(tid):
+        await _anexar(tid, conv, cliente, await _behavior(tid))
+        await _mensaje_del_cliente(tid, conv.id, "acepto")
+        await responder(tid, conv.id, cliente.id, "acepto")
+        await guardar(cliente.id, {"email": "a@example.com", "hobby": "ajedrez"})
+    return cliente
+
+
+async def test_retirar_los_datos_es_solo_del_propietario_o_el_master(app_client) -> None:
+    """agent-core#692: la sección Clientes en escritura no alcanza para retirar los datos."""
+    from core.db.models import AuditLog
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    cliente = await _cliente_que_acepto_con_datos(app_client, tid)
+    url = f"/api/v1/admin/leads/{cliente.id}/consentimiento-datos/revocar"
+
+    # Colaborador con Clientes en lectura: lo frena el permiso de sección.
+    lector = await _usuario_del_negocio(app_client, tid, rol="colaborador", leads="read")
+    r = await app_client.post(url, headers=lector)
+    assert r.status_code == 403 and "leads" in r.json()["error"]["message"], r.text
+
+    # Colaborador con Clientes en escritura: lo frena la comprobación de propietario.
+    escritor = await _usuario_del_negocio(app_client, tid, rol="colaborador", leads="write")
+    r = await app_client.post(url, headers=escritor)
+    assert r.status_code == 403, r.text
+    assert r.json()["error"]["message"] == "Solo el propietario del negocio puede retirar los datos de un cliente."
+    # Nada cambió: ni la fila de consentimiento, ni el perfil, ni la auditoría.
+    assert [f[0] for f in await _filas(tid, cliente.id)] == ["informado", "otorgado"]
+    assert (await _perfil(tid, cliente.id)).get("email") == "a@example.com"
+    async with tenant_scope(tid), get_session() as s:
+        n = (
+            await s.execute(
+                select(func.count()).select_from(AuditLog).where(
+                    AuditLog.tenant_id == tid, AuditLog.action == "consentimiento_datos.revocado"
+                )
+            )
+        ).scalar_one()
+    assert n == 0
+    # Ver el estado (lectura) sigue permitido al colaborador.
+    assert (await app_client.get(url.rsplit("/", 1)[0], headers=escritor)).status_code == 200
+
+    # Un cliente inexistente no se distingue: el colaborador recibe 403, no 404.
+    r = await app_client.post(f"/api/v1/admin/leads/{uuid.uuid4()}/consentimiento-datos/revocar", headers=escritor)
+    assert r.status_code == 403, r.text
+
+    # El rol es el del negocio activo: propietario de otro negocio no basta aquí.
+    otro = await _negocio()
+    ajeno = await _usuario_del_negocio(app_client, otro, rol="owner", leads=None)
+    r = await app_client.post(url, headers={**ajeno, "X-Tenant-Id": str(tid)})
+    assert r.status_code in (403, 404), r.text
+    assert [f[0] for f in await _filas(tid, cliente.id)] == ["informado", "otorgado"]
+
+    # El propietario del negocio sí puede, aunque no tenga una fila de permisos propia.
+    dueno = await _usuario_del_negocio(app_client, tid, rol="owner", leads=None)
+    r = await app_client.post(url, headers=dueno)
+    assert r.status_code == 200, r.text
+    assert r.json()["estado"] == "revocado" and "email" in r.json()["datos_retirados"]
+
+
+async def test_el_master_puede_retirar_los_datos_de_un_cliente(app_client) -> None:
+    tid = await _negocio()
+    cliente = await _cliente_que_acepto_con_datos(app_client, tid)
+    h = await api_headers(app_client, tid)  # admin@local: master de la plataforma
+    r = await app_client.post(f"/api/v1/admin/leads/{cliente.id}/consentimiento-datos/revocar", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["estado"] == "revocado"
+
+
 async def test_el_consentimiento_de_un_cliente_de_otro_negocio_no_se_ve(app_client) -> None:
     a, b = await _negocio(), await _negocio()
     cliente_b, _ = await _cliente_y_conversacion(b)
