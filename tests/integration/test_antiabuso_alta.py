@@ -683,6 +683,64 @@ async def test_datos_inconsistentes_van_a_revision_y_el_master_la_aprueba(vended
     assert "datos inconsistentes" in auditoria.input["motivo_revision"]
 
 
+@pytest.mark.aislamiento
+async def test_una_inscripcion_del_panel_espera_aprobacion_y_el_master_la_aprueba(vendedores, silencio) -> None:
+    """agent-core#672: la espera de aprobación de una inscripción del panel es una revisión por
+    riesgo (aprobable), no por un dato; y al aprobarla el negocio se crea."""
+    from core.provisioning.consumer import MOTIVO_DEL_PANEL, id_del_negocio
+    from core.provisioning.revision import aprobar_alta
+
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    referencia, _ = await suscripcion_de_plan(
+        vendedor, plan="premium", precio=600_000, customer_id=uuid.uuid4(),
+        datos_alta={"email": f"{uniq('owner')}@correo-prueba.co", "negocio": "Acme"}, origen="panel",
+    )
+
+    alta = await _entregar(vendedor, referencia)
+    assert alta.estado == "revision" and MOTIVO_DEL_PANEL in alta.motivo
+    assert alta.detalle["revision_por_riesgo"] is True
+    assert alta.negocio_tenant_id is None
+
+    marcada = await aprobar_alta(vendedor, referencia, por="admin:master@test")
+    assert marcada.estado == "en_curso"
+    aprobada = await _entregar_aprobacion(vendedor, referencia)
+    assert aprobada.estado == "completado", aprobada.motivo
+    assert aprobada.negocio_tenant_id == id_del_negocio(vendedor, referencia)
+
+
+async def test_la_revision_del_panel_muestra_tambien_los_otros_motivos(vendedores, silencio) -> None:
+    """Quien aprueba ve TODO lo que habría frenado el alta, no solo que vino del panel."""
+    from core.provisioning.consumer import MOTIVO_DEL_PANEL
+
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    referencia, _ = await suscripcion_de_plan(
+        vendedor, plan="premium", precio=600_000, customer_id=uuid.uuid4(), aceptar=False,
+        datos_alta={"email": f"{uniq('owner')}@correo-prueba.co", "negocio": "Acme"}, origen="panel",
+    )
+
+    alta = await _entregar(vendedor, referencia)
+    assert alta.estado == "revision"
+    assert MOTIVO_DEL_PANEL in alta.motivo and "no hay aceptación registrada" in alta.motivo
+
+
+async def test_una_inscripcion_del_panel_con_correo_invalido_se_corrige_no_se_aprueba(vendedores, silencio) -> None:
+    from core.provisioning.revision import aprobar_alta
+
+    vendedor = await _vendedor()
+    vendedores(vendedor)
+    referencia, _ = await suscripcion_de_plan(
+        vendedor, plan="premium", precio=600_000, customer_id=uuid.uuid4(),
+        datos_alta={"email": "no-es-un-correo", "negocio": "Acme"}, origen="panel",
+    )
+
+    alta = await _entregar(vendedor, referencia)
+    assert alta.estado == "revision" and "correo" in alta.motivo
+    with pytest.raises(ValueError, match="por un dato"):
+        await aprobar_alta(vendedor, referencia, por="admin:master@test")
+
+
 # ------------------------------------------------------------------ interruptor
 async def test_con_el_alta_pausada_las_altas_nuevas_quedan_en_revision(vendedores, silencio) -> None:
     from core.provisioning import interruptor
