@@ -1,0 +1,3 @@
+## Test de escenarios QA: activa `pack_subscriptions` en la base recién migrada (2026-11-07)
+
+- `test_qa_escenarios.py::test_escalacion_en_curso` fallaba en una base recién migrada: `pack_subscriptions` pide configuración y queda `detected` hasta que otro test la guarda, así que sus procedimientos (`contratar_plan`) no se registraban y la tarjeta «En curso» devolvía `missing: []` con `missing_reason: definicion_no_disponible`. Pasaba o fallaba según el orden de la suite (y el reparto entre workers de xdist). El fixture del archivo ahora guarda la configuración de la habilidad antes de activar los packs. Solo tests, sin cambios de código de producción.
