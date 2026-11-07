@@ -7,6 +7,8 @@
 - `POST /admin/leads/acciones/plantilla/{envio_id}/confirmar` (`Idempotency-Key`): lo confirma.
 - `GET  /admin/leads/acciones/plantilla/{envio_id}`: estado del envío.
 - `GET/POST /admin/leads/{lead_id}/consentimiento`: consentimiento del cliente para promociones.
+- `GET /admin/leads/{lead_id}/consentimiento-datos` y `POST …/revocar`: aviso de datos; retirar es solo del
+  propietario o un admin de plataforma (agent-core#692).
 
 El envío es solo del propietario del negocio o un admin de plataforma (D-SPEC-33-8).
 """
@@ -23,7 +25,7 @@ from sqlalchemy import select
 
 from core.admin import envios_segmento as envios
 from core.admin.roles import actua_como_master
-from core.api.deps import Principal, require, require_owner_or_master
+from core.api.deps import Principal, es_owner_o_master, require, require_owner_or_master
 from core.api.errors import ApiError
 from core.api.routers.leads import FiltroQuery, _consulta, _providers
 from core.db.models import ChannelConnection, CustomerConsent
@@ -439,6 +441,11 @@ async def revocar_consentimiento_datos(
     """El cliente pidió que no se guarden más datos suyos: se registra la revocación y se retiran del
     perfil sus datos personales. Solo dueño o master. Los registros de los módulos (pedidos, citas…)
     no se borran aquí: la supresión en los módulos queda pendiente (aviso en la respuesta y auditoría)."""
+    # Retirar datos personales no se deshace: el permiso de sección (Clientes en escritura) no
+    # alcanza. Se comprueba antes de leer nada (agent-core#692).
+    if not es_owner_o_master(principal):
+        raise ApiError.forbidden("Solo el propietario del negocio puede retirar los datos de un cliente.")
+
     from core import consentimiento
     from core.api.routers.leads import _cliente
     from core.datos_cliente import aviso as aviso_mod
