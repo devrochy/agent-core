@@ -229,10 +229,10 @@ async def test_la_fuente_de_altas_lee_la_inscripcion_por_su_numero() -> None:
         assert await fuente.plan_de_inscripcion(str(sub.plan_id)) is None
 
 
-async def test_una_inscripcion_del_panel_espera_aprobacion_antes_del_alta(monkeypatch) -> None:
+async def test_la_fuente_de_altas_informa_el_origen_de_una_inscripcion_del_panel(monkeypatch) -> None:
     from pack_subscriptions.altas import DatosDeAltaDeLaInscripcion
 
-    from core.provisioning import AltaEnRevision, consumer
+    from core.provisioning import consumer
     from core.provisioning.fuentes import fuentes_de_alta
     from core.shared.tenant import tenant_scope
 
@@ -247,11 +247,10 @@ async def test_una_inscripcion_del_panel_espera_aprobacion_antes_del_alta(monkey
     monkeypatch.setattr(fuentes_de_alta, "del_negocio", _fuentes)
     registro = types.SimpleNamespace(referencia=vista["numero_publico"], detalle={}, customer_id=sub.customer_id)
     async with tenant_scope(tid):
-        with pytest.raises(AltaEnRevision):
-            await consumer._datos_del_pedido(tid, registro)
-        # Con la aprobación de una persona (`detalle.aprobacion`) pasa y trae los datos del comprador.
-        registro.detalle = {"aprobacion": {"por": "admin:a@x.co"}}
         datos = await consumer._datos_del_pedido(tid, registro)
+    # La espera de aprobación ya no vive acá sino en `_dar_de_alta`, junto a los demás controles de
+    # riesgo (agent-core#672): lo que importa es que el origen llegue al consumidor.
+    assert datos["origen"] == "panel"
     assert datos["plan"] == "basic" and datos["email"] == "ana@ejemplo.co"
 
 

@@ -71,6 +71,7 @@ log = get_logger(__name__)
 # visible, el correo no salió). Menor que los 5 del outbox: el alta siempre termina en un
 # estado que alguien puede ver, en vez de quedar en la Bandeja de fallos a medias.
 MAX_INTENTOS = 3
+MOTIVO_DEL_PANEL = "inscripción creada desde el panel: requiere aprobación antes del alta"
 # Espacio de nombres del UUIDv5 de los negocios aprovisionados. NO cambiarlo nunca: es lo
 # que hace que un reintento encuentre el negocio que ya creó.
 _NAMESPACE = uuid.UUID("b8f1c0de-5a3e-4c2b-9d61-0f7e2a4c9b13")
@@ -398,9 +399,6 @@ async def _datos_del_pedido(vendedor: uuid.UUID, registro: ProvisioningRequest) 
             break
     if datos is None:
         raise AltaTransitoria(f"el pedido {registro.referencia} todavía no es visible")
-    if datos.get("origen") == "panel" and not (registro.detalle or {}).get("aprobacion"):
-        # Datos que tecleó un operador (sin los topes del chat): el alta espera a que una persona la apruebe.
-        raise AltaEnRevision("inscripción creada desde el panel: requiere aprobación antes del alta")
     cliente_del_pedido = _uuid(datos.get("customer_id"))
     if registro.customer_id and cliente_del_pedido and cliente_del_pedido != registro.customer_id:
         raise AltaEnRevision("el cliente del pedido no coincide con el de la suscripción")
@@ -499,6 +497,11 @@ async def _dar_de_alta(
             gratis=plan.is_free,
             customer_id=registro.customer_id,
         )
+        if datos.get("origen") == "panel":
+            # Datos que tecleó un operador (sin los topes del chat): una persona tiene que aprobar
+            # el alta. Es un motivo más de riesgo (y no un dato por corregir): se junta con los
+            # demás para que quien revisa los vea todos, y como revisión por riesgo se puede aprobar.
+            motivos.insert(0, MOTIVO_DEL_PANEL)
         if plan.is_free and await _free_repetido(vendedor, registro, huella):
             motivos.append("ya hubo un alta para este cliente o este correo: un Free más se revisa")
         if not plan.is_free and await _recompra(vendedor, registro):
