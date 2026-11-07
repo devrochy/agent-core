@@ -356,7 +356,7 @@ async def test_consentimiento_desde_la_ficha_y_baja_por_palabra(app_client) -> N
 
     assert (await app_client.get(f"{URL}/{beto}/consentimiento", headers=master)).json()["estado"] == "sin_registro"
     r = await app_client.post(f"{URL}/{beto}/consentimiento", json={"estado": "otorgado", "como": "otro"}, headers=master)
-    assert r.status_code == 400  # «otro» pide contar cómo
+    assert r.status_code == 400  # sin evidencia no se registra (con cualquier «como»)
     r = await app_client.post(
         f"{URL}/{beto}/consentimiento",
         json={"estado": "otorgado", "como": "en_el_local", "evidencia": "firmó la planilla"},
@@ -504,6 +504,68 @@ async def test_baja_del_cliente_otro_negocio_no_bloquea_ni_se_ve(app_client) -> 
     assert r.status_code == 404, r.text
     r = await app_client.post(f"{URL}/{ajenos['beto']}/consentimiento", json=cuerpo, headers=master_otro)
     assert r.status_code == 201, r.text
+
+
+COMOS = ("en_el_local", "por_telefono", "por_escrito", "otro")
+
+
+@pytest.mark.parametrize("rol", ["master", "propietario", "colaborador"])
+async def test_aceptar_promociones_exige_evidencia_con_cualquier_como(app_client, rol) -> None:
+    """El dueño (2026-11-07): `otorgado` exige evidencia con las cuatro formas de obtenerlo; vacía o
+    solo con espacios es 400 `evidencia_requerida`, no escribe fila. `revocado` no la exige. Para el
+    colaborador manda el 403 por rol (se comprueba antes que la evidencia)."""
+    tid = await _negocio()
+    ids = await _escenario(tid)
+    if rol == "master":
+        headers = await api_headers(app_client, tid)
+    elif rol == "propietario":
+        headers = await api_headers(app_client, tid, email=await _dueno(tid), password=PASSWORD)
+    else:
+        headers = await api_headers(app_client, tid, email=await _colaborador(tid), password=PASSWORD)
+    beto = ids["beto"]
+    url = f"{URL}/{beto}/consentimiento"
+    antes = await _filas_de_promociones(tid, beto)
+
+    for como in COMOS:
+        for vacia in (None, "", "   ", "\t \n"):
+            cuerpo = {"estado": "otorgado", "como": como} if vacia is None else {"estado": "otorgado", "como": como, "evidencia": vacia}
+            r = await app_client.post(url, json=cuerpo, headers=headers)
+            if rol == "colaborador":
+                assert r.status_code == 403, (como, vacia, r.text)
+            else:
+                assert r.status_code == 400 and r.json()["error"]["code"] == "evidencia_requerida", (como, vacia, r.text)
+    assert await _filas_de_promociones(tid, beto) == antes
+
+    if rol == "colaborador":
+        return
+    # Con evidencia, con cualquier «como»: 201, y la evidencia queda sin espacios sobrantes.
+    for como in COMOS:
+        r = await app_client.post(url, json={"estado": "otorgado", "como": como, "evidencia": "  lo pidió él  "}, headers=headers)
+        assert r.status_code == 201, (como, r.text)
+        assert r.json()["historial"][0]["evidencia"].endswith(": lo pidió él")
+    # Revocar no pide evidencia.
+    r = await app_client.post(url, json={"estado": "revocado", "como": "en_el_local"}, headers=headers)
+    assert r.status_code == 201 and r.json()["estado"] == "revocado", r.text
+
+
+async def test_orden_de_comprobaciones_rol_evidencia_baja(app_client) -> None:
+    """403 por rol primero, luego la evidencia (400), luego el 409 por baja del cliente."""
+    tid = await _negocio()
+    ids = await _escenario(tid)
+    master = await api_headers(app_client, tid)
+    colab = await api_headers(app_client, tid, email=await _colaborador(tid), password=PASSWORD)
+    beto = ids["beto"]
+    await _fila_de_consentimiento(tid, beto, "revocado", "palabra_de_baja")
+    url = f"{URL}/{beto}/consentimiento"
+    sin = {"estado": "otorgado", "como": "por_telefono"}
+    con = {**sin, "evidencia": "llamó al local"}
+
+    assert (await app_client.post(url, json=sin, headers=colab)).status_code == 403
+    assert (await app_client.post(url, json=con, headers=colab)).status_code == 403
+    r = await app_client.post(url, json=sin, headers=master)
+    assert r.status_code == 400 and r.json()["error"]["code"] == "evidencia_requerida"
+    r = await app_client.post(url, json=con, headers=master)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "baja_del_cliente"
 
 
 async def test_aislamiento_entre_negocios(app_client) -> None:
