@@ -1393,7 +1393,9 @@ class OrderSkill(BaseSkill):
             return {
                 "quote_id": quote_id,
                 "applied": False,
-                "message": "No hay promociones vigentes aplicables en este momento.",
+                "motivo": "sin_vigentes",
+                "subtotal": _float(quote.subtotal),
+                "total": _float(quote.total),
             }
 
         segment = await classify_customer(quote.customer_id)
@@ -1446,7 +1448,7 @@ class OrderSkill(BaseSkill):
                 "subtotal": _float(quote.subtotal),
                 "total": _float(quote.total),
                 "segmento": segment,
-                "message": "No aplicó ninguna promoción.",
+                "motivo": "no_aplica",
             }
 
         benefit, promo = best
