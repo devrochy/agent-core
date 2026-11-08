@@ -70,11 +70,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 4. Tasks de fondo: consumer del stream + poller del debounce
     consumer_task = asyncio.create_task(consume_loop())
     debounce_task = asyncio.create_task(poll_debounce_loop())
+    # 5. Sondas de métricas (ADR-0188): solo rol api y con OTEL_METRICS_ENABLED.
+    from core.observability.sondas import arrancar as arrancar_sondas
+
+    sondas_task = arrancar_sondas()
 
     yield
 
     consumer_task.cancel()
     debounce_task.cancel()
+    if sondas_task is not None:
+        sondas_task.cancel()
     shutdown_metrics()  # exporta lo pendiente antes de salir
     log.info("shutdown")
 
@@ -222,6 +228,12 @@ async def tenant_context_middleware(request: Request, call_next):
             if access is None or (write and access != "write"):
                 return _forbidden(request)
         return await call_next(request)
+
+
+# Duración por grupo de ruta (ADR-0188): sin `/healthz*` y sin la ruta exacta (cardinalidad).
+from core.observability.metricas_negocio import MetricasHttpMiddleware  # noqa: E402
+
+app.add_middleware(MetricasHttpMiddleware)
 
 
 @app.get("/")

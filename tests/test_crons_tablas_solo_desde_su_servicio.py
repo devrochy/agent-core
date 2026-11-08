@@ -25,6 +25,7 @@ _USUARIOS_DEL_SERVICIO = {
     ROOT / "core" / "tasks" / "cron_runtime.py",
     ROOT / "core" / "tasks" / "cron_scheduler.py",
     ROOT / "core" / "tasks" / "celery_app.py",  # el cron de mantenimiento llama a `mantenimiento`
+    ROOT / "core" / "observability" / "sondas.py",  # métrica de fallos en 24 h (ADR-0188), solo lectura
 }
 
 
