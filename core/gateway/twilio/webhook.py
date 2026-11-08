@@ -35,6 +35,7 @@ from sqlalchemy import select, text
 
 from core.db.models import ChannelConnection, TwilioConnection
 from core.db.session import get_session
+from core.gateway.twilio.alta import registrada
 from core.gateway.webhook_flatten import FlattenedEvent
 from core.shared.crypto import get_secret_box
 from core.shared.logger import get_logger
@@ -163,9 +164,12 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
         adapter = _ADAPTADOR
         headers = {k.lower(): v for k, v in request.headers.items()}
         params = dict(form_params(raw_body))
+        token = str(creds.get("auth_token") or "")
+        # La documentación de Twilio dice que el fragmento de los overrides (`#rc=…`) no entra en la firma; por si
+        # alguna vía lo incluyera, también se acepta la URL tal como se registró.
         firma_ok = adapter.verify_request(
-            raw_body, headers, str(creds.get("auth_token") or ""), url=url
-        )
+            raw_body, headers, token, url=url
+        ) or adapter.verify_request(raw_body, headers, token, url=registrada(url))
         if not firma_ok or params.get("AccountSid") != twilio.account_sid:
             log.warning(
                 "twilio_webhook_signature_invalid",
@@ -234,6 +238,13 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
                 )
             except Exception:
                 log.exception("twilio_status_update_failed", tenant_id=str(tenant_id))
+            from core.gateway.twilio.costos import ESTADOS_FINALES
+
+            if update["provider_status"] in ESTADOS_FINALES:
+                # El costo se lee aparte (el precio tarda): no demora la respuesta a Twilio.
+                from core.tasks.twilio_costos import encolar_costo
+
+                encolar_costo(tenant_id, connection_id, message_sid)
             log.info(
                 "twilio_webhook_received",
                 tenant_id=str(tenant_id),

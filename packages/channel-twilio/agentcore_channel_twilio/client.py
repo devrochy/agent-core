@@ -39,13 +39,14 @@ _SID = {
     "XE": re.compile(r"^XE[0-9a-f]{32}$"),
     "HX": re.compile(r"^HX[0-9a-f]{32}$"),
     "MG": re.compile(r"^MG[0-9a-f]{32}$"),
+    "SM": re.compile(r"^(SM|MM)[0-9a-f]{32}$"),
 }
 
 FormData = Mapping[str, str] | Sequence[tuple[str, str]]
 
 
 def require_sid(value: str, prefix: str) -> str:
-    """Devuelve el SID si tiene el formato de Twilio (`AC`, `XE`, `HX`, `MG` + 32 hex); si no, un
+    """Devuelve el SID si tiene el formato de Twilio (`AC`, `XE`, `HX`, `MG`, `SM`/`MM` + 32 hex); si no, un
     `ProviderError` CONFIG. Así un valor guardado o recibido nunca altera la ruta de la URL."""
     pattern = _SID[prefix]
     if not isinstance(value, str) or not pattern.match(value):

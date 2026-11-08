@@ -41847,6 +41847,532 @@
           }
         }
       }
+    },
+    "/api/v1/admin/connections/twilio/{connection_id}/refresh": {
+      "post": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Refrescar",
+        "description": "Revisa ahora la cuenta, el número y los webhooks contra Twilio (lo mismo que el chequeo de cada 15 min).",
+        "operationId": "refrescar_api_v1_admin_connections_twilio__connection_id__refresh_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConexionTwilioOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/twilio/{connection_id}/webhooks": {
+      "post": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Reregistrar",
+        "description": "Vuelve a apuntar los webhooks del número a solvershub (si alguien los cambió en la consola de Twilio).",
+        "operationId": "reregistrar_api_v1_admin_connections_twilio__connection_id__webhooks_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConexionTwilioOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/twilio/{connection_id}/test-message": {
+      "post": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Mensaje De Prueba",
+        "description": "Manda un texto de prueba. WhatsApp exige que ese número le haya escrito al negocio en las últimas 24 h.",
+        "operationId": "mensaje_de_prueba_api_v1_admin_connections_twilio__connection_id__test_message_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwilioPruebaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwilioPruebaOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "409": {
+            "description": "`fuera_de_ventana` o `conexion_pausada`."
+          },
+          "422": {
+            "description": "`numero_invalido`."
+          },
+          "429": {
+            "description": "`too_many_tests` (1 cada 30 s) o `daily_limit` (10 al día)."
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/twilio/{connection_id}/credentials": {
+      "put": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Rotar Credenciales",
+        "description": "Cambia el Auth Token (o la cuenta) del número ya conectado. Pide la contraseña; se valida contra Twilio antes\nde guardar. Una conexión pausada no se rota (409 `conexion_pausada`): rotar no debe reactivarla.",
+        "operationId": "rotar_credenciales_api_v1_admin_connections_twilio__connection_id__credentials_put",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwilioRotarIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConexionTwilioOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "409": {
+            "description": "`sender_ya_conectado`, `cuenta_en_otro_negocio`, `twilio_account_suspended` o `conflicto`."
+          },
+          "422": {
+            "description": "`twilio_credentials_invalid`, `sender_not_found`, `sender_not_online` o `webhook_overwrite_not_confirmed` (con `details.previous_webhook`)."
+          },
+          "502": {
+            "description": "`twilio_unavailable` o `twilio_error`."
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/twilio/{connection_id}/disconnect": {
+      "post": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Desconectar",
+        "description": "Desconecta el número (borrado lógico, libera el número) y, si se pide, le devuelve sus webhooks anteriores.",
+        "operationId": "desconectar_api_v1_admin_connections_twilio__connection_id__disconnect_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwilioDesconectarIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwilioDesconectarOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "400": {
+            "description": "`password_required`."
+          },
+          "403": {
+            "description": "`password_incorrect`."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/twilio/{connection_id}/costs": {
+      "get": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Costos",
+        "description": "Lo que Twilio cobró por los mensajes de esta conexión, por moneda.",
+        "operationId": "costos_api_v1_admin_connections_twilio__connection_id__costs_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "dias",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 90,
+              "minimum": 1,
+              "default": 30,
+              "title": "Dias"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwilioCostosOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -76087,6 +76613,173 @@
           "webhook_ajeno"
         ],
         "title": "TwilioSenderOut"
+      },
+      "TwilioCostoMoneda": {
+        "properties": {
+          "moneda": {
+            "type": "string",
+            "title": "Moneda"
+          },
+          "mensajes": {
+            "type": "integer",
+            "title": "Mensajes"
+          },
+          "total": {
+            "type": "string",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "moneda",
+          "mensajes",
+          "total"
+        ],
+        "title": "TwilioCostoMoneda"
+      },
+      "TwilioCostosOut": {
+        "properties": {
+          "dias": {
+            "type": "integer",
+            "title": "Dias"
+          },
+          "por_moneda": {
+            "items": {
+              "$ref": "#/components/schemas/TwilioCostoMoneda"
+            },
+            "type": "array",
+            "title": "Por Moneda"
+          },
+          "nota": {
+            "type": "string",
+            "title": "Nota",
+            "description": "Twilio no documenta si su precio incluye el cargo de Meta: puede ser solo la tarifa de Twilio."
+          }
+        },
+        "type": "object",
+        "required": [
+          "dias",
+          "por_moneda",
+          "nota"
+        ],
+        "title": "TwilioCostosOut"
+      },
+      "TwilioDesconectarIn": {
+        "properties": {
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password",
+            "description": "Contraseña del usuario (confirmación)."
+          },
+          "restore_webhooks": {
+            "type": "boolean",
+            "title": "Restore Webhooks",
+            "description": "Devolverle al número de Twilio los webhooks que tenía antes de conectarlo.",
+            "default": false
+          },
+          "continuar_si_falla": {
+            "type": "boolean",
+            "title": "Continuar Si Falla",
+            "description": "Desconectar aunque no se puedan devolver los webhooks (si no, 502 `webhooks_no_restaurados` y no se borra nada).",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TwilioDesconectarIn"
+      },
+      "TwilioDesconectarOut": {
+        "properties": {
+          "webhooks_restaurados": {
+            "type": "boolean",
+            "title": "Webhooks Restaurados"
+          }
+        },
+        "type": "object",
+        "required": [
+          "webhooks_restaurados"
+        ],
+        "title": "TwilioDesconectarOut"
+      },
+      "TwilioPruebaIn": {
+        "properties": {
+          "to": {
+            "type": "string",
+            "maxLength": 24,
+            "minLength": 8,
+            "title": "To",
+            "description": "Número de WhatsApp de destino, en formato +E164."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "to"
+        ],
+        "title": "TwilioPruebaIn"
+      },
+      "TwilioPruebaOut": {
+        "properties": {
+          "message_sid": {
+            "type": "string",
+            "title": "Message Sid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message_sid"
+        ],
+        "title": "TwilioPruebaOut"
+      },
+      "TwilioRotarIn": {
+        "properties": {
+          "account_sid": {
+            "type": "string",
+            "maxLength": 34,
+            "minLength": 34,
+            "title": "Account Sid",
+            "description": "Account SID de Twilio (`AC…`)."
+          },
+          "auth_token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Auth Token",
+            "description": "Auth Token de la cuenta. No se devuelve nunca."
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password",
+            "description": "Contraseña del usuario (confirmación)."
+          },
+          "confirm_overwrite_webhook": {
+            "type": "boolean",
+            "title": "Confirm Overwrite Webhook",
+            "description": "Si el número ya manda sus mensajes a otra dirección (cambiada en la consola de Twilio), reemplazarla. Sin esto, la rotación responde 422 `webhook_overwrite_not_confirmed`.",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_sid",
+          "auth_token"
+        ],
+        "title": "TwilioRotarIn"
       }
     }
   }

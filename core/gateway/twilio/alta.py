@@ -315,7 +315,8 @@ async def conectar(
                 fila.sender_e164 = e164
                 fila.webhook_inbound_url = inbound_url
                 fila.webhook_status_url = status_url
-                if ajeno:
+                if ajeno and not fila.previous_webhook:
+                    # Se guarda el ORIGINAL: un alta repetida (o una rotación) no lo pisa con lo que haya ahora.
                     fila.previous_webhook = ajeno
             fila.status = "pending"
             fila.sender_status = sender.status
@@ -366,23 +367,45 @@ async def conectar(
     return resultado
 
 
+# Connection overrides de Twilio (en el fragmento de la URL): hasta 3 reintentos ante un 5xx o una conexión que no
+# se establece. Por defecto Twilio solo reintenta una vez si no conecta, así que un 500 de la auditoría perdería el
+# mensaje. El fragmento NO entra en la firma (documentación de Twilio): la URL guardada, contra la que se verifica,
+# va sin él.
+_OVERRIDES = "#rc=3&rp=5xx,ct"
+
+
+def registrada(url: str) -> str:
+    """La URL tal como se escribe en el sender: la guardada más los connection overrides."""
+    return f"{url}{_OVERRIDES}"
+
+
+def apunta_a_nosotros(sender: Sender, inbound_url: str, status_url: str) -> bool:
+    """¿El sender manda la entrada y los estados a estas URL? Acepta la forma con overrides y la de antes."""
+    entrada = sender.webhook.get("callback_url")
+    estados = sender.webhook.get("status_callback_url")
+    return entrada in (inbound_url, registrada(inbound_url)) and estados in (
+        status_url,
+        registrada(status_url),
+    )
+
+
 async def _registrar_webhooks(
     client: TwilioClient, sender_sid: str, inbound_url: str, status_url: str
 ) -> tuple[str, int | None, str, str]:
-    """Escribe los webhooks del sender y los relee. Devuelve `(estado, código de error, estado del sender,
-    display name)`: `connected` solo si Twilio quedó apuntando a las dos URL."""
+    """Escribe los webhooks del sender (con los overrides de reintento) y los relee. Devuelve `(estado, código de
+    error, estado del sender, display name)`: `connected` solo si Twilio quedó apuntando a las dos URL."""
     try:
         await set_webhooks(
-            client, sender_sid, callback_url=inbound_url, status_callback_url=status_url
+            client,
+            sender_sid,
+            callback_url=registrada(inbound_url),
+            status_callback_url=registrada(status_url),
         )
         leido = await get_sender(client, sender_sid)
     except ProviderError as exc:
         log.warning("twilio_webhooks_no_registrados", code=exc.code, category=exc.category)
         return ("revoked" if exc.category == "AUTH" else "error"), exc.code, "", ""
-    ok = (
-        leido.webhook.get("callback_url") == inbound_url
-        and leido.webhook.get("status_callback_url") == status_url
-    )
+    ok = apunta_a_nosotros(leido, inbound_url, status_url)
     if not ok:
         log.warning("twilio_webhooks_no_coinciden", sender_sid=sender_sid)
     else:
@@ -456,5 +479,6 @@ async def credenciales_de_envio(
         "from": f"whatsapp:{creds['sender_e164']}" if creds.get("sender_e164") else "",
     }
     if fila[0]:
-        salida["status_callback_url"] = str(fila[0])
+        # Con los mismos overrides de reintento que el webhook del sender (el fragmento no entra en la firma).
+        salida["status_callback_url"] = registrada(str(fila[0]))
     return salida
