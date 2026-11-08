@@ -55,8 +55,22 @@ async def run_connector() -> None:
     await connector.run()
 
 
+def _configurar_sentry() -> None:
+    """Sentry como en la API y el worker (no-op sin SENTRY_ENABLED/SENTRY_DSN), con `role=connector`
+    para separar sus errores en el proyecto."""
+    from core.observability.sentry_setup import configure_sentry
+
+    configure_sentry()
+    settings = get_settings()
+    if settings.sentry_enabled and settings.sentry_dsn:
+        import sentry_sdk
+
+        sentry_sdk.set_tag("role", "connector")
+
+
 def main() -> None:
     configure_logging()
+    _configurar_sentry()
 
     def _stop(*_: object) -> None:
         raise KeyboardInterrupt
