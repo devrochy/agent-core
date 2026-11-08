@@ -8,6 +8,10 @@ Autoinstrumentación (ADR-0188), solo con `OTEL_ENABLED`:
 - FastAPI: span por petición, sin `/healthz*` y sin los spans internos de send/receive. La
   query sale de `http.url`/`url.query` (el GET de verificación del webhook trae `hub.verify_token`).
 - SQLAlchemy: `db.statement` es el SQL del cursor, con marcadores (`$1`), nunca los valores.
+- Errores: el instrumentador de SQLAlchemy pone `str(exc)` en el status (con asyncpg trae el
+  `DETAIL` con valores de la fila) y FastAPI registra la excepción como evento. El exportador
+  (`ExportadorRedactado`) deja solo el código del status y el tipo de la excepción.
+- Rutas con secreto en el path (`/api/v1/files/{token}`): el segmento se tapa en los atributos.
 - httpx: la URL del span va sin query (`/oauth/access_token?client_secret=…`, tokens de Meta).
 - Las tres con un `MeterProvider` no-op: sus histogramas llevan la ruta, el host y el código, y
   se comerían el presupuesto de series; las métricas HTTP propias van agrupadas.
@@ -24,12 +28,15 @@ from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.metrics import NoOpMeterProvider
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import Event, ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     ConsoleSpanExporter,
     SimpleSpanProcessor,
+    SpanExporter,
+    SpanExportResult,
 )
+from opentelemetry.trace import Status
 
 from core.config import get_settings
 
@@ -47,10 +54,10 @@ def _configure() -> None:
     provider = TracerProvider(resource=resource)
     if settings.otel_exporter_endpoint:
         provider.add_span_processor(
-            BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otel_exporter_endpoint))
+            BatchSpanProcessor(ExportadorRedactado(OTLPSpanExporter(endpoint=settings.otel_exporter_endpoint)))
         )
     else:
-        provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
+        provider.add_span_processor(SimpleSpanProcessor(ExportadorRedactado(ConsoleSpanExporter())))
     trace.set_tracer_provider(provider)
     _tracer = trace.get_tracer("agent-core")
     instrumentar_httpx()
@@ -87,10 +94,59 @@ async def record_llm_call(model: str, tokens_in: int, tokens_out: int, cost_usd:
 def conversation_key(tenant_id: uuid.UUID, conversation_id: uuid.UUID) -> str:
     return f"{tenant_id}:{conversation_id}"
 
+# ------------------------------------------------------------------- redacción (ADR-0188)
+class ExportadorRedactado(SpanExporter):
+    """Envuelve un exportador y quita de cada span lo que puede traer datos de un cliente: la
+    descripción del status (solo queda el código) y el mensaje y la traza de las excepciones (solo
+    queda el tipo). El detalle sigue en Sentry, que pasa por su scrubber. `ReadableSpan` no se puede
+    modificar en `on_end`: se exporta una copia."""
+
+    def __init__(self, interno: SpanExporter) -> None:
+        self.interno = interno
+
+    @staticmethod
+    def redactar(span: ReadableSpan) -> ReadableSpan:
+        eventos = [
+            Event(e.name, {k: v for k, v in (e.attributes or {}).items() if k == "exception.type"}, e.timestamp)
+            if e.name == "exception"
+            else e
+            for e in span.events
+        ]
+        status = Status(span.status.status_code) if span.status.description else span.status
+        if status is span.status and all(a is b for a, b in zip(eventos, span.events, strict=True)):
+            return span
+        return ReadableSpan(
+            name=span.name,
+            context=span.context,
+            parent=span.parent,
+            resource=span.resource,
+            attributes=span.attributes,
+            events=eventos,
+            links=span.links,
+            kind=span.kind,
+            status=status,
+            start_time=span.start_time,
+            end_time=span.end_time,
+            instrumentation_scope=span.instrumentation_scope,
+        )
+
+    def export(self, spans: Any) -> SpanExportResult:
+        return self.interno.export([self.redactar(s) for s in spans])
+
+    def shutdown(self) -> None:
+        self.interno.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self.interno.force_flush(timeout_millis)
+
+
 # ------------------------------------------------------------ autoinstrumentación (ADR-0188)
 EXCLUIDAS = "/healthz"  # regex contra la URL completa: `/healthz` y `/healthz/deep`
 _QUERY_TAPADA = "[redactado]"
 _ATRIBUTOS_URL = ("http.url", "url.full")
+_ATRIBUTOS_RUTA = ("http.target", "url.path")
+# Rutas cuyo último segmento es la autorización (token firmado de un archivo, HU de archivos).
+_RUTAS_CON_SECRETO = ("/api/v1/files/",)
 _httpx_instrumentado = False
 
 
@@ -106,6 +162,15 @@ def sin_query(url: str) -> str:
     return urlunsplit((partes.scheme, netloc, partes.path, "", ""))
 
 
+def sin_secreto_en_ruta(texto: str) -> str:
+    """Tapa el segmento que sigue a una ruta con secreto (`/api/v1/files/<token>`)."""
+    for prefijo in _RUTAS_CON_SECRETO:
+        i = texto.find(prefijo)
+        if i >= 0:
+            return texto[: i + len(prefijo)] + _QUERY_TAPADA
+    return texto
+
+
 def _tapar_url(span: Any) -> None:
     if span is None or not span.is_recording():
         return
@@ -113,7 +178,11 @@ def _tapar_url(span: Any) -> None:
     for clave in _ATRIBUTOS_URL:
         valor = atributos.get(clave)
         if isinstance(valor, str):
-            span.set_attribute(clave, sin_query(valor))
+            span.set_attribute(clave, sin_secreto_en_ruta(sin_query(valor)))
+    for clave in _ATRIBUTOS_RUTA:
+        valor = atributos.get(clave)
+        if isinstance(valor, str):
+            span.set_attribute(clave, sin_secreto_en_ruta(valor.split("?", 1)[0]))
     if atributos.get("url.query"):
         span.set_attribute("url.query", _QUERY_TAPADA)
 
