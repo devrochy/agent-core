@@ -32,6 +32,7 @@ celery = Celery(
         "core.tasks.push_tasks",
         "core.tasks.production_readiness",
         "core.tasks.gate_tasks",  # HU-AOS-21 parte 4: medición del gate de pass^k
+        "core.tasks.twilio_costos",  # ADR-0186: costo por mensaje de WhatsApp vía Twilio
     ],
 )
 celery.conf.update(
@@ -130,6 +131,17 @@ def _meta_pricing_sync() -> Any:
 # (15 min) sigue siendo `core.meta_subscriptions_health_check`, este cron
 # solo LEE ese resultado, nunca repite el GET.
 _META_HEALTH_CHECK_TASK = "core.meta_health_check"
+
+
+_TWILIO_HEALTH_CHECK_TASK = "core.twilio_health_check"
+
+
+@core_cron(_TWILIO_HEALTH_CHECK_TASK, crontab(minute="*/15"))
+def _twilio_health_check() -> Any:
+    """Salud de las conexiones de WhatsApp vía Twilio (ADR-0186 §11): cuenta, sender y webhooks."""
+    from core.gateway.twilio.operacion import revisar_todas
+
+    return revisar_todas()
 
 
 @core_cron(_META_HEALTH_CHECK_TASK, crontab(minute="30"))

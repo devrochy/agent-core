@@ -84,3 +84,20 @@ async def set_webhooks(
         f"{SENDERS_URL}/{require_sid(sender_sid, 'XE')}", payload, op="senders.set_webhooks"
     )
     return Sender.from_api(body)
+
+
+async def restore_webhooks(
+    client: TwilioClient, sender_sid: str, previous: dict[str, str]
+) -> Sender:
+    """Devuelve al sender los webhooks que tenía antes de conectarlo (al desconectar, ADR-0186 §10). Un campo que
+    no estaba queda vacío: el sender deja de mandarnos mensajes."""
+    webhook: dict[str, str] = {}
+    for campo in ("callback_url", "status_callback_url", "fallback_url"):
+        webhook[campo] = str(previous.get(campo) or "")
+        webhook[campo.replace("_url", "_method")] = "POST"
+    body = await client.post_json(
+        f"{SENDERS_URL}/{require_sid(sender_sid, 'XE')}",
+        {"webhook": webhook},
+        op="senders.restore_webhooks",
+    )
+    return Sender.from_api(body)

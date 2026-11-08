@@ -141,8 +141,8 @@ async def test_alta_guarda_registra_webhooks_y_es_idempotente(negocios) -> None:
     assert primera.created is True
     assert primera.status == "connected"
     assert primera.sender_e164 == twilio.e164
-    assert twilio.webhook["callback_url"] == primera.webhook_inbound_url
-    assert twilio.webhook["status_callback_url"] == primera.webhook_status_url
+    assert twilio.webhook["callback_url"] == primera.webhook_inbound_url + "#rc=3&rp=5xx,ct"
+    assert twilio.webhook["status_callback_url"] == primera.webhook_status_url + "#rc=3&rp=5xx,ct"
     assert (
         primera.webhook_inbound_url.endswith("/inbound")
         and "/webhooks/twilio/" in primera.webhook_inbound_url
@@ -262,7 +262,7 @@ async def test_resolve_credentials_arma_las_del_adaptador(negocios) -> None:
         "account_sid": AC,
         "auth_token": "token-secreto",
         "from": f"whatsapp:{twilio.e164}",
-        "status_callback_url": hecha.webhook_status_url,
+        "status_callback_url": hecha.webhook_status_url + "#rc=3&rp=5xx,ct",
     }
     # Con el negocio equivocado, nada (no cae a la primaria ni al `.env`).
     async with tenant_scope(otro):

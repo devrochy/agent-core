@@ -178,6 +178,8 @@ async def meta_costs_context(tenant_id: uuid.UUID, since: datetime) -> dict[str,
                     .where(
                         MessageCost.tenant_id == tenant_id, MessageCost.billable.is_(True),
                         MessageCost.event_ts >= since,
+                        # Solo Meta: los costos de Twilio (0122) no entran en la discrepancia de volumen.
+                        MessageCost.provider == "meta",
                     )
                     .group_by(MessageCost.pricing_category)
                 )

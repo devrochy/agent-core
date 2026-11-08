@@ -1892,8 +1892,8 @@ class MessageTemplate(Base):
 
 
 class MessageCost(Base):
-    """Ingesta de costos por webhook (`statuses[].pricing`) -- factual pero
-    SIN dólares: este objeto nunca trae un monto, solo metadata de
+    """Ingesta de costos por webhook (`statuses[].pricing`) -- factual pero, para Meta,
+    SIN dólares: ese objeto nunca trae un monto, solo metadata de
     facturación (`billable`/`pricing_model`/categoría). El monto real vive
     en `PricingDaily.cost` (única fuente autoritativa, `pricing_analytics`).
     NO única sobre `external_message_id`: Meta puede mandar el mismo wamid
@@ -1919,6 +1919,11 @@ class MessageCost(Base):
     status: Mapped[str | None] = mapped_column(Text)
     event_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # `meta` (sin monto: lo autoritativo es `PricingDaily.cost`) o `twilio` (con el `price` del recurso Message, en
+    # positivo, y su moneda; un costo por mensaje, migración 0122, ADR-0186 §11).
+    provider: Mapped[str] = mapped_column(Text, nullable=False, default="meta", server_default="meta")
+    price: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    price_unit: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

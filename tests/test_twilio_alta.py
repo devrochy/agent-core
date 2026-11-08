@@ -291,7 +291,8 @@ async def test_registrar_webhooks_confirma_releyendo():
         client, XE, "https://t/in", "https://t/st"
     )
     assert (status, error, sender_status) == ("connected", None, "ONLINE")
-    assert estado["webhook"]["callback_url"] == "https://t/in"
+    # Con los connection overrides en el fragmento (no entran en la firma).
+    assert estado["webhook"]["callback_url"] == "https://t/in#rc=3&rp=5xx,ct"
     assert estado["webhook"]["status_callback_method"] == "POST"
 
 

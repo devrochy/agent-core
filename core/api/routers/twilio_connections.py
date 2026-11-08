@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from core.api.deps import Principal, require, require_owner_or_master
@@ -215,3 +215,201 @@ async def ver(
     if conexion is None:
         raise ApiError.not_found("Conexión no encontrada.")
     return _out(conexion)
+
+
+# --------------------------------------------------------------------------- operación (PR-5, ADR-0186 §10-11)
+
+
+class TwilioPruebaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    to: str = Field(
+        min_length=8, max_length=24, description="Número de WhatsApp de destino, en formato +E164."
+    )
+
+
+class TwilioPruebaOut(BaseModel):
+    message_sid: str
+
+
+class TwilioDesconectarIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: str | None = Field(default=None, description="Contraseña del usuario (confirmación).")
+    restore_webhooks: StrictBool = Field(
+        default=False,
+        description="Devolverle al número de Twilio los webhooks que tenía antes de conectarlo.",
+    )
+
+
+class TwilioDesconectarOut(BaseModel):
+    webhooks_restaurados: bool
+
+
+class TwilioCostoMoneda(BaseModel):
+    moneda: str
+    mensajes: int
+    total: str
+
+
+class TwilioCostosOut(BaseModel):
+    dias: int
+    por_moneda: list[TwilioCostoMoneda]
+    nota: str = Field(
+        description="Twilio no documenta si su precio incluye el cargo de Meta: puede ser solo la tarifa de Twilio."
+    )
+
+
+async def _escritura(principal: Principal) -> uuid.UUID:
+    require_owner_or_master(principal)
+    tid = _tenant(principal)
+    await _exigir_bandera(tid)
+    return tid
+
+
+def _o_404(conexion: svc.ConexionTwilio | None) -> ConexionTwilioOut:
+    if conexion is None:
+        raise ApiError.not_found("Conexión no encontrada.")
+    return _out(conexion)
+
+
+@router.post(
+    "/{connection_id}/refresh", response_model=ConexionTwilioOut, responses={404: _ERRORES[404]}
+)
+async def refrescar(
+    connection_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> ConexionTwilioOut:
+    """Revisa ahora la cuenta, el número y los webhooks contra Twilio (lo mismo que el chequeo de cada 15 min)."""
+    from core.gateway.twilio import operacion
+
+    tid = await _escritura(principal)
+    return _o_404(await operacion.revisar(tid, connection_id))
+
+
+@router.post(
+    "/{connection_id}/webhooks", response_model=ConexionTwilioOut, responses={404: _ERRORES[404]}
+)
+async def reregistrar(
+    connection_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> ConexionTwilioOut:
+    """Vuelve a apuntar los webhooks del número a solvershub (si alguien los cambió en la consola de Twilio)."""
+    from core.gateway.twilio import operacion
+
+    tid = await _escritura(principal)
+    try:
+        return _o_404(await operacion.reregistrar_webhooks(tid, connection_id))
+    except svc.AltaError as exc:
+        raise _api_error(exc) from None
+
+
+@router.post(
+    "/{connection_id}/test-message",
+    response_model=TwilioPruebaOut,
+    responses={
+        404: _ERRORES[404],
+        409: {"description": "`fuera_de_ventana` o `conexion_pausada`."},
+        422: {"description": "`numero_invalido`."},
+        429: {"description": "`too_many_tests` (1 cada 30 s) o `daily_limit` (10 al día)."},
+    },
+)
+async def mensaje_de_prueba(
+    connection_id: uuid.UUID,
+    payload: TwilioPruebaIn,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> TwilioPruebaOut:
+    """Manda un texto de prueba. WhatsApp exige que ese número le haya escrito al negocio en las últimas 24 h."""
+    from core.gateway.twilio import operacion
+
+    tid = await _escritura(principal)
+    try:
+        sid = await operacion.enviar_prueba(
+            tid, connection_id, payload.to, actor=f"admin:{principal.admin.email}"
+        )
+    except svc.AltaError as exc:
+        raise _api_error(exc) from None
+    return TwilioPruebaOut(message_sid=sid)
+
+
+class TwilioRotarIn(TwilioCredencialesIn):
+    password: str | None = Field(default=None, description="Contraseña del usuario (confirmación).")
+
+
+@router.put("/{connection_id}/credentials", response_model=ConexionTwilioOut, responses=_ERRORES)
+async def rotar_credenciales(
+    connection_id: uuid.UUID,
+    payload: TwilioRotarIn,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> ConexionTwilioOut:
+    """Cambia el Auth Token (o la cuenta) del número ya conectado. Pide la contraseña; se valida contra Twilio antes
+    de guardar. Una conexión pausada no se rota (409 `conexion_pausada`): rotar no debe reactivarla."""
+    from core.api.step_up import confirmar_password
+    from core.gateway.twilio import operacion
+
+    tid = await _escritura(principal)
+    await confirmar_password(principal, payload.password, proposito="connection_credentials")
+    try:
+        return _out(
+            await operacion.rotar_credenciales(
+                tid, connection_id, account_sid=payload.account_sid, auth_token=payload.auth_token
+            )
+        )
+    except svc.AltaError as exc:
+        raise _api_error(exc) from None
+
+
+@router.post(
+    "/{connection_id}/disconnect",
+    response_model=TwilioDesconectarOut,
+    responses={
+        404: _ERRORES[404],
+        400: {"description": "`password_required`."},
+        403: {"description": "`password_incorrect`."},
+    },
+)
+async def desconectar(
+    connection_id: uuid.UUID,
+    payload: TwilioDesconectarIn,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> TwilioDesconectarOut:
+    """Desconecta el número (borrado lógico, libera el número) y, si se pide, le devuelve sus webhooks anteriores."""
+    from core.api.step_up import confirmar_password
+    from core.gateway.twilio import operacion
+
+    tid = await _escritura(principal)
+    await confirmar_password(principal, payload.password, proposito="connection_delete")
+    try:
+        restaurados = await operacion.desconectar(
+            tid, connection_id, restaurar_webhooks=payload.restore_webhooks
+        )
+    except svc.AltaError as exc:
+        raise _api_error(exc) from None
+    return TwilioDesconectarOut(webhooks_restaurados=restaurados)
+
+
+@router.get(
+    "/{connection_id}/costs", response_model=TwilioCostosOut, responses={404: _ERRORES[404]}
+)
+async def costos(
+    connection_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections"))],
+    dias: Annotated[int, Query(ge=1, le=90)] = 30,
+) -> TwilioCostosOut:
+    """Lo que Twilio cobró por los mensajes de esta conexión, por moneda."""
+    from core.admin.permissions import effective_access
+    from core.gateway.twilio import costos as costos_svc
+
+    tid = _tenant(principal)
+    await _exigir_bandera(tid)
+    # El dinero sale solo con la sección Costos, como en el resto del panel.
+    if await effective_access(principal.admin, "costs", tid) is None:
+        raise ApiError.forbidden("Sin permiso para la sección 'costs'.")
+    if await svc.obtener(tid, connection_id) is None:
+        raise ApiError.not_found("Conexión no encontrada.")
+    datos = await costos_svc.resumen(tid, connection_id, dias=dias)
+    return TwilioCostosOut(
+        dias=int(datos["dias"]),  # type: ignore[arg-type]
+        por_moneda=[TwilioCostoMoneda(**m) for m in datos["por_moneda"]],  # type: ignore[union-attr]
+        nota="Es lo que informa Twilio por cada mensaje. Puede no incluir el cargo de Meta.",
+    )

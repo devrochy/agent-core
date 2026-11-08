@@ -234,6 +234,13 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
                 )
             except Exception:
                 log.exception("twilio_status_update_failed", tenant_id=str(tenant_id))
+            from core.gateway.twilio.costos import ESTADOS_FINALES
+
+            if update["provider_status"] in ESTADOS_FINALES:
+                # El costo se lee aparte (el precio tarda): no demora la respuesta a Twilio.
+                from core.tasks.twilio_costos import encolar_costo
+
+                encolar_costo(tenant_id, connection_id, message_sid)
             log.info(
                 "twilio_webhook_received",
                 tenant_id=str(tenant_id),

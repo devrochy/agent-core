@@ -1,0 +1,29 @@
+## Salud, operación y costos de WhatsApp vía Twilio (PR-5, ADR-0186) (2026-11-07)
+
+- **Salud de la conexión**:
+  - Revisa la cuenta (activa), el sender (`ONLINE`) y que sus webhooks apunten a solvershub.
+  - Estados posibles: `connected`, `degraded`, `revoked` o `error`. Una caída transitoria de Twilio no cambia el estado.
+  - Alerta una vez al día por conexión cuando pasa a `degraded` o `revoked`.
+  - Cron `core.twilio_health_check` cada 15 min, declarado en el catálogo de crons (ADR-0183).
+  - Las conexiones se listan con `admin_twilio_connection_ids()` (SECURITY DEFINER, migración 0122) y cada una se lee dentro del scope de su negocio.
+- **Acciones**, todas en `/api/v1/admin/connections/twilio/{id}/…` y para propietario o master:
+  - `refresh`: revisa la salud ahora.
+  - `webhooks`: vuelve a registrar los webhooks.
+  - `test-message`: manda un texto fijo a un número. Solo funciona dentro de la ventana de 24 h; fuera de ella responde 409 `fuera_de_ventana`. Tope de 1 cada 30 s y 10 por día.
+  - `PUT credentials`: rota el Auth Token o la cuenta. Se validan contra Twilio antes de guardarlos.
+  - `disconnect`: pide la contraseña, borra lógicamente la conexión y su fila de Twilio (libera el número) y puede restaurar los webhooks que el sender tenía antes.
+  - `GET costs`: devuelve lo que Twilio cobró por moneda.
+- El borrado genérico de una conexión también borra lógicamente su fila de `twilio_connections`.
+- **Costos por mensaje**:
+  - Cuando llega un estado final, el webhook encola `core.twilio.costo_mensaje`. La tarea lee el `price` del recurso Message y guarda un costo por mensaje en `message_costs`, con `provider='twilio'`, el monto en positivo y la moneda.
+  - Si Twilio todavía no tiene el precio, reintenta a los 5, 10 y 15 min.
+  - La migración 0122 agrega `provider`, `price` y `price_unit`, más un índice único parcial para Twilio.
+  - La lectura de costos de Meta ahora filtra `provider='meta'`.
+  - Twilio no documenta si su precio incluye el cargo de Meta; la respuesta lo aclara.
+- **Reintentos de Twilio** (*connection overrides*): las URL de webhook se registran, y el `StatusCallback` de cada mensaje se envía, con `#rc=3&rp=5xx,ct`, es decir hasta 3 reintentos ante un 5xx o un fallo de conexión. El fragmento no entra en la firma, así que la URL guardada sigue sin él.
+- **Auditoría multitenant** (sin hallazgos altos):
+  - `/costs` exige además la sección Costos, como el resto del dinero en el panel.
+  - Rotar las credenciales de una conexión pausada responde 409 `conexion_pausada`, para no reactivarla.
+  - `PUT /credentials` pide la contraseña.
+  - Repetir un alta o rotar credenciales ya no pisa el `previous_webhook` original.
+  - El contador diario del mensaje de prueba fija su TTL al crearse (SET NX EX).

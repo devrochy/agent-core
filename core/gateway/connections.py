@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import get_settings
@@ -478,6 +478,19 @@ async def delete_connection(connection_id: uuid.UUID) -> None:
         if connection is not None and not administrada_aparte(connection):
             connection.deleted_at = utcnow()
             connection.active = False
+            if connection.provider == "twilio":
+                # Su fila de Twilio se va con ella (ADR-0186): libera el número y el ruteo del webhook.
+                from core.db.models import TwilioConnection
+
+                await session.execute(
+                    update(TwilioConnection)
+                    .where(
+                        TwilioConnection.tenant_id == connection.tenant_id,
+                        TwilioConnection.channel_connection_id == connection.id,
+                        TwilioConnection.deleted_at.is_(None),
+                    )
+                    .values(deleted_at=connection.deleted_at)
+                )
 
 
 async def verify_meta_credentials(
