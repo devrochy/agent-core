@@ -62,6 +62,9 @@ class ConnectionType:
     # parte de HU-AOS-11): el widget se configura en Configuración → Chat web, que crea su
     # conexión; la consola de conexiones es HU-AOS-23.
     en_selector: bool = True
+    # Canal que se abre por negocio (`core.gateway.twilio.bandera`, ADR-0186 §12): con `available=False`, el
+    # tipo solo está disponible en el catálogo de los negocios que tienen la bandera encendida.
+    bandera_negocio: str = ""
 
 
 _META_SCHEMA: dict[str, Any] = {
@@ -121,6 +124,17 @@ _CALENDAR_SCHEMA: dict[str, Any] = {
 }
 
 # Debe coincidir con el seed de la migración `0038`.
+_TWILIO_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "account_sid": {"type": "string", "title": "Account SID", "pattern": "^AC[0-9a-f]{32}$"},
+        "auth_token": {"type": "string", "title": "Auth Token", "format": "password", "writeOnly": True},
+        "sender_e164": {"type": "string", "title": "Número de WhatsApp", "pattern": "^\\+[1-9]\\d{6,14}$"},
+    },
+    "required": ["account_sid", "auth_token", "sender_e164"],
+}
+
+
 CONNECTION_TYPES: tuple[ConnectionType, ...] = (
     ConnectionType(
         id="whatsapp_meta",
@@ -188,9 +202,15 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         provider="twilio",
         icon="bi-whatsapp",
         description="vía Twilio",
+        # Lo arma el alta guiada (`core.gateway.twilio.alta`, ADR-0186 §3), no el formulario manual: el negocio
+        # pega el Account SID y el Auth Token y elige el número de la lista que trae Twilio. El esquema existe
+        # para que `normalize_credentials` conserve estas claves; `sender_e164` es la clave de ruteo.
+        credentials_schema=_TWILIO_SCHEMA,
+        external_id_key="sender_e164",
         produces_conversations=True,
         available=False,
-        setup_kind=SETUP_MANUAL,
+        bandera_negocio="whatsapp_twilio",
+        setup_kind=SETUP_WIZARD,
         sort_order=31,
     ),
     ConnectionType(
@@ -282,6 +302,7 @@ BY_ID: dict[str, ConnectionType] = {t.id: t for t in CONNECTION_TYPES}
 WHATSAPP_META = "whatsapp_meta"
 MESSENGER_META = "messenger_meta"
 INSTAGRAM_META = "instagram_meta"
+WHATSAPP_TWILIO = "whatsapp_twilio"
 WEBCHAT = "webchat"
 PLAYGROUND = "playground"
 
@@ -435,6 +456,18 @@ def types_by_category(include_unavailable: bool = True) -> list[dict[str, Any]]:
     return groups
 
 
+def disponible_para(ctype: ConnectionType, tenant_settings: object) -> bool:
+    """¿El tipo está disponible para este negocio? Los tipos con `bandera_negocio` lo están solo con su bandera
+    encendida en `tenants.settings` (ADR-0186 §12); los demás, según `available`."""
+    if ctype.available:
+        return True
+    if not ctype.bandera_negocio:
+        return False
+    from core.gateway.twilio.bandera import habilitado_desde
+
+    return habilitado_desde(tenant_settings, ctype.bandera_negocio)
+
+
 def setup_url(ctype: ConnectionType) -> str:
     """URL del flujo de alta del tipo (vacío si el tipo no está disponible)."""
     if not ctype.available:
@@ -554,10 +587,12 @@ __all__ = [
     "SETUP_WIZARD",
     "WEBCHAT",
     "WHATSAPP_META",
+    "WHATSAPP_TWILIO",
     "ConnectionType",
     "available_types",
     "available_types_by_category",
     "connection_types",
+    "disponible_para",
     "external_id_for",
     "get_connection_type",
     "messaging_type_ids",

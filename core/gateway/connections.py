@@ -17,6 +17,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import get_settings
 from core.db.models import ChannelConnection, utcnow
@@ -26,6 +27,7 @@ from core.gateway.connection_types import (
     PLAYGROUND,
     WEBCHAT,
     WHATSAPP_META,
+    WHATSAPP_TWILIO,
     external_id_for,
     get_connection_type,
     normalize_credentials,
@@ -275,6 +277,19 @@ async def save_connection(
     (ADR-0069): se descartan claves no declaradas y se coercionan los tipos. La
     primera conexión de mensajería activa queda como primaria.
     """
+    async with get_session() as session:
+        return await save_connection_in(session, label, credentials, connection_id, type_id)
+
+
+async def save_connection_in(
+    session: AsyncSession,
+    label: str,
+    credentials: dict[str, Any],
+    connection_id: uuid.UUID | None = None,
+    type_id: str = WHATSAPP_META,
+) -> tuple[ChannelConnection, bool]:
+    """`save_connection` dentro de la sesión de quien llama, para que el alta guarde también lo propio del
+    proveedor en la misma transacción (Twilio, ADR-0186). Mismas reglas; no hace commit."""
     ctype = get_connection_type(type_id)
     if ctype is None:
         raise ValueError(f"Tipo de conexión desconocido: {type_id}")
@@ -288,127 +303,130 @@ async def save_connection(
     box = get_secret_box()
     tid = get_current_tenant_id()
 
-    async with get_session() as session:
-        previous: dict[str, Any] = {}
-        connection: ChannelConnection | None = None
-        if connection_id is not None:
-            connection = await session.get(ChannelConnection, connection_id)
-            if connection is None or administrada_aparte(connection):
-                raise ValueError("La conexión no existe")
-            if connection.tenant_id != tid:
-                raise ValueError("La conexión no pertenece a este tenant")
-            previous = _decrypt_raw(connection)
+    previous: dict[str, Any] = {}
+    connection: ChannelConnection | None = None
+    if connection_id is not None:
+        connection = await session.get(ChannelConnection, connection_id)
+        if connection is None or administrada_aparte(connection):
+            raise ValueError("La conexión no existe")
+        if connection.tenant_id != tid:
+            raise ValueError("La conexión no pertenece a este tenant")
+        if (connection.provider == "twilio") != (type_id == WHATSAPP_TWILIO):
+            # Una conexión de Twilio tiene su fila `twilio_connections` y sus webhooks: no se convierte en otro tipo
+            # (ni otro tipo en Twilio) desde el formulario manual (ADR-0186).
+            raise ValueError("Esta conexión no se puede cambiar a otro tipo.")
+        previous = _decrypt_raw(connection)
 
-        clean = normalize_credentials(ctype, credentials, previous)
-        external_id = external_id_for(ctype, clean)
-        encrypted = box.encrypt_json(clean)
+    clean = normalize_credentials(ctype, credentials, previous)
+    external_id = external_id_for(ctype, clean)
+    encrypted = box.encrypt_json(clean)
 
-        if type_id == WHATSAPP_META and external_id:
-            # El webhook rutea por este número: no puede ser de otro negocio (ADR-0095).
-            from core.gateway.meta_asset_claims import MetaAssetError, claim_assets
+    if type_id == WHATSAPP_META and external_id:
+        # El webhook rutea por este número: no puede ser de otro negocio (ADR-0095).
+        from core.gateway.meta_asset_claims import MetaAssetError, claim_assets
 
-            try:
-                await claim_assets(session, tid, waba_id=None, phone_number_id=external_id)
-            except MetaAssetError as exc:
-                raise ValueError(exc.message) from exc
+        try:
+            await claim_assets(session, tid, waba_id=None, phone_number_id=external_id)
+        except MetaAssetError as exc:
+            raise ValueError(exc.message) from exc
 
-        if external_id and (
+    if external_id and (
+        await session.execute(
+            select(ChannelConnection.id).where(
+                ChannelConnection.tenant_id == tid,
+                ChannelConnection.provider == ctype.provider,
+                ChannelConnection.external_id == external_id,
+                ChannelConnection.deleted_at.is_(None),
+                ChannelConnection.meta_connection_id.is_not(None),
+            )
+        )
+    ).first():
+        # El número ya tiene su conexión canónica de Meta (ADR-0115): una fila manual del
+        # mismo número chocaría con ella (índice único y CHECK), al crear o al editar.
+        raise ValueError(
+            "Ese número ya está conectado con el asistente de WhatsApp: adminístralo desde esa conexión."
+        )
+
+    if connection is not None:
+        connection.label = label
+        connection.type_id = type_id
+        connection.category = ctype.category
+        connection.channel = ctype.channel
+        connection.provider = ctype.provider
+        connection.external_id = external_id or connection.external_id
+        connection.credentials_encrypted = encrypted
+        connection.active = True
+        created = False
+    else:
+        # Lookup alineado al índice único `(tenant_id, provider, external_id)`
+        # (defensa en profundidad + evita IntegrityError). Se prefiere la fila
+        # activa sobre una soft-deleted para no chocar con el índice parcial.
+        existing = (
             await session.execute(
-                select(ChannelConnection.id).where(
+                select(ChannelConnection)
+                .where(
                     ChannelConnection.tenant_id == tid,
                     ChannelConnection.provider == ctype.provider,
                     ChannelConnection.external_id == external_id,
-                    ChannelConnection.deleted_at.is_(None),
-                    ChannelConnection.meta_connection_id.is_not(None),
                 )
+                .order_by(
+                    case((ChannelConnection.deleted_at.is_(None), 0), else_=1),
+                    ChannelConnection.created_at.desc(),
+                )
+                .limit(1)
             )
-        ).first():
-            # El número ya tiene su conexión canónica de Meta (ADR-0115): una fila manual del
-            # mismo número chocaría con ella (índice único y CHECK), al crear o al editar.
-            raise ValueError(
-                "Ese número ya está conectado con el asistente de WhatsApp: adminístralo desde esa conexión."
-            )
+        ).scalars().first()
+        if existing is not None and administrada_aparte(existing):
+            existing = None  # una canónica borrada no se convierte en manual
+        if existing is not None:
+            revivida = existing.deleted_at is not None
+            existing.label = label
+            existing.type_id = type_id
+            existing.category = ctype.category
+            existing.channel = ctype.channel
+            existing.credentials_encrypted = encrypted
+            existing.active = True
+            existing.deleted_at = None  # re-agregar des-elimina (invariante #8)
+            if revivida and ctype.produces_conversations:
+                await session.flush()
+                await _instancias_de_la_nueva(session, tid, existing.id)
+            return existing, False
+        connection = ChannelConnection(
+            tenant_id=tid,
+            channel=ctype.channel,
+            provider=ctype.provider,
+            type_id=type_id,
+            category=ctype.category,
+            label=label,
+            active=True,
+            is_primary=False,
+            external_id=external_id,
+            credentials_encrypted=encrypted,
+        )
+        session.add(connection)
+        await session.flush()
+        created = True
 
-        if connection is not None:
-            connection.label = label
-            connection.type_id = type_id
-            connection.category = ctype.category
-            connection.channel = ctype.channel
-            connection.provider = ctype.provider
-            connection.external_id = external_id or connection.external_id
-            connection.credentials_encrypted = encrypted
-            connection.active = True
-            created = False
-        else:
-            # Lookup alineado al índice único `(tenant_id, provider, external_id)`
-            # (defensa en profundidad + evita IntegrityError). Se prefiere la fila
-            # activa sobre una soft-deleted para no chocar con el índice parcial.
-            existing = (
-                await session.execute(
-                    select(ChannelConnection)
-                    .where(
-                        ChannelConnection.tenant_id == tid,
-                        ChannelConnection.provider == ctype.provider,
-                        ChannelConnection.external_id == external_id,
-                    )
-                    .order_by(
-                        case((ChannelConnection.deleted_at.is_(None), 0), else_=1),
-                        ChannelConnection.created_at.desc(),
-                    )
-                    .limit(1)
+    # La primera conexión de MENSAJERÍA activa queda como primaria (ADR-0069)
+    if created and ctype.category == CATEGORY_COMMUNICATION:
+        count_active = (
+            await session.execute(
+                select(func.count(ChannelConnection.id)).where(
+                    ChannelConnection.active.is_(True),
+                    ChannelConnection.tenant_id == tid,
+                    ES_MANUAL,
+                    or_(
+                        ChannelConnection.category == CATEGORY_COMMUNICATION,
+                        ChannelConnection.category.is_(None),
+                    ),
                 )
-            ).scalars().first()
-            if existing is not None and administrada_aparte(existing):
-                existing = None  # una canónica borrada no se convierte en manual
-            if existing is not None:
-                revivida = existing.deleted_at is not None
-                existing.label = label
-                existing.type_id = type_id
-                existing.category = ctype.category
-                existing.channel = ctype.channel
-                existing.credentials_encrypted = encrypted
-                existing.active = True
-                existing.deleted_at = None  # re-agregar des-elimina (invariante #8)
-                if revivida and ctype.produces_conversations:
-                    await session.flush()
-                    await _instancias_de_la_nueva(session, tid, existing.id)
-                return existing, False
-            connection = ChannelConnection(
-                tenant_id=tid,
-                channel=ctype.channel,
-                provider=ctype.provider,
-                type_id=type_id,
-                category=ctype.category,
-                label=label,
-                active=True,
-                is_primary=False,
-                external_id=external_id,
-                credentials_encrypted=encrypted,
             )
-            session.add(connection)
-            await session.flush()
-            created = True
-
-        # La primera conexión de MENSAJERÍA activa queda como primaria (ADR-0069)
-        if created and ctype.category == CATEGORY_COMMUNICATION:
-            count_active = (
-                await session.execute(
-                    select(func.count(ChannelConnection.id)).where(
-                        ChannelConnection.active.is_(True),
-                        ChannelConnection.tenant_id == tid,
-                        ES_MANUAL,
-                        or_(
-                            ChannelConnection.category == CATEGORY_COMMUNICATION,
-                            ChannelConnection.category.is_(None),
-                        ),
-                    )
-                )
-            ).scalar() or 0
-            if count_active <= 1:
-                connection.is_primary = True
-        if created and ctype.produces_conversations:
-            await _instancias_de_la_nueva(session, tid, connection.id)
-        return connection, created
+        ).scalar() or 0
+        if count_active <= 1:
+            connection.is_primary = True
+    if created and ctype.produces_conversations:
+        await _instancias_de_la_nueva(session, tid, connection.id)
+    return connection, created
 
 
 async def _instancias_de_la_nueva(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID) -> None:

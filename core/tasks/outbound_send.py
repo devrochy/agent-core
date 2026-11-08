@@ -280,6 +280,14 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
             # tiempo ni los reintentos lo arreglan. Falla ya y se escala.
             await _release_claim(message.id, message.conversation_id, tenant_id)
             return GraphError("La conexión de WhatsApp no tiene credenciales para enviar", category="PERMANENT")
+        elif provider == "twilio" and not (
+            credentials.get("account_sid") and credentials.get("auth_token") and credentials.get("from")
+        ):
+            # Igual que Meta: una conexión de Twilio sin credenciales completas no se arregla reintentando.
+            await _release_claim(message.id, message.conversation_id, tenant_id)
+            return ProviderError(
+                "La conexión de Twilio no tiene credenciales para enviar", provider="twilio", category="CONFIG"
+            )
         if conversation.channel in CANALES_DE_MENSAJERIA_META:
             # Ventana y autoría para decidir `RESPONSE` o `HUMAN_AGENT` (ADR-0152): los datos del
             # mensaje que el adaptador no ve.

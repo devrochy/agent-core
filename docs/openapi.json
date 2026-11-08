@@ -7284,7 +7284,7 @@
           "admin · conexiones"
         ],
         "summary": "Connections Catalog",
-        "description": "Catálogo de tipos de conexión agrupado por categoría (ADR-0069).",
+        "description": "Catálogo de tipos de conexión agrupado por categoría (ADR-0069). Un tipo que se abre por negocio\n(`bandera_negocio`, ADR-0186 §12) está disponible solo si el negocio tiene su bandera encendida.",
         "operationId": "connections_catalog_api_v1_admin_connections_catalog_get",
         "parameters": [
           {
@@ -41386,6 +41386,467 @@
           }
         }
       }
+    },
+    "/api/v1/admin/connections/twilio/discover": {
+      "post": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Descubrir",
+        "description": "Valida las credenciales contra Twilio y lista los números de WhatsApp de la cuenta. No guarda nada.",
+        "operationId": "descubrir_api_v1_admin_connections_twilio_discover_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwilioCredencialesIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwilioDescubrirOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "409": {
+            "description": "`sender_ya_conectado`, `cuenta_en_otro_negocio` o `twilio_account_suspended`."
+          },
+          "422": {
+            "description": "`twilio_credentials_invalid`, `sender_not_found`, `sender_not_online` o `webhook_overwrite_not_confirmed` (con `details.previous_webhook`)."
+          },
+          "502": {
+            "description": "`twilio_unavailable` o `twilio_error`."
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/twilio": {
+      "post": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Conectar",
+        "description": "Conecta el número elegido: guarda la conexión, registra los webhooks del sender en Twilio y los relee.\n201 si se creó; 200 si el número ya estaba conectado en este negocio. Si registrar los webhooks falla, la\nconexión queda en `error` (con `last_error_code`) y se reintenta con el mismo pedido.",
+        "operationId": "conectar_api_v1_admin_connections_twilio_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwilioAltaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConexionTwilioOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "409": {
+            "description": "`sender_ya_conectado`, `cuenta_en_otro_negocio` o `twilio_account_suspended`."
+          },
+          "422": {
+            "description": "`twilio_credentials_invalid`, `sender_not_found`, `sender_not_online` o `webhook_overwrite_not_confirmed` (con `details.previous_webhook`)."
+          },
+          "502": {
+            "description": "`twilio_unavailable` o `twilio_error`."
+          },
+          "200": {
+            "description": "El número ya estaba conectado en este negocio: se actualizó."
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/twilio/{connection_id}": {
+      "get": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Ver",
+        "description": "Resumen de una conexión de Twilio del negocio: número, estado y webhooks registrados.",
+        "operationId": "ver_api_v1_admin_connections_twilio__connection_id__get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConexionTwilioOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/tenants/{tenant_id}/canales/{canal}": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Get Canal Bandera",
+        "description": "Bandera de un canal que se abre por negocio (apagada por defecto). Solo el master.",
+        "operationId": "get_canal_bandera_api_v1_admin_platform_tenants__tenant_id__canales__canal__get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "canal",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Canal"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanalBandera"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No es el admin master (tampoco el tester ni un colaborador).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "El negocio no existe o está borrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Put Canal Bandera",
+        "description": "Abre o cierra un canal para el negocio (auditado como `canal_bandera`). Idempotente. Solo el master; es por\nnegocio y no toca ningún otro.",
+        "operationId": "put_canal_bandera_api_v1_admin_platform_tenants__tenant_id__canales__canal__put",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "canal",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Canal"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CanalBanderaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanalBandera"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No es el admin master (tampoco el tester ni un colaborador).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "El negocio no existe o está borrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcionesErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -75347,6 +75808,285 @@
         "type": "object",
         "title": "SeguimientoHechoIn",
         "description": "Cierra el seguimiento y, si se pide, programa el siguiente en el mismo gesto (HU-CRM-21).\n`siguiente_en` es ISO 8601: sin zona es hora del negocio."
+      },
+      "CanalBandera": {
+        "properties": {
+          "canal": {
+            "type": "string",
+            "title": "Canal",
+            "description": "Canal que se abre por negocio (hoy solo `whatsapp_twilio`, ADR-0186)."
+          },
+          "habilitado": {
+            "type": "boolean",
+            "title": "Habilitado",
+            "description": "Si el tipo de conexión del canal está disponible en el catálogo del negocio. Apagado: «Próximamente» y su alta responde 404."
+          }
+        },
+        "type": "object",
+        "required": [
+          "canal",
+          "habilitado"
+        ],
+        "title": "CanalBandera"
+      },
+      "CanalBanderaIn": {
+        "properties": {
+          "habilitado": {
+            "type": "boolean",
+            "title": "Habilitado"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "habilitado"
+        ],
+        "title": "CanalBanderaIn"
+      },
+      "ConexionTwilioOut": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "sender_e164": {
+            "type": "string",
+            "title": "Sender E164"
+          },
+          "sender_sid": {
+            "type": "string",
+            "title": "Sender Sid"
+          },
+          "sender_status": {
+            "type": "string",
+            "title": "Sender Status"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "`pending`, `connected`, `degraded`, `revoked` o `error`."
+          },
+          "account_sid": {
+            "type": "string",
+            "title": "Account Sid"
+          },
+          "webhook_inbound_url": {
+            "type": "string",
+            "title": "Webhook Inbound Url"
+          },
+          "webhook_status_url": {
+            "type": "string",
+            "title": "Webhook Status Url"
+          },
+          "tenia_webhook_previo": {
+            "type": "boolean",
+            "title": "Tenia Webhook Previo"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "label",
+          "sender_e164",
+          "sender_sid",
+          "sender_status",
+          "display_name",
+          "status",
+          "account_sid",
+          "webhook_inbound_url",
+          "webhook_status_url",
+          "tenia_webhook_previo",
+          "last_error_code",
+          "active"
+        ],
+        "title": "ConexionTwilioOut"
+      },
+      "TwilioAltaIn": {
+        "properties": {
+          "account_sid": {
+            "type": "string",
+            "maxLength": 34,
+            "minLength": 34,
+            "title": "Account Sid",
+            "description": "Account SID de Twilio (`AC…`)."
+          },
+          "auth_token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Auth Token",
+            "description": "Auth Token de la cuenta. No se devuelve nunca."
+          },
+          "sender_sid": {
+            "type": "string",
+            "maxLength": 34,
+            "minLength": 34,
+            "title": "Sender Sid",
+            "description": "SID del sender elegido (`XE…`)."
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 120,
+            "title": "Label",
+            "default": ""
+          },
+          "confirm_overwrite_webhook": {
+            "type": "boolean",
+            "title": "Confirm Overwrite Webhook",
+            "description": "Reemplazar los webhooks que el sender ya tenía hacia otra dirección (se guardan para restaurarlos al desconectar).",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_sid",
+          "auth_token",
+          "sender_sid"
+        ],
+        "title": "TwilioAltaIn"
+      },
+      "TwilioCredencialesIn": {
+        "properties": {
+          "account_sid": {
+            "type": "string",
+            "maxLength": 34,
+            "minLength": 34,
+            "title": "Account Sid",
+            "description": "Account SID de Twilio (`AC…`)."
+          },
+          "auth_token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Auth Token",
+            "description": "Auth Token de la cuenta. No se devuelve nunca."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_sid",
+          "auth_token"
+        ],
+        "title": "TwilioCredencialesIn"
+      },
+      "TwilioCuentaOut": {
+        "properties": {
+          "friendly_name": {
+            "type": "string",
+            "title": "Friendly Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "friendly_name",
+          "status",
+          "type"
+        ],
+        "title": "TwilioCuentaOut"
+      },
+      "TwilioDescubrirOut": {
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/TwilioCuentaOut"
+          },
+          "senders": {
+            "items": {
+              "$ref": "#/components/schemas/TwilioSenderOut"
+            },
+            "type": "array",
+            "title": "Senders"
+          }
+        },
+        "type": "object",
+        "required": [
+          "account",
+          "senders"
+        ],
+        "title": "TwilioDescubrirOut"
+      },
+      "TwilioSenderOut": {
+        "properties": {
+          "sender_sid": {
+            "type": "string",
+            "title": "Sender Sid"
+          },
+          "e164": {
+            "type": "string",
+            "title": "E164"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "quality_rating": {
+            "type": "string",
+            "title": "Quality Rating"
+          },
+          "seleccionable": {
+            "type": "boolean",
+            "title": "Seleccionable"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo",
+            "description": "`\"\"`, `no_online` o `ya_conectado_aqui`."
+          },
+          "webhook_ajeno": {
+            "type": "boolean",
+            "title": "Webhook Ajeno",
+            "description": "El sender ya envía sus mensajes a otra dirección."
+          }
+        },
+        "type": "object",
+        "required": [
+          "sender_sid",
+          "e164",
+          "status",
+          "display_name",
+          "quality_rating",
+          "seleccionable",
+          "motivo",
+          "webhook_ajeno"
+        ],
+        "title": "TwilioSenderOut"
       }
     }
   }

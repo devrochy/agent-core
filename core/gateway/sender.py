@@ -307,6 +307,18 @@ async def resolve_credentials(
             # Chat web como conexión (ADR-0115 §4): sin proveedor externo. Sus credenciales son el
             # secreto de Turnstile del widget, que el envío no necesita: no se descifra.
             return "web", {}
+        if connection.provider == "twilio":
+            # WhatsApp vía Twilio (ADR-0186): sin respaldo. Sin credenciales, el envío falla (no sale por la
+            # primaria ni por el número de la plataforma).
+            if not connection.credentials_encrypted:
+                return "twilio", {}
+            from core.gateway.twilio.alta import credenciales_de_envio
+
+            creds = get_secret_box().decrypt_json(connection.credentials_encrypted)
+            async with get_session() as session:
+                return "twilio", await credenciales_de_envio(
+                    session, connection, {str(k): str(v) for k, v in creds.items()}
+                )
         if connection and connection.credentials_encrypted:
             creds = get_secret_box().decrypt_json(connection.credentials_encrypted)
             return connection.provider, {str(k): str(v) for k, v in creds.items()}

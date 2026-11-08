@@ -267,6 +267,52 @@ class ChannelConnection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class TwilioConnection(Base):
+    """Lo propio de una conexión de WhatsApp vía Twilio, 1:1 con su `ChannelConnection` (ADR-0186, migración 0121).
+
+    Sin secretos: el Auth Token va cifrado en `channel_connections.credentials_encrypted`. `public_id` va en la
+    URL del webhook y `webhook_*_url` son las URL exactas que se registraron en el sender: la firma se verifica
+    contra ellas. El número es único entre negocios por `uq_channel_connections_twilio_sender_viva`."""
+
+    __tablename__ = "twilio_connections"
+    __table_args__ = (
+        Index(
+            "uq_twilio_connections_conexion_viva",
+            "tenant_id",
+            "channel_connection_id",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "channel_connection_id"],
+            ["channel_connections.tenant_id", "channel_connections.id"],
+            name="fk_twilio_connections_conexion",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    channel_connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    public_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    account_sid: Mapped[str] = mapped_column(Text, nullable=False)
+    sender_sid: Mapped[str] = mapped_column(Text, nullable=False)
+    sender_e164: Mapped[str] = mapped_column(Text, nullable=False)
+    sender_status: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    # pending | connected | degraded | revoked | error
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", server_default="pending")
+    display_name: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    webhook_inbound_url: Mapped[str] = mapped_column(Text, nullable=False)
+    webhook_status_url: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_webhook: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    subaccount_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    last_health_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[int | None] = mapped_column(Integer)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class WaWebSession(Base):
     """Sesión multi-device del canal WhatsApp Web no oficial (ADR-0074).
 

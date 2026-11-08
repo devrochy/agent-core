@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from core.admin.permissions import effective_access
-from core.api.deps import Principal, require
+from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
 from core.api.forms import coerce_schema_values, redact_secrets
 from core.db.models import AuditLog, PhoneNumber, utcnow
@@ -421,8 +421,15 @@ class RevealedSecretsResponse(BaseModel):
 async def connections_catalog(
     principal: Annotated[Principal, Depends(require("connections"))],
 ) -> CatalogResponse:
-    """Catálogo de tipos de conexión agrupado por categoría (ADR-0069)."""
-    from core.gateway.connection_types import types_by_category
+    """Catálogo de tipos de conexión agrupado por categoría (ADR-0069). Un tipo que se abre por negocio
+    (`bandera_negocio`, ADR-0186 §12) está disponible solo si el negocio tiene su bandera encendida."""
+    from core.gateway.connection_types import disponible_para, types_by_category
+    from core.gateway.twilio.bandera import settings_del_negocio
+
+    tenant_settings: dict = {}
+    if principal.tenant_id is not None:
+        async with get_session() as session:
+            tenant_settings = await settings_del_negocio(session, principal.tenant_id) or {}
 
     categories = [
         ConnectionCategory(
@@ -434,7 +441,7 @@ async def connections_catalog(
                     label=t.label,
                     description=t.description,
                     icon=t.icon,
-                    available=t.available,
+                    available=disponible_para(t, tenant_settings),
                     setup_kind=t.setup_kind,
                     url=setup_url(t),
                     has_schema=bool(t.credentials_schema),
@@ -565,6 +572,9 @@ async def reveal_connection_credentials(
     ctype = get_connection_type(existing.type_id) if existing.type_id else None
     if ctype is None:
         raise ApiError.not_found("Tipo de conexión no encontrado.")
+    if existing.provider == "twilio":
+        # Como en el alta (ADR-0186): solo quien puede cargar el Auth Token puede verlo.
+        require_owner_or_master(principal)
     values = credentials_of(existing)
     secrets = {
         name: str(values[name])

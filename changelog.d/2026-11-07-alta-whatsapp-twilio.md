@@ -1,0 +1,23 @@
+## Alta de WhatsApp vía Twilio (PR-3, ADR-0186) (2026-11-07)
+
+- **Bandera por negocio** `tenants.settings.canales.whatsapp_twilio`, apagada por defecto. Solo la cambia el master con `GET`/`PUT /api/v1/admin/platform/tenants/{id}/canales/{canal}`, y queda auditada como `canal_bandera`. Con la bandera encendida, el catálogo del negocio muestra el tipo `whatsapp_twilio` como disponible (`setup_kind: wizard`). Para el resto sigue «Próximamente», también en el panel clásico.
+- **Alta guiada** en `/api/v1/admin/connections/twilio`. Piden Conexiones en escritura y ser propietario o master:
+  - `POST /discover` valida el Account SID y el Auth Token y lista los números de WhatsApp de la cuenta.
+  - `POST` guarda la conexión con las credenciales cifradas y su fila `twilio_connections` en una sola transacción, registra los webhooks del sender y los relee. Responde 201 al crear y 200 si la conexión ya existía.
+  - `GET /{id}` devuelve el resumen.
+  - Si el sender ya tenía webhooks de otra integración, el alta pide `confirm_overwrite_webhook` y guarda los anteriores.
+  - Las credenciales inválidas responden 422, no 401, porque el panel trata un 401 como sesión expirada.
+- **Migración 0121**:
+  - tabla `twilio_connections`, con RLS forzada y sin DELETE para `app_runtime`;
+  - índice único global `uq_channel_connections_twilio_sender_viva`: un número, un negocio, con el mismo patrón que `phone_numbers` y waweb;
+  - función `twilio_route_connection(public_id)` (SECURITY DEFINER), para el webhook del PR-4.
+  - Ajuste a ADR-0186 §4: la unicidad del número va sobre `channel_connections`, no sobre `twilio_connections`. Así la cubre la misma transacción de `save_connection_in` y la tabla conserva su RLS.
+- `save_connection_in(session, …)`: `save_connection` dentro de la sesión de quien llama, con las mismas reglas.
+- **Envío**: `resolve_credentials` arma las credenciales que espera el adaptador de Twilio (`from` y `status_callback_url`) y no cae a la primaria. `_send_one` falla con CONFIG si la conexión de Twilio no tiene credenciales completas.
+- **Auditoría multitenant** (antes de abrir el PR):
+  - FK compuesta `(tenant_id, channel_connection_id)`.
+  - **Una cuenta de Twilio, un negocio**: lo controla `twilio_account_en_otro_negocio` (SECURITY DEFINER) con un candado por cuenta, y responde 409 `cuenta_en_otro_negocio`. El Auth Token de la cuenta firma los webhooks de todos sus números, así que dos negocios con la misma cuenta podrían suplantarse.
+  - El alta exige que el `tenant_id` sea el del `tenant_scope`.
+  - Revelar el Auth Token pide ser propietario o master.
+  - Una conexión de Twilio no se puede convertir en otro tipo desde el formulario manual.
+- **Pendiente para el PR-5**: el borrado lógico de la conexión todavía no marca `twilio_connections` ni restaura los webhooks previos. El ruteo ya lo descarta, porque mira `channel_connections.deleted_at`.

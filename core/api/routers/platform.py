@@ -925,3 +925,65 @@ async def put_avisos_por_canal(
     except avisos_bandera.NegocioNoEncontrado:
         raise ApiError.not_found("Negocio no encontrado.") from None
     return AvisosPorCanalBandera(habilitada=encendida)
+
+
+class CanalBandera(BaseModel):
+    canal: str = Field(description="Canal que se abre por negocio (hoy solo `whatsapp_twilio`, ADR-0186).")
+    habilitado: bool = Field(
+        description="Si el tipo de conexión del canal está disponible en el catálogo del negocio. Apagado: "
+        "«Próximamente» y su alta responde 404."
+    )
+
+
+class CanalBanderaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    habilitado: StrictBool
+
+
+async def _canal_bandera(tenant_id: uuid.UUID, canal: str, valor: bool | None, principal: Principal) -> CanalBandera:
+    _require_master_agent_os(principal)
+    from core.gateway.twilio import bandera as canal_bandera
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            if valor is None:
+                encendido = await canal_bandera.leer(tenant_id, canal)
+            else:
+                encendido = await canal_bandera.fijar(tenant_id, canal, valor, actor=f"admin:{principal.admin.email}")
+    except canal_bandera.CanalDesconocido:
+        raise ApiError.not_found("Canal desconocido.") from None
+    except canal_bandera.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return CanalBandera(canal=canal, habilitado=encendido)
+
+
+@router.get(
+    "/tenants/{tenant_id}/canales/{canal}",
+    response_model=CanalBandera,
+    responses=_ERRORES_OPCIONES_DIRECTAS,
+)
+async def get_canal_bandera(
+    tenant_id: uuid.UUID,
+    canal: str,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> CanalBandera:
+    """Bandera de un canal que se abre por negocio (apagada por defecto). Solo el master."""
+    return await _canal_bandera(tenant_id, canal, None, principal)
+
+
+@router.put(
+    "/tenants/{tenant_id}/canales/{canal}",
+    response_model=CanalBandera,
+    responses=_ERRORES_OPCIONES_DIRECTAS,
+)
+async def put_canal_bandera(
+    tenant_id: uuid.UUID,
+    canal: str,
+    payload: CanalBanderaIn,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> CanalBandera:
+    """Abre o cierra un canal para el negocio (auditado como `canal_bandera`). Idempotente. Solo el master; es por
+    negocio y no toca ningún otro."""
+    return await _canal_bandera(tenant_id, canal, payload.habilitado, principal)
