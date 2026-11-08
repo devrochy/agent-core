@@ -1,6 +1,6 @@
 # ADR-0188 — Observabilidad: métricas, trazas y logs hacia Grafana Cloud (y Kibana para logs)
 
-- **Estado:** aceptado (2026-11-08, verificado en test con el backend `be29a373`: 18 métricas `agentcore_*` en Grafana, dependencias en 1, trazas `kernel.turn → llm_call` en Tempo y `/healthz/deep` en 200 por el puerto local. El plan lo aprobó el dueño el 2026-11-07. Sin probar: disparo real de «Worker sin latido», DLQ con `XADD`, Sentry del conector y todo lo de producción, que sigue en HU-ARCH-07 y HU-ARCH-32).
+- **Estado:** aceptado (2026-11-08, verificado en test con el backend `be29a373`: 18 métricas `agentcore_*` en Grafana, dependencias en 1, trazas `kernel.turn → llm_call` en Tempo y `/healthz/deep` en 200 por el puerto local. El dueño confirmó en test los dashboards con datos y la alerta «Worker sin latido» disparada a propósito. El plan lo aprobó el 2026-11-07. Sin probar: DLQ con `XADD`, Redis parado, Sentry del conector y todo lo de producción, que sigue en HU-ARCH-07 y HU-ARCH-32).
 - **Fecha:** 2026-11-08
 - **Contexto:** HU-ARCH-07 (observabilidad de producción, P0) y D-SPEC-01-2 («OTLP a un servicio gestionado gratis»). Decisiones del dueño del 2026-11-07: Grafana Cloud gratis para métricas, trazas, dashboards y alertas; Elasticsearch y Kibana autohospedados solo para logs; alertas por Slack; enlaces solo para master desde el panel.
 - **Usa:** HU-AOS-10 (`kernel.turn`, `trace_id` y propagación a Celery en `core/observability/celery_trazas.py`), ADR-0183 (`cron_runs`), ADR-0120 (CI por niveles).
