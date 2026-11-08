@@ -2,7 +2,7 @@
 
 - **Estado:** propuesto
 - **Fecha:** 2026-11-07
-- **Contexto:** D-63 (docs); HU-CONN-11 a HU-CONN-17 (SPEC-08). Primer uso: el agente comercial de solvershub con un número nuevo comprado en Twilio, mientras Meta verifica a solvershub.
+- **Contexto:** D-64 (docs); HU-CONN-11 a HU-CONN-17 (SPEC-08). Primer uso: el agente comercial de solvershub con un número nuevo comprado en Twilio, mientras Meta verifica a solvershub.
 - **Usa:** ADR-0052 (canales por entry points), ADR-0069 (catálogo de tipos de conexión), ADR-0072 (capacidades según la conexión), ADR-0094 (credenciales por conexión), ADR-0108 (plantillas por evento), ADR-0115 (conexión canónica), ADR-0122 (pausa y borrado lógico), ADR-0126 (webhook por conexión), ADR-0165 (salida estructurada).
 - **Relacionado:** ADR-0187 (fase 2, Twilio como ISV con subcuentas).
 

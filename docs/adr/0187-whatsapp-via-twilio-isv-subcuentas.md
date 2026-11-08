@@ -2,7 +2,7 @@
 
 - **Estado:** propuesto. Su construcción está **bloqueada** hasta que Meta verifique a solvershub y apruebe su app de Tech Provider.
 - **Fecha:** 2026-11-07
-- **Contexto:** D-63 (docs), HU-CONN-18 (SPEC-08). Documentación de Twilio consultada el 2026-11-07: Tech Provider Program, su guía de integración, Senders API v2 y Self Sign-up.
+- **Contexto:** D-64 (docs), HU-CONN-18 (SPEC-08). Documentación de Twilio consultada el 2026-11-07: Tech Provider Program, su guía de integración, Senders API v2 y Self Sign-up.
 - **Usa:** ADR-0186 (conexión Twilio BYOK), ADR-0030 (wizard reanudable), ADR-0128 (Embedded Signup real), ADR-0094 (credenciales por conexión).
 
 ## Contexto
