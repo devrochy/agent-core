@@ -28,6 +28,7 @@ from opentelemetry.metrics import CallbackOptions, Observation
 
 from core.config import get_settings
 from core.observability import salud
+from core.observability.metricas_negocio import _etiqueta
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
@@ -116,7 +117,7 @@ def _observar_deps(_opciones: CallbackOptions) -> Iterable[Observation]:
 
 
 def _observar_crons(_opciones: CallbackOptions) -> Iterable[Observation]:
-    return [Observation(v, {"job": k[:80]}) for k, v in dict(_valores["crons"]).items()]
+    return [Observation(v, {"job": _etiqueta(k)}) for k, v in dict(_valores["crons"]).items()]
 
 
 _meter = metrics.get_meter("agent-core")
