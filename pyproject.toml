@@ -52,6 +52,10 @@ dependencies = [
     "qrcode[png]>=7.4",
     # Catálogo del centro de pruebas (SPEC-30): YAML de solvershub-docs
     "pyyaml>=6.0",
+    # Autoinstrumentación de trazas (ADR-0188): misma serie 0.66bN que semantic-conventions del SDK.
+    "opentelemetry-instrumentation-fastapi>=0.66b1",
+    "opentelemetry-instrumentation-sqlalchemy>=0.66b1",
+    "opentelemetry-instrumentation-httpx>=0.66b1",
 ]
 
 [project.optional-dependencies]

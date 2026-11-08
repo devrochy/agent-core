@@ -49,6 +49,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, UUID
 
 from core.config import get_settings
 from core.db.session import get_session
+from core.observability import metricas_negocio
 from core.observability.tracing import current_trace_id, get_tracer
 from core.shared import turno as turno_vigente
 from core.shared.logger import get_logger
@@ -83,6 +84,7 @@ class Turno:
     t0: float
     trace_id: str | None = None
     conversation_id: uuid.UUID | None = None
+    canal: str | None = None  # `conversations.channel`: solo para la métrica de duración (ADR-0188)
     inbound_message_ids: list[uuid.UUID] = field(default_factory=list)
     decidido: bool = False
     outcome: str | None = None
@@ -204,6 +206,10 @@ async def _abrir_turno() -> AsyncIterator[Turno]:
                     span.set_attribute("outcome", turno.outcome or "")
                     span.set_attribute("status", turno.status or "")
     finally:
+        # Duración por canal y resultado (ADR-0188); sin cabecera, `sin_decision`.
+        metricas_negocio.turno(
+            turno.canal, turno.status if turno.decidido else "sin_decision", turno.ms() / 1000
+        )
         # Blindado: si algún día se decide en otra task (otro contexto), `reset` lanzaría
         # `ValueError`; eso no debe tapar el resultado del turno ni dejarlo pegado.
         try:
@@ -251,6 +257,8 @@ async def decidir(
     turno.outcome = outcome
     turno.blocked_by = blocked_by
     turno.conversation_id = conversation.id
+    canal = getattr(conversation, "channel", None)
+    turno.canal = canal if isinstance(canal, str) else None
     if status is not None:
         turno.status = status
     # Las columnas del router solo valen en un turno enrutado (`ck_core_decisions_routed` y

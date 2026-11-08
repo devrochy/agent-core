@@ -55,8 +55,26 @@ async def run_connector() -> None:
     await connector.run()
 
 
+def _configurar_sentry() -> None:
+    """Sentry como en la API y el worker (no-op sin SENTRY_ENABLED/SENTRY_DSN), con `role=connector`
+    para separar sus errores en el proyecto."""
+    from core.observability.sentry_setup import configure_sentry
+
+    configure_sentry()
+    settings = get_settings()
+    if settings.sentry_enabled and settings.sentry_dsn:
+        import sentry_sdk
+
+        sentry_sdk.set_tag("role", "connector")
+
+
 def main() -> None:
     configure_logging()
+    _configurar_sentry()
+
+    from core.observability.metricas import configure_metrics, shutdown_metrics
+
+    configure_metrics()  # no-op sin OTEL_METRICS_ENABLED (ADR-0188)
 
     def _stop(*_: object) -> None:
         raise KeyboardInterrupt
@@ -66,6 +84,8 @@ def main() -> None:
         asyncio.run(run_connector())
     except KeyboardInterrupt:
         log.info("waweb_connector_stopped")
+    finally:
+        shutdown_metrics()
 
 
 if __name__ == "__main__":

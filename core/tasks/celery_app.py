@@ -11,7 +11,13 @@ from typing import Any
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import beat_init, setup_logging, worker_init
+from celery.signals import (
+    beat_init,
+    setup_logging,
+    worker_init,
+    worker_process_init,
+    worker_process_shutdown,
+)
 
 from core.config import get_settings
 from core.shared.logger import configure_logging, get_logger
@@ -398,3 +404,26 @@ def _load_plugins_on_beat_start(sender: object = None, **_kwargs: object) -> Non
         if refrescar is not None:
             refrescar(force=True)
         log.info("beat_schedule_cargado", tareas=sorted(scheduler.schedule))
+    # El beat es un solo proceso: el proveedor de métricas va aquí (ADR-0188); al salir lo
+    # vacía el `atexit` del SDK.
+    from core.observability.metricas import configure_metrics
+
+    configure_metrics()
+
+
+@worker_process_init.connect
+def _metricas_en_el_hijo(**_kwargs: object) -> None:
+    """Métricas en cada hijo del prefork (ADR-0188), no en el padre: el hilo del lector
+    periódico no sobrevive al fork. Con `--pool=solo` Celery emite la señal en el propio
+    proceso, así que también aplica."""
+    from core.observability.metricas import configure_metrics
+
+    configure_metrics()
+
+
+@worker_process_shutdown.connect
+def _metricas_al_salir_el_hijo(**_kwargs: object) -> None:
+    """El hijo sale sin pasar por `atexit`: se exporta lo pendiente aquí."""
+    from core.observability.metricas import shutdown_metrics
+
+    shutdown_metrics()
