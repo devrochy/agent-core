@@ -1527,19 +1527,23 @@ async def save_message_templates(
         if plantilla is None:
             from core.gateway.twilio import plantillas_en_uso as twilio_tpl
 
-            de_twilio = next(
-                (
-                    t
-                    for t in await twilio_tpl.del_negocio(principal.tenant_id, solo_aprobadas=False)
-                    if t.friendly_name == nombre and t.language == idioma
-                ),
-                None,
-            )
-            if de_twilio is None:
+            # Plantilla de Twilio (ADR-0186): sus variables son `{{1}}`, `{{2}}`… del cuerpo. El mismo nombre puede
+            # existir en varias conexiones (el aviso usa la de cada conversación): todas tienen que pedir las mismas.
+            de_twilio = [
+                t
+                for t in await twilio_tpl.del_negocio(principal.tenant_id, solo_aprobadas=False)
+                if t.friendly_name == nombre and t.language == idioma
+            ]
+            if not de_twilio:
                 errores[evento] = f"No existe la plantilla {nombre} ({idioma}) en tus conexiones."
                 continue
-            # Plantilla de Twilio (ADR-0186): sus variables son `{{1}}`, `{{2}}`… del cuerpo.
-            placeholders_twilio = twilio_tpl.placeholders(de_twilio.body)
+            distintas = {tuple(twilio_tpl.placeholders(t.body)) for t in de_twilio}
+            if len(distintas) > 1:
+                errores[evento] = (
+                    f"La plantilla {nombre} ({idioma}) tiene variables distintas en tus conexiones de Twilio."
+                )
+                continue
+            placeholders_twilio = list(next(iter(distintas)))
             if isinstance(entrada.variables, dict):
                 if set(entrada.variables) != set(placeholders_twilio):
                     errores[evento] = "Las variables no coinciden con las de la plantilla."

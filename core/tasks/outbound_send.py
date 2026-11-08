@@ -324,11 +324,15 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
                 # de red no la arregla. La de Twilio (ADR-0186) va por su `ContentSid`.
                 try:
                     if provider == "twilio":
-                        from core.gateway.twilio.plantillas_en_uso import contenido_de
+                        from core.gateway.twilio.plantillas_en_uso import contenido_de, enviable
 
                         contenido = contenido_de(message.template_components)
                         if contenido is None:
                             raise ChannelError("La plantilla de Twilio no trae su ContentSid")
+                        if not await enviable(tenant_id, conversation.connection_id, contenido[0]):
+                            raise ChannelError(
+                                "La plantilla ya no está aprobada en la conexión actual de la conversación"
+                            )
                         wamid = await adapter.send_content_template(
                             credentials, customer.external_id, contenido[0], contenido[1]
                         )

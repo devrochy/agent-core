@@ -283,3 +283,53 @@ async def test_plantilla_de_otra_conexion_del_mismo_negocio(negocios, app_client
         json={"template_id": str(ajena_id), "variables": {"1": "x"}},
     )
     assert r.status_code == 404
+
+
+async def test_mismo_nombre_en_dos_conexiones(negocios, app_client) -> None:
+    """El mismo nombre en otra conexión de Twilio del negocio: el mapa exige las mismas variables en todas, y el envío
+    solo acepta el ContentSid de la conexión actual de la conversación."""
+    from core.db.models import TwilioContentTemplate
+    from core.db.session import get_session
+    from core.gateway.twilio import alta
+    from core.gateway.twilio.plantillas_en_uso import enviable
+    from core.shared.tenant import tenant_scope
+
+    a, b = negocios
+    ac = "AC" + uuid.uuid4().hex
+    e164 = f"+1555{uuid.uuid4().int % 10_000_000:07d}"
+    async with tenant_scope(a["tid"]):
+        otra = await alta.conectar(
+            a["tid"], account_sid=ac, auth_token="tok", sender_sid=XE, transport=_twilio(ac, e164)
+        )
+        async with get_session() as s:
+            s.add(
+                TwilioContentTemplate(
+                    tenant_id=a["tid"],
+                    channel_connection_id=otra.connection_id,
+                    content_sid="HX" + uuid.uuid4().hex,
+                    friendly_name="recordatorio_cita",
+                    whatsapp_name="recordatorio_cita",
+                    language="es",
+                    category="UTILITY",
+                    body="Hola {{1}}",
+                    types={"twilio/text": {"body": "Hola {{1}}"}},
+                    approval_status="approved",
+                )
+            )
+        assert await enviable(a["tid"], a["connection_id"], a["sid"]) is True
+        assert await enviable(a["tid"], otra.connection_id, a["sid"]) is False
+    # Otro negocio no puede validar el HX de A, ni con la conexión de A.
+    async with tenant_scope(b["tid"]):
+        assert await enviable(b["tid"], a["connection_id"], a["sid"]) is False
+
+    h = await api_headers(app_client, a["tid"])
+    bueno = {
+        "template": "recordatorio_cita",
+        "language": "es",
+        "variables": ["cliente.nombre", "cita.fecha"],
+    }
+    r = await app_client.put(
+        "/api/v1/admin/settings/message-templates", headers=h, json={"mapping": {EVENTO: bueno}}
+    )
+    assert r.status_code == 400, r.text
+    assert "distintas" in r.text

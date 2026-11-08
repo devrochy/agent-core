@@ -35,6 +35,10 @@ def _fila(body="Hola {{1}}, tu cita es el {{2}}") -> TwilioContentTemplate:
     )
 
 
+def test_placeholders_con_numero_desmedido_no_revientan():
+    assert tpl.placeholders("Hola {{1}} " + "{{" + "9" * 5000 + "}}") == ["1"]
+
+
 def test_placeholders_y_vista_previa():
     fila = _fila()
     assert tpl.placeholders(fila.body) == ["1", "2"]
@@ -95,7 +99,11 @@ def _fixture_twilio(monkeypatch, adapter):
             {"account_sid": "AC" + "1" * 32, "auth_token": "t", "from": "whatsapp:+15550001111"},
         )
 
+    async def _enviable(tenant_id, connection_id, content_sid):
+        return content_sid == HX
+
     monkeypatch.setattr(mod, "resolve_credentials", _creds)
+    monkeypatch.setattr(tpl, "enviable", _enviable)
     return msg, tenant_id, calls
 
 
@@ -157,3 +165,21 @@ async def test_canal_sin_plantillas_es_permanente_tambien_en_meta(monkeypatch):
     msg.template_components = []
     error = await _send_one(msg.id, tenant_id)
     assert error is not None and error.category == "PERMANENT"
+
+
+async def test_plantilla_que_ya_no_es_de_la_conexion_actual_es_permanente(monkeypatch):
+    """El cliente escribió por otro número del negocio después de encolar: el HX de la conexión A no sale por B."""
+    from core.tasks.outbound_send import _send_one
+
+    async def _nunca(*a, **k):
+        raise AssertionError("no debe enviarse")
+
+    adapter = SimpleNamespace(send_text=_nunca, send_image=_nunca, send_content_template=_nunca)
+    msg, tenant_id, calls = _fixture_twilio(monkeypatch, adapter)
+    otra = _fila()
+    otra.content_sid = "HX" + "c" * 32  # `enviable` solo reconoce HX en la conexión actual
+    msg.template_name = "recordatorio"
+    msg.template_components = tpl.componentes(otra, {"1": "Ana", "2": "lunes"})
+    error = await _send_one(msg.id, tenant_id)
+    assert error is not None and error.category == "PERMANENT" and error.provider == "twilio"
+    assert calls["release"] == 1

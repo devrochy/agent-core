@@ -21,7 +21,7 @@ from core.db.session import get_session
 from core.kernel.mensajes.saneo import clean_param
 
 TIPO_COMPONENTE = "twilio_content"
-_PLACEHOLDER = re.compile(r"\{\{\s*(\d+)\s*\}\}")
+_PLACEHOLDER = re.compile(r"\{\{\s*(\d{1,3})\s*\}\}")
 _SID_HX = re.compile(r"^HX[0-9a-f]{32}$")
 # Solo las de texto (`twilio/text`): una con botones o media enviaría algo distinto de lo que se muestra (PR-7i).
 _SOLO_TEXTO = text(
@@ -97,7 +97,11 @@ async def aprobadas(conversation: Any) -> list[TwilioContentTemplate]:
                         TwilioContentTemplate.deleted_at.is_(None),
                         _SOLO_TEXTO,
                     )
-                    .order_by(TwilioContentTemplate.friendly_name, TwilioContentTemplate.language)
+                    .order_by(
+                        TwilioContentTemplate.friendly_name,
+                        TwilioContentTemplate.language,
+                        TwilioContentTemplate.id,
+                    )
                 )
             ).scalars()
         )
@@ -135,3 +139,27 @@ async def del_negocio(
         return list(
             (await session.execute(stmt.order_by(TwilioContentTemplate.friendly_name))).scalars()
         )
+
+
+async def enviable(tenant_id: uuid.UUID, connection_id: uuid.UUID | None, content_sid: str) -> bool:
+    """¿El `ContentSid` encolado sigue vivo, aprobado y de texto en la conexión ACTUAL de la conversación?
+
+    La plantilla se elige contra la conexión de la conversación al encolarla, pero el envío lee de nuevo
+    `conversation.connection_id` (que un entrante por otro número del negocio puede cambiar) y la plantilla puede
+    pausarse o borrarse mientras espera. Sin esta comprobación saldría el HX de una conexión por el número de otra."""
+    if connection_id is None:
+        return False
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                select(TwilioContentTemplate.id).where(
+                    TwilioContentTemplate.tenant_id == tenant_id,
+                    TwilioContentTemplate.channel_connection_id == connection_id,
+                    TwilioContentTemplate.content_sid == content_sid,
+                    TwilioContentTemplate.approval_status == "approved",
+                    TwilioContentTemplate.deleted_at.is_(None),
+                    _SOLO_TEXTO,
+                )
+            )
+        ).first()
+    return fila is not None
