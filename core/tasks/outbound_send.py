@@ -357,14 +357,35 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
                 # Botones de respuesta (HU-AOS-09): el sender ya validó canal, ventana y topes. Si
                 # la conexión dejó de ser de Meta o el payload no sirve, el `ChannelError` es
                 # permanente: reintentarlo como error de red no lo arregla.
+                # En Twilio (ADR-0186 §9) sale como un Content de su forma, con el cuerpo, los títulos y los ids en
+                # variables. Sin texto de respaldo aquí, igual que en Meta: quien no acepta degradar (opciones
+                # directas, confirmaciones) ya decidió antes de encolar.
                 try:
-                    wamid = await adapter.send_interactive(
-                        credentials, customer.external_id, dict(message.interactive)
-                    )
+                    if provider == "twilio":
+                        from core.gateway.twilio import interactivos
+
+                        wamid = await interactivos.enviar(
+                            tenant_id,
+                            conversation.connection_id,
+                            credentials,
+                            customer.external_id,
+                            dict(message.interactive),
+                            outbound=adapter,
+                        )
+                    else:
+                        wamid = await adapter.send_interactive(
+                            credentials, customer.external_id, dict(message.interactive)
+                        )
                 except ProviderError:
                     raise  # el error ya clasificado del proveedor decide su reintento
                 except ChannelError as exc:
                     await _release_claim(message.id, message.conversation_id, tenant_id)
+                    if provider == "twilio":
+                        return ProviderError(
+                            f"Mensaje interactivo no enviable: {exc}",
+                            provider="twilio",
+                            category="PERMANENT",
+                        )
                     return GraphError(
                         f"Mensaje interactivo no enviable: {exc}", category="PERMANENT"
                     )
