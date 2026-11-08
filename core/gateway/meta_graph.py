@@ -24,6 +24,7 @@ from core.db.models import GraphApiCall
 from core.db.session import get_session
 from core.gateway.meta_errors import GraphError, classify_and_build_error
 from core.gateway.meta_usage import record_usage
+from core.observability import metricas_negocio
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 
@@ -121,6 +122,7 @@ async def graph_fetch(
     )
 
     if error is not None:
+        metricas_negocio.error_graph(error.category)
         raise error
 
     assert response is not None  # si no hubo error de red, siempre hay response acá

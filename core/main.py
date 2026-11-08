@@ -28,6 +28,7 @@ from core.config import get_settings
 from core.gateway.twilio.webhook import router as twilio_webhook_router
 from core.gateway.webhooks import router as webhooks_router
 from core.mcp.host import mcp_host
+from core.observability.salud import router as salud_router
 from core.orchestrator.consumer import consume_loop
 from core.orchestrator.debounce import poll_debounce_loop, recover_orphaned_conversations
 from core.plugin_manager import plugin_manager
@@ -48,6 +49,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     configure_sentry()  # no-op sin SENTRY_ENABLED/SENTRY_DSN
 
+    from core.observability.metricas import configure_metrics, shutdown_metrics
+
+    configure_metrics()  # no-op sin OTEL_METRICS_ENABLED (ADR-0188)
+
     # 1. Detectar y registrar plugins (entry_points)
     plugin_manager.scan()
     await plugin_manager.sync_registry()
@@ -66,11 +71,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 4. Tasks de fondo: consumer del stream + poller del debounce
     consumer_task = asyncio.create_task(consume_loop())
     debounce_task = asyncio.create_task(poll_debounce_loop())
+    # 5. Sondas de métricas (ADR-0188): solo rol api y con OTEL_METRICS_ENABLED.
+    from core.observability.sondas import arrancar as arrancar_sondas
+
+    sondas_task = arrancar_sondas()
 
     yield
 
     consumer_task.cancel()
     debounce_task.cancel()
+    if sondas_task is not None:
+        sondas_task.cancel()
+    shutdown_metrics()  # exporta lo pendiente antes de salir
     log.info("shutdown")
 
 
@@ -83,6 +95,10 @@ app = FastAPI(
     # y de ahí se generan los tipos TS del panel/app (ADR-0077).
     openapi_url=None,
 )
+# Spans por petición con OTEL_ENABLED (ADR-0188), sin `/healthz*` ni la query de la URL.
+from core.observability.tracing import instrumentar_app  # noqa: E402
+
+instrumentar_app(app)
 app.add_exception_handler(ApiError, api_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 
@@ -98,6 +114,8 @@ app.add_exception_handler(AccesoError, acceso_error_handler)
 app.include_router(webhooks_router)
 # WhatsApp vía Twilio (ADR-0186): `/webhooks/twilio/{public_id}/inbound|status`.
 app.include_router(twilio_webhook_router)
+# `/healthz/deep` (ADR-0188): pública por el prefijo `/healthz` del middleware.
+app.include_router(salud_router)
 app.include_router(admin_router)
 # API JSON unificada (ADR-0076/0077): se autentica sola por realms.
 app.include_router(api_router)
@@ -213,6 +231,12 @@ async def tenant_context_middleware(request: Request, call_next):
             if access is None or (write and access != "write"):
                 return _forbidden(request)
         return await call_next(request)
+
+
+# Duración por grupo de ruta (ADR-0188): sin `/healthz*` y sin la ruta exacta (cardinalidad).
+from core.observability.metricas_negocio import MetricasHttpMiddleware  # noqa: E402
+
+app.add_middleware(MetricasHttpMiddleware)
 
 
 @app.get("/")

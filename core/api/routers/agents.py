@@ -432,7 +432,7 @@ async def patch_agent(
     except svc.AgenteNoEncontrado:
         raise ApiError.not_found("Agente no encontrado.") from None
     except svc.Conflicto as exc:
-        raise ApiError(409, "conflict", str(exc)) from None
+        raise ApiError(409, exc.codigo, str(exc)) from None
     return _summary(agente, versiones[0].version if versiones else None)
 
 
