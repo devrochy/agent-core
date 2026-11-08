@@ -35,6 +35,9 @@ _EXTRA_DENYLIST = [
     "limpios", "entrada", "data", "value", "guardado", "contenido",
     # Acceso del dueño (ADR-0175): el enlace de un solo uso y lo que lo arma o lo lleva.
     "enlace", "inv", "nonce", "token_nonce",
+    # Conector de WhatsApp Web (ADR-0188): el evento entrante y el trabajo de salida llevan el texto y
+    # el teléfono del cliente; `qr` es el código de vinculación vigente.
+    "event", "qr", "job", "text", "sender", "jid", "to", "raw",
 ]
 _configured = False
 
