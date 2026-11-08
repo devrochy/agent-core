@@ -27,6 +27,7 @@ from core.api.errors import ApiError, api_error_handler, validation_error_handle
 from core.config import get_settings
 from core.gateway.webhooks import router as webhooks_router
 from core.mcp.host import mcp_host
+from core.observability.salud import router as salud_router
 from core.orchestrator.consumer import consume_loop
 from core.orchestrator.debounce import poll_debounce_loop, recover_orphaned_conversations
 from core.plugin_manager import plugin_manager
@@ -95,6 +96,8 @@ async def acceso_error_handler(_request: Request, exc: AccesoError) -> JSONRespo
 app.add_exception_handler(AccesoError, acceso_error_handler)
 
 app.include_router(webhooks_router)
+# `/healthz/deep` (ADR-0188): pública por el prefijo `/healthz` del middleware.
+app.include_router(salud_router)
 app.include_router(admin_router)
 # API JSON unificada (ADR-0076/0077): se autentica sola por realms.
 app.include_router(api_router)
