@@ -659,6 +659,9 @@ async def connection_action(
     # clave y sus dominios están en Configuración → Chat web.
     if existing is None or administrada_aparte(existing):
         raise ApiError.not_found("Conexión no encontrada.")
+    if existing.provider == "twilio":
+        # Como el alta (ADR-0186): pausar, borrar o marcar principal un número de Twilio es del propietario o el master.
+        require_owner_or_master(principal)
 
     if payload.action == "delete":
         from core.api.step_up import confirmar_password

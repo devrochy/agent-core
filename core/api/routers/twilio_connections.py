@@ -28,7 +28,7 @@ _CANAL = "whatsapp_twilio"
 _ERRORES = {
     404: {"description": "Twilio no está habilitado para este negocio, o la conexión no existe."},
     409: {
-        "description": "`sender_ya_conectado`, `cuenta_en_otro_negocio` o `twilio_account_suspended`."
+        "description": "`sender_ya_conectado`, `cuenta_en_otro_negocio`, `twilio_account_suspended` o `conflicto`."
     },
     422: {
         "description": "`twilio_credentials_invalid`, `sender_not_found`, `sender_not_online` o "
@@ -39,7 +39,8 @@ _ERRORES = {
 
 
 class TwilioCredencialesIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Un SID pegado con un espacio al final se limpia antes de validar el largo, en vez de rechazarse.
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     account_sid: str = Field(
         min_length=34, max_length=34, description="Account SID de Twilio (`AC…`)."

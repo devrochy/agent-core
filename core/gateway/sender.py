@@ -310,7 +310,8 @@ async def resolve_credentials(
         if connection.provider == "twilio":
             # WhatsApp vía Twilio (ADR-0186): sin respaldo. Sin credenciales, el envío falla (no sale por la
             # primaria ni por el número de la plataforma).
-            if not connection.credentials_encrypted:
+            if not connection.credentials_encrypted or connection.deleted_at is not None or not connection.active:
+                # Borrada o pausada: no envía, aunque guarde credenciales (el número pudo pasar a otro negocio).
                 return "twilio", {}
             from core.gateway.twilio.alta import credenciales_de_envio
 

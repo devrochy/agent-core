@@ -129,7 +129,8 @@ async def _sql(tid: uuid.UUID | None, sql: str, **params: Any) -> list[Any]:
 
     async with tenant_scope(tid):
         async with get_session() as session:
-            return list((await session.execute(text(sql), params)).all())
+            resultado = await session.execute(text(sql), params)
+            return list(resultado.all()) if resultado.returns_rows else []
 
 
 async def test_alta_guarda_registra_webhooks_y_es_idempotente(negocios) -> None:
@@ -336,3 +337,61 @@ async def test_api_bandera_catalogo_y_alta(negocios, app_client, monkeypatch) ->
     r = await app_client.get("/api/v1/admin/connections/manual/whatsapp_twilio", headers=h)
     assert r.status_code == 404
     await _bandera(tid, False)
+
+
+async def test_borrada_o_pausada_no_envia_y_la_cuenta_falla_cerrada(negocios) -> None:
+    from core.gateway.sender import resolve_credentials
+    from core.shared.tenant import tenant_scope
+
+    tid, _ = negocios
+    twilio = TwilioFalso(_numero())
+    hecha = await _conectar(tid, twilio)
+    for cambio, deshacer in (
+        ("active = false", "active = true"),
+        ("deleted_at = now(), active = false", "deleted_at = null, active = true"),
+    ):
+        await _sql(
+            tid, f"update channel_connections set {cambio} where id = :c", c=hecha.connection_id
+        )
+        async with tenant_scope(tid):
+            provider, creds = await resolve_credentials(hecha.connection_id, expected_tenant_id=tid)
+        assert (provider, creds) == ("twilio", {}), cambio
+        await _sql(
+            tid, f"update channel_connections set {deshacer} where id = :c", c=hecha.connection_id
+        )
+
+    # Sin la fila viva de `twilio_connections`, tampoco.
+    await _sql(
+        tid,
+        "update twilio_connections set deleted_at = now() where channel_connection_id = :c",
+        c=hecha.connection_id,
+    )
+    async with tenant_scope(tid):
+        provider, creds = await resolve_credentials(hecha.connection_id, expected_tenant_id=tid)
+    assert creds == {}
+
+    # Sin negocio en el scope, «una cuenta, un negocio» responde que sí está tomada (falla cerrada).
+    assert await _sql(None, "select twilio_account_en_otro_negocio(:a)", a="AC" + "0" * 32) == [
+        (True,)
+    ]
+
+
+async def test_colaborador_con_escritura_no_pausa_ni_revela(negocios, app_client) -> None:
+    from test_opciones_api import _headers
+
+    tid, _ = negocios
+    hecha = await _conectar(tid, TwilioFalso(_numero()))
+    h = await _headers(app_client, tid, rol="colaborador", secciones={"connections": "write"})
+    base = f"/api/v1/admin/connections/{hecha.connection_id}"
+    r = await app_client.post(f"{base}/action", headers=h, json={"action": "deactivate"})
+    assert r.status_code == 403, r.text
+    r = await app_client.post(
+        "/api/v1/admin/connections/twilio/discover",
+        headers=h,
+        json={"account_sid": AC, "auth_token": "x"},
+    )
+    assert r.status_code in (403, 404), r.text
+    [(activa,)] = await _sql(
+        tid, "select active from channel_connections where id = :c", c=hecha.connection_id
+    )
+    assert activa is True

@@ -16,7 +16,7 @@ Cuatro piezas, todas aditivas:
    cuál es. Devuelve solo `(tenant_id, channel_connection_id)` de una conexión no borrada; nada más se lee sin el
    `tenant_scope`. No filtra `active`: el webhook lo comprueba ya dentro del negocio (una conexión pausada responde
    200 sin procesar, para que Twilio no reintente).
-4. `twilio_account_en_otro_negocio(account_sid, tenant_id)`, SECURITY DEFINER: una cuenta de Twilio, un negocio.
+4. `twilio_account_en_otro_negocio(account_sid)`, SECURITY DEFINER (el negocio sale de `app.tenant_id`): una cuenta de Twilio, un negocio.
    El Auth Token de la cuenta firma los webhooks de todos sus números; si dos negocios compartieran la cuenta, uno
    podría firmar webhooks válidos para el `public_id` del otro y hacerse pasar por sus clientes. Devuelve solo un
    booleano. (Varias cuentas en un negocio, o varios números de una cuenta en el mismo negocio, sí.)
@@ -50,6 +50,9 @@ _TS = sa.DateTime(timezone=True)
 _AHORA = sa.text("now()")
 _TABLA = "twilio_connections"
 _ESTADOS = "'pending','connected','degraded','revoked','error'"
+# Como 0063/0073: las funciones SECURITY DEFINER corren con el rol que las crea. Sin BYPASSRLS, la RLS forzada de
+# `twilio_connections` las limitaría al negocio en curso y «una cuenta, un negocio» fallaría abierta sin avisar.
+_PUEDE_SALTAR_RLS = "select rolsuper or rolbypassrls from pg_roles where rolname = current_user"
 
 
 def _rls(table: str) -> None:
@@ -64,6 +67,11 @@ def _rls(table: str) -> None:
 
 
 def upgrade() -> None:
+    if not op.get_bind().execute(sa.text(_PUEDE_SALTAR_RLS)).scalar():
+        raise RuntimeError(
+            "0121: el rol de migraciones no es superusuario ni tiene BYPASSRLS. Las funciones SECURITY DEFINER "
+            "de Twilio quedarían sujetas a la RLS forzada. Corre la migración con el dueño de la base."
+        )
     op.create_table(
         _TABLA,
         sa.Column("id", _UUID, primary_key=True),
@@ -147,30 +155,34 @@ def upgrade() -> None:
     op.execute("REVOKE ALL ON FUNCTION twilio_route_connection(text) FROM PUBLIC")
     op.execute(
         f"""
-        CREATE OR REPLACE FUNCTION twilio_account_en_otro_negocio(p_account_sid text, p_tenant_id uuid)
+        CREATE OR REPLACE FUNCTION twilio_account_en_otro_negocio(p_account_sid text)
         RETURNS boolean
         LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
-            SELECT EXISTS (
-                SELECT 1
-                FROM {_TABLA} tc
-                JOIN channel_connections cc
-                  ON cc.id = tc.channel_connection_id AND cc.tenant_id = tc.tenant_id
-                WHERE tc.account_sid = p_account_sid
-                  AND tc.tenant_id <> p_tenant_id
-                  AND tc.deleted_at IS NULL
-                  AND cc.deleted_at IS NULL
-            )
+            -- El negocio es el del `tenant_scope` en curso, no un argumento. Sin negocio, falla cerrada (true).
+            SELECT CASE
+                WHEN nullif(current_setting('app.tenant_id', true), '') IS NULL THEN true
+                ELSE EXISTS (
+                    SELECT 1
+                    FROM {_TABLA} tc
+                    JOIN channel_connections cc
+                      ON cc.id = tc.channel_connection_id AND cc.tenant_id = tc.tenant_id
+                    WHERE tc.account_sid = p_account_sid
+                      AND tc.tenant_id <> nullif(current_setting('app.tenant_id', true), '')::uuid
+                      AND tc.deleted_at IS NULL
+                      AND cc.deleted_at IS NULL
+                )
+            END
         $$;
         """
     )
-    op.execute("REVOKE ALL ON FUNCTION twilio_account_en_otro_negocio(text, uuid) FROM PUBLIC")
+    op.execute("REVOKE ALL ON FUNCTION twilio_account_en_otro_negocio(text) FROM PUBLIC")
     op.execute(
         """
         DO $do$
         BEGIN
             IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_runtime') THEN
                 GRANT EXECUTE ON FUNCTION twilio_route_connection(text) TO app_runtime;
-                GRANT EXECUTE ON FUNCTION twilio_account_en_otro_negocio(text, uuid) TO app_runtime;
+                GRANT EXECUTE ON FUNCTION twilio_account_en_otro_negocio(text) TO app_runtime;
             END IF;
         END $do$;
         """
@@ -178,7 +190,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP FUNCTION IF EXISTS twilio_account_en_otro_negocio(text, uuid)")
+    op.execute("DROP FUNCTION IF EXISTS twilio_account_en_otro_negocio(text)")
     op.execute("DROP FUNCTION IF EXISTS twilio_route_connection(text)")
     op.execute("DROP INDEX IF EXISTS uq_channel_connections_twilio_sender_viva")
     op.execute(f"drop policy if exists tenant_isolation on {_TABLA}")

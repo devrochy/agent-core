@@ -21,3 +21,10 @@
   - Revelar el Auth Token pide ser propietario o master.
   - Una conexión de Twilio no se puede convertir en otro tipo desde el formulario manual.
 - **Pendiente para el PR-5**: el borrado lógico de la conexión todavía no marca `twilio_connections` ni restaura los webhooks previos. El ruteo ya lo descarta, porque mira `channel_connections.deleted_at`.
+- **Revisión cruzada del #716**:
+  - 0121 exige un rol con BYPASSRLS, como 0063 y 0073. Sin él, las funciones SECURITY DEFINER quedarían sujetas a la RLS y «una cuenta, un negocio» fallaría abierta.
+  - `twilio_account_en_otro_negocio(account_sid)` toma el negocio de `app.tenant_id` y, si no hay negocio, falla cerrada.
+  - Una conexión de Twilio borrada, pausada o sin fila viva no envía, aunque tenga credenciales guardadas.
+  - Pausar, borrar o marcar como principal una conexión de Twilio exige ser propietario o master.
+  - Los demás choques de integridad responden 409 `conflicto`, sin el texto de la base.
+  - Los SID se limpian de espacios antes de validarlos.

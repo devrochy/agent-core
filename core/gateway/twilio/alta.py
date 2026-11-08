@@ -265,8 +265,8 @@ async def conectar(
                 )
             # Una cuenta, un negocio: su Auth Token firma los webhooks de todos sus números (migración 0121).
             en_otro = await session.execute(
-                text("select twilio_account_en_otro_negocio(:a, :t)"),
-                {"a": client.account_sid, "t": tenant_id},
+                text("select twilio_account_en_otro_negocio(:a)"),
+                {"a": client.account_sid},
             )
             if en_otro.scalar():
                 raise AltaError(
@@ -327,7 +327,12 @@ async def conectar(
             raise AltaError(
                 409, "sender_ya_conectado", "Este número ya está conectado en otro negocio."
             ) from None
-        raise
+        # Otro choque de la base (CHECK de formato, `public_id` repetido): sin el texto de la base en la respuesta.
+        restriccion = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        log.warning("twilio_alta_integrity_error", constraint=restriccion)
+        raise AltaError(
+            409, "conflicto", "No se pudo guardar la conexión. Intenta de nuevo."
+        ) from None
 
     status, last_error, sender_status, display_name = await _registrar_webhooks(
         client, sender.sid, inbound_url, status_url
@@ -442,11 +447,14 @@ async def credenciales_de_envio(
             )
         )
     ).first()
+    if fila is None:
+        # Sin su fila viva (desconectada o a medio crear) la conexión no envía (ADR-0186): sin respaldo.
+        return {}
     salida = {
         "account_sid": creds.get("account_sid", ""),
         "auth_token": creds.get("auth_token", ""),
         "from": f"whatsapp:{creds['sender_e164']}" if creds.get("sender_e164") else "",
     }
-    if fila is not None and fila[0]:
+    if fila[0]:
         salida["status_callback_url"] = str(fila[0])
     return salida
