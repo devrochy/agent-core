@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentcore-channel-twilio"
+version = "0.1.0"
+description = "Canal WhatsApp vía Twilio (BYOK, ADR-0186) para agent-core"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.entry-points."agent_core.channels"]
+twilio = "agentcore_channel_twilio"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agentcore_channel_twilio*"]
