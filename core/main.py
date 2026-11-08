@@ -25,6 +25,7 @@ from core.admin.views import router as admin_router
 from core.api import api_router
 from core.api.errors import ApiError, api_error_handler, validation_error_handler
 from core.config import get_settings
+from core.gateway.twilio.webhook import router as twilio_webhook_router
 from core.gateway.webhooks import router as webhooks_router
 from core.mcp.host import mcp_host
 from core.observability.salud import router as salud_router
@@ -111,6 +112,8 @@ async def acceso_error_handler(_request: Request, exc: AccesoError) -> JSONRespo
 app.add_exception_handler(AccesoError, acceso_error_handler)
 
 app.include_router(webhooks_router)
+# WhatsApp vía Twilio (ADR-0186): `/webhooks/twilio/{public_id}/inbound|status`.
+app.include_router(twilio_webhook_router)
 # `/healthz/deep` (ADR-0188): pública por el prefijo `/healthz` del middleware.
 app.include_router(salud_router)
 app.include_router(admin_router)

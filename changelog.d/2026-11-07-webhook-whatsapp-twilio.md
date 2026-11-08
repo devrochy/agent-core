@@ -1,0 +1,34 @@
+## Webhook de WhatsApp vía Twilio (PR-4, ADR-0186) (2026-11-07)
+
+- **Rutas públicas** `POST /webhooks/twilio/{public_id}/inbound` y `/status` (`core/gateway/twilio/webhook.py`):
+  - El negocio sale solo de la ruta, con `twilio_route_connection`. Si no existe responde 404.
+  - La firma `X-Twilio-Signature` se verifica con el Auth Token de la conexión contra la URL **registrada**. Además, el `AccountSid` debe ser el de la conexión. Si falla, 403 y alerta por firmas repetidas.
+  - Una conexión pausada o un negocio no operativo reciben 200 y no se procesa nada.
+  - Responde TwiML vacío (`text/xml`).
+  - El cuerpo tiene un tope de 64 KiB.
+- **Idempotencia** en las mismas tres capas que Meta:
+  - La auditoría de webhooks guarda `meta_app_id = "twilio:<AccountSid>"` y `MessageSid` (o `MessageSid:estado`). Solo guarda campos de diagnóstico, nunca el texto del mensaje.
+  - `claim_message_once`.
+  - El stream.
+- `publish_inbound_message`: el `xadd` al stream del core, extraído del webhook de Meta, que ahora usan los dos webhooks.
+- **Estados**: `parse_status` → `apply_status_update`, la misma máquina que Meta. Un estado nunca retrocede y `undelivered` queda como `failed` con su código.
+- **Ventana de 24 h**: cada entrante de Twilio la refresca, igual que en Meta.
+- **Media**: `core/media/twilio_media.py` descarga `MediaUrlN` con auth básica, solo contra `api.twilio.com`. Sigue un único redirect, sin credenciales, hacia el CDN de Twilio o S3. Usa el mismo tope y la misma clasificación de errores que Meta.
+- `resolve_credentials`: el respaldo a la conexión primaria ya no puede caer en una conexión de Twilio.
+- **Ajuste a ADR-0186 §6**: se reutiliza la auditoría de webhooks existente en vez de crear una tabla `twilio_webhook_events`. Los SID de Twilio son únicos en todo Twilio, la FK a la conexión de Meta queda NULL y así se aprovecha la alerta de eventos atascados.
+- **Pendiente**: registrar la baja por 21610 (STOP total, distinto del 131050 de Meta) llega con los envíos a segmentos (PR-7b). Los costos llegan en el PR-5.
+- **Auditoría multitenant** (sin hallazgos altos):
+  - El `To` firmado tiene que ser el número de la conexión. Si no, no se publica: la conversación nacería sin conexión y su respuesta podría salir por la primaria o por el número de la plataforma.
+  - El cuerpo se lee por partes con tope, sin confiar en `Content-Length`.
+  - La descarga de media acepta solo `MediaUrl` de un mensaje de la cuenta de la conexión (ruta anclada al `AccountSid`).
+  - S3 queda acotado a `s3[.-]…amazonaws.com`.
+  - Las dos respuestas se leen en streaming con tope.
+- **Revisión cruzada del #717**:
+  - El stream lleva el `connection_id` que el webhook ya validó y el consumer lo usa primero, filtrando por negocio y proveedor. Si se borra o pausa la conexión en medio, la conversación igual queda con su conexión y el envío falla cerrado. Un entrante de Twilio sin conexión se descarta: ya no se crea una conversación sin ruta.
+  - `publish_inbound_message` libera el claim si falla el encolado, para que el reintento del proveedor no llegue como duplicado. Aplica también a Meta.
+  - Con la conexión pausada, los estados de entrega de mensajes ya enviados se siguen aplicando.
+  - Se aclara que la auditoría no deduplica.
+  - Nuevos tests de aislamiento entre negocios:
+    - una firma de A contra el `public_id` de B;
+    - un estado firmado por A con un SID que solo existe en B;
+    - un número que pasa de un negocio a otro.

@@ -748,40 +748,63 @@ async def _dispatch_entry_messages(
     messages = adapter.parse_inbound(mini_payload)
     enqueued = 0
     duplicates = 0
-    redis = get_redis()
-
     for message in messages:
-        if not await claim_message_once(tenant_id, message.provider, message.external_message_id):
+        resultado = await publish_inbound_message(tenant_id, message)
+        if resultado == "duplicate":
             duplicates += 1
-            continue
-
-        if message.media:
-            processed = await _try_process_media(message)
-            if processed is None:
-                # Cuota de audio/OCR agotada: se descarta el mensaje (ADR-0045).
-                continue
-            message = processed
-
-        await redis.xadd(
-            INBOUND_STREAM,
-            {
-                "tenant_id": str(tenant_id),
-                "provider": message.provider,
-                "channel": message.channel,
-                "external_message_id": message.external_message_id,
-                "customer_external_id": message.customer_external_id,
-                "customer_name": message.customer_name or "",
-                "content": message.content,
-                "connection_external_id": message.connection_external_id,
-                "media": json.dumps(message.media),
-                "media_context": message.media_context,
-                # Solo si el cliente tocó un botón o una fila de lista (HU-AOS-05).
-                **({"interactive_id": message.interactive_id} if message.interactive_id else {}),
-            },
-        )
-        enqueued += 1
-
+        elif resultado == "enqueued":
+            enqueued += 1
     return enqueued, duplicates
+
+
+async def publish_inbound_message(
+    tenant_id: uuid.UUID, message: Any, *, connection_id: uuid.UUID | None = None
+) -> str:
+    """Publica un mensaje entrante ya verificado en el stream del core (capa 2 de idempotencia incluida).
+    Devuelve `"enqueued"`, `"duplicate"` (ya visto: Meta o Twilio reintentan) o `"dropped"` (cuota de medios
+    agotada, ADR-0045). Lo usan el webhook de Meta y el de Twilio (ADR-0186). `connection_id` es la conexión que el
+    webhook ya validó (Twilio): viaja en el stream para que el consumer no la vuelva a buscar por número.
+
+    Si algo falla después del claim (cuota, Redis), el claim se libera: el reintento del proveedor no llega como
+    duplicado y el mensaje no se pierde."""
+    from core.gateway.idempotency import release_message_claim
+
+    if not await claim_message_once(tenant_id, message.provider, message.external_message_id):
+        return "duplicate"
+    try:
+        return await _publicar(tenant_id, message, connection_id)
+    except Exception:
+        await release_message_claim(tenant_id, message.provider, message.external_message_id)
+        raise
+
+
+async def _publicar(tenant_id: uuid.UUID, message: Any, connection_id: uuid.UUID | None) -> str:
+    if message.media:
+        processed = await _try_process_media(message)
+        if processed is None:
+            # Cuota de audio/OCR agotada: se descarta el mensaje (ADR-0045).
+            return "dropped"
+        message = processed
+
+    await get_redis().xadd(
+        INBOUND_STREAM,
+        {
+            "tenant_id": str(tenant_id),
+            "provider": message.provider,
+            "channel": message.channel,
+            "external_message_id": message.external_message_id,
+            "customer_external_id": message.customer_external_id,
+            "customer_name": message.customer_name or "",
+            "content": message.content,
+            "connection_external_id": message.connection_external_id,
+            "media": json.dumps(message.media),
+            "media_context": message.media_context,
+            # Solo si el cliente tocó un botón o una fila de lista (HU-AOS-05).
+            **({"interactive_id": message.interactive_id} if message.interactive_id else {}),
+            **({"connection_id": str(connection_id)} if connection_id else {}),
+        },
+    )
+    return "enqueued"
 
 
 _TEMPLATE_WEBHOOK_FIELDS = {
