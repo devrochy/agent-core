@@ -47,6 +47,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     configure_sentry()  # no-op sin SENTRY_ENABLED/SENTRY_DSN
 
+    from core.observability.metricas import configure_metrics, shutdown_metrics
+
+    configure_metrics()  # no-op sin OTEL_METRICS_ENABLED (ADR-0188)
+
     # 1. Detectar y registrar plugins (entry_points)
     plugin_manager.scan()
     await plugin_manager.sync_registry()
@@ -70,6 +74,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     consumer_task.cancel()
     debounce_task.cancel()
+    shutdown_metrics()  # exporta lo pendiente antes de salir
     log.info("shutdown")
 
 
