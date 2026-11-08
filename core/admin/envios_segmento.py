@@ -81,6 +81,7 @@ MOTIVOS = {
     "promocion_reciente": f"Recibió otra promoción hace menos de {DIAS_ENTRE_PROMOCIONES} días",
     "no_permitido_en_test": "No permitido en test",
     "conexion_pausada": "Conexión pausada",
+    "otra_conexion": "Escribió por otra conexión después de armar el envío",
     "sin_nombre": "Sin nombre y sin valor de respaldo",
 }
 
@@ -336,7 +337,7 @@ async def conexion_de_envio(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> C
         label=conexion.label or conexion.external_id,
         cuenta=conexion.meta_connection_id,
         phone_number_id=conexion.external_id,
-        proveedor="twilio" if conexion.meta_connection_id is None else "meta",
+        proveedor=conexion.provider,
     )
 
 
@@ -367,18 +368,19 @@ def _plantilla_de_twilio(t: Any) -> Plantilla:
 
 
 async def plantillas_de_la_conexion(
-    tenant_id: uuid.UUID, connection_id: uuid.UUID, cuenta: uuid.UUID | None
+    tenant_id: uuid.UUID, connection_id: uuid.UUID, proveedor: str, cuenta: uuid.UUID | None
 ) -> list[Plantilla]:
-    """Plantillas `MARKETING` aprobadas de la conexión: las de su WABA en Meta (`cuenta`) o las suyas en Twilio."""
-    if cuenta is not None:
-        return [_plantilla_de_meta(t) for t in await plantillas_de_marketing(tenant_id, cuenta)]
-    from core.gateway.twilio import plantillas_en_uso as tpl
+    """Plantillas `MARKETING` aprobadas de la conexión: las suyas en Twilio o las de su WABA en Meta (`cuenta`)."""
+    if proveedor == "twilio":
+        from core.gateway.twilio import plantillas_en_uso as tpl
 
-    return [
-        _plantilla_de_twilio(t)
-        for t in await tpl.aprobadas_de_conexion(tenant_id, connection_id)
-        if (t.category or "").upper() == "MARKETING"
-    ]
+        return [
+            _plantilla_de_twilio(t)
+            for t in await tpl.aprobadas_de_conexion(tenant_id, connection_id)
+            if (t.category or "").upper() == "MARKETING"
+        ]
+    assert cuenta is not None  # `es_conexion_de_envio`
+    return [_plantilla_de_meta(t) for t in await plantillas_de_marketing(tenant_id, cuenta)]
 
 
 async def plantillas_de_marketing(tenant_id: uuid.UUID, cuenta: uuid.UUID) -> list[MessageTemplate]:
@@ -499,7 +501,12 @@ async def vista_previa(
 
     conexion = await conexion_de_envio(tenant_id, connection_id)
     plantilla = next(
-        (t for t in await plantillas_de_la_conexion(tenant_id, conexion.id, conexion.cuenta) if t.id == template_id), None
+        (
+            t
+            for t in await plantillas_de_la_conexion(tenant_id, conexion.id, conexion.proveedor, conexion.cuenta)
+            if t.id == template_id
+        ),
+        None,
     )
     if plantilla is None:
         raise EnvioError(404, "template_not_found", "Plantilla de marketing no aprobada en esa conexión.")
@@ -784,6 +791,7 @@ async def procesar_lote(send_id: str, lote: int = 1, **_: Any) -> None:
         consentimientos = await estados_de_consentimiento(session, tenant_id, [r.customer_id for r, _c, _k in pendientes])
         plantilla = await _plantilla_del_envio(session, envio)
         variables = dict(envio.variables or {})
+        conexion_del_envio = envio.connection_id
 
     for destinatario, conversacion, cliente in pendientes:
         if consentimientos.get(cliente.id) != "otorgado":
@@ -791,6 +799,11 @@ async def procesar_lote(send_id: str, lote: int = 1, **_: Any) -> None:
             continue
         if plantilla is None:
             await _marcar(destinatario.id, "omitido", motivo="plantilla_no_aprobada")
+            continue
+        if conversacion.connection_id != conexion_del_envio:
+            # Escribió por otro número del negocio después de la vista previa: la promoción saldría por un número que
+            # el dueño no eligió, con una plantilla que puede ser de otro proveedor.
+            await _marcar(destinatario.id, "omitido", motivo="otra_conexion")
             continue
         if await motivo_pausa_de_conversacion(conversacion):
             await _marcar(destinatario.id, "omitido", motivo="conexion_pausada")

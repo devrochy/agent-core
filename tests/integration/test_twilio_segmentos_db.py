@@ -2,7 +2,8 @@
 
 - La conexión de Twilio aparece con sus plantillas de marketing aprobadas y de texto, y no con las demás.
 - Vista previa, confirmación y lotes como en Meta; cada mensaje lleva el `ContentSid` y sale por Twilio.
-- Reprocesar un lote no duplica; una plantilla que deja de estar aprobada se omite.
+- Reprocesar un lote no duplica; una plantilla que deja de estar aprobada o un cliente que escribió por otra conexión
+  se omiten.
 - El 21610 de Twilio da de baja al cliente una sola vez, no escala y no se deshace desde la ficha.
 - Otra conexión o negocio: 404; conexión pausada: 409.
 
@@ -289,6 +290,30 @@ async def test_plantilla_que_deja_de_estar_aprobada_se_omite(app_client, encolad
     assert motivos == [("plantilla_no_aprobada",)]
 
 
+async def test_cliente_que_escribio_por_otra_conexion_se_omite(app_client, encolados) -> None:
+    from core.gateway.twilio import alta
+    from core.shared.tenant import tenant_scope
+
+    n = await _negocio()
+    h = await api_headers(app_client, n["tid"])
+    envio = await _confirmado(app_client, n, h)
+    ac = "AC" + uuid.uuid4().hex
+    e164 = f"+1555{uuid.uuid4().int % 10_000_000:07d}"
+    async with tenant_scope(n["tid"]):
+        otra = await alta.conectar(n["tid"], account_sid=ac, auth_token="tok", sender_sid=XE, transport=_alta(ac, e164))
+    await _sql(n["tid"], "update conversations set connection_id = :o where id = :c", o=otra.connection_id, c=n["conv_eva"])
+
+    assert await _lotes(n["tid"], envio) == 1
+    assert len(encolados) == 1  # solo ana
+    motivos = await _sql(
+        n["tid"],
+        "select motivo from segment_send_recipients where send_id = :s and customer_id = :c",
+        s=envio,
+        c=n["eva"],
+    )
+    assert motivos == [("otra_conexion",)]
+
+
 async def test_plantillas_ajenas_y_conexion_pausada(app_client) -> None:
     a, b = await _negocio(), await _negocio()
     h = await api_headers(app_client, a["tid"])
@@ -299,6 +324,22 @@ async def test_plantillas_ajenas_y_conexion_pausada(app_client) -> None:
     for plantilla in (utilidad, b["promo"]):
         r = await app_client.post(f"{ACC}/vista-previa", json=_cuerpo(a, plantilla), headers=h)
         assert (r.status_code, r.json()["error"]["code"]) == (404, "template_not_found"), r.text
+    # Tampoco la de otra conexión de Twilio del mismo negocio.
+    from core.db.session import get_session
+    from core.gateway.twilio import alta
+    from core.shared.tenant import tenant_scope
+
+    ac = "AC" + uuid.uuid4().hex
+    e164 = f"+1555{uuid.uuid4().int % 10_000_000:07d}"
+    async with tenant_scope(a["tid"]):
+        otra = await alta.conectar(a["tid"], account_sid=ac, auth_token="tok", sender_sid=XE, transport=_alta(ac, e164))
+        async with get_session() as s:
+            ajena = _plantilla(a["tid"], otra.connection_id, "promo_de_la_otra")
+            s.add(ajena)
+            await s.flush()
+            ajena_id = ajena.id
+    r = await app_client.post(f"{ACC}/vista-previa", json=_cuerpo(a, ajena_id), headers=h)
+    assert (r.status_code, r.json()["error"]["code"]) == (404, "template_not_found"), r.text
     # La conexión de otro negocio no existe para este.
     r = await app_client.post(f"{ACC}/vista-previa", json=_cuerpo(b), headers=h)
     assert r.status_code == 404, r.text
@@ -306,7 +347,9 @@ async def test_plantillas_ajenas_y_conexion_pausada(app_client) -> None:
     await _sql(a["tid"], "update channel_connections set active = false where id = :c", c=a["conexion"])
     r = await app_client.post(f"{ACC}/vista-previa", json=_cuerpo(a), headers=h)
     assert (r.status_code, r.json()["error"]["code"]) == (409, "connection_paused"), r.text
-    [conexion] = (await app_client.get(f"{ACC}/conexiones", headers=h)).json()
+    conexion = next(
+        c for c in (await app_client.get(f"{ACC}/conexiones", headers=h)).json() if c["id"] == str(a["conexion"])
+    )
     assert conexion["motivo_pausa"]
 
 

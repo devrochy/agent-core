@@ -165,7 +165,7 @@ async def conexiones_para_envio(
         ).scalars().all()
     salida = []
     for c in conexiones:
-        plantillas = await envios.plantillas_de_la_conexion(tenant_id, c.id, c.meta_connection_id)
+        plantillas = await envios.plantillas_de_la_conexion(tenant_id, c.id, c.provider, c.meta_connection_id)
         salida.append(
             ConexionDeEnvioOut(
                 id=c.id,
