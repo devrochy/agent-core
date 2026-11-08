@@ -17,7 +17,11 @@ pausa por uso de la API el sender descarta ese id (`sender.py`).
 
 Consentimiento (D-SPEC-33-5): solo reciben los clientes cuya última fila de
 `customer_consents` está `otorgado`. Lo marca el dueño en la ficha, con evidencia; la baja llega
-por palabras clave del cliente o por el error 131050 de Meta.
+por palabras clave del cliente o por el error del proveedor (131050 de Meta, 21610 de Twilio).
+
+Proveedores: la conexión es de WhatsApp Cloud o de Twilio (ADR-0186, PR-7b). `Plantilla` es lo que
+el envío necesita de cualquiera de las dos; `template_id` apunta a `message_templates` o a
+`twilio_content_templates` según el proveedor de la conexión del envío.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ import hashlib
 import re
 import unicodedata
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -63,8 +68,8 @@ MAX_CANDIDATOS = 5000
 LOTE = 25
 PREFIJO = "segmento"
 PROPOSITO = "promociones"
-# Bajas que no se deshacen desde la ficha (D-SPEC-33-9): la pidió el cliente o la impuso Meta.
-ORIGENES_DE_BAJA_DEL_CLIENTE = frozenset({"palabra_de_baja", "meta_131050"})
+# Bajas que no se deshacen desde la ficha (D-SPEC-33-9): la pidió el cliente o la impuso el proveedor.
+ORIGENES_DE_BAJA_DEL_CLIENTE = frozenset({"palabra_de_baja", "meta_131050", "twilio_21610"})
 MAX_NOMBRE = 60  # el nombre lo puede escribir el agente: se acota como en ADR-0108
 
 MOTIVOS = {
@@ -76,6 +81,7 @@ MOTIVOS = {
     "promocion_reciente": f"Recibió otra promoción hace menos de {DIAS_ENTRE_PROMOCIONES} días",
     "no_permitido_en_test": "No permitido en test",
     "conexion_pausada": "Conexión pausada",
+    "otra_conexion": "Escribió por otra conexión después de armar el envío",
     "sin_nombre": "Sin nombre y sin valor de respaldo",
 }
 
@@ -274,13 +280,42 @@ async def registrar_baja_si_corresponde(
 class ConexionDeEnvio:
     id: uuid.UUID
     label: str
-    cuenta: uuid.UUID  # meta_connections.id
+    cuenta: uuid.UUID | None  # meta_connections.id; None en Twilio
     phone_number_id: str
+    proveedor: str = "meta"
+
+
+@dataclass(frozen=True)
+class Plantilla:
+    """Una plantilla de marketing aprobada, de Meta o de Twilio: lo único que el envío necesita saber de ella."""
+
+    id: uuid.UUID
+    nombre: str
+    idioma: str
+    placeholders: list[str]
+    texto: Callable[[dict[str, str]], str]
+    componentes: Callable[[dict[str, str]], list[dict[str, Any]]]
+
+
+def es_conexion_de_envio(conexion: ChannelConnection) -> bool:
+    """WhatsApp con plantillas aprobadas: Cloud (con cuenta de Meta) o Twilio. WhatsApp Web y las manuales no."""
+    return conexion.channel == "whatsapp" and (
+        conexion.meta_connection_id is not None or conexion.provider == "twilio"
+    )
+
+
+async def motivo_pausa_de_conexion(conexion: ChannelConnection) -> str | None:
+    """Por qué no se puede enviar por esa conexión: la pausa de su cuenta de Meta o, sin cuenta (Twilio), la propia."""
+    from core.gateway.meta_connection_state import motivo_pausa_de, motivo_pausa_propia
+
+    if conexion.meta_connection_id is not None:
+        return await motivo_pausa_de(conexion.meta_connection_id)
+    return motivo_pausa_propia(active=bool(conexion.active), deleted=conexion.deleted_at is not None)
 
 
 async def conexion_de_envio(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> ConexionDeEnvio:
-    """La conexión de WhatsApp Cloud por la que sale el envío. Las de WhatsApp Web o manuales no
-    tienen plantillas aprobadas y quedan fuera."""
+    """La conexión de WhatsApp por la que sale el envío: Cloud o Twilio. Las de WhatsApp Web o
+    manuales no tienen plantillas aprobadas y quedan fuera."""
     async with get_session() as session:
         conexion = (
             await session.execute(
@@ -293,18 +328,59 @@ async def conexion_de_envio(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> C
         ).scalar_one_or_none()
     if conexion is None:
         raise EnvioError(404, "not_found", "Conexión no encontrada.")
-    if conexion.channel != "whatsapp" or conexion.meta_connection_id is None:
+    if not es_conexion_de_envio(conexion):
         raise EnvioError(400, "conexion_sin_plantillas", "Esa conexión no envía plantillas de WhatsApp.")
-    from core.gateway.meta_connection_state import motivo_pausa_de
-
-    if motivo := await motivo_pausa_de(conexion.meta_connection_id):
+    if motivo := await motivo_pausa_de_conexion(conexion):
         raise EnvioError(409, "connection_paused", f"{motivo}: reactívala en Conexiones para enviar.")
     return ConexionDeEnvio(
         id=conexion.id,
         label=conexion.label or conexion.external_id,
         cuenta=conexion.meta_connection_id,
         phone_number_id=conexion.external_id,
+        proveedor=conexion.provider,
     )
+
+
+def _plantilla_de_meta(t: MessageTemplate) -> Plantilla:
+    from core.gateway.event_notices import build_components, render_body, template_placeholders
+
+    return Plantilla(
+        id=t.id,
+        nombre=t.name,
+        idioma=t.language,
+        placeholders=template_placeholders(t.components),
+        texto=lambda valores: render_body(t, valores),
+        componentes=lambda valores: build_components(t, valores),
+    )
+
+
+def _plantilla_de_twilio(t: Any) -> Plantilla:
+    from core.gateway.twilio import plantillas_en_uso as tpl
+
+    return Plantilla(
+        id=t.id,
+        nombre=t.friendly_name,
+        idioma=t.language,
+        placeholders=tpl.placeholders(t.body),
+        texto=lambda valores: tpl.vista_previa(t, valores),
+        componentes=lambda valores: tpl.componentes(t, valores),
+    )
+
+
+async def plantillas_de_la_conexion(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID, proveedor: str, cuenta: uuid.UUID | None
+) -> list[Plantilla]:
+    """Plantillas `MARKETING` aprobadas de la conexión: las suyas en Twilio o las de su WABA en Meta (`cuenta`)."""
+    if proveedor == "twilio":
+        from core.gateway.twilio import plantillas_en_uso as tpl
+
+        return [
+            _plantilla_de_twilio(t)
+            for t in await tpl.aprobadas_de_conexion(tenant_id, connection_id)
+            if (t.category or "").upper() == "MARKETING"
+        ]
+    assert cuenta is not None  # `es_conexion_de_envio`
+    return [_plantilla_de_meta(t) for t in await plantillas_de_marketing(tenant_id, cuenta)]
 
 
 async def plantillas_de_marketing(tenant_id: uuid.UUID, cuenta: uuid.UUID) -> list[MessageTemplate]:
@@ -422,13 +498,19 @@ async def vista_previa(
     variables: dict[str, dict[str, str]],
 ) -> VistaPrevia:
     from core.billing.tarifario import TARIFARIO_VIGENTE
-    from core.gateway.event_notices import render_body, template_placeholders
 
     conexion = await conexion_de_envio(tenant_id, connection_id)
-    plantilla = next((t for t in await plantillas_de_marketing(tenant_id, conexion.cuenta) if t.id == template_id), None)
+    plantilla = next(
+        (
+            t
+            for t in await plantillas_de_la_conexion(tenant_id, conexion.id, conexion.proveedor, conexion.cuenta)
+            if t.id == template_id
+        ),
+        None,
+    )
     if plantilla is None:
         raise EnvioError(404, "template_not_found", "Plantilla de marketing no aprobada en esa conexión.")
-    variables = validar_variables(template_placeholders(plantilla.components), variables)
+    variables = validar_variables(plantilla.placeholders, variables)
 
     sub = consulta.subquery()
     async with get_session() as session:
@@ -542,7 +624,7 @@ async def vista_previa(
         elegibles=len(destinatarios),
         excluidos=excluidos,
         muestra=muestra,
-        texto=render_body(plantilla, {p: (v["valor"] or f"{{{{{p}}}}}") for p, v in variables.items()}),
+        texto=plantilla.texto({p: (v["valor"] or f"{{{{{p}}}}}") for p, v in variables.items()}),
         costo_creditos=str(TARIFARIO_VIGENTE.fees["template_sent"] * len(destinatarios)),
         tope=TOPE_POR_ENVIO,
         bloqueo=bloqueo,
@@ -559,8 +641,8 @@ async def vista_previa(
             admin_label=admin_label,
             connection_id=conexion.id,
             template_id=plantilla.id,
-            template_name=plantilla.name,
-            template_language=plantilla.language,
+            template_name=plantilla.nombre,
+            template_language=plantilla.idioma,
             variables=variables,
             filtro=filtro,
             excluidos=excluidos,
@@ -674,7 +756,6 @@ async def procesar_lote(send_id: str, lote: int = 1, **_: Any) -> None:
     Corre bajo el `tenant_scope` del evento. Si la API de Meta está en pausa por uso, deja los
     pendientes como están y lanza para que el outbox reintente con backoff."""
     from core.events.outbox import emit_domain
-    from core.gateway.event_notices import build_components, render_body
     from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
     from core.gateway.meta_usage import connection_id_for_phone_number, is_paused
     from core.gateway.sender import send_template_to_conversation
@@ -708,19 +789,21 @@ async def procesar_lote(send_id: str, lote: int = 1, **_: Any) -> None:
             )
         ).all()
         consentimientos = await estados_de_consentimiento(session, tenant_id, [r.customer_id for r, _c, _k in pendientes])
-        plantilla = (
-            await session.execute(
-                select(MessageTemplate).where(MessageTemplate.id == envio.template_id, MessageTemplate.tenant_id == tenant_id)
-            )
-        ).scalar_one_or_none()
+        plantilla = await _plantilla_del_envio(session, envio)
         variables = dict(envio.variables or {})
+        conexion_del_envio = envio.connection_id
 
     for destinatario, conversacion, cliente in pendientes:
         if consentimientos.get(cliente.id) != "otorgado":
             await _marcar(destinatario.id, "omitido", motivo="baja" if consentimientos.get(cliente.id) == "revocado" else "sin_consentimiento")
             continue
-        if plantilla is None or plantilla.status != "APPROVED":
+        if plantilla is None:
             await _marcar(destinatario.id, "omitido", motivo="plantilla_no_aprobada")
+            continue
+        if conversacion.connection_id != conexion_del_envio:
+            # Escribió por otro número del negocio después de la vista previa: la promoción saldría por un número que
+            # el dueño no eligió, con una plantilla que puede ser de otro proveedor.
+            await _marcar(destinatario.id, "omitido", motivo="otra_conexion")
             continue
         if await motivo_pausa_de_conversacion(conversacion):
             await _marcar(destinatario.id, "omitido", motivo="conexion_pausada")
@@ -742,10 +825,10 @@ async def procesar_lote(send_id: str, lote: int = 1, **_: Any) -> None:
         try:
             enviado = await send_template_to_conversation(
                 conversacion.id,
-                template_name=plantilla.name,
-                language=plantilla.language,
-                components=build_components(plantilla, valores),
-                preview_text=render_body(plantilla, valores),
+                template_name=plantilla.nombre,
+                language=plantilla.idioma,
+                components=plantilla.componentes(valores),
+                preview_text=plantilla.texto(valores),
                 sender_type="human",
                 client_message_id=cmid,
             )
@@ -782,6 +865,34 @@ async def procesar_lote(send_id: str, lote: int = 1, **_: Any) -> None:
     log.info("envio_segmento_lote", send_id=send_id, lote=lote, enviados=len(pendientes), quedan=int(quedan))
 
 
+async def _plantilla_del_envio(session: Any, envio: SegmentSend) -> Plantilla | None:
+    """La plantilla del envío si sigue aprobada, o `None`. El proveedor sale de la conexión del envío."""
+    proveedor = (
+        await session.execute(
+            select(ChannelConnection.provider).where(
+                ChannelConnection.id == envio.connection_id, ChannelConnection.tenant_id == envio.tenant_id
+            )
+        )
+    ).scalar_one_or_none()
+    if proveedor == "twilio":
+        from core.gateway.twilio import plantillas_en_uso as tpl
+
+        return next(
+            (
+                _plantilla_de_twilio(t)
+                for t in await tpl.aprobadas_de_conexion(envio.tenant_id, envio.connection_id)
+                if t.id == envio.template_id
+            ),
+            None,
+        )
+    fila = (
+        await session.execute(
+            select(MessageTemplate).where(MessageTemplate.id == envio.template_id, MessageTemplate.tenant_id == envio.tenant_id)
+        )
+    ).scalar_one_or_none()
+    return _plantilla_de_meta(fila) if fila is not None and fila.status == "APPROVED" else None
+
+
 async def _phone_number_id_de(conversacion: Conversation) -> str | None:
     """`phone_number_id` de la conexión de la conversación (la misma que el sender)."""
     async with get_session() as session:
@@ -799,7 +910,7 @@ async def _phone_number_id_de(conversacion: Conversation) -> str | None:
 
 
 async def detalle(tenant_id: uuid.UUID, envio_id: uuid.UUID) -> tuple[SegmentSend, dict[str, int], list[tuple[str, str]]]:
-    """(envío, conteo por estado, fallas [(cliente, motivo)] hasta 50). Los estados de Meta
+    """(envío, conteo por estado, fallas [(cliente, motivo)] hasta 50). Los estados del proveedor
     (enviado, entregado, leído, fallido) salen del `Message`, que actualiza el webhook."""
     async with get_session() as session:
         envio = (

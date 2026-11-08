@@ -34820,7 +34820,7 @@
           "admin · leads"
         ],
         "summary": "Conexiones Para Envio",
-        "description": "Conexiones de WhatsApp Cloud del negocio con sus plantillas de marketing aprobadas.",
+        "description": "Conexiones de WhatsApp del negocio (Cloud o Twilio) con sus plantillas de marketing aprobadas.",
         "operationId": "conexiones_para_envio_api_v1_admin_leads_acciones_plantilla_conexiones_get",
         "parameters": [
           {

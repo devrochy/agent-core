@@ -1625,7 +1625,7 @@ class CustomerConsent(Base):
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     proposito: Mapped[str] = mapped_column(Text, nullable=False, default="promociones")
     estado: Mapped[str] = mapped_column(Text, nullable=False)  # otorgado | revocado | informado (0117)
-    # ficha | palabra_de_baja | meta_131050 | aviso_en_chat (0117)
+    # ficha | palabra_de_baja | meta_131050 | twilio_21610 | aviso_en_chat (0117)
     origen: Mapped[str] = mapped_column(Text, nullable=False)
     evidencia: Mapped[str] = mapped_column(Text, nullable=False, default="")
     actor_admin_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"))
