@@ -21,7 +21,9 @@ class WaWebInbound(InboundAdapter):
     provider = "waweb"
     channel = "whatsapp"
 
-    def verify_request(self, raw_body: bytes, headers: dict[str, str], secret: str) -> bool:
+    def verify_request(
+        self, raw_body: bytes, headers: dict[str, str], secret: str, *, url: str | None = None
+    ) -> bool:
         # El canal no recibe webhooks: no hay firma que verificar. El inbound lo
         # inyecta el proceso `connector` directamente al stream del core.
         return True

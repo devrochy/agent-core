@@ -27,6 +27,7 @@ from sqlalchemy import and_, or_, select
 from core.admin.envios_segmento import es_de_un_envio
 from core.db.models import Conversation, Customer, Message, utcnow
 from core.db.session import get_session
+from core.gateway.channels.base import ErrorCategory, ProviderError
 from core.gateway.channels.registry import CANALES_DE_MENSAJERIA_META, outbound_adapter_for
 from core.gateway.meta_errors import REENGAGEMENT_WINDOW_CODE, GraphError
 from core.gateway.sender import resolve_credentials
@@ -50,6 +51,16 @@ _POLICY_DEFER_TTL_S = 2 * 24 * 3600
 # Meta no entrega marketing a quien dejó de recibirlo (HU-CRM-06): se registra la baja.
 CODIGO_SIN_MARKETING = 131050
 
+# Categorías que ni el tiempo ni otro intento arreglan (ADR-0186): fallan al primer intento y no
+# van a la DLQ.
+CATEGORIAS_SIN_REINTENTO: frozenset[ErrorCategory] = frozenset(
+    {"PERMANENT", "AUTH", "CONFIG", "WINDOW", "OPT_OUT", "RECIPIENT", "CONTENT"}
+)
+# Cupo agotado del proveedor (63038 de Twilio): se reintenta a la hora, salvo que pida otro plazo.
+_QUOTA_RETRY_S = 3600.0
+# Timeout de lectura: el proveedor pudo haber enviado. Un solo reintento, para no duplicar más.
+_AMBIGUOUS_MAX_RETRIES = 1
+
 
 class ConexionPausadaError(GraphError):
     """La conexión de la conversación está pausada o eliminada (ADR-0122). Falla sin
@@ -65,26 +76,37 @@ class RetryDecision:
     countdown_s: float | None = None
 
 
-def decide_retry(exc: GraphError, attempts_made: int, max_attempts: int = MAX_ATTEMPTS) -> RetryDecision:
-    """Nunca usa el backoff genérico para códigos de rate limit de Meta --
-    usa `estimated_time_to_regain_access` (ya convertido a ms por
+def decide_retry(exc: ProviderError, attempts_made: int, max_attempts: int = MAX_ATTEMPTS) -> RetryDecision:
+    """Decide por la categoría del error, no por el código de cada proveedor (ADR-0186).
+
+    Nunca usa el backoff genérico para un rate limit: usa el plazo que dio el
+    proveedor (`estimated_time_to_regain_access` de Meta, ya convertido por
     `meta_errors._retry_after_from_usage`) tal cual. 131047 (re-engagement)
-    y AUTH nunca reintentan: ni el tiempo ni los reintentos cambian el
-    resultado."""
+    y las categorías de `CATEGORIAS_SIN_REINTENTO` nunca reintentan: ni el
+    tiempo ni los reintentos cambian el resultado."""
     if exc.category == "POLICY":
         # Rechazo anti-baneo de waweb (pausa o tope): no es un fallo de envío.
         # El mensaje sigue en cola y se reprograma (ADR-0103).
         return RetryDecision("defer")
 
-    if exc.code == REENGAGEMENT_WINDOW_CODE or exc.category in ("PERMANENT", "AUTH"):
+    if exc.category in CATEGORIAS_SIN_REINTENTO or (
+        exc.provider == "meta" and exc.code == REENGAGEMENT_WINDOW_CODE
+    ):
         return RetryDecision("fail_permanent")
 
     if attempts_made >= max_attempts:
         return RetryDecision("fail_permanent")
 
+    if exc.category == "AMBIGUOUS":
+        if attempts_made >= _AMBIGUOUS_MAX_RETRIES:
+            return RetryDecision("fail_permanent")
+        return RetryDecision("retry", _DEFAULT_RETRY_S)
+
     if exc.category == "RATE_LIMIT":
-        countdown_s = (exc.retry_after_ms or 60_000) / 1000
-        return RetryDecision("retry", countdown_s)
+        return RetryDecision("retry", exc.retry_after or _DEFAULT_RETRY_S)
+
+    if exc.category == "QUOTA":
+        return RetryDecision("retry", exc.retry_after or _QUOTA_RETRY_S)
 
     # TRANSIENT: backoff exponencial acotado (60s, 120s, 240s, tope 900s)
     countdown_s = min(_DEFAULT_RETRY_S * (2**attempts_made), 900.0)
@@ -194,8 +216,8 @@ async def _release_claim(
         pass
 
 
-async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError | None:
-    """Devuelve el `GraphError` si falló (para que el caller decida retry/DLQ),
+async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderError | None:
+    """Devuelve el `ProviderError` si falló (para que el caller decida retry/DLQ),
     `None` si se envió bien o si no había nada que hacer (idempotencia)."""
     async with tenant_scope(tenant_id):
         async with get_session() as session:
@@ -290,6 +312,8 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
                 # permanente: reintentarlo como error de red no lo arregla.
                 try:
                     wamid = await adapter.send_interactive(credentials, customer.external_id, dict(message.interactive))
+                except ProviderError:
+                    raise  # el error ya clasificado del proveedor decide su reintento
                 except ChannelError as exc:
                     await _release_claim(message.id, message.conversation_id, tenant_id)
                     return GraphError(f"Mensaje interactivo no enviable: {exc}", category="PERMANENT")
@@ -297,7 +321,7 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
                 wamid = await adapter.send_image(credentials, customer.external_id, message.media_url, message.content)
             else:
                 wamid = await adapter.send_text(credentials, customer.external_id, message.content)
-        except GraphError as exc:
+        except ProviderError as exc:
             await _release_claim(message.id, message.conversation_id, tenant_id)
             return exc
         except WaWebPolicyBlocked as exc:
@@ -322,7 +346,7 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> GraphError |
 
 
 async def _mark_failed(
-    message_id: uuid.UUID, tenant_id: uuid.UUID, exc: GraphError, *, dlq: bool, escalar: bool = True
+    message_id: uuid.UUID, tenant_id: uuid.UUID, exc: ProviderError, *, dlq: bool, escalar: bool = True
 ) -> tuple[uuid.UUID, object, uuid.UUID] | None:
     async with tenant_scope(tenant_id):
         async with get_session() as session:
@@ -337,9 +361,12 @@ async def _mark_failed(
                 )
                 return None
             db_message.status = "failed"
+            # Subcódigo y fbtrace_id solo existen en los errores de Meta.
+            error_subcode = getattr(exc, "error_subcode", None)
+            fbtrace_id = getattr(exc, "fbtrace_id", None)
             db_message.error_code = exc.code
-            db_message.error_subcode = exc.error_subcode
-            db_message.error_fbtrace_id = exc.fbtrace_id
+            db_message.error_subcode = error_subcode
+            db_message.error_fbtrace_id = fbtrace_id
             db_message.error_reason = exc.message
             db_message.status_updated_at = utcnow()
             conversation_id = db_message.conversation_id
@@ -350,14 +377,14 @@ async def _mark_failed(
         if dlq:
             log.error(
                 "outbound_dlq", message_id=str(message_id), tenant_id=str(tenant_id),
-                error_code=exc.code, error_subcode=exc.error_subcode, fbtrace_id=exc.fbtrace_id,
+                error_code=exc.code, error_subcode=error_subcode, fbtrace_id=fbtrace_id,
             )
 
         if de_un_envio:
             # HU-CRM-06 (ADR-0150): una promoción que no llega no escala la conversación ni pausa
             # al agente. Si el cliente dejó de recibir marketing (131050), queda la baja.
             escalar = False
-            if exc.code == CODIGO_SIN_MARKETING:
+            if exc.provider == "meta" and exc.code == CODIGO_SIN_MARKETING:
                 await _baja_por_meta(conversation_id, tenant_id, exc.message)
 
         if escalar:
@@ -420,7 +447,7 @@ async def _policy_eta(tenant_id: uuid.UUID):
 
 
 async def _handle_policy_defer(
-    message_id: uuid.UUID, tenant_id: uuid.UUID, error: GraphError
+    message_id: uuid.UUID, tenant_id: uuid.UUID, error: ProviderError
 ) -> None:
     """Reprograma un mensaje bloqueado por política anti-baneo.
 
@@ -466,7 +493,10 @@ def outbound_send_task(self, message_id: str, tenant_id: str) -> None:
         run_async(_handle_policy_defer(uuid.UUID(message_id), uuid.UUID(tenant_id), error))
         return
 
-    dlq = self.request.retries >= MAX_ATTEMPTS and error.category not in ("PERMANENT", "AUTH")
+    dlq = self.request.retries >= MAX_ATTEMPTS and error.category not in (
+        *CATEGORIAS_SIN_REINTENTO,
+        "AMBIGUOUS",  # pudo haber salido: queda `failed`, no se reencola desde la DLQ
+    )
     info = run_async(
         _mark_failed(
             uuid.UUID(message_id), uuid.UUID(tenant_id), error, dlq=dlq,
