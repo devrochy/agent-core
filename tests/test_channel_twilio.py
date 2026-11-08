@@ -647,6 +647,7 @@ def test_tabla_de_codigos(code, categoria):
 
 def test_codigo_desconocido_cae_por_estado_http():
     assert category_for_code(99999, 401) == "AUTH"
+    assert category_for_code(None, 403) == "AUTH"
     assert category_for_code(None, 429) == "RATE_LIMIT"
     assert category_for_code(99999, 400) == "PERMANENT"
     assert category_for_code(None, 503) == "TRANSIENT"
@@ -711,3 +712,56 @@ async def test_decide_retry_con_errores_de_twilio():
         == "retry"
     )
     assert decide_retry(error_from_response(httpx.Response(503)), 0).action == "retry"
+
+
+def test_la_tabla_entera_es_deliberada():
+    """Cambiar la categoría de un código (o agregar uno) obliga a tocar esta copia: así se revisa a propósito."""
+    assert CODE_CATEGORIES == {
+        20003: "AUTH",
+        30002: "AUTH",
+        30001: "TRANSIENT",
+        30008: "TRANSIENT",
+        20429: "RATE_LIMIT",
+        63018: "RATE_LIMIT",
+        63038: "QUOTA",
+        63016: "WINDOW",
+        21610: "OPT_OUT",
+        21211: "RECIPIENT",
+        21612: "RECIPIENT",
+        21614: "RECIPIENT",
+        63003: "RECIPIENT",
+        63024: "RECIPIENT",
+        63032: "RECIPIENT",
+        30003: "RECIPIENT",
+        30005: "RECIPIENT",
+        30006: "RECIPIENT",
+        21606: "CONFIG",
+        21608: "CONFIG",
+        21408: "CONFIG",
+        63007: "CONFIG",
+        63051: "CONFIG",
+        63112: "CONFIG",
+        63020: "CONFIG",
+        63005: "CONTENT",
+        63013: "CONTENT",
+        63021: "CONTENT",
+        63027: "CONTENT",
+        63028: "CONTENT",
+        63030: "CONTENT",
+        30007: "CONTENT",
+        63049: "PERMANENT",
+        30004: "PERMANENT",
+        20404: "PERMANENT",
+    }
+
+
+@pytest.mark.parametrize(("metodo", "esperada"), [("post", "AMBIGUOUS"), ("get", "TRANSIENT")])
+async def test_2xx_sin_json_queda_clasificado(metodo, esperada):
+    transport, _ = _transport(lambda r: httpx.Response(200, text="<html>ok</html>"))
+    client = TwilioClient(AC, TOKEN, transport=transport)
+    with pytest.raises(ProviderError) as exc:
+        if metodo == "post":
+            await client.post_form(f"{client.account_url}/Messages.json", [("Body", "x")], op="t")
+        else:
+            await client.get(f"{client.account_url}.json", op="t")
+    assert exc.value.category == esperada

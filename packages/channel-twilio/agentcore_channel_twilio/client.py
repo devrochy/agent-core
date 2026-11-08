@@ -168,7 +168,26 @@ class TwilioClient:
             )
             if response.status_code == 204 or not response.content:
                 return {}
-            return response.json()
+            try:
+                body = response.json()
+            except ValueError:
+                body = None
+            if not isinstance(body, dict):
+                # 2xx con un cuerpo que no es JSON: en un POST no se sabe si Twilio lo hizo. Clasificado, nunca
+                # un `ValueError` suelto que el envío reintentaría como transitorio (y duplicaría).
+                category = "TRANSIENT" if idempotent else "AMBIGUOUS"
+                log.warning(
+                    "twilio_api_cuerpo_invalido",
+                    op=op,
+                    status=response.status_code,
+                    category=category,
+                )
+                raise ProviderError(
+                    "Twilio respondió sin un cuerpo JSON válido",
+                    provider="twilio",
+                    category=category,
+                )
+            return body
 
         error = error_from_response(response)
         log.warning(

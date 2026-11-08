@@ -2,7 +2,7 @@
 
 `decide_retry` decide por la categoría, no por el código. Los títulos de cada código están en
 https://www.twilio.com/docs/api/errors/<código> (leídos el 2026-11-07). Un código que no está aquí
-cae por su estado HTTP: 401 es AUTH, 429 RATE_LIMIT, otro 4xx PERMANENT y 5xx TRANSIENT.
+cae por su estado HTTP: 401 y 403 son AUTH, 429 RATE_LIMIT, otro 4xx PERMANENT y 5xx TRANSIENT.
 
 Lo mismo sirve para el `ErrorCode` de un status callback (`category_for_code`): ahí no hay
 reintento, pero la categoría dice si hay que registrar una baja (OPT_OUT) o degradar la conexión.
@@ -15,8 +15,13 @@ import httpx
 from core.gateway.channels.base import ErrorCategory, ProviderError, category_for_http_status
 
 CODE_CATEGORIES: dict[int, ErrorCategory] = {
-    # Credenciales incorrectas, caducadas o de otra cuenta.
+    # Credenciales incorrectas, caducadas o de otra cuenta; cuenta suspendida.
     20003: "AUTH",
+    30002: "AUTH",
+    # Cola de salida llena: la documentación dice reintentar. Error desconocido del operador: reintentable con
+    # condiciones según la documentación.
+    30001: "TRANSIENT",
+    30008: "TRANSIENT",
     # Concurrencia de la REST API (HTTP 429) y tasa del canal o del sender.
     20429: "RATE_LIMIT",
     63018: "RATE_LIMIT",
@@ -28,6 +33,7 @@ CODE_CATEGORIES: dict[int, ErrorCategory] = {
     21610: "OPT_OUT",
     # Destinatario: número inválido, sin WhatsApp, inválido para Meta, o en un experimento de Meta.
     21211: "RECIPIENT",
+    21612: "RECIPIENT",
     21614: "RECIPIENT",
     63003: "RECIPIENT",
     63024: "RECIPIENT",
@@ -43,15 +49,19 @@ CODE_CATEGORIES: dict[int, ErrorCategory] = {
     63007: "CONFIG",
     63051: "CONFIG",
     63112: "CONFIG",
+    63020: "CONFIG",
     # Contenido: rechazado por el canal o violación de su política, filtrado.
     63005: "CONTENT",
     63013: "CONTENT",
+    63021: "CONTENT",
+    63027: "CONTENT",
+    63028: "CONTENT",
+    63030: "CONTENT",
     30007: "CONTENT",
     # Meta decidió no entregar un mensaje de marketing. No es una baja del cliente: no se registra
     # como OPT_OUT, solo no se reintenta.
     63049: "PERMANENT",
     30004: "PERMANENT",
-    30008: "PERMANENT",
     20404: "PERMANENT",
 }
 
@@ -61,7 +71,7 @@ _MAX_MESSAGE = 300
 def category_for_code(code: int | None, http_status: int | None = None) -> ErrorCategory:
     if code is not None and code in CODE_CATEGORIES:
         return CODE_CATEGORIES[code]
-    if http_status == 401:
+    if http_status in (401, 403):
         return "AUTH"
     return category_for_http_status(http_status)
 
