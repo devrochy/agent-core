@@ -36,11 +36,13 @@ Después hay que redesplegar los cuatro recursos. Un restart en Coolify reconstr
    - `metricas_sin_endpoint`: falta `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`.
    - `metricas_sdk_no_disponible`: el Python de la imagen no trae `_ctypes`, algo que no debería pasar con `python:3.12-slim`.
 2. **Sondas.** En la API aparece `sondas_arrancadas`. Si sale `sonda_fallo` con `sonda=…` y `error_type`, esa medición no llega y solo ella falta.
-3. **Salud profunda.** Con todo sano debe devolver 200 y `{"status":"ok","componentes":{"db":"ok","redis":"ok","worker":"ok"}}`:
+3. **Salud profunda.** Desde el host, con todo sano debe devolver 200 y `{"status":"ok","componentes":{"db":"ok","redis":"ok","worker":"ok"}}`:
 
    ```bash
-   curl -s https://test.solvershub.site/healthz/deep
+   curl -s http://127.0.0.1:3013/healthz/deep
    ```
+
+   `https://test.solvershub.site/healthz/deep` no sirve para esta comprobación: devuelve el 404 del panel, porque el túnel de test no enruta esa ruta a la API.
 
 4. **Grafana**, en Explore → Prometheus, con `deployment_environment="test"`. Si Grafana Cloud no promueve ese atributo del recurso a etiqueta, hay que filtrar uniendo con `target_info` (o promoverlo en Alloy):
    - `agentcore_dependency_up` en 1 para db y redis.
