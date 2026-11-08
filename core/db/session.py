@@ -27,7 +27,12 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 def get_engine():  # type: ignore[no-untyped-def]
     global _engine
     if _engine is None:
-        _engine = create_async_engine(get_settings().database_url, pool_pre_ping=True)
+        # `hide_parameters`: el mensaje de un error de SQL no lleva los valores (`[parameters: …]`),
+        # que podían ser datos de un cliente y terminar en un log, un span o Sentry (ADR-0188).
+        _engine = create_async_engine(get_settings().database_url, pool_pre_ping=True, hide_parameters=True)
+        from core.observability.tracing import instrumentar_engine
+
+        instrumentar_engine(_engine)  # spans de SQL con OTEL_ENABLED (ADR-0188)
     return _engine
 
 
