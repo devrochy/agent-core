@@ -368,9 +368,12 @@ CAPACIDADES_POR_TIPO: dict[str, CapacidadesCanal] = {
     ),
     # Por QR (neonize): solo texto entrante y saliente, sin plantillas ni ventana (ADR-0103).
     "whatsapp_waweb": TEXTO_CON_MENU,
-    # WhatsApp vía Twilio (ADR-0186): misma ventana de 24 h que Meta y, fuera de ella, plantilla aprobada de la Content
-    # API (PR-7a). Botones y lista llegan con el PR-7i.
-    "whatsapp_twilio": CapacidadesCanal(plantilla_aprobada=True, ventana_24h=True),
+    # WhatsApp vía Twilio (ADR-0186): botones y lista dentro de la ventana de 24 h como Content `twilio/quick-reply` y
+    # `twilio/list-picker` (PR-7i); fuera, plantilla aprobada de la Content API (PR-7a). Las opciones directas fuera de
+    # la ventana buscan la contraparte de Meta, que una conversación de Twilio no tiene: no sale nada (`sin_plantilla`).
+    "whatsapp_twilio": CapacidadesCanal(
+        botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True
+    ),
     "whatsapp_plivo": SOLO_TEXTO,
     "instagram_meta": TEXTO_CON_MENU,
     "messenger_meta": TEXTO_CON_MENU,

@@ -237,7 +237,11 @@ async def _enviar(
         )
     abierta = ev.ventana_abierta(conversation.service_window_expires_at, ahora)
     contraparte, motivo_plantilla = None, ""
-    if capacidades_de(conversation.channel, proveedor).plantilla_aprobada and not abierta:
+    if proveedor == "twilio" and not abierta:
+        # La plantilla de opciones fuera de la ventana es la contraparte de Meta: una conversación de Twilio no la
+        # usa aunque conserve un `meta_connection_id` de cuando era de Meta (ADR-0186, PR-7i).
+        motivo_plantilla = ev.SIN_VERSION_EN_META
+    elif capacidades_de(conversation.channel, proveedor).plantilla_aprobada and not abierta:
         contraparte, motivo_plantilla = await _contraparte(conversation, version, definicion)
     decision = ev.decidir_via(
         canal=conversation.channel,

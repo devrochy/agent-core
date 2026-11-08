@@ -38,7 +38,7 @@ def test_todo_tipo_de_conexion_con_canal_declara_sus_capacidades() -> None:
     [
         ("whatsapp", "meta", META),
         ("whatsapp", "waweb", TEXTO_CON_MENU),
-        ("whatsapp", "twilio", CapacidadesCanal(plantilla_aprobada=True, ventana_24h=True)),
+        ("whatsapp", "twilio", META),  # botones y lista por Content de Twilio (ADR-0186, PR-7i)
         ("whatsapp", "plivo", SOLO_TEXTO),
         ("web", "web", TEXTO_CON_MENU),
         ("instagram", "meta", TEXTO_CON_MENU),
@@ -135,7 +135,7 @@ def test_el_modulo_no_deja_capacidades_sin_campo() -> None:
 # ---------------------------------------------------------------- la cascada de envío sigue la tabla
 @pytest.mark.parametrize(
     ("canal", "proveedor"),
-    [("whatsapp", "waweb"), ("whatsapp", ""), ("whatsapp", "twilio"), ("web", ""), ("instagram", ""), ("messenger", ""), ("email", "")],
+    [("whatsapp", "waweb"), ("whatsapp", ""), ("web", ""), ("instagram", ""), ("messenger", ""), ("email", "")],
 )
 @pytest.mark.parametrize("ventana", [True, False])
 def test_decidir_via_canales_de_texto_sale_texto_numerado(canal: str, proveedor: str, ventana: bool) -> None:
@@ -155,6 +155,15 @@ def test_decidir_via_playground_ignora_ventana_y_plantilla() -> None:
             kw = dict(canal="test", proveedor="", ventana_abierta=ventana, plantilla_utilizable=plantilla)
             assert envio.decidir_via(interactivo_valido=True, **kw) == envio.Decision(envio.INTERACTIVO)
             assert envio.decidir_via(interactivo_valido=False, **kw) == envio.Decision(envio.TEXTO, envio.FUERA_DE_TOPES)
+
+
+@pytest.mark.parametrize("proveedor", ["meta", "twilio"])
+def test_decidir_via_whatsapp_con_botones_sigue_la_ventana(proveedor: str) -> None:
+    from core.kernel.opciones import envio
+
+    kw = dict(canal="whatsapp", proveedor=proveedor, interactivo_valido=True)
+    assert envio.decidir_via(ventana_abierta=True, plantilla_utilizable=False, **kw) == envio.Decision(envio.INTERACTIVO)
+    assert envio.decidir_via(ventana_abierta=False, plantilla_utilizable=False, **kw).via is None
 
 
 def test_decidir_via_whatsapp_meta_sigue_la_ventana_y_la_plantilla() -> None:

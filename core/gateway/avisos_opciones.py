@@ -175,7 +175,9 @@ async def intentar(
     canal = conversation.channel
     proveedor = await ac.proveedor_de_conversacion(conversation)
     tipo = tipo_de_conexion(canal, proveedor)
-    # Twilio tiene plantilla aprobada (ADR-0186) pero todavía no opciones (botones/lista, PR-7i): sigue sin puente.
+    # Twilio (ADR-0186) tiene botones y lista desde el PR-7i, pero sin puente: un aviso suele salir con la ventana
+    # cerrada y la plantilla de opciones fuera de ella es la contraparte de Meta, que una conversación de Twilio no
+    # tiene. El aviso sigue su camino de siempre (plantilla de Content, PR-7a).
     if proveedor == "twilio" or (
         tipo not in ac.TIPOS_DE_TEXTO and not capacidades_de(canal, proveedor).plantilla_aprobada
     ):

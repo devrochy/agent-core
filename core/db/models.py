@@ -369,6 +369,39 @@ class TwilioContentTemplate(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class TwilioInteractiveContent(Base):
+    """Content de Twilio (`twilio/quick-reply` o `twilio/list-picker`) reutilizable por FORMA (`quick_reply:3`,
+    `list:7`): el cuerpo, los títulos y los ids van como variables de cada envío (ADR-0186 §9, migración 0124)."""
+
+    __tablename__ = "twilio_interactive_contents"
+    __table_args__ = (
+        Index(
+            "uq_twilio_interactive_contents_forma_viva",
+            "tenant_id",
+            "channel_connection_id",
+            "forma",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "channel_connection_id"],
+            ["channel_connections.tenant_id", "channel_connections.id"],
+            name="fk_twilio_interactive_contents_conexion",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    channel_connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    account_sid: Mapped[str] = mapped_column(Text, nullable=False)
+    forma: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sid: Mapped[str] = mapped_column(Text, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class WaWebSession(Base):
     """Sesión multi-device del canal WhatsApp Web no oficial (ADR-0074).
 
