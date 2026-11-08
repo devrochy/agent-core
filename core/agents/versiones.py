@@ -49,9 +49,10 @@ class AgenteNoEncontrado(LookupError):
 
 
 class Conflicto(RuntimeError):
-    def __init__(self, mensaje: str, lock_version: int | None = None) -> None:
+    def __init__(self, mensaje: str, lock_version: int | None = None, codigo: str = "conflict") -> None:
         super().__init__(mensaje)
         self.lock_version = lock_version
+        self.codigo = codigo
 
 
 class ErroresDeContrato(ValueError):
@@ -263,7 +264,8 @@ async def actualizar_agente(
     status: str | None = None,
 ) -> AgentRecord:
     """Nombre, descripción y estado. `key` y `kind` no cambian (la instancia fija su rol por
-    FK). Archivar un agente instanciado en una conexión → `Conflicto`."""
+    FK). Archivar el General o el Coordinador (vienen con el negocio: sin ellos las conexiones
+    nuevas, el backfill y los presets fallan) o un agente instanciado en una conexión → `Conflicto`."""
     _exigir_scope(tenant_id)
     async with get_session() as session:
         agente = (
@@ -276,6 +278,12 @@ async def actualizar_agente(
         if agente is None:
             raise AgenteNoEncontrado(str(agent_id))
         if status == "archived" and agente.status != "archived":
+            if agente.key in KEYS_RESERVADAS:
+                raise Conflicto(
+                    "El General y el Coordinador vienen con el negocio y no se archivan. Para que el General "
+                    "no atienda en una conexión, pon otro agente como principal y quítalo de ella.",
+                    codigo="agent_reserved",
+                )
             instanciado = (
                 await session.execute(
                     text(
@@ -286,7 +294,9 @@ async def actualizar_agente(
                 )
             ).first()
             if instanciado is not None:
-                raise Conflicto("El agente está instanciado en una conexión: quítalo de ella antes de archivarlo.")
+                raise Conflicto(
+                    "El agente está en una conexión: quítalo de ella antes de archivarlo.", codigo="agent_in_use"
+                )
         if name is not None:
             agente.name = name
         if description is not None:

@@ -177,6 +177,44 @@ async def test_api_agrega_cambia_el_por_defecto_y_quita_sin_romper_uno_y_solo_un
     assert await _legacy_y_settings(tid) == antes
 
 
+async def test_el_general_y_el_coordinador_no_se_archivan_y_un_especialista_solo_fuera_de_conexiones(
+    app_client,
+) -> None:
+    tid, _cuenta, _phone, cid = await _con_agentes()
+    h = await api_headers(app_client, tid)
+    ventas = await _especialista(app_client, h, "ventas")
+    reservados = dict(await _sql(tid, "select key, id from agents where tenant_id = :t and key in "
+                                      "('general', 'coordinador')", t=tid))
+
+    def _archivar(aid: Any) -> Any:
+        return app_client.patch(f"/api/v1/admin/agents/{aid}", headers=h, json={"status": "archived"})
+
+    for key in ("general", "coordinador"):
+        assert _codigo(await _archivar(reservados[key])) == (409, "agent_reserved")
+    # Aunque el General ya no esté en ninguna conexión: sin él fallan las conexiones nuevas (core_missing).
+    r = await app_client.post(_agents(cid), headers=h, json={"agent_id": ventas})
+    assert r.status_code == 201, r.text
+    ventas_en_cid = r.json()["id"]
+    assert (await app_client.patch(_agents(cid, ventas_en_cid), headers=h, json={"is_default": True})).status_code == 200
+    ids = {f["key"]: f["id"] for f in (await app_client.get(_agents(cid), headers=h)).json()}
+    assert (await app_client.delete(_agents(cid, ids["general"]), headers=h)).status_code == 204
+    assert _codigo(await _archivar(reservados["general"])) == (409, "agent_reserved")
+    (estado,) = await _sql(tid, "select status from agents where id = :a", a=reservados["general"])
+    assert estado[0] == "active"
+
+    # Un especialista en una conexión no se archiva; fuera de ellas sí, y se reactiva. Se repone el
+    # General como principal para poder quitar a Ventas.
+    r = await app_client.post(_agents(cid), headers=h, json={"agent_id": str(reservados["general"])})
+    assert r.status_code == 201, r.text
+    assert (await app_client.patch(_agents(cid, r.json()["id"]), headers=h, json={"is_default": True})).status_code == 200
+    assert _codigo(await _archivar(ventas)) == (409, "agent_in_use")
+    assert (await app_client.delete(_agents(cid, ventas_en_cid), headers=h)).status_code == 204
+    r = await _archivar(ventas)
+    assert r.status_code == 200 and r.json()["status"] == "archived", r.text
+    r = await app_client.patch(f"/api/v1/admin/agents/{ventas}", headers=h, json={"status": "active"})
+    assert r.status_code == 200 and r.json()["status"] == "active", r.text
+
+
 async def test_api_rechaza_integraciones_y_conexiones_sin_coordinador(app_client) -> None:
     tid, _cuenta, _phone, _cid = await _con_agentes()
     h = await api_headers(app_client, tid)
