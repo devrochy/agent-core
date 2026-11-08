@@ -233,6 +233,9 @@ Columnas A/W/B: la variable va en la API, el worker o el beat. Fuente de verdad 
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | ✓ | ✓ | ✓ | proveedor: URL **completa** de trazas, terminada en `/v1/traces`: el core la pasa tal cual al exportador (`core/observability/tracing.py:36-38`) |
 | `OTEL_EXPORTER_OTLP_HEADERS` | ✓ | ✓ | ✓ | proveedor: credencial del servicio OTLP (la lee el SDK de OpenTelemetry del entorno, no `core/config.py`) |
 | `OTEL_SERVICE_NAME` | ✓ | ✓ | ✓ | fijo: `agent-core-api`, `agent-core-worker`, `agent-core-beat` |
+| `OTEL_METRICS_ENABLED` | ✓ | ✓ | ✓ | fijo: `true` cuando Alloy está arriba (ADR-0188); por defecto `false` = sin métricas. También en el conector |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | ✓ | ✓ | ✓ | fijo: `http://alloy:4318/v1/metrics`, URL **completa** (el core la pasa tal cual al exportador, `core/observability/metricas.py`). Sin ella, las métricas no se configuran aunque `OTEL_METRICS_ENABLED=true` |
+| `OTEL_RESOURCE_ATTRIBUTES` | ✓ | ✓ | ✓ | fijo: `deployment.environment=production` (test: `deployment.environment=test`). La lee el SDK de OpenTelemetry; distingue test de producción en Grafana |
 | `SLACK_ALERTS_WEBHOOK_URL` | ✓ | ✓ | ✓ | proveedor, opcional |
 
 Coolify inyecta `SOURCE_COMMIT` y `COOLIFY_BRANCH`: los usa el checklist de producción para decir
