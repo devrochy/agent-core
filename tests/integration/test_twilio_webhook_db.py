@@ -41,12 +41,12 @@ def _numero() -> str:
     return f"+1555{uuid.uuid4().int % 10_000_000:07d}"
 
 
-def _twilio(e164: str) -> httpx.MockTransport:
+def _twilio(e164: str, ac: str = AC) -> httpx.MockTransport:
     estado: dict[str, Any] = {"webhook": {}}
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
-        if path.endswith(f"/Accounts/{AC}.json"):
+        if path.endswith(f"/Accounts/{ac}.json"):
             return httpx.Response(
                 200, json={"status": "active", "friendly_name": "Cuenta", "type": "Full"}
             )
@@ -290,3 +290,214 @@ async def test_to_ajeno_no_se_publica(conexion, app_client) -> None:
     r = await _post(app_client, conexion, "inbound", params)
     assert r.status_code == 200
     assert await _encolados(dict(params)["MessageSid"]) == 0
+
+
+AC_B = "AC" + "7" * 32
+TOKEN_B = "token-del-negocio-b"
+
+
+@pytest.fixture(scope="module")
+async def conexion_b() -> AsyncIterator[dict[str, Any]]:
+    """Otro negocio con su propia cuenta de Twilio y su número."""
+    from core.alta_negocio import onboard_tenant
+    from core.gateway.twilio import alta, bandera
+    from core.shared.tenant import tenant_scope
+    from core.tenants import deactivate_tenant, purge_tenant
+
+    slug = f"twb-{uuid.uuid4().hex[:8]}"
+    tid, _ = await onboard_tenant(
+        name=f"Twilio {slug}", slug=slug, packs=[], sembrar_ejemplos=False
+    )
+    e164 = _numero()
+    async with tenant_scope(tid):
+        await bandera.fijar(tid, "whatsapp_twilio", True, actor="test")
+        hecha = await alta.conectar(
+            tid, account_sid=AC_B, auth_token=TOKEN_B, sender_sid=XE, transport=_twilio(e164, AC_B)
+        )
+    yield {
+        "tid": tid,
+        "connection_id": hecha.connection_id,
+        "e164": e164,
+        "public_id": hecha.webhook_inbound_url.rstrip("/").split("/")[-2],
+        "inbound_url": hecha.webhook_inbound_url,
+        "status_url": hecha.webhook_status_url,
+    }
+    async with tenant_scope(tid):
+        await deactivate_tenant(str(tid))
+    await purge_tenant(str(tid), f"ELIMINAR {slug}")
+
+
+async def test_firma_de_a_contra_el_public_id_de_b(conexion, conexion_b, app_client) -> None:
+    """Un webhook bien firmado por A (su token y su AccountSid) dirigido al public_id de B no entra."""
+    params = _entrante(conexion_b, AccountSid=AC)
+    r = await _post(app_client, conexion_b, "inbound", params, token=TOKEN)
+    assert r.status_code == 403
+    assert await _encolados(dict(params)["MessageSid"]) == 0
+
+
+async def test_estado_de_a_no_toca_mensajes_de_b(conexion, conexion_b, app_client) -> None:
+    from core.db.models import Conversation, Customer, Message
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid_b = conexion_b["tid"]
+    sid_de_b = "SM" + uuid.uuid4().hex
+    async with tenant_scope(tid_b):
+        async with get_session() as s:
+            cliente = Customer(
+                tenant_id=tid_b, channel="whatsapp", external_id=f"whatsapp:{_numero()}", name="Bea"
+            )
+            s.add(cliente)
+            await s.flush()
+            conv = Conversation(
+                tenant_id=tid_b,
+                customer_id=cliente.id,
+                channel="whatsapp",
+                connection_id=conexion_b["connection_id"],
+            )
+            s.add(conv)
+            await s.flush()
+            s.add(
+                Message(
+                    tenant_id=tid_b,
+                    conversation_id=conv.id,
+                    direction="outbound",
+                    sender_type="agent",
+                    content="hola",
+                    status="sent",
+                    external_message_id=sid_de_b,
+                )
+            )
+    params = [
+        ("MessageSid", sid_de_b),
+        ("AccountSid", AC),
+        ("MessageStatus", "undelivered"),
+        ("ErrorCode", "30005"),
+    ]
+    r = await _post(app_client, conexion, "status", params)  # firmado por A, en la ruta de A
+    assert r.status_code == 200
+    assert await _sql(
+        tid_b, "select status, error_code from messages where external_message_id = :s", s=sid_de_b
+    ) == [("sent", None)]
+
+
+async def test_el_numero_que_pasa_a_otro_negocio_corta_la_ruta_vieja(
+    conexion_b, app_client
+) -> None:
+    """A conecta un número, lo borra y B lo conecta (con otra cuenta): la ruta de A queda en 404 y B recibe."""
+    from core.alta_negocio import onboard_tenant
+    from core.gateway.connections import delete_connection
+    from core.gateway.twilio import alta, bandera
+    from core.shared.tenant import tenant_scope
+    from core.tenants import deactivate_tenant, purge_tenant
+
+    slug = f"twc-{uuid.uuid4().hex[:8]}"
+    tid_c, _ = await onboard_tenant(
+        name=f"Twilio {slug}", slug=slug, packs=[], sembrar_ejemplos=False
+    )
+    ac_c, token_c = "AC" + "8" * 32, "token-c"
+    e164 = _numero()
+    try:
+        async with tenant_scope(tid_c):
+            await bandera.fijar(tid_c, "whatsapp_twilio", True, actor="test")
+            vieja = await alta.conectar(
+                tid_c,
+                account_sid=ac_c,
+                auth_token=token_c,
+                sender_sid=XE,
+                transport=_twilio(e164, ac_c),
+            )
+            await delete_connection(vieja.connection_id)
+        vieja_c = {
+            "public_id": vieja.webhook_inbound_url.rstrip("/").split("/")[-2],
+            "inbound_url": vieja.webhook_inbound_url,
+            "e164": e164,
+        }
+        r = await _post(
+            app_client, vieja_c, "inbound", _entrante(vieja_c, AccountSid=ac_c), token=token_c
+        )
+        assert r.status_code == 404
+        tid_b = conexion_b["tid"]
+        ac_d = "AC" + "9" * 32
+        async with tenant_scope(tid_b):
+            nueva = await alta.conectar(
+                tid_b,
+                account_sid=ac_d,
+                auth_token="token-d",
+                sender_sid=XE,
+                transport=_twilio(e164, ac_d),
+            )
+        assert nueva.sender_e164 == e164
+        assert (
+            await _sql(
+                tid_c,
+                "select count(*) from channel_connections where id = :c and deleted_at is null",
+                c=vieja.connection_id,
+            )
+        ) == [(0,)]
+    finally:
+        async with tenant_scope(tid_c):
+            await deactivate_tenant(str(tid_c))
+        await purge_tenant(str(tid_c), f"ELIMINAR {slug}")
+
+
+async def test_conexion_pausada_aplica_estados(conexion, app_client) -> None:
+    """Pausada: los entrantes se ignoran, pero el estado de un mensaje que ya salió se sigue aplicando."""
+    from core.db.models import Conversation, Customer, Message
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid, cid = conexion["tid"], conexion["connection_id"]
+    sid = "SM" + uuid.uuid4().hex
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            cliente = Customer(
+                tenant_id=tid, channel="whatsapp", external_id=f"whatsapp:{_numero()}", name="Ana"
+            )
+            s.add(cliente)
+            await s.flush()
+            conv = Conversation(
+                tenant_id=tid, customer_id=cliente.id, channel="whatsapp", connection_id=cid
+            )
+            s.add(conv)
+            await s.flush()
+            s.add(
+                Message(
+                    tenant_id=tid,
+                    conversation_id=conv.id,
+                    direction="outbound",
+                    sender_type="agent",
+                    content="hola",
+                    status="sent",
+                    external_message_id=sid,
+                )
+            )
+    await _sql(tid, "update channel_connections set active = false where id = :c", c=cid)
+    try:
+        r = await _post(
+            app_client,
+            conexion,
+            "status",
+            [("MessageSid", sid), ("AccountSid", AC), ("MessageStatus", "delivered")],
+        )
+        assert r.status_code == 200
+        assert await _sql(
+            tid, "select status from messages where external_message_id = :s", s=sid
+        ) == [("delivered",)]
+    finally:
+        await _sql(tid, "update channel_connections set active = true where id = :c", c=cid)
+
+
+async def test_el_stream_lleva_la_conexion_validada(conexion, app_client) -> None:
+    from core.gateway.webhooks import INBOUND_STREAM
+    from core.memory.working import get_redis
+
+    params = _entrante(conexion)
+    sid = dict(params)["MessageSid"]
+    assert (await _post(app_client, conexion, "inbound", params)).status_code == 200
+    [campos] = [
+        c
+        for _i, c in await get_redis().xrevrange(INBOUND_STREAM, count=500)
+        if c["external_message_id"] == sid
+    ]
+    assert campos["connection_id"] == str(conexion["connection_id"])

@@ -23,3 +23,12 @@
   - La descarga de media acepta solo `MediaUrl` de un mensaje de la cuenta de la conexión (ruta anclada al `AccountSid`).
   - S3 queda acotado a `s3[.-]…amazonaws.com`.
   - Las dos respuestas se leen en streaming con tope.
+- **Revisión cruzada del #717**:
+  - El stream lleva el `connection_id` que el webhook ya validó y el consumer lo usa primero, filtrando por negocio y proveedor. Si se borra o pausa la conexión en medio, la conversación igual queda con su conexión y el envío falla cerrado. Un entrante de Twilio sin conexión se descarta: ya no se crea una conversación sin ruta.
+  - `publish_inbound_message` libera el claim si falla el encolado, para que el reintento del proveedor no llegue como duplicado. Aplica también a Meta.
+  - Con la conexión pausada, los estados de entrega de mensajes ya enviados se siguen aplicando.
+  - Se aclara que la auditoría no deduplica.
+  - Nuevos tests de aislamiento entre negocios:
+    - una firma de A contra el `public_id` de B;
+    - un estado firmado por A con un SID que solo existe en B;
+    - un número que pasa de un negocio a otro.

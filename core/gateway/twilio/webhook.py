@@ -9,11 +9,14 @@
 3. Dentro del `tenant_scope`: la firma `X-Twilio-Signature` se verifica con el Auth Token de la conexión contra la
    URL EXACTA registrada en el sender (guardada en `twilio_connections`), no contra la que reconstruye el proxy. El
    `AccountSid` del formulario tiene que ser el de la conexión. Falla: 403.
-4. Conexión pausada (`active = false`) o negocio no operativo (billing): 200 sin procesar, para que Twilio no
-   reintente.
-5. Idempotencia en las mismas tres capas que Meta: la tabla de auditoría de webhooks (único por
-   `twilio:<AccountSid>` + `MessageSid` o `MessageSid:MessageStatus`; se guardan solo campos de diagnóstico, nunca
-   el texto del mensaje), `claim_message_once` y el stream con su DLQ.
+4. Negocio no operativo (ciclo de vida o billing): 200 sin procesar, para que Twilio no reintente. Conexión pausada
+   (`active = false`): los entrantes se ignoran con 200, pero los estados de entrega se siguen aplicando (son de
+   mensajes que ya salieron). Los cortes son la pausa y la suspensión del negocio; la bandera `whatsapp_twilio` solo
+   abre el tipo en el catálogo.
+5. Auditoría en la tabla de webhooks (`twilio:<AccountSid>` + `MessageSid` o `MessageSid:MessageStatus`; solo campos
+   de diagnóstico, nunca el texto del mensaje). No deduplica: la idempotencia son `claim_message_once` (Redis, 48 h),
+   `ProcessedEvent` del consumer y el UNIQUE de `messages`, todos por negocio. La conexión validada viaja en el
+   stream (`connection_id`): el consumer no la vuelve a buscar por número.
 6. Entrante: `publish_inbound_message` (el mismo camino que Meta). Estado: `apply_status_update` con el dict que
    arma `parse_status` (la misma máquina de estados que Meta; un estado nunca retrocede).
 
@@ -174,7 +177,7 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
             await _alert_on_invalid_signature(f"twilio:{twilio.account_sid}")
             return Response(status_code=403)
 
-        if not connection.active:
+        if not connection.active and kind == "inbound":
             log.info("twilio_webhook_conexion_pausada", tenant_id=str(tenant_id), kind=kind)
             return _twiml()
         if not await is_tenant_operational(tenant_id):
@@ -216,7 +219,9 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
                     )
                     resultado = "ignored"
                     continue
-                resultado = await publish_inbound_message(tenant_id, message)
+                resultado = await publish_inbound_message(
+                    tenant_id, message, connection_id=connection_id
+                )
             log.info(
                 "twilio_webhook_received", tenant_id=str(tenant_id), kind=kind, result=resultado
             )

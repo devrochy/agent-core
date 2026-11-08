@@ -443,6 +443,9 @@ async def _handle_inbound_scoped(fields: dict[str, str], *, opciones_habilitada:
 
     try:
         conversation, customer, app_settings = await _resolve_conversation(fields)
+    except InboundSinConexion as exc:
+        log.warning("inbound_sin_conexion_descartado", tenant_id=get_current_tenant_id(), provider=str(exc))
+        return
     except QuotaExceeded as exc:
         # Bloqueo duro de cuota (ADR-0045): se descarta el inbound sin procesar.
         log.warning(
@@ -560,6 +563,32 @@ async def _handle_inbound_scoped(fields: dict[str, str], *, opciones_habilitada:
 
 
 # ------------------------------------------------------------------ resolución
+class InboundSinConexion(Exception):
+    """El entrante es de un proveedor que solo responde por su conexión (Twilio) y esa conexión no está."""
+
+
+async def _conexion_validada(session: Any, tenant_id: uuid.UUID | None, fields: dict[str, str]) -> Any:
+    """La conexión que el webhook ya validó (`connection_id` del stream), del mismo negocio y proveedor. Se usa aunque
+    la hayan borrado o pausado después: la conversación queda con SU conexión y el envío falla cerrado
+    (`resolve_credentials`), en vez de buscar otra por número y caer a la primaria."""
+    crudo = fields.get("connection_id") or ""
+    if not crudo or tenant_id is None:
+        return None
+    try:
+        connection_id = uuid.UUID(crudo)
+    except ValueError:
+        return None
+    return (
+        await session.execute(
+            select(ChannelConnection).where(
+                ChannelConnection.id == connection_id,
+                ChannelConnection.tenant_id == tenant_id,
+                ChannelConnection.provider == fields.get("provider", ""),
+            )
+        )
+    ).scalars().first()
+
+
 async def _resolve_conversation(
     fields: dict[str, str],
 ) -> tuple[Conversation, Customer, AppSettings | None]:
@@ -638,18 +667,24 @@ async def _resolve_conversation(
                 source="import",
             )
 
-        connection = (
-            await session.execute(
-                select(ChannelConnection)
-                .where(
-                    ChannelConnection.tenant_id == tenant_id,
-                    ChannelConnection.external_id == connection_external_id,
-                    ChannelConnection.deleted_at.is_(None),
+        connection = await _conexion_validada(session, tenant_id, fields)
+        if connection is None and fields.get("provider") == "twilio":
+            # Twilio no tiene ruta sin su conexión (ADR-0186): una conversación sin conexión respondería por la
+            # primaria o por el número de la plataforma. No se crea.
+            raise InboundSinConexion(fields.get("provider", ""))
+        if connection is None:
+            connection = (
+                await session.execute(
+                    select(ChannelConnection)
+                    .where(
+                        ChannelConnection.tenant_id == tenant_id,
+                        ChannelConnection.external_id == connection_external_id,
+                        ChannelConnection.deleted_at.is_(None),
+                    )
+                    .order_by(ChannelConnection.created_at)
+                    .limit(1)
                 )
-                .order_by(ChannelConnection.created_at)
-                .limit(1)
-            )
-        ).scalars().first()
+            ).scalars().first()
 
         # Puente para conexiones del wizard de Embedded Signup (ADR-0030):
         # no tienen fila en channel_connections, pero sí una en phone_numbers.
