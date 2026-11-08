@@ -236,6 +236,13 @@ from core.observability.metricas_negocio import MetricasHttpMiddleware  # noqa: 
 app.add_middleware(MetricasHttpMiddleware)
 
 
+# `X-Request-ID` y `request_id` en los logs (ADR-0188). Se agrega después del middleware de
+# tenant para envolverlo: sus logs (y los de las rutas) ya llevan el id.
+from core.observability.request_id import RequestIdMiddleware  # noqa: E402
+
+app.add_middleware(RequestIdMiddleware)
+
+
 @app.get("/")
 async def root() -> RedirectResponse:
     return RedirectResponse("/admin")

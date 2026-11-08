@@ -2,6 +2,11 @@
 
 Todos los logs llevan `conversation_id` cuando existe, para correlación
 (mismo patrón que agent-sale: tracing por conversación, no tracing distribuido).
+
+Correlación (ADR-0188): dentro del turno, `turn_id` y `trace_id` los fija el Coordinador en los
+contextvars. Fuera del turno (una petición HTTP, una tarea de Celery), `con_trace_id` agrega el
+`trace_id` del span vigente, y el middleware de `X-Request-ID` agrega `request_id`. También en
+los registros de `logging` (httpx, SQLAlchemy, Celery), que pasan por `foreign_pre_chain`.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ import sys
 from typing import Any
 
 import structlog
+from opentelemetry import trace
 
 from core.config import get_settings
 
@@ -26,11 +32,22 @@ def silenciar_urls_de_clientes_http() -> None:
         logging.getLogger(nombre).setLevel(logging.WARNING)
 
 
+def con_trace_id(_logger: Any, _metodo: str, evento: dict[str, Any]) -> dict[str, Any]:
+    """`trace_id` del span vigente si el evento no trae uno (el del turno manda)."""
+    if "trace_id" not in evento:
+        contexto = trace.get_current_span().get_span_context()
+        if contexto.is_valid:
+            evento["trace_id"] = format(contexto.trace_id, "032x")  # como `tracing.current_trace_id`
+    return evento
+
+
 def _formateador_json_de_stdlib() -> logging.Formatter:
     """Los registros de `logging` (Celery, httpx, SQLAlchemy…) también en una línea JSON, con el
     traceback como texto plano en `exception` (sin variables locales)."""
     return structlog.stdlib.ProcessorFormatter(
         foreign_pre_chain=[
+            structlog.contextvars.merge_contextvars,
+            con_trace_id,
             structlog.stdlib.add_log_level,
             structlog.stdlib.add_logger_name,
             structlog.processors.TimeStamper(fmt="iso"),
@@ -64,6 +81,7 @@ def configure_logging() -> None:
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
+            con_trace_id,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.StackInfoRenderer(),
