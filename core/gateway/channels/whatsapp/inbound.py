@@ -29,7 +29,9 @@ class WhatsAppMetaInbound(InboundAdapter):
     provider = "meta"
     channel = "whatsapp"
 
-    def verify_request(self, raw_body: bytes, headers: dict[str, str], secret: str) -> bool:
+    def verify_request(
+        self, raw_body: bytes, headers: dict[str, str], secret: str, *, url: str | None = None
+    ) -> bool:
         from core.gateway.webhook_verify import verify_signature
 
         return verify_signature(raw_body, headers.get("x-hub-signature-256", ""), secret)
