@@ -58,6 +58,10 @@ async def run_connector() -> None:
 def main() -> None:
     configure_logging()
 
+    from core.observability.metricas import configure_metrics, shutdown_metrics
+
+    configure_metrics()  # no-op sin OTEL_METRICS_ENABLED (ADR-0188)
+
     def _stop(*_: object) -> None:
         raise KeyboardInterrupt
 
@@ -66,6 +70,8 @@ def main() -> None:
         asyncio.run(run_connector())
     except KeyboardInterrupt:
         log.info("waweb_connector_stopped")
+    finally:
+        shutdown_metrics()
 
 
 if __name__ == "__main__":

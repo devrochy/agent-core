@@ -366,6 +366,12 @@ class Settings(BaseSettings):
     otel_enabled: bool = Field(default=False, alias="OTEL_ENABLED")
     otel_exporter_endpoint: str = Field(default="", alias="OTEL_EXPORTER_OTLP_ENDPOINT")
     otel_service_name: str = Field(default="agent-core", alias="OTEL_SERVICE_NAME")
+    # Métricas OTLP (ADR-0188), independientes de las trazas. Apagadas = no-op: los contadores
+    # declarados con `opentelemetry.metrics` no salen del proceso. El endpoint es la URL
+    # completa (`http://alloy:4318/v1/metrics`), igual que OTEL_EXPORTER_OTLP_ENDPOINT lo es
+    # para las trazas: no se le agrega `/v1/metrics`.
+    otel_metrics_enabled: bool = Field(default=False, alias="OTEL_METRICS_ENABLED")
+    otel_metrics_endpoint: str = Field(default="", alias="OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
     # Ledger del Coordinador (HU-AOS-10, adenda de ADR-0112): `core_decisions`, `turn_outcomes`
     # y la propagación del `turn_id` a `messages`/`usage_ledger`/`audit_log`. Es observabilidad,
     # no cambia la conducta; apagarlo deja las columnas en NULL. Es "la bandera" de la HU.
