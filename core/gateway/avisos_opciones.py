@@ -121,7 +121,9 @@ async def _opciones_habilitadas(tenant_id: uuid.UUID) -> bool:
         return False
 
 
-def _cae(evento: str, conversation_id: uuid.UUID, canal: str, outcome: str, motivo: str = "") -> None:
+def _cae(
+    evento: str, conversation_id: uuid.UUID, canal: str, outcome: str, motivo: str = ""
+) -> None:
     """Rastro de un puente que no salió y cae al camino de D2/legacy: log y métrica, códigos y nunca valores."""
     _fallbacks.add(1, {"canal": canal[:20], "outcome": outcome[:40]})
     log.info(
@@ -141,7 +143,9 @@ async def _conversacion_activa(conversation_id: uuid.UUID, tenant_id: uuid.UUID)
         ultimo = (
             await session.execute(
                 select(func.max(Message.created_at)).where(
-                    Message.tenant_id == tenant_id, Message.conversation_id == conversation_id, Message.status != "failed"
+                    Message.tenant_id == tenant_id,
+                    Message.conversation_id == conversation_id,
+                    Message.status != "failed",
                 )
             )
         ).scalar_one_or_none()
@@ -149,7 +153,11 @@ async def _conversacion_activa(conversation_id: uuid.UUID, tenant_id: uuid.UUID)
 
 
 async def intentar(
-    conversation: Conversation, evento: str, ctx: dict[str, Any], notice_key: str, entrada: dict[str, Any]
+    conversation: Conversation,
+    evento: str,
+    ctx: dict[str, Any],
+    notice_key: str,
+    entrada: dict[str, Any],
 ) -> NoticeResult | None:
     """Envía el aviso como plantilla con opciones si se puede. Devuelve el `NoticeResult` si este camino lo resolvió
     (salió, o ya había salido) o None para seguir con el camino de D2/legacy. Corre dentro del `tenant_scope` del
@@ -167,7 +175,10 @@ async def intentar(
     canal = conversation.channel
     proveedor = await ac.proveedor_de_conversacion(conversation)
     tipo = tipo_de_conexion(canal, proveedor)
-    if tipo not in ac.TIPOS_DE_TEXTO and not capacidades_de(canal, proveedor).plantilla_aprobada:
+    # Twilio tiene plantilla aprobada (ADR-0186) pero todavía no opciones (botones/lista, PR-7i): sigue sin puente.
+    if proveedor == "twilio" or (
+        tipo not in ac.TIPOS_DE_TEXTO and not capacidades_de(canal, proveedor).plantilla_aprobada
+    ):
         _cae(evento, conversation.id, canal, CANAL_SIN_PUENTE)
         return None
     expira = conversation.service_window_expires_at
@@ -228,7 +239,9 @@ async def error_de_mapeo(tenant_id: uuid.UUID, evento: str, clave: str) -> str:
         plantilla = (
             await session.execute(
                 select(OptionTemplate).where(
-                    OptionTemplate.tenant_id == tenant_id, OptionTemplate.key == clave, OptionTemplate.deleted_at.is_(None)
+                    OptionTemplate.tenant_id == tenant_id,
+                    OptionTemplate.key == clave,
+                    OptionTemplate.deleted_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
@@ -252,7 +265,9 @@ async def error_de_mapeo(tenant_id: uuid.UUID, evento: str, clave: str) -> str:
     except ValidationError:
         return f"La definición de la plantilla con opciones «{clave}» no es válida."
     necesarias, _ = contexto.rutas_citadas(definicion)
-    del_evento = {r for r in EVENTOS[evento] if r in contexto.RUTAS_DE_DATOS} | set(contexto.VARIABLES_BASE)
+    del_evento = {r for r in EVENTOS[evento] if r in contexto.RUTAS_DE_DATOS} | set(
+        contexto.VARIABLES_BASE
+    )
     faltan = [r for r in necesarias if r not in del_evento]
     if faltan:
         return f"La plantilla con opciones «{clave}» usa datos que este evento no tiene: {', '.join(faltan[:5])}."

@@ -696,8 +696,22 @@ async def list_conversation_templates(
         template_has_non_body_variables,
         template_placeholders,
     )
+    from core.gateway.twilio import plantillas_en_uso as twilio_tpl
 
     conversation = await _owned_conversation(conversation_id, principal.tenant_id)
+    if await twilio_tpl.es_de_twilio(conversation):
+        # WhatsApp vía Twilio (ADR-0186): las aprobadas de su conexión.
+        return [
+            ApprovedTemplate(
+                id=t.id,
+                name=t.friendly_name,
+                language=t.language,
+                category=t.category,
+                body=t.body,
+                variables=twilio_tpl.placeholders(t.body),
+            )
+            for t in await twilio_tpl.aprobadas(conversation)
+        ]
     return [
         ApprovedTemplate(
             id=t.id,
@@ -731,6 +745,10 @@ async def send_template_message(
     if conversation.channel == TEST_CHANNEL:
         raise ApiError.bad_request("Las conversaciones de prueba no envían mensajes.", "test_channel")
     await _rechazar_si_conexion_pausada(conversation)
+    from core.gateway.twilio import plantillas_en_uso as twilio_tpl
+
+    if await twilio_tpl.es_de_twilio(conversation):
+        return await _enviar_plantilla_de_twilio(conversation, payload)
     plantilla = next(
         (
             t
@@ -761,6 +779,40 @@ async def send_template_message(
     )
     if not enviado:
         raise ApiError(409, "send_paused", "No se pudo enviar: la conexión está pausada por uso.")
+    return Response(status_code=204)
+
+
+def _valores_completos(placeholders: list[str], variables: dict[str, str]) -> dict[str, str]:
+    valores = {k: v.strip() for k, v in variables.items() if v and v.strip()}
+    faltan = [p for p in placeholders if p not in valores]
+    if faltan:
+        raise ApiError.bad_request(
+            "Completa todas las variables de la plantilla.",
+            "template_variables",
+            fields={p: "Requerida." for p in faltan},
+        )
+    return {p: valores[p][:1000] for p in placeholders}
+
+
+async def _enviar_plantilla_de_twilio(conversation: Any, payload: TemplateMessageIn) -> Response:
+    """La plantilla aprobada de la conexión de Twilio de esta conversación, por su `ContentSid` (ADR-0186)."""
+    from core.gateway.sender import send_template_to_conversation
+    from core.gateway.twilio import plantillas_en_uso as twilio_tpl
+
+    plantilla = await twilio_tpl.aprobada_por_id(conversation, payload.template_id)
+    if plantilla is None:
+        raise ApiError.not_found("Plantilla no aprobada en la conexión de esta conversación.")
+    valores = _valores_completos(twilio_tpl.placeholders(plantilla.body), payload.variables)
+    enviado = await send_template_to_conversation(
+        conversation.id,
+        template_name=plantilla.friendly_name,
+        language=plantilla.language,
+        components=twilio_tpl.componentes(plantilla, valores),
+        preview_text=twilio_tpl.vista_previa(plantilla, valores),
+        sender_type="human",
+    )
+    if not enviado:
+        raise ApiError(409, "send_paused", "No se pudo enviar: la conexión está pausada.")
     return Response(status_code=204)
 
 

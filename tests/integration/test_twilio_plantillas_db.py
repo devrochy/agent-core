@@ -496,3 +496,24 @@ async def test_plantilla_de_otra_conexion_del_mismo_negocio(negocios, twilio, ap
     assert (await app_client.post(f"{base_y}/submit", headers=h)).status_code == 404
     assert (await app_client.post(f"{base_y}/refresh", headers=h)).status_code == 404
     assert (await app_client.delete(base_y, headers=h)).status_code == 404
+
+
+async def test_no_importa_contenidos_con_botones(negocios, twilio) -> None:
+    from core.gateway.twilio import plantillas
+
+    tid, _ = negocios
+    api, cid = await _conectar(tid, twilio)
+    sid = "HX" + uuid.uuid4().hex
+    api.contents[sid] = {
+        "sid": sid,
+        "friendly_name": "con_botones",
+        "language": "es",
+        "variables": {},
+        "types": {
+            "twilio/text": {"body": "Hola"},
+            "twilio/quick-reply": {"body": "Hola", "actions": []},
+        },
+        "approval_requests": {"status": "approved"},
+    }
+    nombres = [p.nombre for p in await _en(tid, plantillas.sincronizar, tid, cid, manual=False)]
+    assert "con_botones" not in nombres
