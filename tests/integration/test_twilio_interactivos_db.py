@@ -218,6 +218,21 @@ async def test_rls_rechaza_escribir_en_otro_negocio(negocios) -> None:
         )
 
 
+async def test_fk_compuesta_rechaza_la_conexion_de_otro_negocio(negocios) -> None:
+    """Con su propio `tenant_id` (pasa la RLS), B no puede colgar una fila de la conexión de A."""
+    a, b = negocios
+    with pytest.raises((DBAPIError, IntegrityError)):
+        await _sql(
+            b["tid"],
+            "insert into twilio_interactive_contents (id, tenant_id, channel_connection_id, forma, content_sid) "
+            "values (:i, :t, :c, 'list:5', :s)",
+            i=uuid.uuid4(),
+            t=b["tid"],
+            c=a["connection_id"],
+            s="HX" + "f" * 32,
+        )
+
+
 @pytest.mark.parametrize(
     ("forma", "sid"), [("quick_reply:11", "HX" + "e" * 32), ("carrusel:1", "HX" + "e" * 32), ("list:2", "XX" + "e" * 32)]
 )
