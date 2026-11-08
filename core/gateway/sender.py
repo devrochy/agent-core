@@ -353,6 +353,9 @@ async def resolve_credentials(
                     ChannelConnection.category == CATEGORY_COMMUNICATION,
                     ChannelConnection.category.is_(None),
                 ),
+                # Twilio no es respaldo de nada (ADR-0186): sus conversaciones siempre llevan su conexión, y una
+                # conversación sin conexión no debe salir por un número de Twilio.
+                ChannelConnection.provider != "twilio",
             ).limit(1)
         )
         primary = result.scalars().first()

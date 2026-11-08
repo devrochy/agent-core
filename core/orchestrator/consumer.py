@@ -847,7 +847,10 @@ async def _persist_inbound(
             # Ventana de 24h de Meta (WhatsApp, Messenger e Instagram): cada inbound la refresca --
             # validada por `sender.py::validate_service_window` antes de encolar un envío libre.
             # Sin esto, una conversación de Messenger o Instagram nunca vencería para el validador.
-            if fields.get("provider") == "meta" and fields.get("channel") in ("whatsapp", "messenger", "instagram"):
+            # WhatsApp vía Twilio tiene la misma ventana (ADR-0186): fuera de ella Twilio rechaza el texto libre (63016).
+            if (
+                fields.get("provider") == "meta" and fields.get("channel") in ("whatsapp", "messenger", "instagram")
+            ) or (fields.get("provider") == "twilio" and fields.get("channel") == "whatsapp"):
                 conversation = await session.get(Conversation, conversation_id)
                 if conversation is not None:
                     conversation.service_window_expires_at = utcnow() + timedelta(hours=_SERVICE_WINDOW_HOURS)

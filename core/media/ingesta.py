@@ -489,8 +489,8 @@ async def procesar_media_entrante(
     external_id = fields.get("external_message_id", "")
     if tenant_id is None:
         return MediaOutcome.skipped()
-    # Solo Meta Cloud en esta tanda (ADR-0151): waweb y web conservan su camino.
-    if fields.get("provider") != "meta" or fields.get("channel") != "whatsapp":
+    # Meta Cloud (ADR-0151) y WhatsApp vía Twilio (ADR-0186): waweb y web conservan su camino.
+    if fields.get("provider") not in ("meta", "twilio") or fields.get("channel") != "whatsapp":
         log.info(
             "media_canal_no_soportado",
             provider=fields.get("provider"),
@@ -505,7 +505,7 @@ async def procesar_media_entrante(
             log.info("media_cache_hit", conversation_id=str(conversation.id), kind=mime_type)
             return cacheado
 
-    # Solo Meta Cloud en esta tanda (ADR-0151). WA Web y chat web conservan su camino.
+    # Credenciales de la conexión de la conversación (Meta o Twilio).
     from core.gateway.sender import resolve_credentials
 
     try:
@@ -517,7 +517,10 @@ async def procesar_media_entrante(
     except Exception:
         log.warning("media_credenciales_failed", conversation_id=str(conversation.id), exc_info=True)
         return MediaOutcome.skipped()
-    if provider != "meta" or not creds.get("access_token"):
+    con_credenciales = (provider == "meta" and creds.get("access_token")) or (
+        provider == "twilio" and creds.get("account_sid") and creds.get("auth_token")
+    )
+    if provider != fields.get("provider") or not con_credenciales:
         log.warning(
             "media_sin_credenciales",
             conversation_id=str(conversation.id),
@@ -534,7 +537,8 @@ async def procesar_media_entrante(
         if clave:
             await _cache_set(clave, outcome)
         return outcome
-    if not media_id:
+    media_url = str(item.get("url") or "")
+    if (provider == "meta" and not media_id) or (provider == "twilio" and not media_url):
         outcome = await _outcome_fijo(
             "media_download_failed",
             content=fields.get("content", "") or "[Archivo adjunto]",
@@ -548,7 +552,14 @@ async def procesar_media_entrante(
         return outcome
 
     try:
-        media = await descargar_media(media_id, str(creds.get("access_token") or ""))
+        if provider == "twilio":
+            from core.media.twilio_media import descargar_media_twilio
+
+            media = await descargar_media_twilio(
+                media_url, str(creds.get("account_sid") or ""), str(creds.get("auth_token") or ""), mime_esperado=mime_type
+            )
+        else:
+            media = await descargar_media(media_id, str(creds.get("access_token") or ""))
     except MediaProviderError as exc:
         if exc.transient:
             raise
