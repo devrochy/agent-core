@@ -28,6 +28,9 @@ def get_engine():  # type: ignore[no-untyped-def]
     global _engine
     if _engine is None:
         _engine = create_async_engine(get_settings().database_url, pool_pre_ping=True)
+        from core.observability.tracing import instrumentar_engine
+
+        instrumentar_engine(_engine)  # spans de SQL con OTEL_ENABLED (ADR-0188)
     return _engine
 
 

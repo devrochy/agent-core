@@ -82,6 +82,10 @@ app = FastAPI(
     # y de ahí se generan los tipos TS del panel/app (ADR-0077).
     openapi_url=None,
 )
+# Spans por petición con OTEL_ENABLED (ADR-0188), sin `/healthz*` ni la query de la URL.
+from core.observability.tracing import instrumentar_app  # noqa: E402
+
+instrumentar_app(app)
 app.add_exception_handler(ApiError, api_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 
