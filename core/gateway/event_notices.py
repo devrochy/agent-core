@@ -323,6 +323,13 @@ async def send_event_notice(
     if not nombre:
         await _registrar_sin_plantilla(conversation_id, notice_key, event_key, "evento sin plantilla")
         return NoticeResult(SIN_PLANTILLA, "evento sin plantilla")
+    from core.gateway.twilio import plantillas_en_uso as twilio_tpl
+
+    if await twilio_tpl.es_de_twilio(conversation):
+        # WhatsApp vía Twilio (ADR-0186): la plantilla aprobada de su conexión, por `ContentSid`.
+        return await _aviso_con_plantilla_de_twilio(
+            conversation, event_key, context, notice_key, entrada, nombre, idioma
+        )
     plantilla = await approved_template_for(conversation, nombre, idioma)
     if plantilla is None:
         detalle = f"la plantilla {nombre} ({idioma}) no está aprobada en esta conexión"
@@ -349,6 +356,45 @@ async def send_event_notice(
     )
     if not enviado:
         raise NoticeNotSentError(f"Aviso {event_key} sin encolar (pausa por uso de la API)")
+    return NoticeResult("plantilla")
+
+
+async def _aviso_con_plantilla_de_twilio(
+    conversation: Conversation,
+    event_key: str,
+    context: dict[str, Any],
+    notice_key: str,
+    entrada: dict[str, Any],
+    nombre: str,
+    idioma: str,
+) -> NoticeResult:
+    """Ventana cerrada en una conversación de Twilio: la plantilla aprobada de su conexión, con los valores del
+    servidor (`resolve_values`, las variables son `{{1}}`, `{{2}}`…). Mismos resultados que la rama de Meta."""
+    from core.gateway.sender import send_template_to_conversation
+    from core.gateway.twilio import plantillas_en_uso as twilio_tpl
+
+    plantilla = await twilio_tpl.aprobada(conversation, nombre, idioma)
+    if plantilla is None:
+        detalle = f"la plantilla {nombre} ({idioma}) no está aprobada en esta conexión"
+        await _registrar_sin_plantilla(conversation.id, notice_key, event_key, detalle)
+        return NoticeResult(SIN_PLANTILLA, detalle)
+    try:
+        valores = resolve_values(
+            event_key, entrada.get("variables") or [], twilio_tpl.placeholders(plantilla.body), context
+        )
+    except NoticeConfigError as exc:
+        await _registrar_sin_plantilla(conversation.id, notice_key, event_key, str(exc))
+        return NoticeResult(SIN_PLANTILLA, str(exc))
+    enviado = await send_template_to_conversation(
+        conversation.id,
+        template_name=plantilla.friendly_name,
+        language=plantilla.language,
+        components=twilio_tpl.componentes(plantilla, valores),
+        preview_text=twilio_tpl.vista_previa(plantilla, valores),
+        client_message_id=notice_key,
+    )
+    if not enviado:
+        raise NoticeNotSentError(f"Aviso {event_key} sin encolar")
     return NoticeResult("plantilla")
 
 

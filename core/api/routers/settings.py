@@ -1409,6 +1409,23 @@ async def _message_templates_out(tenant_id) -> MessageTemplatesSettings:
                 named=(t.parameter_format or "").upper() == "NAMED",
             )
         )
+    # WhatsApp vía Twilio (ADR-0186): también sus plantillas aprobadas, con el mismo formato (`{{1}}`, `{{2}}`…).
+    from core.gateway.twilio import plantillas_en_uso as twilio_tpl
+
+    for t in await twilio_tpl.del_negocio(tenant_id):
+        if (t.friendly_name, t.language) in vistas:
+            continue
+        vistas.add((t.friendly_name, t.language))
+        templates.append(
+            TenantTemplateItem(
+                name=t.friendly_name,
+                language=t.language,
+                category=t.category,
+                body=t.body,
+                variables=twilio_tpl.placeholders(t.body),
+                named=False,
+            )
+        )
     return MessageTemplatesSettings(
         events=[EventCatalogItem(event=k, variables=v) for k, v in EVENTOS.items()],
         mapping={k: EventTemplateEntry.model_validate(v) for k, v in raw.items() if k in EVENTOS},
@@ -1508,18 +1525,43 @@ async def save_message_templates(
                 )
             ).scalars().first()
         if plantilla is None:
-            errores[evento] = f"No existe la plantilla {nombre} ({idioma}) en tus conexiones."
-            continue
-        if template_has_non_body_variables(plantilla.components):
-            errores[evento] = "La plantilla tiene variables fuera del cuerpo (cabecera o botón): no se admite todavía."
-            continue
-        placeholders = template_placeholders(plantilla.components)
-        claves = set(entrada.variables) if isinstance(entrada.variables, dict) else None
-        if (claves is not None and claves != set(placeholders)) or (
-            claves is None and len(rutas) != len(placeholders)
-        ):
-            errores[evento] = f"La plantilla tiene {len(placeholders)} variables y mapeaste {len(rutas)}."
-            continue
+            from core.gateway.twilio import plantillas_en_uso as twilio_tpl
+
+            # Plantilla de Twilio (ADR-0186): sus variables son `{{1}}`, `{{2}}`… del cuerpo. El mismo nombre puede
+            # existir en varias conexiones (el aviso usa la de cada conversación): todas tienen que pedir las mismas.
+            de_twilio = [
+                t
+                for t in await twilio_tpl.del_negocio(principal.tenant_id, solo_aprobadas=False)
+                if t.friendly_name == nombre and t.language == idioma
+            ]
+            if not de_twilio:
+                errores[evento] = f"No existe la plantilla {nombre} ({idioma}) en tus conexiones."
+                continue
+            distintas = {tuple(twilio_tpl.placeholders(t.body)) for t in de_twilio}
+            if len(distintas) > 1:
+                errores[evento] = (
+                    f"La plantilla {nombre} ({idioma}) tiene variables distintas en tus conexiones de Twilio."
+                )
+                continue
+            placeholders_twilio = list(next(iter(distintas)))
+            if isinstance(entrada.variables, dict):
+                if set(entrada.variables) != set(placeholders_twilio):
+                    errores[evento] = "Las variables no coinciden con las de la plantilla."
+                    continue
+            elif len(entrada.variables) != len(placeholders_twilio):
+                errores[evento] = "La cantidad de variables no coincide con la de la plantilla."
+                continue
+        else:
+            if template_has_non_body_variables(plantilla.components):
+                errores[evento] = "La plantilla tiene variables fuera del cuerpo (cabecera o botón): no se admite todavía."
+                continue
+            placeholders = template_placeholders(plantilla.components)
+            claves = set(entrada.variables) if isinstance(entrada.variables, dict) else None
+            if (claves is not None and claves != set(placeholders)) or (
+                claves is None and len(rutas) != len(placeholders)
+            ):
+                errores[evento] = f"La plantilla tiene {len(placeholders)} variables y mapeaste {len(rutas)}."
+                continue
         por_canal = por_canal if pedido else await _textos_guardados(evento)
         opcion = await _opcion_guardada(evento) if opcion is None else opcion
         limpio[evento] = {

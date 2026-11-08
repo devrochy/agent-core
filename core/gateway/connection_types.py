@@ -99,7 +99,13 @@ _EMAIL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "host": {"type": "string", "title": "Servidor SMTP", "description": "ej. smtp.gmail.com"},
-        "port": {"type": "integer", "title": "Puerto", "default": 587, "minimum": 1, "maximum": 65535},
+        "port": {
+            "type": "integer",
+            "title": "Puerto",
+            "default": 587,
+            "minimum": 1,
+            "maximum": 65535,
+        },
         "username": {"type": "string", "title": "Usuario SMTP"},
         "password": {
             "type": "string",
@@ -128,8 +134,17 @@ _TWILIO_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "account_sid": {"type": "string", "title": "Account SID", "pattern": "^AC[0-9a-f]{32}$"},
-        "auth_token": {"type": "string", "title": "Auth Token", "format": "password", "writeOnly": True},
-        "sender_e164": {"type": "string", "title": "Número de WhatsApp", "pattern": "^\\+[1-9]\\d{6,14}$"},
+        "auth_token": {
+            "type": "string",
+            "title": "Auth Token",
+            "format": "password",
+            "writeOnly": True,
+        },
+        "sender_e164": {
+            "type": "string",
+            "title": "Número de WhatsApp",
+            "pattern": "^\\+[1-9]\\d{6,14}$",
+        },
     },
     "required": ["account_sid", "auth_token", "sender_e164"],
 }
@@ -348,10 +363,14 @@ TEXTO_CON_MENU = CapacidadesCanal(respuesta_numerica=True)
 # `tests/test_capacidades_canal.py`: un canal nuevo declara sus capacidades a propósito, no por omisión.
 CAPACIDADES_POR_TIPO: dict[str, CapacidadesCanal] = {
     # WhatsApp Cloud: botones y lista dentro de la ventana de 24 h; fuera, plantilla aprobada (QUICK_REPLY).
-    "whatsapp_meta": CapacidadesCanal(botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True),
+    "whatsapp_meta": CapacidadesCanal(
+        botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True
+    ),
     # Por QR (neonize): solo texto entrante y saliente, sin plantillas ni ventana (ADR-0103).
     "whatsapp_waweb": TEXTO_CON_MENU,
-    "whatsapp_twilio": SOLO_TEXTO,
+    # WhatsApp vía Twilio (ADR-0186): misma ventana de 24 h que Meta y, fuera de ella, plantilla aprobada de la Content
+    # API (PR-7a). Botones y lista llegan con el PR-7i.
+    "whatsapp_twilio": CapacidadesCanal(plantilla_aprobada=True, ventana_24h=True),
     "whatsapp_plivo": SOLO_TEXTO,
     "instagram_meta": TEXTO_CON_MENU,
     "messenger_meta": TEXTO_CON_MENU,
@@ -411,7 +430,11 @@ def canales_con(capacidad: str) -> list[str]:
         raise ValueError(f"capacidad desconocida: {capacidad}")
     canales: list[str] = []
     for t in connection_types():
-        if t.channel and t.produces_conversations and getattr(CAPACIDADES_POR_TIPO[t.id], capacidad):
+        if (
+            t.channel
+            and t.produces_conversations
+            and getattr(CAPACIDADES_POR_TIPO[t.id], capacidad)
+        ):
             if t.channel not in canales:
                 canales.append(t.channel)
     return canales

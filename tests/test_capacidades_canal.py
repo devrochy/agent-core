@@ -38,7 +38,7 @@ def test_todo_tipo_de_conexion_con_canal_declara_sus_capacidades() -> None:
     [
         ("whatsapp", "meta", META),
         ("whatsapp", "waweb", TEXTO_CON_MENU),
-        ("whatsapp", "twilio", SOLO_TEXTO),
+        ("whatsapp", "twilio", CapacidadesCanal(plantilla_aprobada=True, ventana_24h=True)),
         ("whatsapp", "plivo", SOLO_TEXTO),
         ("web", "web", TEXTO_CON_MENU),
         ("instagram", "meta", TEXTO_CON_MENU),

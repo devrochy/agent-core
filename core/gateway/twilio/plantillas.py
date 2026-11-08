@@ -531,6 +531,9 @@ def _datos_de_twilio(
 ) -> tuple[str, dict[str, Any], dict[str, str], str] | None:
     """Lo que se guarda de un Content de Twilio, acotado (invariante 7: es dato y viene de fuera): solo el texto de
     `twilio/text`, hasta 20 variables cortas y un idioma válido. `None` si no cabe en las reglas."""
+    if set(content.types) != {"twilio/text"}:
+        # Con botones, tarjeta o media enviaría algo distinto del texto que se muestra: hasta el PR-7i no se usa.
+        return None
     texto = content.types.get("twilio/text")
     cuerpo = str(texto.get("body") or "") if isinstance(texto, dict) else ""
     if not _SID_HX.fullmatch(content.sid or "") or not cuerpo or len(cuerpo) > MAX_CUERPO:

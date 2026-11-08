@@ -76,7 +76,9 @@ class RetryDecision:
     countdown_s: float | None = None
 
 
-def decide_retry(exc: ProviderError, attempts_made: int, max_attempts: int = MAX_ATTEMPTS) -> RetryDecision:
+def decide_retry(
+    exc: ProviderError, attempts_made: int, max_attempts: int = MAX_ATTEMPTS
+) -> RetryDecision:
     """Decide por la categoría del error, no por el código de cada proveedor (ADR-0186).
 
     Nunca usa el backoff genérico para un rate limit: usa el plazo que dio el
@@ -233,13 +235,16 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
             if message.tenant_id != tenant_id:
                 log.error(
                     "outbound_send_tenant_mismatch",
-                    message_id=str(message_id), task_tenant_id=str(tenant_id),
+                    message_id=str(message_id),
+                    task_tenant_id=str(tenant_id),
                     message_tenant_id=str(message.tenant_id),
                 )
                 return None
 
             conversation = await session.get(Conversation, message.conversation_id)
-            customer = await session.get(Customer, conversation.customer_id) if conversation else None
+            customer = (
+                await session.get(Customer, conversation.customer_id) if conversation else None
+            )
         if conversation is None or customer is None:
             return None
 
@@ -279,14 +284,20 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
             # Sin credenciales (la conexión viva no tiene número o token, ADR-0122): ni el
             # tiempo ni los reintentos lo arreglan. Falla ya y se escala.
             await _release_claim(message.id, message.conversation_id, tenant_id)
-            return GraphError("La conexión de WhatsApp no tiene credenciales para enviar", category="PERMANENT")
+            return GraphError(
+                "La conexión de WhatsApp no tiene credenciales para enviar", category="PERMANENT"
+            )
         elif provider == "twilio" and not (
-            credentials.get("account_sid") and credentials.get("auth_token") and credentials.get("from")
+            credentials.get("account_sid")
+            and credentials.get("auth_token")
+            and credentials.get("from")
         ):
             # Igual que Meta: una conexión de Twilio sin credenciales completas no se arregla reintentando.
             await _release_claim(message.id, message.conversation_id, tenant_id)
             return ProviderError(
-                "La conexión de Twilio no tiene credenciales para enviar", provider="twilio", category="CONFIG"
+                "La conexión de Twilio no tiene credenciales para enviar",
+                provider="twilio",
+                category="CONFIG",
             )
         if conversation.channel in CANALES_DE_MENSAJERIA_META:
             # Ventana y autoría para decidir `RESPONSE` o `HUMAN_AGENT` (ADR-0152): los datos del
@@ -294,7 +305,9 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
             credentials = {
                 **credentials,
                 "service_window_expires_at": (
-                    conversation.service_window_expires_at.isoformat() if conversation.service_window_expires_at else ""
+                    conversation.service_window_expires_at.isoformat()
+                    if conversation.service_window_expires_at
+                    else ""
                 ),
                 "human": "true" if message.sender_type == "human" else "false",
             }
@@ -307,26 +320,58 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
 
         try:
             if message.template_name:
-                wamid = await adapter.send_template(
-                    credentials,
-                    customer.external_id,
-                    message.template_name,
-                    message.template_language or "es",
-                    list(message.template_components or []),
-                )
+                # Una plantilla que el canal no sabe enviar (`ChannelError`) es permanente: reintentarla como error
+                # de red no la arregla. La de Twilio (ADR-0186) va por su `ContentSid`.
+                try:
+                    if provider == "twilio":
+                        from core.gateway.twilio.plantillas_en_uso import contenido_de, enviable
+
+                        contenido = contenido_de(message.template_components)
+                        if contenido is None:
+                            raise ChannelError("La plantilla de Twilio no trae su ContentSid")
+                        if not await enviable(tenant_id, conversation.connection_id, contenido[0]):
+                            raise ChannelError(
+                                "La plantilla ya no está aprobada en la conexión actual de la conversación"
+                            )
+                        wamid = await adapter.send_content_template(
+                            credentials, customer.external_id, contenido[0], contenido[1]
+                        )
+                    else:
+                        wamid = await adapter.send_template(
+                            credentials,
+                            customer.external_id,
+                            message.template_name,
+                            message.template_language or "es",
+                            list(message.template_components or []),
+                        )
+                except ProviderError:
+                    raise
+                except ChannelError as exc:
+                    await _release_claim(message.id, message.conversation_id, tenant_id)
+                    if provider == "twilio":
+                        return ProviderError(
+                            f"Plantilla no enviable: {exc}", provider="twilio", category="PERMANENT"
+                        )
+                    return GraphError(f"Plantilla no enviable: {exc}", category="PERMANENT")
             elif message.interactive:
                 # Botones de respuesta (HU-AOS-09): el sender ya validó canal, ventana y topes. Si
                 # la conexión dejó de ser de Meta o el payload no sirve, el `ChannelError` es
                 # permanente: reintentarlo como error de red no lo arregla.
                 try:
-                    wamid = await adapter.send_interactive(credentials, customer.external_id, dict(message.interactive))
+                    wamid = await adapter.send_interactive(
+                        credentials, customer.external_id, dict(message.interactive)
+                    )
                 except ProviderError:
                     raise  # el error ya clasificado del proveedor decide su reintento
                 except ChannelError as exc:
                     await _release_claim(message.id, message.conversation_id, tenant_id)
-                    return GraphError(f"Mensaje interactivo no enviable: {exc}", category="PERMANENT")
+                    return GraphError(
+                        f"Mensaje interactivo no enviable: {exc}", category="PERMANENT"
+                    )
             elif message.media_type == "image" and message.media_url:
-                wamid = await adapter.send_image(credentials, customer.external_id, message.media_url, message.content)
+                wamid = await adapter.send_image(
+                    credentials, customer.external_id, message.media_url, message.content
+                )
             else:
                 wamid = await adapter.send_text(credentials, customer.external_id, message.content)
         except ProviderError as exc:
@@ -337,7 +382,9 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
             return GraphError(str(exc), category="POLICY", is_transient=True)
         except Exception as exc:  # transporte no clasificado (ej. httpx.ConnectError sin envolver)
             await _release_claim(message.id, message.conversation_id, tenant_id)
-            return GraphError(f"Error de red enviando mensaje: {exc}", category="TRANSIENT", is_transient=True)
+            return GraphError(
+                f"Error de red enviando mensaje: {exc}", category="TRANSIENT", is_transient=True
+            )
 
         async with get_session() as session:
             db_message = await session.get(Message, message_id)
@@ -354,7 +401,12 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
 
 
 async def _mark_failed(
-    message_id: uuid.UUID, tenant_id: uuid.UUID, exc: ProviderError, *, dlq: bool, escalar: bool = True
+    message_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    exc: ProviderError,
+    *,
+    dlq: bool,
+    escalar: bool = True,
 ) -> tuple[uuid.UUID, object, uuid.UUID] | None:
     async with tenant_scope(tenant_id):
         async with get_session() as session:
@@ -364,7 +416,8 @@ async def _mark_failed(
             if db_message.tenant_id != tenant_id:
                 log.error(
                     "outbound_mark_failed_tenant_mismatch",
-                    message_id=str(message_id), task_tenant_id=str(tenant_id),
+                    message_id=str(message_id),
+                    task_tenant_id=str(tenant_id),
                     message_tenant_id=str(db_message.tenant_id),
                 )
                 return None
@@ -384,8 +437,12 @@ async def _mark_failed(
 
         if dlq:
             log.error(
-                "outbound_dlq", message_id=str(message_id), tenant_id=str(tenant_id),
-                error_code=exc.code, error_subcode=error_subcode, fbtrace_id=fbtrace_id,
+                "outbound_dlq",
+                message_id=str(message_id),
+                tenant_id=str(tenant_id),
+                error_code=exc.code,
+                error_subcode=error_subcode,
+                fbtrace_id=fbtrace_id,
             )
 
         if de_un_envio:
@@ -414,9 +471,13 @@ async def _baja_por_meta(conversation_id: uuid.UUID, tenant_id: uuid.UUID, detal
                 )
             )
         ).scalar_one_or_none()
-        if customer_id is not None and (
-            await estados_de_consentimiento(session, tenant_id, [customer_id])
-        ).get(customer_id) == "revocado":
+        if (
+            customer_id is not None
+            and (await estados_de_consentimiento(session, tenant_id, [customer_id])).get(
+                customer_id
+            )
+            == "revocado"
+        ):
             return  # ya estaba de baja: un 131050 repetido no agrega filas
     if customer_id is not None:
         await registrar_consentimiento(
@@ -507,7 +568,10 @@ def outbound_send_task(self, message_id: str, tenant_id: str) -> None:
     )
     info = run_async(
         _mark_failed(
-            uuid.UUID(message_id), uuid.UUID(tenant_id), error, dlq=dlq,
+            uuid.UUID(message_id),
+            uuid.UUID(tenant_id),
+            error,
+            dlq=dlq,
             escalar=not isinstance(error, ConexionPausadaError),
         )
     )
