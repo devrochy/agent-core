@@ -194,3 +194,8 @@ def conectar() -> None:
     before_task_publish.connect(turno_al_publicar, weak=False)
     task_prerun.connect(turno_al_empezar, weak=False)
     task_postrun.connect(turno_al_terminar, weak=False)
+    # Conteo y duración de las tareas (ADR-0188).
+    from core.observability import metricas_negocio
+
+    task_prerun.connect(metricas_negocio.tarea_empezo, weak=False)
+    task_postrun.connect(metricas_negocio.tarea_termino, weak=False)

@@ -371,6 +371,18 @@ async def resumen(ahora: datetime | None = None) -> Resumen:
     )
 
 
+async def fallos_24h(ahora: datetime | None = None) -> dict[str, int]:
+    """Ejecuciones `failed` de cada cron que corrió en las últimas 24 h (0 si no falló). Para la
+    sonda de métricas `agentcore_cron_failures_24h` (ADR-0188)."""
+    desde = (ahora or utcnow()) - timedelta(hours=24)
+    fallidas = func.count().filter(CronRun.status == "failed")
+    async with get_session() as session:
+        filas = await session.execute(
+            select(CronRun.task_name, fallidas).where(CronRun.started_at > desde).group_by(CronRun.task_name)
+        )
+        return {str(nombre): int(n) for nombre, n in filas.all()}
+
+
 async def detalle(name: str, ahora: datetime | None = None) -> CronView:
     if get_meta(name) is None:
         raise CronNotFound(name)

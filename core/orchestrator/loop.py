@@ -75,6 +75,7 @@ from core.memory import notas as notas_del_equipo
 from core.memory import relacion as relacion_con_modulos
 from core.memory import vector as vector_memory
 from core.memory import working as working_memory
+from core.observability import metricas_negocio
 from core.observability.tracing import get_tracer, span_attributes
 from core.orchestrator.escalation import ESCALATION_REPLY, VERIFYING_REPLY, escalate
 from core.orchestrator.guardrails import MAX_GUARDRAIL_RETRIES, run_guardrails
@@ -176,9 +177,18 @@ class _TurnUsage:
         self.cached_tokens += leidos
         self.cache_write_tokens += escritos
         self.latency_ms += response.latency_ms
-        self.cost_usd += _response_cost(provider, response)
+        costo = _response_cost(provider, response)
+        self.cost_usd += costo
         self.model = response.model or self.model
         self.llamadas += 1
+        metricas_negocio.llm_respuesta(
+            response.model or getattr(provider, "model", ""),
+            entrada=uso.input_tokens + (0 if incluido else leidos + escritos),
+            salida=uso.output_tokens,
+            cache_leido=leidos,
+            cache_escrito=escritos,
+            costo_usd=costo,
+        )
 
 
 async def _compilado_del_turno() -> Any:
@@ -622,6 +632,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             # v2.0.0 (ADR-0050): fallback real. Si el proveedor/modelo primario
             # falla y el tenant definió `spec.model.fallback` (distinto), se
             # intenta UNA vez con ese modelo antes de escalar.
+            metricas_negocio.llm_fallo(routing.model)
             fallback_model = spec.model.fallback
             recovered = None
             if fallback_model and fallback_model != routing.model:
@@ -641,6 +652,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                         fallback=fallback_model,
                     )
                 except LLMProviderError:
+                    metricas_negocio.llm_fallo(fallback_model)
                     log.exception("llm_call_fallback_failed", conversation_id=str(conversation_id))
             if recovered is None:
                 log.exception("llm_call_failed", conversation_id=str(conversation_id))
