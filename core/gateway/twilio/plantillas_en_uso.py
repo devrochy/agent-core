@@ -84,13 +84,20 @@ async def aprobadas(conversation: Any) -> list[TwilioContentTemplate]:
     connection_id = getattr(conversation, "connection_id", None)
     if connection_id is None:
         return []
+    return await aprobadas_de_conexion(conversation.tenant_id, connection_id)
+
+
+async def aprobadas_de_conexion(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID
+) -> list[TwilioContentTemplate]:
+    """Las aprobadas de una conexión de ese negocio, por nombre (también las usa el envío a segmentos, PR-7b)."""
     async with get_session() as session:
         return list(
             (
                 await session.execute(
                     select(TwilioContentTemplate)
                     .where(
-                        TwilioContentTemplate.tenant_id == conversation.tenant_id,
+                        TwilioContentTemplate.tenant_id == tenant_id,
                         TwilioContentTemplate.channel_connection_id == connection_id,
                         TwilioContentTemplate.approval_status == "approved",
                         TwilioContentTemplate.content_sid.is_not(None),

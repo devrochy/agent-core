@@ -468,10 +468,12 @@ async def _mark_failed(
 
         if de_un_envio:
             # HU-CRM-06 (ADR-0150): una promoción que no llega no escala la conversación ni pausa
-            # al agente. Si el cliente dejó de recibir marketing (131050), queda la baja.
+            # al agente. Si el cliente dejó de recibir marketing (131050 de Meta, OPT_OUT de Twilio), queda la baja.
             escalar = False
             if exc.provider == "meta" and exc.code == CODIGO_SIN_MARKETING:
-                await _baja_por_meta(conversation_id, tenant_id, exc.message)
+                await _baja_por_proveedor(conversation_id, tenant_id, exc.message, "meta_131050")
+            elif exc.provider == "twilio" and exc.category == "OPT_OUT":
+                await _baja_por_proveedor(conversation_id, tenant_id, exc.message, "twilio_21610")
 
         if escalar:
             from core.orchestrator.escalation import escalate
@@ -481,7 +483,9 @@ async def _mark_failed(
     return conversation_id, created_at, failed_id
 
 
-async def _baja_por_meta(conversation_id: uuid.UUID, tenant_id: uuid.UUID, detalle: str) -> None:
+async def _baja_por_proveedor(
+    conversation_id: uuid.UUID, tenant_id: uuid.UUID, detalle: str, origen: str
+) -> None:
     from core.admin.envios_segmento import estados_de_consentimiento, registrar_consentimiento
 
     async with get_session() as session:
@@ -499,10 +503,10 @@ async def _baja_por_meta(conversation_id: uuid.UUID, tenant_id: uuid.UUID, detal
             )
             == "revocado"
         ):
-            return  # ya estaba de baja: un 131050 repetido no agrega filas
+            return  # ya estaba de baja: un error repetido no agrega filas
     if customer_id is not None:
         await registrar_consentimiento(
-            tenant_id, customer_id, estado="revocado", origen="meta_131050", evidencia=detalle[:500]
+            tenant_id, customer_id, estado="revocado", origen=origen, evidencia=detalle[:500]
         )
 
 

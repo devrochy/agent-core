@@ -23,7 +23,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, Query
 from pydantic import BaseModel, Field, StringConstraints
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from core.admin import envios_segmento as envios
 from core.admin.roles import actua_como_master
@@ -146,10 +146,7 @@ _COMO = {
 async def conexiones_para_envio(
     principal: Annotated[Principal, Depends(require("leads", write=True))],
 ) -> list[ConexionDeEnvioOut]:
-    """Conexiones de WhatsApp Cloud del negocio con sus plantillas de marketing aprobadas."""
-    from core.gateway.event_notices import render_body, template_placeholders
-    from core.gateway.meta_connection_state import motivo_pausa_de
-
+    """Conexiones de WhatsApp del negocio (Cloud o Twilio) con sus plantillas de marketing aprobadas."""
     require_owner_or_master(principal)
     tenant_id = principal.tenant_id
     async with get_session() as session:
@@ -160,7 +157,7 @@ async def conexiones_para_envio(
                     ChannelConnection.tenant_id == tenant_id,
                     ChannelConnection.deleted_at.is_(None),
                     ChannelConnection.channel == "whatsapp",
-                    ChannelConnection.meta_connection_id.is_not(None),
+                    or_(ChannelConnection.meta_connection_id.is_not(None), ChannelConnection.provider == "twilio"),
                 )
                 .order_by(ChannelConnection.created_at)
                 .limit(50)
@@ -168,18 +165,14 @@ async def conexiones_para_envio(
         ).scalars().all()
     salida = []
     for c in conexiones:
-        assert c.meta_connection_id is not None
-        plantillas = await envios.plantillas_de_marketing(tenant_id, c.meta_connection_id)
+        plantillas = await envios.plantillas_de_la_conexion(tenant_id, c.id, c.meta_connection_id)
         salida.append(
             ConexionDeEnvioOut(
                 id=c.id,
                 label=c.label or c.external_id,
-                motivo_pausa=await motivo_pausa_de(c.meta_connection_id),
+                motivo_pausa=await envios.motivo_pausa_de_conexion(c),
                 plantillas=[
-                    PlantillaDeEnvio(
-                        id=t.id, name=t.name, language=t.language, body=render_body(t, {}),
-                        variables=template_placeholders(t.components),
-                    )
+                    PlantillaDeEnvio(id=t.id, name=t.nombre, language=t.idioma, body=t.texto({}), variables=t.placeholders)
                     for t in plantillas
                 ],
             )
@@ -328,7 +321,7 @@ async def ver_consentimiento(
         historial=[
             ConsentimientoItem(
                 estado=f.estado, origen=f.origen, evidencia=f.evidencia,
-                quien=f.actor_label or ("el cliente" if f.origen in ("palabra_de_baja", "meta_131050") else "el equipo"),
+                quien=f.actor_label or ("el cliente" if f.origen in envios.ORIGENES_DE_BAJA_DEL_CLIENTE else "el equipo"),
                 created_at=f.created_at,
             )
             for f in filas
