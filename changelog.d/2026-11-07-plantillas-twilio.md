@@ -1,0 +1,31 @@
+## Plantillas de WhatsApp vía Twilio (PR-6, ADR-0186) (2026-11-07)
+
+- **Tabla `twilio_content_templates`** (migración 0123):
+  - Guarda las plantillas de la Content API (`HX…`) de cada conexión de Twilio, con el estado de su aprobación de WhatsApp.
+  - RLS forzada y FK compuesta a la conexión.
+  - Nombre único entre las vivas de la conexión.
+  - Borrado lógico.
+- **Crear**, en dos pasos para que un corte a mitad no duplique nada:
+  - Primero la fila local en `creating` y después el Content en Twilio.
+  - Si el segundo paso falla, repetir el pedido reconcilia por nombre con lo que Twilio ya tenga.
+  - Antes de llamar a Twilio valida: nombre, idioma, categoría, texto de hasta 1.024 caracteres y variables `{{1}}…` contiguas, cada una con su ejemplo.
+- **Aprobación**:
+  - Enviar a aprobación es idempotente.
+  - Twilio no avisa por webhook, así que el estado se consulta por polling con backoff: cada 5 min la primera hora, cada 30 min hasta 48 h y cada hora hasta 14 días.
+  - Cron `core.twilio_template_poll` (cada 5 min), sobre `admin_twilio_plantillas_por_revisar` (SECURITY DEFINER).
+- **Sincronización**:
+  - Cron `core.twilio_template_sync` (cada hora): trae todas las plantillas de cada cuenta, incluidas las creadas en la consola de Twilio, y adopta las que quedaron en `creating`.
+  - El sync manual tiene un tope de uno por minuto por conexión.
+- **Rutas** en `/api/v1/admin/connections/twilio/{id}/templates`:
+  - `GET`: listar (con `solo_aprobadas`).
+  - `POST`: crear.
+  - `POST sync`.
+  - `POST {tid}/submit` y `POST {tid}/refresh`.
+  - `DELETE {tid}`: borrado lógico aquí; en Twilio también, si se puede.
+- Los dos crons están declarados en el catálogo de ADR-0183.
+- **Auditoría multitenant** (sin hallazgos altos):
+  - **Polling**: un error que no es pasajero (token revocado, por ejemplo) aplaza la consulta una hora, para que una fila trabada no acapare el cron. Si el Content ya no existe (404), la plantilla se da de baja. El enumerador omite las conexiones pausadas.
+  - **Sync**: al adoptar una plantilla en `creating` toma el contenido de Twilio, así lo que se muestra es lo que el `HX` envía. Da de baja las borradas en la consola. Los datos importados se acotan: solo el texto, hasta 20 variables y un idioma válido. Ante un conflicto de integridad responde 409, sin el SQL en el log.
+  - **Borrar en Twilio**: solo se borra lo que creó solvershub (`origen`) y que ninguna otra fila usa. Las importadas de la consola se quedan en la cuenta.
+  - **Permisos**: sincronizar y borrar piden propietario o master. Crear, enviar a aprobación y borrar quedan auditados.
+  - **Tope del sync manual**: se toma después de validar la conexión.

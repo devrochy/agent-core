@@ -42373,6 +42373,543 @@
           }
         }
       }
+    },
+    "/api/v1/admin/connections/twilio/{connection_id}/templates": {
+      "get": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Listar Plantillas",
+        "description": "Plantillas de la conexión, con el estado de su aprobación.",
+        "operationId": "listar_plantillas_api_v1_admin_connections_twilio__connection_id__templates_get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "solo_aprobadas",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Solo Aprobadas"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TwilioPlantillaOut"
+                  },
+                  "title": "Response Listar Plantillas Api V1 Admin Connections Twilio  Connection Id  Templates Get"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Crear Plantilla",
+        "description": "Crea la plantilla en la cuenta de Twilio (sin enviarla a aprobación). Repetirla tras un corte la reconcilia.",
+        "operationId": "crear_plantilla_api_v1_admin_connections_twilio__connection_id__templates_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwilioPlantillaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwilioPlantillaOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "409": {
+            "description": "`nombre_en_uso` o `plantilla_sin_crear`."
+          },
+          "422": {
+            "description": "`nombre_invalido`, `idioma_invalido`, `categoria_invalida`, `cuerpo_invalido` o `variables_invalidas`."
+          },
+          "429": {
+            "description": "`sync_rate_limited` (sync manual, uno por minuto)."
+          },
+          "502": {
+            "description": "`twilio_unavailable` o `twilio_error`."
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/twilio/{connection_id}/templates/sync": {
+      "post": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Sincronizar Plantillas",
+        "description": "Trae todas las plantillas de la cuenta de Twilio (también las creadas en su consola). Uno por minuto.",
+        "operationId": "sincronizar_plantillas_api_v1_admin_connections_twilio__connection_id__templates_sync_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TwilioPlantillaOut"
+                  },
+                  "title": "Response Sincronizar Plantillas Api V1 Admin Connections Twilio  Connection Id  Templates Sync Post"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "409": {
+            "description": "`nombre_en_uso` o `plantilla_sin_crear`."
+          },
+          "422": {
+            "description": "`nombre_invalido`, `idioma_invalido`, `categoria_invalida`, `cuerpo_invalido` o `variables_invalidas`."
+          },
+          "429": {
+            "description": "`sync_rate_limited` (sync manual, uno por minuto)."
+          },
+          "502": {
+            "description": "`twilio_unavailable` o `twilio_error`."
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/twilio/{connection_id}/templates/{template_id}/submit": {
+      "post": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Enviar Plantilla A Aprobacion",
+        "description": "Pide la aprobación de WhatsApp. Idempotente.",
+        "operationId": "enviar_plantilla_a_aprobacion_api_v1_admin_connections_twilio__connection_id__templates__template_id__submit_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwilioPlantillaOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "409": {
+            "description": "`nombre_en_uso` o `plantilla_sin_crear`."
+          },
+          "422": {
+            "description": "`nombre_invalido`, `idioma_invalido`, `categoria_invalida`, `cuerpo_invalido` o `variables_invalidas`."
+          },
+          "429": {
+            "description": "`sync_rate_limited` (sync manual, uno por minuto)."
+          },
+          "502": {
+            "description": "`twilio_unavailable` o `twilio_error`."
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/twilio/{connection_id}/templates/{template_id}/refresh": {
+      "post": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Refrescar Plantilla",
+        "description": "Consulta ahora el estado de la aprobación.",
+        "operationId": "refrescar_plantilla_api_v1_admin_connections_twilio__connection_id__templates__template_id__refresh_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwilioPlantillaOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "409": {
+            "description": "`nombre_en_uso` o `plantilla_sin_crear`."
+          },
+          "422": {
+            "description": "`nombre_invalido`, `idioma_invalido`, `categoria_invalida`, `cuerpo_invalido` o `variables_invalidas`."
+          },
+          "429": {
+            "description": "`sync_rate_limited` (sync manual, uno por minuto)."
+          },
+          "502": {
+            "description": "`twilio_unavailable` o `twilio_error`."
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/twilio/{connection_id}/templates/{template_id}": {
+      "delete": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Borrar Plantilla",
+        "description": "Borra la plantilla (también en Twilio, si se puede).",
+        "operationId": "borrar_plantilla_api_v1_admin_connections_twilio__connection_id__templates__template_id__delete",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -76780,6 +77317,150 @@
           "auth_token"
         ],
         "title": "TwilioRotarIn"
+      },
+      "TwilioPlantillaIn": {
+        "properties": {
+          "nombre": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Nombre",
+            "description": "Minúsculas, números y guion bajo."
+          },
+          "idioma": {
+            "type": "string",
+            "maxLength": 5,
+            "minLength": 2,
+            "title": "Idioma",
+            "description": "`es`, `es_CO`…"
+          },
+          "categoria": {
+            "type": "string",
+            "title": "Categoria",
+            "description": "`UTILITY`, `MARKETING` o `AUTHENTICATION`."
+          },
+          "cuerpo": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Cuerpo",
+            "description": "Texto con variables `{{1}}`, `{{2}}`…"
+          },
+          "ejemplos": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Ejemplos",
+            "description": "Valor de ejemplo de cada variable: `{\"1\": \"Ana\"}`."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "nombre",
+          "idioma",
+          "categoria",
+          "cuerpo"
+        ],
+        "title": "TwilioPlantillaIn"
+      },
+      "TwilioPlantillaOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Connection Id"
+          },
+          "content_sid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Sid"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "idioma": {
+            "type": "string",
+            "title": "Idioma"
+          },
+          "categoria": {
+            "type": "string",
+            "title": "Categoria"
+          },
+          "cuerpo": {
+            "type": "string",
+            "title": "Cuerpo"
+          },
+          "ejemplos": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Ejemplos"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado",
+            "description": "`creating`, `unsubmitted`, `received`, `pending`, `approved`, `rejected`, `paused` o `disabled`."
+          },
+          "motivo_rechazo": {
+            "type": "string",
+            "title": "Motivo Rechazo"
+          },
+          "enviada_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enviada At"
+          },
+          "aprobada_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aprobada At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "connection_id",
+          "content_sid",
+          "nombre",
+          "idioma",
+          "categoria",
+          "cuerpo",
+          "ejemplos",
+          "estado",
+          "motivo_rechazo",
+          "enviada_at",
+          "aprobada_at"
+        ],
+        "title": "TwilioPlantillaOut"
       }
     }
   }
