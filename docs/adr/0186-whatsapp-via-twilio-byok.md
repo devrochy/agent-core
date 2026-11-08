@@ -2,7 +2,7 @@
 
 - **Estado:** propuesto
 - **Fecha:** 2026-11-07
-- **Contexto:** D-63 (docs); HU-CONN-11 a HU-CONN-17 (SPEC-08). Primer uso: el agente comercial de solvershub con un número nuevo comprado en Twilio, mientras Meta verifica a solvershub.
+- **Contexto:** D-64 (docs); HU-CONN-11 a HU-CONN-17 (SPEC-08). Primer uso: el agente comercial de solvershub con un número nuevo comprado en Twilio, mientras Meta verifica a solvershub.
 - **Usa:** ADR-0052 (canales por entry points), ADR-0069 (catálogo de tipos de conexión), ADR-0072 (capacidades según la conexión), ADR-0094 (credenciales por conexión), ADR-0108 (plantillas por evento), ADR-0115 (conexión canónica), ADR-0122 (pausa y borrado lógico), ADR-0126 (webhook por conexión), ADR-0165 (salida estructurada).
 - **Relacionado:** ADR-0187 (fase 2, Twilio como ISV con subcuentas).
 
@@ -197,3 +197,44 @@ Para que el negocio no tenga cuenta propia en Twilio (modelo ISV), Twilio exige 
 | PR-7a | Resolvedor, avisos por evento y selector del chat |
 | PR-7i | Botones y listas |
 | PR-7b | Segmentos (después de la fase 1) |
+
+## Adenda (2026-11-08) · lo que cambió al implementar (PR-2 a PR-7b)
+
+La fase 1 quedó implementada en PRs apilados (#714, #716, #717, #718, #719, #723, #728 y #729; migraciones 0121 a 0124). Esto corrige lo escrito arriba donde el código terminó distinto. El ADR sigue **propuesto** hasta probarlo en test con el número real.
+
+### Cambios de decisión
+
+- **§9, sin texto de respaldo (cambia lo aprobado).** El ADR decía «si la creación falla, el envío cae a texto numerado». No se implementó: un interactivo que Twilio no acepta falla como error de Twilio y la conversación escala, igual que en Meta. El outbox no sabe si quien encoló el mensaje acepta un texto en lugar del botón (`sin_degradar` no viaja con el mensaje), y un texto no confirma una confirmación ni ejecuta una opción directa. Degradar a texto se decide antes de encolar, en `send_interactive_to_conversation`. Se revisa si en test Twilio rechaza los interactivos (ver «Pendiente de verificar»); agregarlo exige guardar en el mensaje si acepta degradarse.
+- **§9, un Content por forma, no por hash.** La documentación de Twilio admite variables en el cuerpo, los títulos y los ids de un mensaje en sesión, así que no hace falta un Content por cada combinación de botones.
+  - La clave de `twilio_interactive_contents` es `(tenant, conexión, forma)`, con forma `quick_reply:N` o `list:N`.
+  - Todo lo variable viaja en `ContentVariables`. Los ejemplos del Content son neutros, para no dejar datos de un cliente en la cuenta.
+  - La fila guarda la `account_sid` que la creó: rotar credenciales o reconectar el número con otra cuenta conserva la conexión, y un Content de otra cuenta no sirve. Desconectar da de baja la caché.
+  - **No hay purga**: son como mucho 13 formas por conexión.
+  - En sesión: de 1 a 3 botones y de 1 a 10 filas. Un id de más de 200 caracteres o un título vacío es un error; el id no se trunca porque tiene que volver igual en `ButtonPayload` o `ListId`.
+  - Un Content borrado en la consola se recrea una vez, ante un 404 o un 20404.
+- **§9, opciones directas fuera de la ventana.** Con la ventana cerrada no sale nada y queda `sin_plantilla`: esa plantilla es la contraparte de Meta (ADR-0172), que una conversación de Twilio no usa aunque conserve un `meta_connection_id`. Los avisos por evento con opciones siguen sin puente y usan su plantilla de Content.
+- **§6, sin tabla `twilio_webhook_events`.** La auditoría reutiliza la tabla de webhooks con `meta_app_id = "twilio:<AccountSid>"` y solo campos de diagnóstico. Son tres tablas nuevas, no cuatro.
+- **§8, sin `core/gateway/templates/resolver.py`.** `core/gateway/twilio/plantillas_en_uso.py` tiene lo de Twilio, y cada consumidor (selector del chat, mapa y avisos por evento, segmentos) ramifica por proveedor. Así el camino de Meta no se toca. El selector del chat mantiene su contrato: no se agregan `provider` ni `template_ref`.
+
+### Precisiones
+
+- **§3.** Credenciales que Twilio rechaza responden 422 `twilio_credentials_invalid`, no 401: un 401 de nuestra API significa sesión vencida.
+- **§4.** El índice único global es `uq_channel_connections_twilio_sender_viva`, sobre `channel_connections`, no sobre `twilio_connections`. Regla nueva: **una cuenta de Twilio, un negocio** (`twilio_account_en_otro_negocio`, SECURITY DEFINER).
+- **§5.** Las URL registradas llevan *connection overrides* en el fragmento (`#rc=3&rp=5xx,ct`), para que Twilio reintente ante 5xx o timeout de conexión. La firma se valida contra la URL guardada con y sin ese fragmento.
+- **§8.** `twilio_content_templates` lleva la columna `origen` (`solvershub` o `twilio`), que distingue las creadas aquí de las adoptadas por el sync. El sync solo da de baja con la lista completa. Solo se usan plantillas de texto (`twilio/text`): una con botones o media enviaría algo distinto de lo que se muestra.
+- **§8, al enviar.** `plantillas_en_uso.enviable` revalida que el `ContentSid` siga vivo, aprobado y de texto en la conexión **actual** de la conversación; si no, el error es permanente.
+- **§10.** El 63049 es `PERMANENT` y no da de baja: lo decide Meta por envío. Un `ChannelError` de plantilla o de interactivo es permanente, también en Meta (antes era transitorio y terminaba en la DLQ).
+- **Segmentos (PR-7b, ADR-0150).** Salen por Twilio con sus plantillas `MARKETING` aprobadas; `segment_sends.template_id` apunta a la tabla según el proveedor de la conexión. Un 21610 en un mensaje de segmento da de baja al cliente con origen `twilio_21610`, sin escalar. Un destinatario cuya conversación cambió de conexión tras la vista previa se omite (`otra_conexion`, también en Meta).
+- **Bandera.** Las rutas nuevas no la exigen: abre el alta. Con la conexión creada, los cortes son la pausa y la suspensión del negocio.
+
+### Pendiente de verificar en test con el número real
+
+1. Que Twilio acepte variables en `actions[].title`, `actions[].id`, `items[].item` e `items[].id`, y saltos de línea en la variable del cuerpo. **Todo el diseño de §9 depende de esto**: si las rechaza, se reabre el Content por estructura.
+2. Qué código devuelve Twilio al enviar con un `ContentSid` borrado.
+3. Qué campos trae el webhook al elegir una fila de lista (`ListId` no está documentado).
+4. Que la Senders API acepte el fragmento `#rc=…` en las URL.
+5. Si `price` incluye el cargo de Meta además de la tarifa de Twilio.
+
+La baja por 21610 solo se registra cuando el error llega al crear el mensaje; si llegara por el status callback no se registra, igual que el 131050 de Meta por webhook.
+
+**Reemplaza un criterio de revisión de arriba:** «que más del 5 % de los envíos interactivos caiga a texto» ya no aplica, porque no hay caída a texto. Se revisa si Twilio rechaza una parte relevante de los interactivos.
