@@ -136,6 +136,26 @@ def _meta_pricing_sync() -> Any:
 # Salud completa de conexiones Meta (horaria) -- `app_subscription_active`
 # (15 min) sigue siendo `core.meta_subscriptions_health_check`, este cron
 # solo LEE ese resultado, nunca repite el GET.
+_TWILIO_TEMPLATE_POLL_TASK = "core.twilio_template_poll"
+_TWILIO_TEMPLATE_SYNC_TASK = "core.twilio_template_sync"
+
+
+@core_cron(_TWILIO_TEMPLATE_POLL_TASK, crontab(minute="*/5"))
+def _twilio_template_poll() -> Any:
+    """Consulta la aprobación de las plantillas de Twilio en revisión (Twilio no avisa por webhook)."""
+    from core.gateway.twilio.plantillas import revisar_pendientes
+
+    return revisar_pendientes()
+
+
+@core_cron(_TWILIO_TEMPLATE_SYNC_TASK, crontab(minute="20"))
+def _twilio_template_sync() -> Any:
+    """Trae cada hora todas las plantillas de cada cuenta de Twilio (también las creadas en su consola)."""
+    from core.gateway.twilio.plantillas import sincronizar_todas
+
+    return sincronizar_todas()
+
+
 _META_HEALTH_CHECK_TASK = "core.meta_health_check"
 
 

@@ -313,6 +313,62 @@ class TwilioConnection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class TwilioContentTemplate(Base):
+    """Plantilla de la Content API de Twilio (`HX…`) de una conexión de WhatsApp vía Twilio, con su aprobación de
+    WhatsApp (ADR-0186 §8, migración 0123). Twilio no avisa los cambios de aprobación: `next_poll_at` programa la
+    próxima consulta (NULL = no se consulta más)."""
+
+    __tablename__ = "twilio_content_templates"
+    __table_args__ = (
+        Index(
+            "uq_twilio_content_templates_nombre_vivo",
+            "tenant_id",
+            "channel_connection_id",
+            "friendly_name",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
+        Index(
+            "uq_twilio_content_templates_sid_vivo",
+            "tenant_id",
+            "channel_connection_id",
+            "content_sid",
+            unique=True,
+            postgresql_where=text("deleted_at is null and content_sid is not null"),
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "channel_connection_id"],
+            ["channel_connections.tenant_id", "channel_connections.id"],
+            name="fk_twilio_content_templates_conexion",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    channel_connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    content_sid: Mapped[str | None] = mapped_column(Text)
+    friendly_name: Mapped[str] = mapped_column(Text, nullable=False)
+    whatsapp_name: Mapped[str] = mapped_column(Text, nullable=False)
+    language: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    types: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    variables: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    # `solvershub` (creada desde el panel) o `twilio` (importada de la consola de Twilio).
+    origen: Mapped[str] = mapped_column(Text, nullable=False, default="solvershub", server_default="solvershub")
+    # creating | unsubmitted | received | pending | approved | rejected | paused | disabled
+    approval_status: Mapped[str] = mapped_column(Text, nullable=False, default="creating", server_default="creating")
+    rejection_reason: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class WaWebSession(Base):
     """Sesión multi-device del canal WhatsApp Web no oficial (ADR-0074).
 

@@ -491,6 +491,19 @@ async def delete_connection(connection_id: uuid.UUID) -> None:
                     )
                     .values(deleted_at=connection.deleted_at)
                 )
+                # Y sus plantillas: al reconectar (la misma fila revive) no reaparecen las de la cuenta anterior, y
+                # el polling deja de consultarlas.
+                from core.db.models import TwilioContentTemplate
+
+                await session.execute(
+                    update(TwilioContentTemplate)
+                    .where(
+                        TwilioContentTemplate.tenant_id == connection.tenant_id,
+                        TwilioContentTemplate.channel_connection_id == connection.id,
+                        TwilioContentTemplate.deleted_at.is_(None),
+                    )
+                    .values(deleted_at=connection.deleted_at, next_poll_at=None)
+                )
 
 
 async def verify_meta_credentials(

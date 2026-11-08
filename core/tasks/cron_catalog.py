@@ -88,6 +88,10 @@ CATALOGO: dict[str, CronMeta] = dict(
            "Revisión completa de las conexiones y de la cola de fallos.", "30 * * * *"),
         _m("core.meta_token_expiry_check", "Canales y Meta", "Aviso de tokens por vencer",
            "Alerta de los access tokens de Meta vencidos o por vencer.", "15 3 * * *"),
+        _m("core.twilio_template_poll", "Canales y Meta", "Aprobación de plantillas de Twilio",
+           "Consulta si WhatsApp ya aprobó o rechazó las plantillas de Twilio en revisión.", "*/5 * * * *"),
+        _m("core.twilio_template_sync", "Canales y Meta", "Sincronización de plantillas de Twilio",
+           "Trae todas las plantillas de cada cuenta de Twilio y el estado de su aprobación.", "20 * * * *"),
         _m("core.twilio_health_check", "Canales y Meta", "Salud de las conexiones de Twilio",
            "Revisa la cuenta, el número y los webhooks de cada conexión de WhatsApp vía Twilio.", "*/15 * * * *"),
         # ---- Facturación de la plataforma

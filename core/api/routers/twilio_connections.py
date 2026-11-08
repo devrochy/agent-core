@@ -11,7 +11,8 @@ Va antes que el router de conexiones en `core/api/__init__.py`: su `/{connection
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
@@ -279,6 +280,24 @@ async def _escritura(principal: Principal, *, bandera_requerida: bool = True) ->
     return tid
 
 
+async def _auditar_plantilla(
+    principal: Principal,
+    accion: str,
+    connection_id: uuid.UUID,
+    template_id: uuid.UUID | None,
+    content_sid: str | None = None,
+) -> None:
+    """Rastro de una acción sobre las plantillas de Twilio, con cuál fue (no el texto)."""
+    from core.shared.audit import record_audit
+
+    datos: dict[str, str] = {"connection_id": str(connection_id)}
+    if template_id is not None:
+        datos["template_id"] = str(template_id)
+    if content_sid:
+        datos["content_sid"] = content_sid
+    await record_audit(f"admin:{principal.admin.email}", accion, input_data=datos)
+
+
 async def _auditar(principal: Principal, accion: str, connection_id: uuid.UUID) -> None:
     from core.api.routers.connections import audit_connection_action
 
@@ -449,3 +468,207 @@ async def costos(
         por_moneda=[TwilioCostoMoneda(**m) for m in datos["por_moneda"]],  # type: ignore[union-attr]
         nota="Es lo que informa Twilio por cada mensaje. Puede no incluir el cargo de Meta.",
     )
+
+
+# --------------------------------------------------------------------------- plantillas (PR-6, ADR-0186 §8)
+
+
+class TwilioPlantillaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    nombre: str = Field(
+        min_length=1, max_length=64, description="Minúsculas, números y guion bajo."
+    )
+    idioma: str = Field(min_length=2, max_length=5, description="`es`, `es_CO`…")
+    categoria: str = Field(description="`UTILITY`, `MARKETING` o `AUTHENTICATION`.")
+    cuerpo: str = Field(
+        min_length=1, max_length=1024, description="Texto con variables `{{1}}`, `{{2}}`…"
+    )
+    ejemplos: dict[str, str] = Field(
+        default_factory=dict, description='Valor de ejemplo de cada variable: `{"1": "Ana"}`.'
+    )
+
+
+class TwilioPlantillaOut(BaseModel):
+    id: uuid.UUID
+    connection_id: uuid.UUID
+    content_sid: str | None
+    nombre: str
+    idioma: str
+    categoria: str
+    cuerpo: str
+    ejemplos: dict[str, str]
+    estado: str = Field(
+        description="`creating`, `unsubmitted`, `received`, `pending`, `approved`, `rejected`, `paused` o `disabled`."
+    )
+    motivo_rechazo: str
+    enviada_at: datetime | None
+    aprobada_at: datetime | None
+
+
+_ERRORES_PLANTILLAS = {
+    404: _ERRORES[404],
+    409: {"description": "`nombre_en_uso` o `plantilla_sin_crear`."},
+    422: {
+        "description": "`nombre_invalido`, `idioma_invalido`, `categoria_invalida`, `cuerpo_invalido` o `variables_invalidas`."
+    },
+    429: {"description": "`sync_rate_limited` (sync manual, uno por minuto)."},
+    502: _ERRORES[502],
+}
+
+
+def _plantilla(p: Any) -> TwilioPlantillaOut:
+    return TwilioPlantillaOut(**p.__dict__)
+
+
+async def _plantillas_escritura(principal: Principal, *, solo_dueno: bool = False) -> uuid.UUID:
+    """Crear y enviar a aprobación: Conexiones en escritura, como las plantillas de Meta. Sincronizar y borrar actúan
+    sobre la cuenta real de Twilio del negocio (incluido lo creado en su consola): además propietario o master."""
+    if solo_dueno:
+        require_owner_or_master(principal)
+    tid = _tenant(principal)
+    await _exigir_bandera(tid)
+    return tid
+
+
+@router.get(
+    "/{connection_id}/templates",
+    response_model=list[TwilioPlantillaOut],
+    responses={404: _ERRORES[404]},
+)
+async def listar_plantillas(
+    connection_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections"))],
+    solo_aprobadas: bool = False,
+) -> list[TwilioPlantillaOut]:
+    """Plantillas de la conexión, con el estado de su aprobación."""
+    from core.gateway.twilio import plantillas
+
+    tid = _tenant(principal)
+    await _exigir_bandera(tid)
+    if await svc.obtener(tid, connection_id) is None:
+        raise ApiError.not_found("Conexión no encontrada.")
+    return [
+        _plantilla(p)
+        for p in await plantillas.listar(tid, connection_id, solo_aprobadas=solo_aprobadas)
+    ]
+
+
+@router.post(
+    "/{connection_id}/templates",
+    response_model=TwilioPlantillaOut,
+    status_code=201,
+    responses=_ERRORES_PLANTILLAS,
+)
+async def crear_plantilla(
+    connection_id: uuid.UUID,
+    payload: TwilioPlantillaIn,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> TwilioPlantillaOut:
+    """Crea la plantilla en la cuenta de Twilio (sin enviarla a aprobación). Repetirla tras un corte la reconcilia."""
+    from core.gateway.twilio import plantillas
+
+    tid = await _plantillas_escritura(principal)
+    try:
+        creada = _plantilla(
+            await plantillas.crear(
+                tid,
+                connection_id,
+                nombre=payload.nombre,
+                idioma=payload.idioma,
+                categoria=payload.categoria,
+                cuerpo=payload.cuerpo,
+                ejemplos=payload.ejemplos,
+            )
+        )
+    except svc.AltaError as exc:
+        raise _api_error(exc) from None
+    await _auditar_plantilla(
+        principal, "twilio.template_created", connection_id, creada.id, creada.content_sid
+    )
+    return creada
+
+
+@router.post(
+    "/{connection_id}/templates/sync",
+    response_model=list[TwilioPlantillaOut],
+    responses=_ERRORES_PLANTILLAS,
+)
+async def sincronizar_plantillas(
+    connection_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> list[TwilioPlantillaOut]:
+    """Trae todas las plantillas de la cuenta de Twilio (también las creadas en su consola). Uno por minuto."""
+    from core.gateway.twilio import plantillas
+
+    tid = await _plantillas_escritura(principal, solo_dueno=True)
+    try:
+        resultado = [_plantilla(p) for p in await plantillas.sincronizar(tid, connection_id)]
+    except svc.AltaError as exc:
+        raise _api_error(exc) from None
+    await _auditar_plantilla(principal, "twilio.templates_synced", connection_id, None)
+    return resultado
+
+
+@router.post(
+    "/{connection_id}/templates/{template_id}/submit",
+    response_model=TwilioPlantillaOut,
+    responses=_ERRORES_PLANTILLAS,
+)
+async def enviar_plantilla_a_aprobacion(
+    connection_id: uuid.UUID,
+    template_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> TwilioPlantillaOut:
+    """Pide la aprobación de WhatsApp. Idempotente."""
+    from core.gateway.twilio import plantillas
+
+    tid = await _plantillas_escritura(principal)
+    try:
+        enviada = _plantilla(await plantillas.enviar_a_aprobacion(tid, connection_id, template_id))
+    except svc.AltaError as exc:
+        raise _api_error(exc) from None
+    await _auditar_plantilla(
+        principal, "twilio.template_submitted", connection_id, template_id, enviada.content_sid
+    )
+    return enviada
+
+
+@router.post(
+    "/{connection_id}/templates/{template_id}/refresh",
+    response_model=TwilioPlantillaOut,
+    responses=_ERRORES_PLANTILLAS,
+)
+async def refrescar_plantilla(
+    connection_id: uuid.UUID,
+    template_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> TwilioPlantillaOut:
+    """Consulta ahora el estado de la aprobación."""
+    from core.gateway.twilio import plantillas
+
+    tid = await _plantillas_escritura(principal)
+    try:
+        return _plantilla(await plantillas.refrescar(tid, template_id, connection_id=connection_id))
+    except svc.AltaError as exc:
+        raise _api_error(exc) from None
+
+
+@router.delete(
+    "/{connection_id}/templates/{template_id}", status_code=204, responses={404: _ERRORES[404]}
+)
+async def borrar_plantilla(
+    connection_id: uuid.UUID,
+    template_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> Response:
+    """Borra la plantilla (también en Twilio, si se puede)."""
+    from core.gateway.twilio import plantillas
+
+    tid = await _plantillas_escritura(principal, solo_dueno=True)
+    try:
+        await plantillas.borrar(tid, connection_id, template_id)
+    except svc.AltaError as exc:
+        raise _api_error(exc) from None
+    await _auditar_plantilla(principal, "twilio.template_deleted", connection_id, template_id)
+    return Response(status_code=204)
