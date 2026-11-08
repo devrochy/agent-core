@@ -39,3 +39,20 @@ def test_sin_sentry_no_hay_tag(monkeypatch):
     connector._configurar_sentry()
 
     assert tags == []
+
+
+def test_las_variables_del_conector_no_salen_a_sentry():
+    import json
+
+    from core.observability.sentry_setup import _event_scrubber
+
+    evento = {
+        "exception": {"values": [{"stacktrace": {"frames": [{"vars": {
+            "event": "InboundEvent(text='hola, mi cédula es 123', sender='573001234567')",
+            "qr": "2@codigo-de-vinculacion", "job": {"text": "x", "to": "573001234567"},
+            "jid": "573001234567@s.whatsapp.net", "sender": "573001234567", "raw": "{}",
+        }}]}}]}
+    }
+    _event_scrubber().scrub_event(evento)
+    texto = json.dumps(evento, default=str)
+    assert "573001234567" not in texto and "codigo-de-vinculacion" not in texto and "cédula" not in texto
