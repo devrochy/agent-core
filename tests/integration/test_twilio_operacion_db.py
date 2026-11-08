@@ -175,6 +175,39 @@ async def _en(tid: uuid.UUID, coro_fn, *args, **kwargs):
         return await coro_fn(*args, **kwargs)
 
 
+async def _mensaje(tid: uuid.UUID, connection_id: uuid.UUID, sid: str) -> None:
+    from core.db.models import Conversation, Customer, Message
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as s:
+            cliente = Customer(
+                tenant_id=tid, channel="whatsapp", external_id=f"whatsapp:{_numero()}", name="Ana"
+            )
+            s.add(cliente)
+            await s.flush()
+            conv = Conversation(
+                tenant_id=tid,
+                customer_id=cliente.id,
+                channel="whatsapp",
+                connection_id=connection_id,
+            )
+            s.add(conv)
+            await s.flush()
+            s.add(
+                Message(
+                    tenant_id=tid,
+                    conversation_id=conv.id,
+                    direction="outbound",
+                    sender_type="agent",
+                    content="hola",
+                    status="delivered",
+                    external_message_id=sid,
+                )
+            )
+
+
 async def test_salud_por_estado(negocios, twilio_simulado) -> None:
     from core.gateway.twilio import operacion
 
@@ -305,6 +338,9 @@ async def test_costo_por_mensaje(negocios, twilio_simulado) -> None:
     tid, _ = negocios
     tw, hecha = await _conectar(tid, twilio_simulado)
     sid = "SM" + uuid.uuid4().hex
+    # Sin el mensaje en el negocio no se guarda nada (como Meta).
+    assert await _en(tid, costos.registrar_costo, tid, hecha.connection_id, sid) == "sin_mensaje"
+    await _mensaje(tid, hecha.connection_id, sid)
     tw.precio = None
     assert await _en(tid, costos.registrar_costo, tid, hecha.connection_id, sid) == "sin_precio"
     tw.precio = "-0.00500"
@@ -411,3 +447,129 @@ async def test_costos_piden_la_seccion_costos(negocios, twilio_simulado, app_cli
     )
     r = await app_client.get(url, headers=con)
     assert r.status_code == 200 and r.json()["dias"] == 30, r.text
+
+
+async def test_desconectar_si_no_se_restaura(negocios, twilio_simulado) -> None:
+    from core.gateway.twilio import operacion
+    from core.gateway.twilio.alta import AltaError
+
+    tid, _ = negocios
+    tw, hecha = await _conectar(
+        tid, twilio_simulado, webhook={"callback_url": "https://otra.app/in"}
+    )
+    tw.caido = True
+    with pytest.raises(AltaError) as exc:
+        await _en(tid, operacion.desconectar, tid, hecha.connection_id, restaurar_webhooks=True)
+    assert exc.value.code == "webhooks_no_restaurados"
+    assert await _sql(
+        tid,
+        "select deleted_at is null from channel_connections where id = :c",
+        c=hecha.connection_id,
+    ) == [(True,)]
+    restaurados = await _en(
+        tid,
+        operacion.desconectar,
+        tid,
+        hecha.connection_id,
+        restaurar_webhooks=True,
+        continuar_si_falla=True,
+    )
+    assert restaurados is False
+    assert await _sql(
+        tid,
+        "select deleted_at is null from channel_connections where id = :c",
+        c=hecha.connection_id,
+    ) == [(False,)]
+
+
+async def test_desconectar_no_pisa_una_integracion_nueva(negocios, twilio_simulado) -> None:
+    from core.gateway.twilio import operacion
+
+    tid, _ = negocios
+    tw, hecha = await _conectar(
+        tid, twilio_simulado, webhook={"callback_url": "https://original.app/in"}
+    )
+    tw.webhook = {"callback_url": "https://otra-integracion.app/in"}  # el dueño ya lo movió
+    assert (
+        await _en(tid, operacion.desconectar, tid, hecha.connection_id, restaurar_webhooks=True)
+        is False
+    )
+    assert tw.webhook == {"callback_url": "https://otra-integracion.app/in"}
+
+
+async def test_rotar_con_webhook_ajeno_pide_confirmar(negocios, twilio_simulado) -> None:
+    from core.gateway.twilio import operacion
+    from core.gateway.twilio.alta import AltaError
+
+    tid, _ = negocios
+    tw, hecha = await _conectar(tid, twilio_simulado)
+    tw.webhook = {"callback_url": "https://otra.app/in"}
+    with pytest.raises(AltaError) as exc:
+        await _en(
+            tid,
+            operacion.rotar_credenciales,
+            tid,
+            hecha.connection_id,
+            account_sid=tw.ac,
+            auth_token=tw.token_valido,
+        )
+    assert exc.value.code == "webhook_overwrite_not_confirmed"
+    ok = await _en(
+        tid,
+        operacion.rotar_credenciales,
+        tid,
+        hecha.connection_id,
+        account_sid=tw.ac,
+        auth_token=tw.token_valido,
+        confirm_overwrite_webhook=True,
+    )
+    assert ok.status == "connected"
+
+
+async def test_entre_negocios(negocios, twilio_simulado, app_client) -> None:
+    from _api_helpers import api_headers
+
+    from core.gateway.twilio import costos, operacion
+    from core.gateway.twilio.alta import AltaError
+
+    tid_a, tid_b = negocios
+    tw_a, a = await _conectar(tid_a, twilio_simulado)
+    tw_b, b = await _conectar(tid_b, twilio_simulado)
+    # (a) el mismo SID en dos negocios: cada uno guarda el suyo.
+    sid = "SM" + uuid.uuid4().hex
+    await _mensaje(tid_a, a.connection_id, sid)
+    await _mensaje(tid_b, b.connection_id, sid)
+    twilio_simulado.append(tw_a)
+    assert await _en(tid_a, costos.registrar_costo, tid_a, a.connection_id, sid) == "guardado"
+    twilio_simulado.append(tw_b)
+    assert await _en(tid_b, costos.registrar_costo, tid_b, b.connection_id, sid) == "guardado"
+    # (b) el connection_id de A desde B da 404.
+    h_b = await api_headers(app_client, tid_b)
+    base = f"/api/v1/admin/connections/twilio/{a.connection_id}"
+    for metodo, ruta, cuerpo in [
+        ("post", "/refresh", None),
+        ("post", "/test-message", {"to": "+573001234567"}),
+        (
+            "put",
+            "/credentials",
+            {"account_sid": tw_a.ac, "auth_token": "x", "password": "admin123"},
+        ),
+        ("post", "/disconnect", {"password": "admin123"}),
+        ("get", "/costs", None),
+    ]:
+        r = await getattr(app_client, metodo)(
+            base + ruta, headers=h_b, **({"json": cuerpo} if cuerpo else {})
+        )
+        assert r.status_code == 404, (ruta, r.text)
+    # (c) rotar B hacia la cuenta de A: «una cuenta, un negocio».
+    twilio_simulado.append(tw_a)
+    with pytest.raises(AltaError) as exc:
+        await _en(
+            tid_b,
+            operacion.rotar_credenciales,
+            tid_b,
+            b.connection_id,
+            account_sid=tw_a.ac,
+            auth_token=tw_a.token_valido,
+        )
+    assert exc.value.code in ("cuenta_en_otro_negocio", "sender_not_found")

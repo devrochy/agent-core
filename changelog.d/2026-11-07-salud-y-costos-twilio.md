@@ -27,3 +27,13 @@
   - `PUT /credentials` pide la contraseña.
   - Repetir un alta o rotar credenciales ya no pisa el `previous_webhook` original.
   - El contador diario del mensaje de prueba fija su TTL al crearse (SET NX EX).
+- **Revisión cruzada del #718**:
+  - Re-registrar webhooks, rotar credenciales y desconectar quedan auditados como `twilio.*`.
+  - Desconectar restaura los webhooks **antes** de borrar. Si no puede restaurarlos, no borra nada: responde 502 `webhooks_no_restaurados`, salvo que se pida `continuar_si_falla`. Solo restaura si el sender sigue apuntando a solvershub.
+  - Desconectar ya no exige la bandera.
+  - La firma se acepta también sobre la URL con el fragmento de los overrides.
+  - Rotar con webhooks ajenos pide `confirm_overwrite_webhook`.
+  - El costo solo se guarda para mensajes del negocio (como Meta, ADR-0100).
+  - Una revisión de salud que se cruza con una rotación se descarta: así no salta una alerta falsa de `revoked`.
+  - Las URL del webhook solo las ve el propietario o el master.
+  - Nuevos tests entre negocios.

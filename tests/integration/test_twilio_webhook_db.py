@@ -501,3 +501,15 @@ async def test_el_stream_lleva_la_conexion_validada(conexion, app_client) -> Non
         if c["external_message_id"] == sid
     ]
     assert campos["connection_id"] == str(conexion["connection_id"])
+
+
+async def test_firma_sobre_la_url_registrada_tambien_vale(conexion, app_client) -> None:
+    """Si alguna vía firmara la URL con los overrides (`#rc=…`), el webhook igual la acepta."""
+    from core.gateway.twilio.alta import registrada
+
+    params = _entrante(conexion)
+    r = await _post(
+        app_client, conexion, "inbound", params, url=registrada(conexion["inbound_url"])
+    )
+    assert r.status_code == 200
+    assert await _encolados(dict(params)["MessageSid"]) == 1

@@ -30,7 +30,13 @@ log = get_logger(__name__)
 
 ESTADOS_FINALES = frozenset({"delivered", "read", "failed", "undelivered"})
 Resultado = Literal[
-    "guardado", "ya_estaba", "sin_precio", "sin_conexion", "error_transitorio", "error"
+    "guardado",
+    "ya_estaba",
+    "sin_precio",
+    "sin_conexion",
+    "sin_mensaje",
+    "error_transitorio",
+    "error",
 ]
 
 
@@ -56,6 +62,17 @@ async def registrar_costo(
         ).first()
         if ya is not None:
             return "ya_estaba"
+        # Como Meta (ADR-0100): solo se guarda el costo de un mensaje de ESTE negocio. Un SID ajeno (otra
+        # integración de la misma cuenta, el mensaje de prueba, un estado tardío) no deja fila.
+        message_id = (
+            await session.execute(
+                select(Message.id).where(
+                    Message.tenant_id == tenant_id, Message.external_message_id == message_sid
+                )
+            )
+        ).scalar_one_or_none()
+        if message_id is None:
+            return "sin_mensaje"
         connection = (
             await session.execute(
                 select(ChannelConnection).where(
@@ -86,13 +103,6 @@ async def registrar_costo(
         return "sin_precio"
 
     async with get_session() as session:
-        message_id = (
-            await session.execute(
-                select(Message.id).where(
-                    Message.tenant_id == tenant_id, Message.external_message_id == message_sid
-                )
-            )
-        ).scalar_one_or_none()
         resultado = await session.execute(
             pg_insert(MessageCost)
             .values(

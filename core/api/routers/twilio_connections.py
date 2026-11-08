@@ -209,12 +209,18 @@ async def ver(
     principal: Annotated[Principal, Depends(require("connections"))],
 ) -> ConexionTwilioOut:
     """Resumen de una conexión de Twilio del negocio: número, estado y webhooks registrados."""
+    from core.api.deps import es_owner_o_master
+
     tid = _tenant(principal)
     await _exigir_bandera(tid)
     conexion = await svc.obtener(tid, connection_id)
     if conexion is None:
         raise ApiError.not_found("Conexión no encontrada.")
-    return _out(conexion)
+    salida = _out(conexion)
+    if not es_owner_o_master(principal):
+        # Las URL llevan el `public_id` del webhook: solo las ve quien administra la conexión.
+        salida = salida.model_copy(update={"webhook_inbound_url": "", "webhook_status_url": ""})
+    return salida
 
 
 # --------------------------------------------------------------------------- operación (PR-5, ADR-0186 §10-11)
@@ -240,6 +246,11 @@ class TwilioDesconectarIn(BaseModel):
         default=False,
         description="Devolverle al número de Twilio los webhooks que tenía antes de conectarlo.",
     )
+    continuar_si_falla: StrictBool = Field(
+        default=False,
+        description="Desconectar aunque no se puedan devolver los webhooks (si no, 502 `webhooks_no_restaurados` y "
+        "no se borra nada).",
+    )
 
 
 class TwilioDesconectarOut(BaseModel):
@@ -260,11 +271,18 @@ class TwilioCostosOut(BaseModel):
     )
 
 
-async def _escritura(principal: Principal) -> uuid.UUID:
+async def _escritura(principal: Principal, *, bandera_requerida: bool = True) -> uuid.UUID:
     require_owner_or_master(principal)
     tid = _tenant(principal)
-    await _exigir_bandera(tid)
+    if bandera_requerida:
+        await _exigir_bandera(tid)
     return tid
+
+
+async def _auditar(principal: Principal, accion: str, connection_id: uuid.UUID) -> None:
+    from core.api.routers.connections import audit_connection_action
+
+    await audit_connection_action(principal, accion, str(connection_id))
 
 
 def _o_404(conexion: svc.ConexionTwilio | None) -> ConexionTwilioOut:
@@ -299,9 +317,11 @@ async def reregistrar(
 
     tid = await _escritura(principal)
     try:
-        return _o_404(await operacion.reregistrar_webhooks(tid, connection_id))
+        resultado = _o_404(await operacion.reregistrar_webhooks(tid, connection_id))
     except svc.AltaError as exc:
         raise _api_error(exc) from None
+    await _auditar(principal, "twilio.webhooks_reregistered", connection_id)
+    return resultado
 
 
 @router.post(
@@ -334,6 +354,11 @@ async def mensaje_de_prueba(
 
 class TwilioRotarIn(TwilioCredencialesIn):
     password: str | None = Field(default=None, description="Contraseña del usuario (confirmación).")
+    confirm_overwrite_webhook: StrictBool = Field(
+        default=False,
+        description="Si el número ya manda sus mensajes a otra dirección (cambiada en la consola de Twilio), "
+        "reemplazarla. Sin esto, la rotación responde 422 `webhook_overwrite_not_confirmed`.",
+    )
 
 
 @router.put("/{connection_id}/credentials", response_model=ConexionTwilioOut, responses=_ERRORES)
@@ -350,13 +375,19 @@ async def rotar_credenciales(
     tid = await _escritura(principal)
     await confirmar_password(principal, payload.password, proposito="connection_credentials")
     try:
-        return _out(
+        resultado = _out(
             await operacion.rotar_credenciales(
-                tid, connection_id, account_sid=payload.account_sid, auth_token=payload.auth_token
+                tid,
+                connection_id,
+                account_sid=payload.account_sid,
+                auth_token=payload.auth_token,
+                confirm_overwrite_webhook=payload.confirm_overwrite_webhook,
             )
         )
     except svc.AltaError as exc:
         raise _api_error(exc) from None
+    await _auditar(principal, "twilio.credentials_rotated", connection_id)
+    return resultado
 
 
 @router.post(
@@ -377,14 +408,19 @@ async def desconectar(
     from core.api.step_up import confirmar_password
     from core.gateway.twilio import operacion
 
-    tid = await _escritura(principal)
+    # Sin exigir la bandera: si se le quita a un negocio, igual tiene que poder desconectar lo que ya tiene.
+    tid = await _escritura(principal, bandera_requerida=False)
     await confirmar_password(principal, payload.password, proposito="connection_delete")
     try:
         restaurados = await operacion.desconectar(
-            tid, connection_id, restaurar_webhooks=payload.restore_webhooks
+            tid,
+            connection_id,
+            restaurar_webhooks=payload.restore_webhooks,
+            continuar_si_falla=payload.continuar_si_falla,
         )
     except svc.AltaError as exc:
         raise _api_error(exc) from None
+    await _auditar(principal, "twilio.disconnected", connection_id)
     return TwilioDesconectarOut(webhooks_restaurados=restaurados)
 
 

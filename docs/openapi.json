@@ -76683,6 +76683,12 @@
             "title": "Restore Webhooks",
             "description": "Devolverle al número de Twilio los webhooks que tenía antes de conectarlo.",
             "default": false
+          },
+          "continuar_si_falla": {
+            "type": "boolean",
+            "title": "Continuar Si Falla",
+            "description": "Desconectar aunque no se puedan devolver los webhooks (si no, 502 `webhooks_no_restaurados` y no se borra nada).",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -76759,6 +76765,12 @@
             ],
             "title": "Password",
             "description": "Contraseña del usuario (confirmación)."
+          },
+          "confirm_overwrite_webhook": {
+            "type": "boolean",
+            "title": "Confirm Overwrite Webhook",
+            "description": "Si el número ya manda sus mensajes a otra dirección (cambiada en la consola de Twilio), reemplazarla. Sin esto, la rotación responde 422 `webhook_overwrite_not_confirmed`.",
+            "default": false
           }
         },
         "additionalProperties": false,

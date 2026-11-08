@@ -93,8 +93,10 @@ async def _guardar_estado(
     last_error_code: int | None = None,
     sender_status: str = "",
     display_name: str = "",
-) -> str:
-    """Persiste el resultado de una revisión sobre la fila releída con candado. Devuelve el estado anterior."""
+    desde: Any = None,
+) -> str | None:
+    """Persiste el resultado de una revisión sobre la fila releída con candado. Devuelve el estado anterior, o
+    `None` si la fila cambió desde `desde` (una rotación de credenciales en medio): esa revisión ya no vale."""
     async with get_session() as session:
         fila = (
             await session.execute(
@@ -109,6 +111,13 @@ async def _guardar_estado(
         ).scalar_one_or_none()
         if fila is None:
             return ""
+        if desde is not None and fila.updated_at != desde:
+            log.info(
+                "twilio_salud_descartada_por_cambio",
+                tenant_id=str(tenant_id),
+                connection_id=str(connection_id),
+            )
+            return None
         anterior = fila.status
         if status is not None:
             fila.status = status
@@ -192,7 +201,10 @@ async def revisar(
         last_error_code=codigo,
         sender_status=sender_status,
         display_name=display_name,
+        desde=c.fila.updated_at,
     )
+    if anterior is None:
+        return await alta.obtener(tenant_id, connection_id)
     if anterior != nuevo:
         log.info(
             "twilio_sender_status_changed",
@@ -323,6 +335,7 @@ async def rotar_credenciales(
     *,
     account_sid: str,
     auth_token: str,
+    confirm_overwrite_webhook: bool = False,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> alta.ConexionTwilio:
     """Cambia el Auth Token (o la cuenta) de la conexión y vuelve a registrar los webhooks. Es el alta de nuevo con
@@ -341,7 +354,8 @@ async def rotar_credenciales(
         auth_token=auth_token,
         sender_sid=c.fila.sender_sid,
         label=c.connection.label,
-        confirm_overwrite_webhook=True,
+        # Si alguien movió los webhooks a otra integración, se pregunta igual que en el alta.
+        confirm_overwrite_webhook=confirm_overwrite_webhook,
         transport=transport,
     )
 
@@ -351,30 +365,49 @@ async def desconectar(
     connection_id: uuid.UUID,
     *,
     restaurar_webhooks: bool,
+    continuar_si_falla: bool = False,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> bool:
-    """Borra lógicamente la conexión y su fila de Twilio (libera el número) y, si se pide, devuelve al sender los
-    webhooks que tenía antes. Devuelve si los restauró. Restaurar es best-effort: la conexión queda borrada igual."""
+    """Desconecta el número: primero (si se pide) le devuelve al sender los webhooks que tenía antes y después borra
+    lógicamente la conexión y su fila de Twilio (libera el número). Restaurar va primero para poder reintentar: si
+    falla y no se pidió `continuar_si_falla`, no se borra nada (502 `webhooks_no_restaurados`). Solo se restaura si
+    el sender sigue apuntando a solvershub: si el dueño ya lo movió a otra integración, no se toca. Devuelve si
+    restauró."""
     from core.gateway.connections import delete_connection
 
     c = await _cargar(tenant_id, connection_id)
     if c is None:
         raise alta.AltaError(404, "not_found", "Conexión no encontrada.")
+    restaurados = False
+    if restaurar_webhooks:
+        try:
+            client = _cliente_de(c, transport)
+            sender = await get_sender(client, c.fila.sender_sid)
+            if alta.apunta_a_nosotros(
+                sender, c.fila.webhook_inbound_url, c.fila.webhook_status_url
+            ):
+                await restore_webhooks(
+                    client, c.fila.sender_sid, dict(c.fila.previous_webhook or {})
+                )
+                restaurados = True
+        except (ProviderError, alta.AltaError):
+            log.warning(
+                "twilio_webhooks_no_restaurados",
+                tenant_id=str(tenant_id),
+                connection_id=str(connection_id),
+            )
+            if not continuar_si_falla:
+                raise alta.AltaError(
+                    502,
+                    "webhooks_no_restaurados",
+                    "No se pudieron devolver los webhooks anteriores al número. Intenta de nuevo, o desconecta sin "
+                    "restaurarlos.",
+                ) from None
     await delete_connection(connection_id)
-    if not restaurar_webhooks:
-        return False
-    try:
-        await restore_webhooks(
-            _cliente_de(c, transport), c.fila.sender_sid, dict(c.fila.previous_webhook or {})
-        )
-    except (ProviderError, alta.AltaError):
-        log.warning(
-            "twilio_webhooks_no_restaurados",
-            tenant_id=str(tenant_id),
-            connection_id=str(connection_id),
-        )
-        return False
     log.info(
-        "twilio_webhooks_restaurados", tenant_id=str(tenant_id), connection_id=str(connection_id)
+        "twilio_conexion_desconectada",
+        tenant_id=str(tenant_id),
+        connection_id=str(connection_id),
+        restaurados=restaurados,
     )
-    return True
+    return restaurados
