@@ -229,6 +229,9 @@ async def test_corte_a_mitad_se_reconcilia(negocios, twilio) -> None:
     api.fallar_creacion = False
     hecha = await _en(tid, plantillas.crear, tid, cid, **{**_PLANTILLA, "nombre": "aviso_pago"})
     assert hecha.estado == "unsubmitted" and len(api.contents) == 1  # adoptó el que Twilio ya tenía
+    # Adoptada por nombre: no se puede probar que la creó solvershub, así que no se borra en Twilio.
+    await _en(tid, plantillas.borrar, tid, cid, hecha.id)
+    assert hecha.content_sid in api.contents
 
 
 async def test_sync_trae_las_de_la_consola_y_borrar(negocios, twilio) -> None:
@@ -395,3 +398,101 @@ async def test_sync_y_borrar_piden_propietario(negocios, twilio, app_client) -> 
         base, headers=colaborador, json={**_PLANTILLA, "nombre": "del_colaborador"}
     )
     assert r.status_code == 201, r.text
+
+
+async def test_sync_con_lista_cortada_no_da_de_baja(negocios, twilio, monkeypatch) -> None:
+    from core.gateway.twilio import plantillas
+
+    tid, _ = negocios
+    api, cid = await _conectar(tid, twilio)
+    viva = await _en(
+        tid, plantillas.crear, tid, cid, **{**_PLANTILLA, "nombre": "viva_en_la_pagina_21"}
+    )
+    otra_sid = "HX" + uuid.uuid4().hex
+    api.contents[otra_sid] = {
+        "sid": otra_sid,
+        "friendly_name": "de_la_pagina_1",
+        "language": "es",
+        "types": {"twilio/text": {"body": "Hola"}},
+        "variables": {},
+        "approval_requests": {},
+    }
+
+    async def _cortada(client):
+        from agentcore_channel_twilio.content import ContentTemplate
+
+        return [ContentTemplate.from_api(api.contents[otra_sid])], False
+
+    monkeypatch.setattr(plantillas, "list_contents_completo", _cortada)
+    nombres = {p.nombre for p in await _en(tid, plantillas.sincronizar, tid, cid, manual=False)}
+    assert {"viva_en_la_pagina_21", "de_la_pagina_1"} <= nombres
+    assert await _sql(
+        tid, "select deleted_at is null from twilio_content_templates where id = :i", i=viva.id
+    ) == [(True,)]
+
+
+async def test_borrada_aqui_no_vuelve_y_nombre_raro_no_tumba_el_sync(negocios, twilio) -> None:
+    from core.gateway.twilio import plantillas
+
+    tid, _ = negocios
+    api, cid = await _conectar(tid, twilio)
+    sid = "HX" + uuid.uuid4().hex
+    api.contents[sid] = {
+        "sid": sid,
+        "friendly_name": "importada",
+        "language": "es",
+        "types": {"twilio/text": {"body": "Hola"}},
+        "variables": {},
+        "approval_requests": {},
+    }
+    raro = "HX" + uuid.uuid4().hex
+    api.contents[raro] = {
+        "sid": raro,
+        "friendly_name": "con_salto\n",
+        "language": "es",
+        "types": {"twilio/text": {"body": "Hola"}},
+        "variables": {},
+        "approval_requests": {},
+    }
+    [importada] = [
+        p
+        for p in await _en(tid, plantillas.sincronizar, tid, cid, manual=False)
+        if p.nombre == "importada"
+    ]
+    await _en(tid, plantillas.borrar, tid, cid, importada.id)
+    assert sid in api.contents  # importada: queda en Twilio
+    nombres = [p.nombre for p in await _en(tid, plantillas.sincronizar, tid, cid, manual=False)]
+    assert "importada" not in nombres and "con_salto\n" not in nombres
+
+
+async def test_desconectar_da_de_baja_sus_plantillas(negocios, twilio) -> None:
+    from core.gateway.connections import delete_connection
+    from core.gateway.twilio import plantillas
+
+    tid, _ = negocios
+    _, cid = await _conectar(tid, twilio)
+    creada = await _en(
+        tid, plantillas.crear, tid, cid, **{**_PLANTILLA, "nombre": "de_la_conexion"}
+    )
+    await _en(tid, delete_connection, cid)
+    assert await _sql(
+        tid,
+        "select deleted_at is not null, next_poll_at from twilio_content_templates where id = :i",
+        i=creada.id,
+    ) == [(True, None)]
+
+
+async def test_plantilla_de_otra_conexion_del_mismo_negocio(negocios, twilio, app_client) -> None:
+    from _api_helpers import api_headers
+
+    from core.gateway.twilio import plantillas
+
+    tid, _ = negocios
+    _, cid_x = await _conectar(tid, twilio)
+    _, cid_y = await _conectar(tid, twilio)
+    de_x = await _en(tid, plantillas.crear, tid, cid_x, **{**_PLANTILLA, "nombre": "de_x"})
+    h = await api_headers(app_client, tid)
+    base_y = f"/api/v1/admin/connections/twilio/{cid_y}/templates/{de_x.id}"
+    assert (await app_client.post(f"{base_y}/submit", headers=h)).status_code == 404
+    assert (await app_client.post(f"{base_y}/refresh", headers=h)).status_code == 404
+    assert (await app_client.delete(base_y, headers=h)).status_code == 404

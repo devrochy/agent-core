@@ -146,10 +146,16 @@ async def fetch_approval(client: TwilioClient, content_sid: str) -> Approval:
 
 
 async def list_contents_with_approvals(client: TwilioClient) -> list[ContentTemplate]:
-    rows = await client.paginate(
-        CONTENT_AND_APPROVALS_URL, key="contents", op="content.list", params={"PageSize": 100}
+    contenidos, _completo = await list_contents_completo(client)
+    return contenidos
+
+
+async def list_contents_completo(client: TwilioClient) -> tuple[list[ContentTemplate], bool]:
+    """Todos los Content de la cuenta con su aprobación, y si la lista está completa (500 por página, el máximo)."""
+    rows, completo = await client.paginate_completo(
+        CONTENT_AND_APPROVALS_URL, key="contents", op="content.list", params={"PageSize": 500}
     )
-    return [ContentTemplate.from_api(row) for row in rows]
+    return [ContentTemplate.from_api(row) for row in rows], completo
 
 
 async def delete_content(client: TwilioClient, content_sid: str) -> None:

@@ -30,11 +30,12 @@ from agentcore_channel_twilio.content import (
     create_content,
     delete_content,
     fetch_approval,
+    list_contents_completo,
     list_contents_with_approvals,
     submit_whatsapp_approval,
     validate_variables,
 )
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from core.db.models import TwilioContentTemplate, utcnow
@@ -46,12 +47,15 @@ from core.shared.tenant import tenant_scope
 
 log = get_logger(__name__)
 
-_NOMBRE = re.compile(r"^[a-z0-9_]{1,64}$")
-_IDIOMA = re.compile(r"^[a-z]{2}(_[A-Z]{2})?$")
+_NOMBRE = re.compile(r"[a-z0-9_]{1,64}")
+_IDIOMA = re.compile(r"[a-z]{2}(_[A-Z]{2})?")
 MAX_CUERPO = 1024
 _EN_REVISION = frozenset({"received", "pending"})
 _ESTADOS = APPROVAL_STATUSES | {"creating"}
 SYNC_MANUAL_CADA_S = 60
+MAX_EJEMPLO = 256
+# Tope de plantillas vivas por conexión (WhatsApp permite miles por cuenta; aquí no hace falta tanto).
+MAX_PLANTILLAS_POR_CONEXION = 1000
 
 
 @dataclass(frozen=True)
@@ -132,11 +136,11 @@ def validar(
     nombre: str, idioma: str, categoria: str, cuerpo: str, ejemplos: dict[str, str]
 ) -> None:
     """Reglas de WhatsApp antes de llamar a Twilio. Lanza `AltaError` 422 con el motivo."""
-    if not _NOMBRE.match(nombre):
+    if not _NOMBRE.fullmatch(nombre):
         raise alta.AltaError(
             422, "nombre_invalido", "El nombre usa minúsculas, números y guion bajo (hasta 64)."
         )
-    if not _IDIOMA.match(idioma):
+    if not _IDIOMA.fullmatch(idioma):
         raise alta.AltaError(422, "idioma_invalido", "El idioma va como «es» o «es_CO».")
     if categoria not in CATEGORIES:
         raise alta.AltaError(
@@ -147,6 +151,12 @@ def validar(
             422,
             "cuerpo_invalido",
             f"El texto no puede estar vacío ni pasar de {MAX_CUERPO} caracteres.",
+        )
+    if any(not str(k).isdigit() or len(str(v)) > MAX_EJEMPLO for k, v in ejemplos.items()):
+        raise alta.AltaError(
+            422,
+            "variables_invalidas",
+            f"Las variables son números y cada ejemplo tiene hasta {MAX_EJEMPLO} caracteres.",
         )
     try:
         validate_variables([cuerpo], ejemplos)
@@ -234,6 +244,22 @@ async def crear(
                 )
             reintento = fila is not None
             if fila is None:
+                vivas = (
+                    await session.execute(
+                        select(func.count(TwilioContentTemplate.id)).where(
+                            TwilioContentTemplate.tenant_id == tenant_id,
+                            TwilioContentTemplate.channel_connection_id == connection_id,
+                            TwilioContentTemplate.deleted_at.is_(None),
+                        )
+                    )
+                ).scalar_one()
+                if vivas >= MAX_PLANTILLAS_POR_CONEXION:
+                    raise alta.AltaError(
+                        409,
+                        "limite_de_plantillas",
+                        f"La conexión ya tiene {MAX_PLANTILLAS_POR_CONEXION} plantillas.",
+                    )
+            if fila is None:
                 fila = TwilioContentTemplate(
                     tenant_id=tenant_id,
                     channel_connection_id=connection_id,
@@ -269,7 +295,7 @@ async def crear(
                 (
                     c
                     for c in await list_contents_with_approvals(client)
-                    if c.friendly_name == nombre
+                    if c.friendly_name == nombre and _SID_HX.fullmatch(c.sid or "")
                 ),
                 None,
             )
@@ -407,7 +433,7 @@ async def sincronizar(
                 429, "sync_rate_limited", "Espera un minuto antes de sincronizar otra vez."
             )
     try:
-        contenidos = await list_contents_with_approvals(client)
+        contenidos, completo = await list_contents_completo(client)
     except ProviderError as exc:
         raise alta._traducir(exc) from None
     ahora = utcnow()
@@ -429,10 +455,23 @@ async def sincronizar(
                 .all()
             )
             por_sid = {f.content_sid: f for f in filas if f.content_sid}
+            # Las que se borraron aquí y siguen en Twilio (importadas, compartidas o sin poder borrarse allá) no vuelven.
+            dadas_de_baja = set(
+                (
+                    await session.execute(
+                        select(TwilioContentTemplate.content_sid).where(
+                            TwilioContentTemplate.tenant_id == tenant_id,
+                            TwilioContentTemplate.channel_connection_id == connection_id,
+                            TwilioContentTemplate.deleted_at.is_not(None),
+                            TwilioContentTemplate.content_sid.is_not(None),
+                        )
+                    )
+                ).scalars()
+            )
             por_nombre = {f.friendly_name: f for f in filas}
             vistos: set[str] = set()
             for content in contenidos:
-                if not _SID_HX.match(content.sid or ""):
+                if not _SID_HX.fullmatch(content.sid or ""):
                     continue
                 vistos.add(content.sid)
                 fila = por_sid.get(content.sid)
@@ -440,6 +479,8 @@ async def sincronizar(
                 if fila is None and pendiente is not None and not pendiente.content_sid:
                     fila = pendiente  # la que quedó en `creating`
                     _adoptar(fila, content)
+                if fila is None and content.sid in dadas_de_baja:
+                    continue
                 if fila is None:
                     fila = _desde_twilio(tenant_id, connection_id, content)
                     if fila is None or fila.friendly_name in por_nombre:
@@ -453,9 +494,9 @@ async def sincronizar(
                     content.approval.category,
                     ahora,
                 )
-            if contenidos:
-                # Borradas en la consola de Twilio: el `HX` ya no envía nada. (Con la lista vacía no se da de baja nada:
-                # puede ser una respuesta incompleta.)
+            if contenidos and completo:
+                # Borradas en la consola de Twilio: el `HX` ya no envía nada. Solo con la lista COMPLETA (no vacía ni
+                # cortada en el tope de páginas): si no, se darían de baja plantillas vivas.
                 for f in filas:
                     if f.content_sid and f.content_sid not in vistos:
                         f.deleted_at, f.next_poll_at = ahora, None
@@ -481,7 +522,7 @@ async def sincronizar(
     return sorted(resultado, key=lambda p: p.nombre)
 
 
-_SID_HX = re.compile(r"^HX[0-9a-f]{32}$")
+_SID_HX = re.compile(r"HX[0-9a-f]{32}")
 _MAX_VARIABLES = 20
 
 
@@ -492,13 +533,14 @@ def _datos_de_twilio(
     `twilio/text`, hasta 20 variables cortas y un idioma válido. `None` si no cabe en las reglas."""
     texto = content.types.get("twilio/text")
     cuerpo = str(texto.get("body") or "") if isinstance(texto, dict) else ""
-    if not _SID_HX.match(content.sid or "") or not cuerpo or len(cuerpo) > MAX_CUERPO:
+    if not _SID_HX.fullmatch(content.sid or "") or not cuerpo or len(cuerpo) > MAX_CUERPO:
         return None
     variables = {
-        str(k)[:4]: str(v)[:256]
+        str(k): str(v)[:MAX_EJEMPLO]
         for k, v in list((content.variables or {}).items())[:_MAX_VARIABLES]
+        if str(k).isdigit() and len(str(k)) <= 2
     }
-    idioma = content.language if _IDIOMA.match(content.language or "") else "es"
+    idioma = content.language if _IDIOMA.fullmatch(content.language or "") else "es"
     return cuerpo, {"twilio/text": {"body": cuerpo}}, variables, idioma
 
 
@@ -506,6 +548,9 @@ def _adoptar(fila: TwilioContentTemplate, content: ContentTemplate) -> None:
     """Una fila que quedó en `creating` toma el Content de Twilio con ese nombre y SU contenido: lo que se muestra es
     lo que el `HX` envía."""
     fila.content_sid = content.sid
+    # No se puede probar que lo creó solvershub (pudo crearse en la consola con el mismo nombre): se trata como
+    # importado y no se borra en Twilio al borrarlo aquí.
+    fila.origen = "twilio"
     datos = _datos_de_twilio(content)
     if datos is not None:
         fila.body, fila.types, fila.variables, fila.language = datos
@@ -516,14 +561,14 @@ def _desde_twilio(
 ) -> TwilioContentTemplate | None:
     """Una plantilla creada en la consola de Twilio (`origen='twilio'`). Se omite si no cabe en las reglas."""
     datos = _datos_de_twilio(content)
-    if not _NOMBRE.match(content.friendly_name or "") or datos is None:
+    if not _NOMBRE.fullmatch(content.friendly_name or "") or datos is None:
         log.info("twilio_plantilla_omitida", content_sid=(content.sid or "")[:34])
         return None
     cuerpo, tipos, variables, idioma = datos
     categoria = content.approval.category if content.approval.category in CATEGORIES else "UTILITY"
     nombre_wa = (
         content.approval.name
-        if _NOMBRE.match(content.approval.name or "")
+        if _NOMBRE.fullmatch(content.approval.name or "")
         else content.friendly_name
     )
     return TwilioContentTemplate(

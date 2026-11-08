@@ -29,3 +29,11 @@
   - **Borrar en Twilio**: solo se borra lo que creó solvershub (`origen`) y que ninguna otra fila usa. Las importadas de la consola se quedan en la cuenta.
   - **Permisos**: sincronizar y borrar piden propietario o master. Crear, enviar a aprobación y borrar quedan auditados.
   - **Tope del sync manual**: se toma después de validar la conexión.
+- **Revisión cruzada del #719**:
+  - El sync da de baja lo que falta solo si la lista de Twilio llegó **completa**. La paginación ahora avisa cuando la corta el tope, y las páginas son de 500.
+  - Una plantilla adoptada por nombre queda como `origen='twilio'`, así que no se borra en Twilio.
+  - Desconectar da de baja también las plantillas de la conexión.
+  - Las regex usan `fullmatch` (antes `$` aceptaba un salto de línea final).
+  - Ejemplos de variables numéricos y de hasta 256 caracteres. Tope de 1.000 plantillas por conexión.
+  - Una plantilla borrada aquí que sigue en Twilio no se reimporta.
+  - La auditoría guarda cuál plantilla fue y también registra el sync manual.

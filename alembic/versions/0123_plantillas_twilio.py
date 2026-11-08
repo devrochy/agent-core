@@ -4,7 +4,11 @@
 una conexión de Twilio, con su aprobación de WhatsApp.
 
 - FK compuesta `(tenant_id, channel_connection_id)` a `channel_connections` (no puede apuntar a otro negocio).
-- `friendly_name` único entre las vivas de la conexión; `content_sid` único entre las vivas. Borrado lógico.
+- `friendly_name` único entre las vivas de la conexión; `content_sid` único entre las vivas de la conexión (no global:
+  dos conexiones de la misma cuenta ven el mismo `HX`, y un único global le revelaría a un negocio, por el error de
+  integridad, que el `HX` existe en otro). Borrado lógico.
+- `ix_twilio_content_templates_por_revisar` empieza por `next_poll_at`, no por `tenant_id`: es el índice del
+  enumerador del cron, que recorre todos los negocios (las búsquedas del negocio usan los únicos de arriba).
 - `approval_status`: `creating` (el Content todavía no existe en Twilio), `unsubmitted` (existe, sin pedir
   aprobación), `received`/`pending` (en revisión), `approved`, `rejected`, `paused`, `disabled`.
 - Polling de la aprobación (Twilio no avisa por webhook): `next_poll_at` con su índice parcial y el enumerador

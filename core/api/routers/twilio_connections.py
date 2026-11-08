@@ -280,6 +280,24 @@ async def _escritura(principal: Principal, *, bandera_requerida: bool = True) ->
     return tid
 
 
+async def _auditar_plantilla(
+    principal: Principal,
+    accion: str,
+    connection_id: uuid.UUID,
+    template_id: uuid.UUID | None,
+    content_sid: str | None = None,
+) -> None:
+    """Rastro de una acción sobre las plantillas de Twilio, con cuál fue (no el texto)."""
+    from core.shared.audit import record_audit
+
+    datos: dict[str, str] = {"connection_id": str(connection_id)}
+    if template_id is not None:
+        datos["template_id"] = str(template_id)
+    if content_sid:
+        datos["content_sid"] = content_sid
+    await record_audit(f"admin:{principal.admin.email}", accion, input_data=datos)
+
+
 async def _auditar(principal: Principal, accion: str, connection_id: uuid.UUID) -> None:
     from core.api.routers.connections import audit_connection_action
 
@@ -565,7 +583,9 @@ async def crear_plantilla(
         )
     except svc.AltaError as exc:
         raise _api_error(exc) from None
-    await _auditar(principal, "twilio.template_created", connection_id)
+    await _auditar_plantilla(
+        principal, "twilio.template_created", connection_id, creada.id, creada.content_sid
+    )
     return creada
 
 
@@ -583,9 +603,11 @@ async def sincronizar_plantillas(
 
     tid = await _plantillas_escritura(principal, solo_dueno=True)
     try:
-        return [_plantilla(p) for p in await plantillas.sincronizar(tid, connection_id)]
+        resultado = [_plantilla(p) for p in await plantillas.sincronizar(tid, connection_id)]
     except svc.AltaError as exc:
         raise _api_error(exc) from None
+    await _auditar_plantilla(principal, "twilio.templates_synced", connection_id, None)
+    return resultado
 
 
 @router.post(
@@ -606,7 +628,9 @@ async def enviar_plantilla_a_aprobacion(
         enviada = _plantilla(await plantillas.enviar_a_aprobacion(tid, connection_id, template_id))
     except svc.AltaError as exc:
         raise _api_error(exc) from None
-    await _auditar(principal, "twilio.template_submitted", connection_id)
+    await _auditar_plantilla(
+        principal, "twilio.template_submitted", connection_id, template_id, enviada.content_sid
+    )
     return enviada
 
 
@@ -646,5 +670,5 @@ async def borrar_plantilla(
         await plantillas.borrar(tid, connection_id, template_id)
     except svc.AltaError as exc:
         raise _api_error(exc) from None
-    await _auditar(principal, "twilio.template_deleted", connection_id)
+    await _auditar_plantilla(principal, "twilio.template_deleted", connection_id, template_id)
     return Response(status_code=204)

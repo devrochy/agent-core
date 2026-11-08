@@ -116,18 +116,28 @@ class TwilioClient:
         self, url: str, *, key: str, op: str, params: Mapping[str, Any] | None = None
     ) -> list[dict[str, Any]]:
         """Recorre `meta.next_page_url` (formato de las APIs v1/v2) hasta `MAX_PAGES`."""
+        items, _completo = await self.paginate_completo(url, key=key, op=op, params=params)
+        return items
+
+    async def paginate_completo(
+        self, url: str, *, key: str, op: str, params: Mapping[str, Any] | None = None
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Como `paginate`, y además si la lista llegó COMPLETA (`False` = se cortó en `MAX_PAGES`). Quien da de baja
+        lo que falta (el sync de plantillas) solo debe hacerlo con la lista completa."""
         items: list[dict[str, Any]] = []
         next_url: str | None = url
         page_params = params
         for _ in range(MAX_PAGES):
             if not next_url:
-                return items
+                return items, True
             body = await self.get(next_url, op=op, params=page_params)
             items.extend(body.get(key) or [])
             next_url = (body.get("meta") or {}).get("next_page_url") or None
             page_params = None  # la URL de la página siguiente ya trae sus parámetros
+        if not next_url:
+            return items, True
         log.warning("twilio_paginate_truncated", op=op, pages=MAX_PAGES)
-        return items
+        return items, False
 
     async def _request(
         self, method: str, url: str, *, op: str, idempotent: bool, **kwargs: Any
