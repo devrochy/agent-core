@@ -40,6 +40,9 @@ def upgrade() -> None:
         sa.Column("id", _UUID, primary_key=True),
         sa.Column("tenant_id", _UUID, nullable=False),
         sa.Column("channel_connection_id", _UUID, nullable=False),
+        # La cuenta de Twilio que creó el Content: si la conexión cambia de cuenta (rotar credenciales o reconectar el
+        # número con otra), la fila de la cuenta vieja no sirve y se reemplaza.
+        sa.Column("account_sid", sa.Text(), nullable=False),
         sa.Column("forma", sa.Text(), nullable=False),
         sa.Column("content_sid", sa.Text(), nullable=False),
         sa.Column("last_used_at", _TS, nullable=True),
@@ -56,6 +59,9 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "content_sid ~ '^HX[0-9a-f]{32}$'", name="ck_twilio_interactive_contents_sid"
+        ),
+        sa.CheckConstraint(
+            "account_sid ~ '^AC[0-9a-f]{32}$'", name="ck_twilio_interactive_contents_account"
         ),
     )
     op.create_index(

@@ -209,8 +209,9 @@ async def test_rls_rechaza_escribir_en_otro_negocio(negocios) -> None:
     with pytest.raises((DBAPIError, IntegrityError)):
         await _sql(
             b["tid"],
-            "insert into twilio_interactive_contents (id, tenant_id, channel_connection_id, forma, content_sid) "
-            "values (:i, :t, :c, 'list:4', :s)",
+            "insert into twilio_interactive_contents (id, tenant_id, channel_connection_id, account_sid, forma, content_sid) "
+            "values (:i, :t, :c, :ac, 'list:4', :s)",
+            ac=a["creds"]["account_sid"],
             i=uuid.uuid4(),
             t=a["tid"],
             c=a["connection_id"],
@@ -224,8 +225,9 @@ async def test_fk_compuesta_rechaza_la_conexion_de_otro_negocio(negocios) -> Non
     with pytest.raises((DBAPIError, IntegrityError)):
         await _sql(
             b["tid"],
-            "insert into twilio_interactive_contents (id, tenant_id, channel_connection_id, forma, content_sid) "
-            "values (:i, :t, :c, 'list:5', :s)",
+            "insert into twilio_interactive_contents (id, tenant_id, channel_connection_id, account_sid, forma, content_sid) "
+            "values (:i, :t, :c, :ac, 'list:5', :s)",
+            ac=b["creds"]["account_sid"],
             i=uuid.uuid4(),
             t=b["tid"],
             c=a["connection_id"],
@@ -234,18 +236,78 @@ async def test_fk_compuesta_rechaza_la_conexion_de_otro_negocio(negocios) -> Non
 
 
 @pytest.mark.parametrize(
-    ("forma", "sid"), [("quick_reply:11", "HX" + "e" * 32), ("carrusel:1", "HX" + "e" * 32), ("list:2", "XX" + "e" * 32)]
+    ("forma", "sid", "cuenta"),
+    [
+        ("quick_reply:11", "HX" + "e" * 32, None),
+        ("carrusel:1", "HX" + "e" * 32, None),
+        ("list:2", "XX" + "e" * 32, None),
+        ("list:2", "HX" + "e" * 32, "XX" + "e" * 32),
+    ],
 )
-async def test_check_de_forma_y_sid(negocios, forma, sid) -> None:
+async def test_check_de_forma_sid_y_cuenta(negocios, forma, sid, cuenta) -> None:
     a, _ = negocios
     with pytest.raises((DBAPIError, IntegrityError)):
         await _sql(
             a["tid"],
-            "insert into twilio_interactive_contents (id, tenant_id, channel_connection_id, forma, content_sid) "
-            "values (:i, :t, :c, :f, :s)",
+            "insert into twilio_interactive_contents (id, tenant_id, channel_connection_id, account_sid, forma, content_sid) "
+            "values (:i, :t, :c, :ac, :f, :s)",
+            ac=a["creds"]["account_sid"],
             i=uuid.uuid4(),
             t=a["tid"],
             c=a["connection_id"],
             f=forma,
             s=sid,
+        ) if cuenta is None else await _sql(
+            a["tid"],
+            "insert into twilio_interactive_contents (id, tenant_id, channel_connection_id, account_sid, forma, content_sid) "
+            "values (:i, :t, :c, :ac, :f, :s)",
+            i=uuid.uuid4(),
+            t=a["tid"],
+            c=a["connection_id"],
+            ac=cuenta,
+            f=forma,
+            s=sid,
         )
+
+
+async def test_otra_cuenta_en_la_misma_conexion_no_usa_la_cache(negocios) -> None:
+    """Rotar credenciales o reconectar el número con otra cuenta conserva la conexión: el HX de la cuenta vieja no
+    sirve con la nueva, así que se reemplaza."""
+    a, _ = negocios
+    [(viejo,)] = await _sql(
+        a["tid"],
+        "select content_sid from twilio_interactive_contents where deleted_at is null and forma = 'list:3' "
+        "and channel_connection_id = :c",
+        c=a["connection_id"],
+    )
+    nueva = {**a, "creds": {**a["creds"], "account_sid": "AC" + uuid.uuid4().hex}}
+    twilio = _Twilio()
+    await _enviar(nueva, twilio, LISTA)
+    assert len(twilio.creados) == 1 and twilio.enviados[0]["ContentSid"] == twilio.creados[0]["sid"] != viejo
+    filas = await _sql(
+        a["tid"],
+        "select account_sid, deleted_at is not null from twilio_interactive_contents where forma = 'list:3' "
+        "and channel_connection_id = :c and content_sid in (:v, :n)",
+        c=a["connection_id"],
+        v=viejo,
+        n=twilio.creados[0]["sid"],
+    )
+    assert sorted(filas) == sorted([(a["creds"]["account_sid"], True), (nueva["creds"]["account_sid"], False)])
+
+
+async def test_desconectar_da_de_baja_la_cache(negocios) -> None:
+    from core.gateway.connections import delete_connection
+    from core.shared.tenant import tenant_scope
+
+    _, b = negocios
+    q = "select count(*) from twilio_interactive_contents where deleted_at is null and channel_connection_id = :c"
+    [(antes,)] = await _sql(b["tid"], q, c=b["connection_id"])
+    assert antes > 0
+    async with tenant_scope(b["tid"]):
+        await delete_connection(b["connection_id"])
+    vivas = await _sql(
+        b["tid"],
+        "select count(*) from twilio_interactive_contents where deleted_at is null and channel_connection_id = :c",
+        c=b["connection_id"],
+    )
+    assert vivas == [(0,)]

@@ -504,6 +504,18 @@ async def delete_connection(connection_id: uuid.UUID) -> None:
                     )
                     .values(deleted_at=connection.deleted_at, next_poll_at=None)
                 )
+                # Y la caché de botones y listas (PR-7i): sus Content son de la cuenta anterior.
+                from core.db.models import TwilioInteractiveContent
+
+                await session.execute(
+                    update(TwilioInteractiveContent)
+                    .where(
+                        TwilioInteractiveContent.tenant_id == connection.tenant_id,
+                        TwilioInteractiveContent.channel_connection_id == connection.id,
+                        TwilioInteractiveContent.deleted_at.is_(None),
+                    )
+                    .values(deleted_at=connection.deleted_at)
+                )
 
 
 async def verify_meta_credentials(

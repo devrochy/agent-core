@@ -19,6 +19,7 @@ from test_outbound_send_task import _send_one_fixture
 from core.gateway.channels.base import ProviderError
 from core.gateway.twilio import interactivos as it
 from core.shared.exceptions import ChannelError
+from core.shared.tenant import tenant_scope
 
 AC = "AC" + "1" * 32
 HX1 = "HX" + "a" * 32
@@ -95,16 +96,43 @@ def test_interactivo_que_no_sirve(malo):
         it.forma_y_variables(malo)
 
 
-def test_los_topes_de_twilio_recortan():
+def test_los_topes_de_twilio_recortan_textos_pero_no_ids():
     largo = {
         "type": "list",
         "body": "x" * 2000,
         "button": "b" * 40,
-        "rows": [{"id": "i" * 300, "title": "t" * 40, "description": "d" * 100}],
+        "rows": [{"id": "i" * 200, "title": "t" * 40, "description": "d" * 100}],
     }
     _, _, v = it.forma_y_variables(largo)
     assert len(v["1"]) == it.MAX_CUERPO and len(v["2"]) == it.MAX_TITULO_BOTON
-    assert len(v["3"]) == it.MAX_TITULO_FILA and len(v["4"]) == it.MAX_ID and len(v["5"]) == it.MAX_DESCRIPCION
+    assert len(v["3"]) == it.MAX_TITULO_FILA and v["4"] == "i" * 200 and len(v["5"]) == it.MAX_DESCRIPCION
+    # Un id más largo no se trunca: volvería distinto en ButtonPayload/ListId.
+    with pytest.raises(ChannelError):
+        it.forma_y_variables({**largo, "rows": [{"id": "i" * 201, "title": "t"}]})
+
+
+def test_mas_de_tres_botones_no_sale_en_sesion():
+    cuatro = {**BOTONES, "buttons": [{"id": str(n), "title": f"O{n}"} for n in range(4)]}
+    with pytest.raises(ChannelError):
+        it.forma_y_variables(cuatro)
+
+
+def test_saltos_y_caracteres_de_control_fuera_de_titulos_e_ids():
+    sucio = {
+        "type": "list",
+        "body": "Hola\n\x07elige",
+        "button": " Ver\nmás ",
+        "rows": [{"id": "a\tb", "title": "Uno\r\ndos", "description": "x\n\ny"}],
+    }
+    _, _, v = it.forma_y_variables(sucio)
+    assert v["1"] == "Hola\n elige"  # el cuerpo conserva los saltos de línea
+    assert v["2"] == "Ver más" and v["3"] == "Uno dos" and v["4"] == "ab" and v["5"] == "x y"
+
+
+@pytest.mark.parametrize("titulo", ["", "   ", "\n\t"])
+def test_titulo_vacio_no_sirve(titulo):
+    with pytest.raises(ChannelError):
+        it.forma_y_variables({**BOTONES, "buttons": [{"id": "a", "title": titulo}]})
 
 
 # ---------------------------------------------------------------- envío (caché simulada)
@@ -116,7 +144,8 @@ class _Cache:
     async def content_de(self, client, tenant_id, connection_id, forma, tipos, variables):
         return self.sids[0]
 
-    async def olvidar(self, tenant_id, connection_id, forma):
+    async def olvidar(self, tenant_id, connection_id, forma, content_sid):
+        assert content_sid == self.sids[0]  # da de baja ESE Content, no la forma
         self.olvidadas += 1
         self.sids.pop(0)
 
@@ -133,11 +162,22 @@ def _twilio(respuestas):
     return httpx.MockTransport(handler), enviados
 
 
+async def _enviar(interactivo, transport):
+    tid = uuid.uuid4()
+    async with tenant_scope(tid):
+        return await it.enviar(tid, uuid.uuid4(), CREDS, "whatsapp:+573001234567", interactivo, transport=transport)
+
+
+async def test_enviar_fuera_del_scope_del_negocio_no_sale():
+    with pytest.raises(PermissionError):
+        await it.enviar(uuid.uuid4(), uuid.uuid4(), CREDS, "whatsapp:+573001234567", BOTONES)
+
+
 async def test_enviar_manda_el_content_con_sus_variables(monkeypatch):
     cache = _Cache([HX1])
     monkeypatch.setattr(it, "_content_de", cache.content_de)
     transport, enviados = _twilio([(201, {"sid": "SM" + "9" * 32})])
-    sid = await it.enviar(uuid.uuid4(), uuid.uuid4(), CREDS, "whatsapp:+573001234567", BOTONES, transport=transport)
+    sid = await _enviar(BOTONES, transport)
     assert sid == "SM" + "9" * 32
     [form] = enviados
     assert form["ContentSid"] == HX1 and form["To"] == "whatsapp:+573001234567"
@@ -149,7 +189,7 @@ async def test_content_borrado_se_recrea_una_vez(monkeypatch):
     monkeypatch.setattr(it, "_content_de", cache.content_de)
     monkeypatch.setattr(it, "_olvidar", cache.olvidar)
     transport, enviados = _twilio([(404, {"code": 20404, "message": "not found"}), (201, {"sid": "SM" + "8" * 32})])
-    sid = await it.enviar(uuid.uuid4(), uuid.uuid4(), CREDS, "whatsapp:+573001234567", LISTA, transport=transport)
+    sid = await _enviar(LISTA, transport)
     assert sid == "SM" + "8" * 32 and cache.olvidadas == 1
     assert [f["ContentSid"] for f in enviados] == [HX1, HX2]
 
@@ -160,7 +200,7 @@ async def test_otro_error_no_recrea(monkeypatch):
     monkeypatch.setattr(it, "_olvidar", cache.olvidar)
     transport, _ = _twilio([(400, {"code": 63016, "message": "fuera de la ventana"})])
     with pytest.raises(ProviderError) as exc:
-        await it.enviar(uuid.uuid4(), uuid.uuid4(), CREDS, "whatsapp:+573001234567", BOTONES, transport=transport)
+        await _enviar(BOTONES, transport)
     assert exc.value.category == "WINDOW" and cache.olvidadas == 0
 
 
@@ -170,7 +210,7 @@ async def test_dos_404_seguidos_no_recrean_sin_fin(monkeypatch):
     monkeypatch.setattr(it, "_olvidar", cache.olvidar)
     transport, enviados = _twilio([(404, {"code": 20404}), (404, {"code": 20404})])
     with pytest.raises(ProviderError):
-        await it.enviar(uuid.uuid4(), uuid.uuid4(), CREDS, "whatsapp:+573001234567", BOTONES, transport=transport)
+        await _enviar(BOTONES, transport)
     assert len(enviados) == 2 and cache.olvidadas == 1
 
 

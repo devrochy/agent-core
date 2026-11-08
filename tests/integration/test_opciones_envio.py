@@ -423,6 +423,39 @@ async def test_whatsapp_que_no_es_de_meta_recibe_texto(negocios, cola, monkeypat
     assert (await mensajes(a.tid, conv))[0]["interactive"] is None
 
 
+async def _twilio(*_a: Any, **_k: Any) -> tuple[str, dict[str, str]]:
+    return "twilio", {"account_sid": "AC" + "1" * 32, "auth_token": "t", "from": "whatsapp:+15550001111"}
+
+
+async def test_twilio_con_la_ventana_abierta_sale_el_interactivo(negocios, cola, monkeypatch) -> None:
+    """ADR-0186 (PR-7i): Twilio tiene botones; el interactivo lo convierte el outbox en un Content de su forma."""
+    a, _, _ = negocios
+    monkeypatch.setattr("core.gateway.sender.resolve_credentials", _twilio)
+    clave = await publicar(a.tid, definicion(2))
+    conv = await conversacion(a.tid)
+
+    r = await enviar(a.tid, conv, clave)
+
+    assert (r.enviado, r.via) == (True, "interactive") and r.ejecucion_directa
+    assert (await mensajes(a.tid, conv))[0]["interactive"]["type"] == "button"
+
+
+async def test_twilio_con_la_ventana_cerrada_no_busca_la_plantilla_de_meta(negocios, cola, monkeypatch) -> None:
+    """Aunque la conversación conserve la cuenta de Meta (venía de Meta) con la contraparte aprobada, por Twilio no
+    se usa: el envío saldría sin ContentSid. No sale nada y queda el motivo."""
+    a, _, _ = negocios
+    d = definicion(3, ttl=168)
+    cuenta, ids = await cuenta_meta(a.tid, {"aviso_tw": ("APPROVED", componentes_meta(d))})
+    clave = await publicar(a.tid, d, message_template_id=ids["aviso_tw"])
+    conv = await conversacion(a.tid, ventana=timedelta(hours=-5), meta=cuenta)
+    monkeypatch.setattr("core.gateway.sender.resolve_credentials", _twilio)
+
+    r = await enviar(a.tid, conv, clave)
+
+    assert (r.enviado, r.motivo) == (False, "version_sin_plantilla_de_meta")
+    assert all(m["template_name"] is None for m in await mensajes(a.tid, conv))
+
+
 async def test_meta_degradado_por_los_topes_sale_como_texto_pero_no_se_contesta_por_texto(negocios, cola) -> None:
     """11 opciones no caben en una lista de Meta: sale el texto numerado, pero WhatsApp Meta tiene botones y no
     interpreta la respuesta numérica (pista C2), así que `ejecucion_directa` es False y el «1» llega al agente."""

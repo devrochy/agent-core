@@ -394,6 +394,7 @@ class TwilioInteractiveContent(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     channel_connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    account_sid: Mapped[str] = mapped_column(Text, nullable=False)
     forma: Mapped[str] = mapped_column(Text, nullable=False)
     content_sid: Mapped[str] = mapped_column(Text, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

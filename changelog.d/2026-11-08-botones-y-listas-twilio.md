@@ -5,16 +5,20 @@
   - Las formas son `quick_reply:N` (`twilio/quick-reply`) y `list:N` (`twilio/list-picker`).
   - El cuerpo, los títulos y los ids van como `ContentVariables`. Así un solo Content por forma sirve para todos los mensajes de esa forma y no hace falta aprobación dentro de la ventana.
   - El pie se agrega al cuerpo. Una fila sin descripción lleva un guion, porque Twilio la exige.
+  - Los títulos, ids y descripciones van sin saltos ni caracteres de control.
+  - Un título vacío, un id de más de 200 caracteres o más de 3 botones son un `ChannelError`. El id no se trunca, porque tiene que volver igual en `ButtonPayload` o `ListId`.
   - Los ejemplos de variables del Content son neutros: el recurso queda en la cuenta del negocio y no guarda datos del primer cliente.
 - **Caché** (migración **0124**): tabla `twilio_interactive_contents`.
   - Tiene `tenant_id`, RLS forzada, FK compuesta a la conexión y único por (negocio, conexión, forma) entre las filas vivas.
+  - Guarda la cuenta (`account_sid`) que creó el Content. Si la conexión cambia de cuenta, la fila vieja se reemplaza. Pasa al rotar credenciales o al reconectar el número con otra cuenta, porque las dos cosas conservan la conexión. Desconectar da de baja la caché, como ya pasaba con las plantillas.
+  - Si dos envíos crean a la vez el Content de la misma forma, gana el primero que se guarda y los dos usan ese. La baja tras un 404 apunta solo a ese Content y no toca uno que otro envío acaba de recrear.
   - La primera vez de una forma se crea el Content; después se reutiliza.
   - Si Twilio responde 404 al enviar, porque alguien borró el Content en la consola, la fila se marca borrada y el Content se recrea una sola vez.
   - Es reversible: el downgrade elimina la tabla, los Content quedan en Twilio y se recrean al volver.
 - **Errores**:
-  - No hay texto de respaldo en el envío, igual que en Meta. Quien acepta degradar a texto ya lo decidió al encolar (`send_interactive_to_conversation`); las opciones directas y las confirmaciones no degradan.
+  - **Cambio respecto de lo aprobado** en ADR-0186, decisión 5: no hay texto de respaldo en el envío, igual que en Meta. Queda para la adenda del ADR. Quien acepta degradar a texto ya lo decidió al encolar (`send_interactive_to_conversation`); las opciones directas y las confirmaciones no degradan.
   - Un interactivo que no sirve es un error **permanente** de Twilio. Los errores de Twilio siguen su categoría: un 63016 fuera de la ventana no se reintenta.
-- **Fuera de la ventana**: las opciones directas buscan la plantilla de contraparte de Meta, que una conversación de Twilio no tiene. Por eso queda el mensaje `failed` con `sin_plantilla`. Antes salía un texto numerado, que fuera de la ventana tampoco llega.
+- **Fuera de la ventana**: las opciones directas no buscan la plantilla de contraparte de Meta para una conversación de Twilio, aunque conserve un `meta_connection_id` de cuando era de Meta. Por eso queda el mensaje `failed` con `sin_plantilla`. Antes salía un texto numerado, que fuera de la ventana tampoco llega.
 - Los **avisos por evento con opciones** siguen sin puente para Twilio y usan su plantilla de Content (PR-7a).
 - **Pendiente de verificar en test con el número real**:
   - Que Twilio acepte variables en `actions[].id` e `items[].id`.
