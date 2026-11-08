@@ -67,6 +67,7 @@ from core.api.routers import (
     sync,
     tenants,
     turnos,
+    twilio_connections,
     web_chat,
 )
 
@@ -99,6 +100,8 @@ api_router.include_router(datos_de_prueba.router)
 api_router.include_router(datos_de_prueba.modulos_router)
 api_router.include_router(agents.router)
 api_router.include_router(agent_editor.router)
+# ADR-0186: antes que `connections` (su `/{connection_id}` capturaría `/twilio`).
+api_router.include_router(twilio_connections.router)
 api_router.include_router(connections.router)
 api_router.include_router(connection_agents.router)
 api_router.include_router(connection_releases.router)
