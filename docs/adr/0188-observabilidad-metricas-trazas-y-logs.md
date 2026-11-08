@@ -101,6 +101,11 @@ Con `OTEL_ENABLED=true`:
   - **Celery**, porque `celery_trazas.py` ya propaga `traceparent`.
   - **Redis**, por volumen y porque las claves llevan ids.
 
+**Errores y rutas con secreto.** Lo encontró el auditor multitenant antes del merge:
+- `ExportadorRedactado` envuelve el exportador y deja de cada span solo el código del status y el tipo de las excepciones. El instrumentador de SQLAlchemy pone `str(exc)` en el status, y con asyncpg trae el `DETAIL` con valores de la fila. FastAPI registra el mensaje de cualquier excepción no manejada.
+- El engine del core usa `hide_parameters=True`, así que ningún error de SQL lleva `[parameters: …]`.
+- El token firmado de `GET /api/v1/files/{token}` se tapa en la ruta del span.
+
 El span `kernel.turn` sigue sin registrar el mensaje de las excepciones, solo su tipo.
 
 ### 5. Logs: correlación en el backend, redacción en Alloy
@@ -131,7 +136,7 @@ La redacción del backend (sin query en spans, Sentry con scrubber, `httpx` sin 
 
 ### 7. Sentry también en el conector
 
-`main()` del conector llama a `configure_sentry()`, con el mismo scrubber que el resto, y marca sus eventos con `role=connector`.
+`main()` del conector llama a `configure_sentry()`, con el mismo scrubber que el resto, y marca sus eventos con `role=connector`. La denylist del scrubber suma las variables locales del conector que llevan el texto, el teléfono o el QR de vinculación: `event`, `job`, `qr`, `sender`, `jid`, `to`, `raw` y `text`.
 
 ## Variables de entorno
 
@@ -154,6 +159,12 @@ Sin `OTEL_EXPORTER_OTLP_HEADERS`: Alloy no pide credenciales en la red interna.
 - **El CI no prueba el SDK de métricas real.** El Python del runner (`/usr/local/Python-3.12.0`) no trae `_ctypes`. Esas pruebas usan `importorskip` y corren en un intérprete aparte en local; las de cableado sí corren en CI. Seguimiento: un Python completo en `preparar-entorno`. La imagen `python:3.12-slim` sí lo trae.
 - **Instancias del worker.** Cada hijo del prefork y cada redeploy crea un `service.instance.id` nuevo. Las series viejas dejan de estar activas a los pocos minutos, pero un despliegue duplica por un rato las del worker.
 - **Lo que mide el LLM.** `agentcore_llm_*` cubre las llamadas del loop del turno, primario y respaldo. Los reintentos internos de la política de modelo y los embeddings no se cuentan aquí; siguen en `usage_ledger`.
+
+## Pendientes conocidos
+
+- `model` se valida con una regex, no contra el catálogo de modelos. Un id de modelo afinado con nombre de organización pasaría como valor de etiqueta. Hoy no se configura ninguno.
+- En rutas públicas (`/webhooks`, `/api/pack`) se aceptan el `X-Request-ID` y el `traceparent` del cliente. Un tercero podría mezclar correlaciones en Loki o Tempo, aunque no mezcla datos.
+- `waweb_inbound_publicado` (`core/waweb/manager.py`, anterior a este ADR) registra el teléfono del cliente en el log. La redacción de Alloy lo tapa, pero conviene quitarlo en origen.
 
 ## Alternativas descartadas
 
