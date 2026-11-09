@@ -77,7 +77,10 @@ def actualizar(archivo: Path, dsl: str) -> int:
 
 def main() -> None:
     dsl = DSL.read_text(encoding="utf-8")
-    llamar("validate", {"dsl": dsl})
+    # `validate` devuelve el error como texto, sin marcar `isError`.
+    validacion = llamar("validate", {"dsl": dsl})
+    if validacion != "OK":
+        raise SystemExit(f"{DSL}: {validacion}")
     for archivo in [C4_MD, *(Path(a).resolve() for a in sys.argv[1:])]:
         print(f"{archivo}: {actualizar(archivo, dsl)} vistas")
 
