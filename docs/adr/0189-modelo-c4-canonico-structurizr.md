@@ -29,9 +29,9 @@ La arquitectura se modela en un único archivo, `docs/architecture/workspace.dsl
 
 **Positivas:** una sola fuente versionada junto al código, jerarquía C4 validada, y cambios de arquitectura y diagrama en el mismo PR. Mermaid no requiere herramientas nuevas para leerse.
 
-**Negativas / lo que aceptamos pagar:** regenerar requiere Docker y un paso manual, y nada obliga aún a hacerlo (CI queda pendiente). El layout automático de Mermaid es peor que un diagrama ajustado a mano. La exportación necesita dos correcciones, aplicadas en `scripts/export_c4.py`. Los packs corren en dos contenedores, pero el modelo los ubica en `core-api`.
+**Negativas / lo que aceptamos pagar:** regenerar requiere Docker y un paso manual; el CI valida el modelo y falla si `c4.md` quedó sin regenerar, con la imagen del MCP en versión fija. El layout automático de Mermaid es peor que un diagrama ajustado a mano. La exportación necesita dos correcciones, aplicadas en `scripts/export_c4.py`. Los packs corren en dos contenedores, pero el modelo los ubica en `core-api`.
 
-**Qué haría que revisáramos esto:** si durante dos trimestres `workspace.dsl` queda atrasado frente a los ADR de topología o si la exportación Mermaid deja de ser legible en GitHub, se reconsidera validar en CI o cambiar el formato de salida.
+**Qué haría que revisáramos esto:** si durante dos trimestres `workspace.dsl` queda atrasado frente a los ADR de topología o si la exportación Mermaid deja de ser legible en GitHub, se reconsidera el modelo o el formato de salida.
 
 ## Impacto en el código
 

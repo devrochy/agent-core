@@ -4,12 +4,13 @@ name: CI
 #   - PR → develop (o cualquier rama que no sea main): nivel RÁPIDO. Lint, tipos,
 #     capas, unitarios y gitleaks sobre los commits de la PR; si la PR toca rutas
 #     que cubre la integración, además el subconjunto crítico `-m aislamiento`
-#     (RLS forzada, aislamiento entre tenants, webhooks, IDOR). Además, el gate de
+#     (RLS forzada, aislamiento entre tenants, webhooks, IDOR); si toca el modelo C4,
+#     su validación y el drift de docs/architecture/c4.md. Además, el gate de
 #     evals y journeys en REPLAY (último paso del job `integracion`): desde las
 #     grabaciones de `evals/cassettes/`, sin red ni LLM_API_KEY (adenda 2026-10-10 de
 #     ADR-0120; fundido en `integracion` por la adenda 2026-10-28).
 #   - push → develop (post-merge), PR → main y push → main: nivel COMPLETO.
-#     Integración completa, gitleaks sobre toda la historia y, hacia main, drift de
+#     Integración completa, gitleaks sobre toda la historia, modelo C4 y, hacia main, drift de
 #     docs/openapi.json. El gate de evals y journeys con el LLM REAL corre SOLO en la
 #     PR → main (una vez por release). En el push a develop corre en REPLAY, sin costo
 #     (decisión del dueño 2026-10-10: develop no gasta LLM; adenda de ADR-0120).
@@ -39,6 +40,10 @@ env:
   # Rutas que cubren los tests de integración: si una PR rápida no toca ninguna,
   # se salta el job de integración.
   RUTAS_INTEGRACION: '^(core/|packages/|plugins/|alembic/|cli/|tests/integration/|tests/conftest\.py$|alembic\.ini$|scripts/init_db\.py$|scripts/install_plugins\.sh$|pyproject\.toml$|uv\.lock$|\.github/|docker/postgres/)'
+  # Rutas del modelo C4 (ADR-0189): si una PR rápida no toca ninguna, no se levanta el MCP.
+  RUTAS_C4: '^(docs/architecture/|scripts/export_c4\.py$|\.github/workflows/ci\.yml$)'
+  # Versión fija: otra versión puede exportar otro Mermaid. Al subirla, regenerar c4.md y cambiar su `docker run`.
+  STRUCTURIZR_MCP_IMAGE: structurizr/mcp:2026.04.20@sha256:fc4ef98b7da925d62b08c71a90eb995a527fae30e2c04b39e3041f253c135539
 
 jobs:
   rapido:
@@ -89,6 +94,40 @@ jobs:
       - name: Linter de agentes (agentspec/3 y kernelspec/1)
         # ADR-0113 / HU-AOS-12: el mismo validador del CLI y de la API al guardar un borrador.
         run: agent-core agent lint tests/fixtures/agents/*.json
+
+      - name: Modelo C4 válido y c4.md sin drift
+        # ADR-0189: `export_c4.py` valida `workspace.dsl` y reescribe los diagramas; si c4.md
+        # cambia, la PR tocó el modelo sin regenerar. Va en `rapido` porque `integracion` se
+        # salta las PRs que solo tocan docs. El MCP no se declara en `services` para no
+        # levantarlo en las PRs que no tocan el modelo.
+        env:
+          BASE: ${{ github.base_ref }}
+          EVENTO: ${{ github.event_name }}
+        run: |
+          # Nivel rápido = PR a una rama que no es main (mismo criterio que el paso `nivel` de `integracion`).
+          if [ "$EVENTO" = "pull_request" ] && [ "$BASE" != "main" ]; then
+            # Si el diff falla, el paso falla (`-e`): nunca se salta el chequeo a ciegas.
+            CAMBIOS="$(git diff --no-renames --name-only "origin/${BASE}...HEAD")"
+            if ! grep -Eq "$RUTAS_C4" <<< "$CAMBIOS"; then
+              echo "::notice title=Modelo C4 omitido::La PR no toca el modelo C4."
+              exit 0
+            fi
+          fi
+          # Puerto dinámico: varios runners pueden compartir la máquina.
+          NOMBRE="c4-mcp-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker run -d --rm --name "$NOMBRE" -p 127.0.0.1::3000 -e PORT=3000 "$STRUCTURIZR_MCP_IMAGE" -dsl -mermaid -plantuml > /dev/null
+          export STRUCTURIZR_MCP_URL="http://$(docker port "$NOMBRE" 3000/tcp)/mcp"
+          for _ in $(seq 1 60); do curl -s -o /dev/null --max-time 2 "$STRUCTURIZR_MCP_URL" && break; sleep 1; done
+          python scripts/export_c4.py
+          if ! git diff --exit-code -- docs/architecture/c4.md; then
+            echo "::error file=docs/architecture/c4.md::c4.md no coincide con workspace.dsl. Regenerar con scripts/export_c4.py (ver cómo levantar el MCP al inicio de c4.md) y commitear el resultado."
+            exit 1
+          fi
+
+      - name: Apagar el MCP de Structurizr
+        # Aparte del paso anterior: también corre si el CI se cancela con un push nuevo.
+        if: always()
+        run: docker rm -f "c4-mcp-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" > /dev/null 2>&1 || true
 
       - name: Contrato OpenAPI sin drift (hacia main)
         # Checklist de release: `docs/openapi.json` refleja `/api/v1` (ADR-0077).
