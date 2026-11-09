@@ -100,6 +100,7 @@ jobs:
       - name: Contrato OpenAPI compatible (PR a develop)
         # La APK instalada no se actualiza con el backend: un cambio incompatible en `/api/v1`
         # la rompe. Si es intencional, etiqueta el PR con `api-incompatible` y relanza el job.
+        # Un valor nuevo en un enum de respuesta solo avisa (`.github/oasdiff-niveles.txt`).
         if: github.base_ref == 'develop' && !contains(github.event.pull_request.labels.*.name, 'api-incompatible')
         env:
           BASE: ${{ github.base_ref }}
@@ -116,7 +117,8 @@ jobs:
             mv -f "$RUNNER_TEMP/oasdiff" "$BIN.$$" && mv -f "$BIN.$$" "$BIN"
           fi
           git show "origin/${BASE}:docs/openapi.json" > "$RUNNER_TEMP/openapi-base.json"
-          "$BIN" breaking --fail-on ERR "$RUNNER_TEMP/openapi-base.json" docs/openapi.json
+          "$BIN" breaking --severity-levels .github/oasdiff-niveles.txt --fail-on ERR \
+            "$RUNNER_TEMP/openapi-base.json" docs/openapi.json
 
       - name: Gitleaks (secret scan)
         # Falla si aparece una credencial real; las claves de prueba del repo están
