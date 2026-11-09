@@ -137,7 +137,7 @@ workspace "SolversHub" "Plataforma multi-tenant de agentes de IA para negocios."
                 // docker-compose.yml:39
                 redis = container "Redis" "Cola de entrada, debounce, locks, memoria de trabajo y broker de Celery." "Redis 7" "Base de datos"
                 // docker-compose.yml:159, ADR-0085
-                tenantsVolume = container "Volumen tenants" "Artefactos por negocio: media, documentos, evidencias, flow.json y overrides de playbooks." "Volumen Docker" "Volumen"
+                tenantsVolume = container "Volumen tenants" "Artefactos POR negocio: media, documentos, evidencias, flow.json y overrides de playbooks." "Volumen Docker" "Volumen"
             }
 
             group "Borde" {
