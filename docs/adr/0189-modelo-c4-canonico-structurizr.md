@@ -1,6 +1,6 @@
 # ADR-0189 — Modelo C4 canónico en Structurizr DSL
 
-- **Estado:** aceptado (el dueño eligió la opción y aprobó el plan el 2026-11-08)
+- **Estado:** propuesto (el dueño eligió la opción y aprobó el plan el 2026-11-08)
 - **Fecha:** 2026-11-09
 
 ## Contexto
