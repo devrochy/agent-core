@@ -1,6 +1,6 @@
 # ADR-0189 — Modelo C4 canónico en Structurizr DSL
 
-- **Estado:** propuesto (el dueño eligió la opción y aprobó el plan el 2026-11-08)
+- **Estado:** aceptado (2026-11-09, por decisión del dueño. Modelo y exportación mergeados en #734; el CI de #737 valida el modelo y falla si `c4.md` queda sin regenerar, comprobado en verde y en rojo en CI real. Sin comprobar por el asistente: cómo se ven los diagramas en GitHub).
 - **Fecha:** 2026-11-09
 
 ## Contexto
