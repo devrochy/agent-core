@@ -84,7 +84,7 @@ exigen contraseña del admin y quedan en la auditoría. El `export-pdf` de v1 es
 ### Offline (F4) ✅
 Identidad Bearer (sesión del gestor). Eventos de la cola: `visita` (pago y no-pago),
 `pago`, `abono`, `gasto` (evidencias base64), `trayectoria`, `cambio_cliente`. Ack
-**por evento** (`sincronizado`/`duplicado`/`error`); idempotente por `eventoIdCliente`;
+**por evento** (`sincronizado`/`duplicado`/`error`); idempotente por cuenta y `eventoIdCliente`;
 cada evento en su savepoint (uno inválido no tumba el lote). La cartera se resuelve
 del payload, del cliente, o de la única cartera visible.
 | Endpoint | Contrato |
