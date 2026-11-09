@@ -29,6 +29,14 @@ from core.admin.auth import verify_password
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
+from pack_cobranza.api_gestor import (
+    SinPermiso,
+    _cartera_visible,
+    _exigir_habilitado,
+    _exigir_permiso,
+    _permiso_de_visita,
+    _permisos_habilitados,
+)
 from pack_cobranza.auth import acceso_de_campo, actor_del_token, issue_token, pack_secret
 from pack_cobranza.evidencias import EvidenciaError, guardar_evidencia
 from pack_cobranza.models import (
@@ -53,8 +61,17 @@ router = APIRouter(prefix="/api/pack/pack_cobranza", tags=[PLUGIN_ID])
 
 async def _auth(authorization: str | None) -> tuple[uuid.UUID, dict[str, Any]] | None:
     """Mismo validador que `api_gestor` (ADR-0136): sin refresh, negocio activo y, si el token
-    es de una cuenta, cuenta habilitada y vinculada al negocio."""
-    return await acceso_de_campo(authorization)
+    es de una cuenta, cuenta habilitada y vinculada al negocio.
+
+    Un token de dispositivo con gestor cuenta como ese gestor (sus carteras y su matriz, agent-core#690).
+    El de un dispositivo sin gestor no tiene matriz que aplicar y sigue con el alcance del negocio."""
+    auth = await acceso_de_campo(authorization)
+    if auth is None:
+        return None
+    tenant_id, payload = auth
+    if payload.get("gestor_id") and not payload.get("rol"):
+        payload = {**payload, "rol": "gestor"}
+    return tenant_id, payload
 
 
 @router.post("/auth/dispositivo")
@@ -133,14 +150,14 @@ async def clientes_dia(cartera_id: str, authorization: str | None = Header(defau
     auth = await _auth(authorization)
     if auth is None:
         return JSONResponse({"error": "no autorizado"}, status_code=401)
-    tenant_id, _payload = auth
+    tenant_id, payload = auth
     try:
         cid = uuid.UUID(cartera_id)
     except ValueError:
         return JSONResponse({"error": "cartera inválida"}, status_code=400)
     async with tenant_scope(tenant_id):
         async with get_session() as session:
-            if await get_owned(session, Cartera, cid) is None:
+            if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
             clientes = (await session.execute(select(Cliente).where(Cliente.tenant_id == tenant_id, Cliente.cartera_id == cid, Cliente.deleted_at.is_(None)))).scalars().all()
             out = []
@@ -167,8 +184,10 @@ async def sync_eventos(request: Request, authorization: str | None = Header(defa
     eventos = body.get("eventos") or []
     aplicados = 0
     duplicados = 0
+    rechazados = 0
     async with tenant_scope(tenant_id):
         async with get_session() as session:
+            habilitados = await _permisos_habilitados(session, tenant_id, payload) if payload.get("rol") == "gestor" else None
             for ev in eventos:
                 evento_id = str(ev.get("evento_id_cliente") or "").strip()
                 tipo = str(ev.get("tipo") or "").strip()
@@ -182,20 +201,39 @@ async def sync_eventos(request: Request, authorization: str | None = Header(defa
                     duplicados += 1
                     continue
                 try:
-                    await _aplicar_evento(session, tenant_id, tipo, data)
+                    await _aplicar_evento(session, tenant_id, payload, tipo, data, habilitados)
+                except SinPermiso:
+                    # Como en la API v2: no se registra, y si el propietario habilita el permiso el mismo evento se aplica.
+                    rechazados += 1
+                    continue
                 except Exception as exc:  # dato inválido del dispositivo: no tumba el lote
                     session.add(SyncEvento(tenant_id=tenant_id, actor=actor, device_id=uuid.UUID(device_id) if device_id else None, evento_id_cliente=evento_id, tipo=tipo, payload=data, estado="error"))
                     log.warning("sync_evento_error", tipo=tipo, error=type(exc).__name__)
                     continue
                 session.add(SyncEvento(tenant_id=tenant_id, actor=actor, device_id=uuid.UUID(device_id) if device_id else None, evento_id_cliente=evento_id, tipo=tipo, payload=data))
                 aplicados += 1
-    return JSONResponse({"aplicados": aplicados, "duplicados": duplicados})
+    return JSONResponse({"aplicados": aplicados, "duplicados": duplicados, "rechazados": rechazados})
 
 
-async def _aplicar_evento(session, tenant_id: uuid.UUID, tipo: str, data: dict[str, Any]) -> None:
+def _permiso_del_evento(tipo: str, data: dict[str, Any]) -> str:
+    if tipo == "visita":
+        return _permiso_de_visita(data)
+    return "registrar_abono" if tipo == "abono" else "registrar_pago"
+
+
+async def _prestamo_del_cliente(session, cliente: Cliente, prestamo_id: uuid.UUID) -> uuid.UUID:
+    prestamo = await get_owned(session, Prestamo, prestamo_id)
+    if prestamo is None or prestamo.cliente_id != cliente.id:
+        raise ValueError("préstamo inválido")
+    return prestamo.id
+
+
+async def _aplicar_evento(session, tenant_id: uuid.UUID, payload: dict[str, Any], tipo: str, data: dict[str, Any], habilitados: frozenset[str] | None) -> None:
+    # Misma matriz y mismas carteras que la API v2 (agent-core#690): este token también sirve aquí.
+    _exigir_habilitado(habilitados, _permiso_del_evento(tipo, data))
     cliente_id = uuid.UUID(str(data.get("cliente_id")))
     cliente = await session.get(Cliente, cliente_id)
-    if cliente is None or cliente.tenant_id != tenant_id:
+    if cliente is None or cliente.tenant_id != tenant_id or await _cartera_visible(session, tenant_id, payload, cliente.cartera_id) is None:
         raise ValueError("cliente inválido")
     if tipo == "visita":
         session.add(
@@ -209,15 +247,16 @@ async def _aplicar_evento(session, tenant_id: uuid.UUID, tipo: str, data: dict[s
             )
         )
     elif tipo == "pago":
-        prestamo_id = uuid.UUID(str(data.get("prestamo_id")))
+        prestamo_id = await _prestamo_del_cliente(session, cliente, uuid.UUID(str(data.get("prestamo_id"))))
         cuota_id = uuid.UUID(str(data["cuota_id"])) if data.get("cuota_id") else None
+        cuota = await session.get(Cuota, cuota_id) if cuota_id else None
+        if cuota is None or cuota.tenant_id != tenant_id or cuota.prestamo_id != prestamo_id:
+            cuota_id = None  # una cuota que no es de este préstamo no se enlaza ni se marca pagada
         session.add(Pago(tenant_id=tenant_id, cliente_id=cliente.id, prestamo_id=prestamo_id, cuota_id=cuota_id, valor=Decimal(str(data.get("valor") or 0)), metodo_pago=str(data.get("metodo_pago") or "efectivo"), registrado_por="gestor"))
-        if cuota_id:
-            cuota = await session.get(Cuota, cuota_id)
-            if cuota is not None and cuota.tenant_id == tenant_id:
-                cuota.estatus = "pagada"
+        if cuota is not None and cuota_id:
+            cuota.estatus = "pagada"
     else:  # abono
-        prestamo_id = uuid.UUID(str(data.get("prestamo_id")))
+        prestamo_id = await _prestamo_del_cliente(session, cliente, uuid.UUID(str(data.get("prestamo_id"))))
         session.add(Abono(tenant_id=tenant_id, prestamo_id=prestamo_id, cliente_id=cliente.id, valor=Decimal(str(data.get("valor") or 0)), metodo_pago=str(data.get("metodo_pago") or "efectivo"), registrado_por="gestor"))
 
 
@@ -232,7 +271,7 @@ async def subir_evidencia(cliente_id: str, request: Request, authorization: str 
     auth = await _auth(authorization)
     if auth is None:
         return JSONResponse({"error": "no autorizado"}, status_code=401)
-    tenant_id, _payload = auth
+    tenant_id, payload = auth
     try:
         cid = uuid.UUID(cliente_id)
     except ValueError:
@@ -245,8 +284,11 @@ async def subir_evidencia(cliente_id: str, request: Request, authorization: str 
     contenido = await archivo.read()
     async with tenant_scope(tenant_id):
         async with get_session() as session:
-            if await get_owned(session, Cliente, cid) is None:
+            cliente = await get_owned(session, Cliente, cid)
+            if cliente is None or await _cartera_visible(session, tenant_id, payload, cliente.cartera_id) is None:
                 return JSONResponse({"error": "cliente no encontrado"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "actualizar_cliente")) is not None:
+                return denegado
             try:
                 meta = await guardar_evidencia(tenant_id, cid, tipo, getattr(archivo, "filename", None), getattr(archivo, "content_type", None), contenido)
             except EvidenciaError as exc:
