@@ -8,6 +8,8 @@ su decisión. Recibe el input del hook como JSON por stdin y responde por stdout
 - deny: operaciones de producción prohibidas desde una sesión, y migraciones
   (Alembic `.py` del core y de los packs, o `.sql`) que crean tablas sin
   `tenant_id` + RLS habilitada y forzada + policy de aislamiento.
+- deny: `gh pr create` hacia `develop` de agent-core cuando el verificador de la
+  skill `abrir-pr` encuentra errores en la rama.
 - ask: comandos que operan sobre recursos de producción de Coolify
   (contenedores, despliegues, la BD); se los pide confirmar al humano.
 
@@ -59,6 +61,12 @@ MUTATING_HTTP_RE = re.compile(
     r"|\s(-d|--data(-raw|-binary|-urlencode)?|-F|--form)\s",
     re.IGNORECASE,
 )
+
+# `gh pr create` en posición de comando, no dentro del texto de otro argumento.
+PR_CREATE_RE = re.compile(r"(?:^|&&|\|\||;|\n|\()\s*gh\s+pr\s+create\b([^\n]*)")
+PR_CD_RE = re.compile(r"(?:^|&&|;|\n|\()\s*cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|)]+)")
+PR_VERIFIER = Path(".claude/skills/abrir-pr/verificar_pr.py")
+PR_VERIFIER_TIMEOUT = 45  # segundos: si tarda más, deja pasar (fail-open)
 
 MIGRATION_PY_RE = re.compile(r"(^|/)alembic/versions/[^/]+\.py$")
 # Leer `.env*` (secretos) por Bash: `.env.example` sí pasa. Cubre `cat`, `grep`,
@@ -149,6 +157,78 @@ def check_bash(tool_input: dict) -> None:
             "PRODUCCIÓN: el comando opera sobre " + ", ".join(sorted(set(targets))) + ".\n"
             "Confírmalo solo si es parte de una release o lo pediste explícitamente "
             "(skill `release`). Para test, el UUID de la app es tr0vpdei5av6szcgwpe1vwcg."
+        )
+
+
+# ---------------------------------------------------------------- abrir PR
+
+
+def _flag(args: str, *names: str) -> str | None:
+    """Valor de una opción de `gh`, con comillas o sin ellas (None si no está)."""
+    options = "|".join(re.escape(name) for name in names)
+    match = re.search(rf"(?:^|\s)(?:{options})[ =](\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S+)", args)
+    if not match:
+        return None
+    value = match.group(1)
+    return value[1:-1] if value[0] in "\"'" else value
+
+
+def _git(workdir: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(workdir), *args], capture_output=True, text=True, check=False
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def check_pr_create(command: str, cwd: str | None) -> None:
+    """Corre `verificar_pr.py` antes de abrir un PR a `develop` de agent-core.
+
+    Solo revisa lo que puede comprobar: la rama actual del repo donde corre el comando.
+    Los PR a otras bases (release, apilados) y los de otros repos pasan sin revisar.
+    """
+    normalized = command.replace("\\\n", " ")
+    match = PR_CREATE_RE.search(normalized)
+    if not match or not cwd:
+        return
+    args = match.group(1)
+    if (_flag(args, "--base", "-B") or "develop") != "develop":
+        return
+    repo = _flag(args, "--repo", "-R")
+    if repo and repo.rsplit("/", 1)[-1] != "agent-core":
+        return
+
+    workdir = Path(cwd)
+    for target in PR_CD_RE.findall(normalized[: match.start() + 1]):
+        workdir = workdir / target.strip("\"'")
+    root = _git(workdir, "rev-parse", "--show-toplevel")
+    if not root:
+        return
+    origin = _git(workdir, "remote", "get-url", "origin").removesuffix(".git")
+    if origin.rsplit("/", 1)[-1] != "agent-core":
+        return
+    head = _flag(args, "--head", "-H")
+    if head and head.rsplit(":", 1)[-1] != _git(workdir, "branch", "--show-current"):
+        return
+    verifier = Path(root) / PR_VERIFIER
+    if not verifier.exists():
+        return
+
+    argv = [sys.executable, "-I", str(verifier)]
+    title = _flag(args, "--title", "-t")
+    if title and not re.search(r"[$`]", title):
+        argv += ["--titulo", title]
+    try:
+        result = subprocess.run(
+            argv, cwd=root, capture_output=True, text=True, check=False, timeout=PR_VERIFIER_TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        return
+    if result.returncode == 1:
+        errors = [line for line in result.stdout.splitlines() if "[ERROR]" in line]
+        deny(
+            "BLOQUEADO: el verificador de `abrir-pr` encontró errores en esta rama.\n"
+            + "\n".join(errors)
+            + "\nCorrígelos y vuelve a abrir el PR (skill `abrir-pr`)."
         )
 
 
@@ -302,6 +382,7 @@ def main() -> None:
     try:
         if tool_name == "Bash":
             check_bash(tool_input)
+            check_pr_create(str(tool_input.get("command", "")), payload.get("cwd"))
         elif tool_name in ("Write", "Edit", "MultiEdit"):
             check_migration_write(tool_name, tool_input, payload.get("cwd"))
     except Exception:  # fail-open: la guardia nunca rompe la sesión

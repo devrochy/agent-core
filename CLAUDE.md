@@ -86,6 +86,7 @@ o `/admin/tenants/nuevo`), nunca código por cliente.
   en `CHANGELOG.md`: así los PRs en paralelo no chocan. La release los consolida
   (`scripts/changelog.py`, ver `changelog.d/README.md`).
 - Un cambio no está completo si `ruff check` && `pytest` no pasan.
+- Los PR a `develop` se abren con `/abrir-pr`.
 
 ## Herramientas de asistentes IA (OpenCode + Claude Code)
 
@@ -110,8 +111,9 @@ referencia `docs`. Para no mantener el mismo contenido dos veces:
   ejecuta ese script y aplica su decisión, así que las reglas se cambian en
   un solo archivo (con sus tests en `tests/test_guards_hook.py`). Bloquea las
   migraciones (Alembic `.py` del core y de los packs) que crean tablas sin
-  `tenant_id` + RLS forzada + policy, y pide confirmación ante comandos sobre
-  los recursos de producción de Coolify.
+  `tenant_id` + RLS forzada + policy, pide confirmación ante comandos sobre
+  los recursos de producción de Coolify, y corre el verificador de `abrir-pr` antes
+  de `gh pr create` hacia `develop`.
 - **ruff tras editar**: `.claude/hooks/ruff_on_edit.sh` (hook PostToolUse) devuelve
   los errores de `ruff check` del `.py` editado. En OpenCode lo corre
   `.opencode/plugins/ruff-on-edit.ts` con el mismo script.

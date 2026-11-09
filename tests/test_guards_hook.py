@@ -201,3 +201,102 @@ def test_files_mode_compares_against_head(tmp_path: Path) -> None:
     # Lo que no es una migración se ignora.
     (tmp_path / "modulo.py").write_text(TABLE)
     assert check_files(tmp_path, "modulo.py").returncode == 0
+
+
+# ---------------------------------------------------------------- abrir PR
+
+VERIFIER_FAILS = 'import sys\nprint("✗ [ERROR] falta un fragmento")\nsys.exit(1)\n'
+VERIFIER_PASSES = (
+    "import pathlib, sys\n"
+    'pathlib.Path(__file__).with_name("argv.txt").write_text(" ".join(sys.argv[1:]))\n'
+)
+
+
+def pr_repo(root: Path, verifier: str | None, origin: str = "agent-core") -> Path:
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+    for args in (
+        ["init", "-q", "-b", "mi-rama"],
+        ["remote", "add", "origin", f"https://github.com/devrochy/{origin}.git"],
+        ["commit", "-q", "--allow-empty", "-m", "x"],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True, env=env)
+    if verifier is not None:
+        path = root / ".claude/skills/abrir-pr/verificar_pr.py"
+        path.parent.mkdir(parents=True)
+        path.write_text(verifier, encoding="utf-8")
+    return root
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ('gh pr create --base develop --title "fix(x): algo"', "deny"),
+        ('gh pr create --title "fix(x): algo"', "deny"),
+        ('git push -u origin mi-rama && gh pr create -B develop -t "fix(x): algo"', "deny"),
+        ("gh pr create \\\n  --base develop \\\n  --fill", "deny"),
+        ('gh pr create --base develop --body "$(cat <<EOF\ncomillas " sueltas\nEOF\n)"', "deny"),
+        ("gh pr create --repo devrochy/agent-core --base develop --head mi-rama", "deny"),
+        ("gh pr create --base main --title 'release'", "allow"),
+        ("gh pr create --base feat/padre --title 'fix(x): hija'", "allow"),
+        ("gh pr create --repo devrochy/solvershub-docs --base develop", "allow"),
+        ("gh pr create --base develop --head otra-rama", "allow"),
+        ("gh pr list --base develop", "allow"),
+        ("echo 'gh pr create --base develop'", "allow"),
+    ],
+)
+def test_pr_create_con_verificador_en_rojo(tmp_path: Path, command: str, expected: str) -> None:
+    assert decide("Bash", {"command": command}, pr_repo(tmp_path, VERIFIER_FAILS)) == expected
+
+
+def test_pr_create_explica_los_errores(tmp_path: Path) -> None:
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "gh pr create --base develop --fill"},
+        "cwd": str(pr_repo(tmp_path, VERIFIER_FAILS)),
+    }
+    proc = subprocess.run(
+        [sys.executable, str(HOOK)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    reason = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "falta un fragmento" in reason
+
+
+def test_pr_create_sigue_el_cd_del_comando(tmp_path: Path) -> None:
+    repo = tmp_path / "worktree"
+    repo.mkdir()
+    pr_repo(repo, VERIFIER_FAILS)
+    command = f"cd {repo} && gh pr create --base develop --fill"
+    assert decide("Bash", {"command": command}, tmp_path) == "deny"
+
+
+def test_pr_create_pasa_el_titulo_al_verificador(tmp_path: Path) -> None:
+    pr_repo(tmp_path, VERIFIER_PASSES)
+    command = 'gh pr create --base develop --title "fix(x): algo"'
+    assert decide("Bash", {"command": command}, tmp_path) == "allow"
+    argv = tmp_path / ".claude/skills/abrir-pr/argv.txt"
+    assert argv.read_text(encoding="utf-8") == "--titulo fix(x): algo"
+
+
+@pytest.mark.parametrize(
+    ("verifier", "origin"),
+    [(None, "agent-core"), (VERIFIER_FAILS, "solvershub-panel")],
+)
+def test_pr_create_sin_verificador_o_de_otro_repo(
+    tmp_path: Path, verifier: str | None, origin: str
+) -> None:
+    pr_repo(tmp_path, verifier, origin)
+    assert decide("Bash", {"command": "gh pr create --base develop"}, tmp_path) == "allow"
+
+
+def test_pr_create_fuera_de_un_repo(tmp_path: Path) -> None:
+    assert decide("Bash", {"command": "gh pr create --base develop"}, tmp_path) == "allow"
