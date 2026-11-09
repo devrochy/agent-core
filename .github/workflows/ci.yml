@@ -97,6 +97,29 @@ jobs:
           python scripts/export_openapi.py
           git diff --exit-code docs/openapi.json
 
+      - name: Contrato OpenAPI compatible (PR a develop)
+        # La APK instalada no se actualiza con el backend: un cambio incompatible en `/api/v1`
+        # la rompe. Si es intencional, etiqueta el PR con `api-incompatible` y relanza el job.
+        # Un valor nuevo en un enum de respuesta solo avisa (`.github/oasdiff-niveles.txt`).
+        if: github.base_ref == 'develop' && !contains(github.event.pull_request.labels.*.name, 'api-incompatible')
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          VER=1.34.1
+          SHA=75775f65b0adebd26a8e013af51a799342dfdc6262d89efa9e3b7bdf89657d90
+          BIN="$HOME/.cache/ci-bin/oasdiff-${VER}"
+          if [ ! -x "$BIN" ]; then
+            mkdir -p "$HOME/.cache/ci-bin"
+            curl -fsSL -o "$RUNNER_TEMP/oasdiff.tar.gz" \
+              "https://github.com/oasdiff/oasdiff/releases/download/v${VER}/oasdiff_${VER}_linux_amd64.tar.gz"
+            echo "$SHA  $RUNNER_TEMP/oasdiff.tar.gz" | sha256sum -c -
+            tar -xzf "$RUNNER_TEMP/oasdiff.tar.gz" -C "$RUNNER_TEMP" oasdiff
+            mv -f "$RUNNER_TEMP/oasdiff" "$BIN.$$" && mv -f "$BIN.$$" "$BIN"
+          fi
+          git show "origin/${BASE}:docs/openapi.json" > "$RUNNER_TEMP/openapi-base.json"
+          "$BIN" breaking --severity-levels .github/oasdiff-niveles.txt --fail-on ERR \
+            "$RUNNER_TEMP/openapi-base.json" docs/openapi.json
+
       - name: Gitleaks (secret scan)
         # Falla si aparece una credencial real; las claves de prueba del repo están
         # allowlisteadas en `.gitleaks.toml`. En el nivel rápido solo se escanean
