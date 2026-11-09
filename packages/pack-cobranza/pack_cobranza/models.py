@@ -134,16 +134,18 @@ class IntentoAcceso(TenantMixin, Base):
 
 
 class SyncEvento(TenantMixin, Base):
-    """Evento offline sincronizado por un dispositivo (idempotente por evento de cliente)."""
+    """Evento offline sincronizado por un dispositivo (idempotente por cuenta y evento de cliente)."""
 
     __tablename__ = "pack_cobranza_sync_eventos"
     __table_args__ = (
-        Index("uq_pack_cobranza_sync_evento", "tenant_id", "evento_id_cliente", unique=True),
+        Index("uq_pack_cobranza_sync_evento_actor", "tenant_id", "actor", "evento_id_cliente", unique=True),
         Index("ix_pack_cobranza_sync_eventos_tenant_device", "tenant_id", "device_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     device_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    # Quién mandó el evento (`auth.actor_del_token`): su cuenta o su dispositivo; "" = fila anterior a 0019.
+    actor: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     evento_id_cliente: Mapped[str] = mapped_column(Text, nullable=False)
     tipo: Mapped[str] = mapped_column(Text, nullable=False)  # visita|pago|abono
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
