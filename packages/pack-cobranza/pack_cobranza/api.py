@@ -29,7 +29,7 @@ from core.admin.auth import verify_password
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
-from pack_cobranza.auth import acceso_de_campo, issue_token, pack_secret
+from pack_cobranza.auth import acceso_de_campo, actor_del_token, issue_token, pack_secret
 from pack_cobranza.evidencias import EvidenciaError, guardar_evidencia
 from pack_cobranza.models import (
     Abono,
@@ -162,6 +162,7 @@ async def sync_eventos(request: Request, authorization: str | None = Header(defa
         return JSONResponse({"error": "no autorizado"}, status_code=401)
     tenant_id, payload = auth
     device_id = payload.get("device_id")
+    actor = actor_del_token(payload)
     body = await request.json()
     eventos = body.get("eventos") or []
     aplicados = 0
@@ -175,7 +176,7 @@ async def sync_eventos(request: Request, authorization: str | None = Header(defa
                 if not evento_id or tipo not in ("visita", "pago", "abono"):
                     continue
                 existe = (
-                    await session.execute(select(SyncEvento.id).where(SyncEvento.tenant_id == tenant_id, SyncEvento.actor == "", SyncEvento.evento_id_cliente == evento_id))
+                    await session.execute(select(SyncEvento.id).where(SyncEvento.tenant_id == tenant_id, SyncEvento.actor.in_((actor, "")), SyncEvento.evento_id_cliente == evento_id).limit(1))
                 ).scalar_one_or_none()
                 if existe is not None:
                     duplicados += 1
@@ -183,10 +184,10 @@ async def sync_eventos(request: Request, authorization: str | None = Header(defa
                 try:
                     await _aplicar_evento(session, tenant_id, tipo, data)
                 except Exception as exc:  # dato inválido del dispositivo: no tumba el lote
-                    session.add(SyncEvento(tenant_id=tenant_id, device_id=uuid.UUID(device_id) if device_id else None, evento_id_cliente=evento_id, tipo=tipo, payload=data, estado="error"))
+                    session.add(SyncEvento(tenant_id=tenant_id, actor=actor, device_id=uuid.UUID(device_id) if device_id else None, evento_id_cliente=evento_id, tipo=tipo, payload=data, estado="error"))
                     log.warning("sync_evento_error", tipo=tipo, error=type(exc).__name__)
                     continue
-                session.add(SyncEvento(tenant_id=tenant_id, device_id=uuid.UUID(device_id) if device_id else None, evento_id_cliente=evento_id, tipo=tipo, payload=data))
+                session.add(SyncEvento(tenant_id=tenant_id, actor=actor, device_id=uuid.UUID(device_id) if device_id else None, evento_id_cliente=evento_id, tipo=tipo, payload=data))
                 aplicados += 1
     return JSONResponse({"aplicados": aplicados, "duplicados": duplicados})
 

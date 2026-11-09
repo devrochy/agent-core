@@ -3,9 +3,9 @@
 `pack_cobranza_sync_eventos` era único por `(tenant_id, evento_id_cliente)`, y ese id lo genera cada
 app: un gestor que repitiera el id de otro recibía «duplicado» (supo que existe y su evento se perdía).
 
-- `actor`: la cuenta que mandó el evento (`admin_id` del token). Texto `NOT NULL` con default `''`, para
-  que los tokens de dispositivo (sin cuenta) y las filas de antes sigan en una misma clave; un `NULL`
-  no choca en un índice único. Columna aditiva con default constante: no reescribe la tabla.
+- `actor`: quién mandó el evento (su cuenta o, sin cuenta, su dispositivo). Texto `NOT NULL` con default
+  `''`, que es el valor de las filas de antes; con un `NULL` el índice único no chocaría. Columna aditiva
+  con default constante: no reescribe la tabla.
 - Índice único nuevo `(tenant_id, actor, evento_id_cliente)`, y se retira el anterior.
 
 Las filas de antes quedan con `''`. La API de campo las sigue contando como ya aplicadas para cualquier

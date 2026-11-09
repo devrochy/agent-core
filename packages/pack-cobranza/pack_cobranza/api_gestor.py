@@ -37,7 +37,14 @@ from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from pack_cobranza import acceso
-from pack_cobranza.auth import acceso_de_campo, issue_token, pack_secret, token_tenant, verify_token
+from pack_cobranza.auth import (
+    acceso_de_campo,
+    actor_del_token,
+    issue_token,
+    pack_secret,
+    token_tenant,
+    verify_token,
+)
 from pack_cobranza.enlazar import enlazar_cliente, telefono_para_guardar
 from pack_cobranza.estadisticas import conteos_cartera
 from pack_cobranza.evidencias import EvidenciaError, guardar_archivo, guardar_evidencia
@@ -865,8 +872,8 @@ async def _prestamo_abierto(session, prestamo_id: uuid.UUID) -> Prestamo | None:
 async def _cuota_de_cartera(session, cartera_id: uuid.UUID, cuota_id: uuid.UUID) -> tuple[Cuota, uuid.UUID] | None:
     """La cuota viva y el cliente al que se le cobra, si es de esa cartera.
 
-    Sin préstamo la cuota cuelga de una suscripción (ADR-0082): la cartera es la de la suscripción
-    o, si no tiene, la de su cliente (agent-core#705)."""
+    Sin préstamo la cuota cuelga de una suscripción (ADR-0082): manda la cartera actual de su cliente,
+    no `Suscripcion.cartera_id`, que no se actualiza al mover al cliente (agent-core#705)."""
     cuota = await _vivo(session, Cuota, cuota_id)
     if cuota is None:
         return None
@@ -876,11 +883,8 @@ async def _cuota_de_cartera(session, cartera_id: uuid.UUID, cuota_id: uuid.UUID)
     sus = await _vivo(session, Suscripcion, cuota.suscripcion_id) if cuota.suscripcion_id else None
     if sus is None:
         return None
-    cartera_de_la_cuota = sus.cartera_id
-    if cartera_de_la_cuota is None:
-        cliente = await _vivo(session, Cliente, sus.cliente_id)
-        cartera_de_la_cuota = cliente.cartera_id if cliente is not None else None
-    return (cuota, sus.cliente_id) if cartera_de_la_cuota == cartera_id else None
+    cliente = await _vivo(session, Cliente, sus.cliente_id)
+    return (cuota, sus.cliente_id) if cliente is not None and cliente.cartera_id == cartera_id else None
 
 
 async def _permisos_de(session, tenant_id: uuid.UUID, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2232,7 +2236,7 @@ async def sync_offline(request: Request, authorization: str | None = Header(defa
         async with get_session() as session:
             habilitados = await _permisos_habilitados(session, tenant_id, payload) if payload.get("rol") == "gestor" else None
             # El id lo genera cada app: dos cuentas pueden repetirlo sin ser el mismo evento (agent-core#705).
-            actor = str(payload.get("admin_id") or "")
+            actor = actor_del_token(payload)
             for ev in eventos:
                 eid = str(ev.get("eventoIdCliente") or "").strip()
                 tipo = str(ev.get("tipoEvento") or "").strip()

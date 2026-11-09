@@ -144,7 +144,7 @@ class SyncEvento(TenantMixin, Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     device_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
-    # Cuenta que mandó el evento (`admin_id` del token); "" = token de dispositivo o fila anterior a 0019.
+    # Quién mandó el evento (`auth.actor_del_token`): su cuenta o su dispositivo; "" = fila anterior a 0019.
     actor: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     evento_id_cliente: Mapped[str] = mapped_column(Text, nullable=False)
     tipo: Mapped[str] = mapped_column(Text, nullable=False)  # visita|pago|abono

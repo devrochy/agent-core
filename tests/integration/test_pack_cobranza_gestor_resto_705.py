@@ -60,6 +60,18 @@ async def _sync(app_client, token: str, eid: str, tipo: str, data: dict[str, Any
     return r.json()[0]
 
 
+async def _token_de_dispositivo(esc: Escenario) -> str:
+    """Como el que emite `/auth/dispositivo`: sin cuenta, con el gestor del dispositivo."""
+    from pack_cobranza.auth import issue_token, pack_secret
+
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(esc.tid):
+        secret = await pack_secret()
+    assert secret
+    return issue_token({"tenant_id": str(esc.tid), "gestor_id": str(esc.gestor_id), "device_id": str(uuid.uuid4())}, secret)
+
+
 async def _crear(esc: Escenario, *objs: Any) -> None:
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -129,6 +141,21 @@ async def test_el_mismo_id_de_evento_de_dos_gestores_no_es_duplicado(app_client)
     assert (await _sync(app_client, esc.token_gestor, eid, "gasto", propio))["estado"] == "duplicado"
     assert (await _sync(app_client, o.token, eid, "gasto", del_otro))["estado"] == "duplicado"
     assert await _contar(esc, Gasto, cartera_id=esc.cartera_id) == gastos_propios + 1
+
+
+async def test_dos_dispositivos_tampoco_comparten_el_id_de_evento(app_client) -> None:
+    from pack_cobranza.models import Gasto
+
+    esc, _ = await _listos(app_client)
+    eid = uniq("ev-dispositivo")
+    datos = {"carteraId": str(esc.cartera_id), "descripcion": "Peaje", "valor": 1000}
+    gastos = await _contar(esc, Gasto, cartera_id=esc.cartera_id)
+    uno, dos = await _token_de_dispositivo(esc), await _token_de_dispositivo(esc)
+
+    assert (await _sync(app_client, uno, eid, "gasto", datos))["estado"] == "sincronizado"
+    assert (await _sync(app_client, dos, eid, "gasto", datos))["estado"] == "sincronizado"
+    assert (await _sync(app_client, uno, eid, "gasto", datos))["estado"] == "duplicado"
+    assert await _contar(esc, Gasto, cartera_id=esc.cartera_id) == gastos + 2
 
 
 async def test_un_evento_anterior_a_separar_por_cuenta_no_se_aplica_otra_vez(app_client) -> None:
@@ -247,11 +274,15 @@ async def test_cuota_de_suscripcion_se_opera_desde_su_cartera(app_client, por) -
     assert r.status_code == 200, r.text
 
 
-async def test_la_suscripcion_de_otra_cartera_no_se_opera_desde_esta(app_client) -> None:
+async def test_la_cuota_de_suscripcion_sigue_la_cartera_actual_del_cliente(app_client) -> None:
+    """`Suscripcion.cartera_id` no se actualiza al mover al cliente: manda la cartera del cliente."""
     esc, o = await _listos(app_client)
-    cuota = await _cuota_de_suscripcion(esc, cartera_id=o.cartera_id)  # cliente de esc, suscripción en la del otro
-    r = await app_client.patch(f"{esc.ruta}/cuotas/{cuota}", json={"password": PW, "valorEsperado": 1}, headers=esc.h())
+    cuota = await _cuota_de_suscripcion(esc, cartera_id=o.cartera_id)  # el cliente ya está en la cartera de esc
+    cuerpo = {"password": PW, "valorEsperado": 21000}
+    r = await app_client.patch(f"{o.ruta}/cuotas/{cuota}", json=cuerpo, headers=_h(o.token))
     assert r.status_code == 404, r.text
+    r = await app_client.patch(f"{esc.ruta}/cuotas/{cuota}", json=cuerpo, headers=esc.h())
+    assert r.status_code == 200, r.text
 
 
 async def test_el_link_de_una_cuota_de_suscripcion_lleva_el_cliente(app_client, monkeypatch) -> None:
@@ -299,10 +330,13 @@ async def test_el_gestor_desactivado_pierde_la_sesion_abierta(app_client, campo,
                 gestor = await session.get(Gestor, esc.gestor_id)
                 setattr(gestor, campo, v)
 
+    dispositivo = await _token_de_dispositivo(esc)
     assert (await app_client.get(f"{BASE}/gestor/mis-carteras", headers=esc.h())).status_code == 200
+    assert (await app_client.get(f"{BASE}/gestor/mis-carteras", headers=_h(dispositivo))).status_code == 200
     await fijar(valor)
     try:
         assert (await app_client.get(f"{BASE}/gestor/mis-carteras", headers=esc.h())).status_code == 401
+        assert (await app_client.get(f"{BASE}/gestor/mis-carteras", headers=_h(dispositivo))).status_code == 401
         # El propietario del mismo negocio no se ve afectado.
         assert (await app_client.get(f"{BASE}/gestor/mis-carteras", headers=esc.h(esc.token_owner))).status_code == 200
     finally:
