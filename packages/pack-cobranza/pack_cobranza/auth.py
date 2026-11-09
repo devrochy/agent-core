@@ -19,8 +19,9 @@ from sqlalchemy import select
 
 from core.admin.roles import actua_como_master, cuenta_habilitada
 from core.db.models import Admin, AdminPermission, TenantUser
-from core.db.session import get_session
+from core.db.session import get_owned, get_session
 from core.tenants import is_tenant_active
+from pack_cobranza.models import Gestor
 
 PLUGIN_ID = "pack_cobranza"
 
@@ -148,6 +149,15 @@ async def _vinculado(session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID) ->
     return global_ is not None
 
 
+async def _gestor_vigente(session: Any, gestor_id: Any) -> bool:
+    """¿El perfil de gestor del token sigue activo? Un token con rol `gestor` y sin `gestor_id` no ve
+    ninguna cartera (`_carteras_visibles`), así que no hay perfil que revisar."""
+    if not gestor_id:
+        return True
+    gestor = await get_owned(session, Gestor, uuid.UUID(str(gestor_id)))
+    return gestor is not None and gestor.deleted_at is None and gestor.estatus == "activo"
+
+
 async def acceso_de_campo(
     authorization: str | None, *, sin_equipo_ok: bool = False
 ) -> tuple[uuid.UUID, dict[str, Any]] | None:
@@ -159,6 +169,7 @@ async def acceso_de_campo(
     - si el token es de una cuenta (`admin_id`): la cuenta sigue habilitada (desactivarla o
       apagar el rol tester corta la app) y sigue vinculada al negocio por `tenant_user`
       (desvincularla también); el master y el tester habilitado no necesitan vínculo;
+    - si es de un gestor: su perfil sigue activo y sin borrar (desactivarlo corta la app, agent-core#705);
     - si es de un gestor o del propietario: el equipo con el que entró (`did`) sigue activo (ADR-0174): bloquearlo corta la
       sesión abierta con 403 `code` (`AccesoError`) en menos de 60 s. `sin_equipo_ok` deja pasar un token
       sin `did` en las rutas por las que un equipo pide vincularse.
@@ -193,6 +204,8 @@ async def acceso_de_campo(
 
             async with tenant_scope(tenant_id):
                 async with get_session() as session:
+                    if rol_politica == "gestor" and not await _gestor_vigente(session, payload.get("gestor_id")):
+                        return None
                     await exigir_equipo_vigente(
                         session,
                         tenant_id,

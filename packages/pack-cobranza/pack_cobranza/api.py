@@ -175,7 +175,7 @@ async def sync_eventos(request: Request, authorization: str | None = Header(defa
                 if not evento_id or tipo not in ("visita", "pago", "abono"):
                     continue
                 existe = (
-                    await session.execute(select(SyncEvento.id).where(SyncEvento.tenant_id == tenant_id, SyncEvento.evento_id_cliente == evento_id))
+                    await session.execute(select(SyncEvento.id).where(SyncEvento.tenant_id == tenant_id, SyncEvento.actor == "", SyncEvento.evento_id_cliente == evento_id))
                 ).scalar_one_or_none()
                 if existe is not None:
                     duplicados += 1
