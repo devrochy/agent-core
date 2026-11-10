@@ -159,3 +159,27 @@ de un negocio (su tope no le sirve) o quejas de mensajes demasiado largos.
 `_instruccion_largo`, `_registrar_largo_excedido`; se retira `_persona_guard`),
 `core/gateway/message_splitter.py`. Tests: `tests/integration/test_persona_largo_loop.py`,
 `tests/test_agent_spec.py`, `tests/test_message_splitter.py`.
+
+## Adenda (2026-11-09): la confirmación no se concede en el mismo turno y tiene un piso en código
+
+Pendiente de aprobación del dueño (HU-ARCH-36). La revisó el agente `arquitecto` antes de escribir código. La
+forma del contrato no cambia. **Revierte** la corrección de arriba sobre `requiresConfirmation`: la repetición
+dentro del mismo turno ya no cuenta como confirmada.
+
+**Caso.** `requiresConfirmation` estaba en 0 de 71 versiones de agente, 0 de 18 specs y 0 de 74 releases de test,
+y aun activado el modelo podía pedir la confirmación y concedérsela sin que el cliente escribiera nada.
+
+**Decisión.**
+- Una acción pide confirmación si su binding lo dice **o** si la tool registrada es `sensible`. Un binding en
+  `false` no quita ese piso, y el panel lo mostrará como «no requiere» en esas tools hasta que se ajuste.
+- Lista inicial: `confirmar_cotizacion`, `cob_registrar_abono`, `sub_cancelar`, `sub_cambiar_plan` y
+  `cancel_calendar_event`. La venta confirma una vez, sobre el total: `crear_pedido` exige la cotización aceptada y
+  `confirmar_pago_pedido` solo genera el link.
+- El pendiente guarda el id del último mensaje del cliente. Solo vale si llegó un mensaje posterior y la pregunta
+  salió en el turno inmediatamente anterior (`core/kernel/confirmacion_pendiente.py`).
+- El pendiente vigente entra al bloque dinámico como dato, porque el historial es solo texto y el modelo no vería
+  los argumentos que debe repetir.
+- `confirmation_required` deja de ser evidencia para el verificador y los guardrails, también en el camino del
+  motor: la acción no ocurrió.
+- Aplica a todo lo que el motor no gobierna: legacy, v3 en sombra y v3 sin tarea en foco o en acciones del core que
+  no son puerta de un procedimiento. La acción gobernada sigue con la confirmación del motor.

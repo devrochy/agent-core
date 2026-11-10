@@ -389,3 +389,12 @@ Los botones reales solo existen en WhatsApp Cloud y la sesión QR de test no sie
 - Para no comerse el «1» que el cliente dirigía al agente, un menú de texto fuera de turno no sale si la conversación tuvo
   actividad en los últimos 15 minutos (cae al texto de D2). La guarda del último saliente de C2 no se relaja.
 - Los eventos de cobranza no se mapean a plantillas con opciones (ver ADR-0108, adenda D3).
+
+## Adenda (2026-11-09) · HU-ARCH-36: `sensible` también vale fuera de las opciones
+
+> **Estado:** pendiente de aprobación del dueño. Detalle en la adenda de ADR-0050.
+
+`MCPTool.sensible` deja de ser solo de las opciones directas: una tool registrada con esa marca también pide la
+confirmación del cliente cuando la llama el modelo y el motor no la gobierna. El botón firmado sigue sin dejar un
+pendiente del bucle, porque `ya_confirmada` se evalúa antes. **Asimetría aceptada:** las tools declarativas POST nacen
+`sensible` para las opciones, pero no están en el host y quedan fuera del bucle; para ellas sigue valiendo el binding.
