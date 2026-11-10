@@ -50,7 +50,7 @@ async def _colaborador(tid: uuid.UUID, permisos: dict[str, str]) -> str:
 
 
 async def test_consola_muestra_coordinador_agentes_release_salud_y_consumo(app_client) -> None:
-    tid, cuenta, _phone, cid = await _con_agentes()
+    tid, cuenta, phone, cid = await _con_agentes()
     h = await api_headers(app_client, tid)  # master
     await banderas_como_dueno(tid, aos_routing="off")
 
@@ -74,6 +74,11 @@ async def test_consola_muestra_coordinador_agentes_release_salud_y_consumo(app_c
             t=tid, c=costo, cid=cid, d=dias,
         )
     integracion = await _conexion(tid, "google_calendar", channel="calendar", provider="google")
+    # El número visible sale de lo que sincronizó Meta (`phone_numbers`), no del phone_number_id.
+    await _sql(
+        tid, "update phone_numbers set display_phone_number = '+57 300 5550101' where tenant_id = :t and phone_number_id = :p",
+        t=tid, p=phone,
+    )
 
     r = await app_client.get(CONSOLA, headers=h)
     assert r.status_code == 200, r.text
@@ -84,9 +89,11 @@ async def test_consola_muestra_coordinador_agentes_release_salud_y_consumo(app_c
     filas = {f["id"]: f for f in body["items"]}
     assert body["items"][-1]["id"] == str(integracion)  # integraciones al final
     assert filas[str(integracion)]["conversational"] is False
+    assert filas[str(integracion)]["display_phone_number"] is None
 
     fila = filas[str(cid)]
     assert fila["meta_connection_id"] == str(cuenta)
+    assert (fila["external_id"], fila["display_phone_number"]) == (phone, "+57 300 5550101")
     assert (fila["health"], fila["pause_scope"], fila["pausable"]) == ("ok", "meta_account", True)
     assert fila["coordinator"]["key"] == "coordinador"
     assert fila["coordinator"]["release_version"] == fila["coordinator"]["latest_version"] is not None
