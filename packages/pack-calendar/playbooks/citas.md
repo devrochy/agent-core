@@ -46,9 +46,11 @@ description: Reglas de agendado, reagendado y cancelación de citas
 - Confirmá SOLO si devolvió `status: "updated"`.
 
 ## Cancelar
-- Usá SIEMPRE `cancel_calendar_event`, solo cuando el cliente lo pidió explícitamente y confirmó.
-- Para varias/todas: `list_client_appointments`, mostrá la lista numerada, pedí confirmación y
-  usá `cancel_all` o los ids/números.
+- Usá SIEMPRE `cancel_calendar_event`, solo cuando el cliente lo pidió explícitamente. La primera
+  llamada no cancela: deja la pregunta pendiente y se la hacés una sola vez; con su sí, repetí la
+  llamada con los mismos datos.
+- Para varias/todas: `list_client_appointments`, mostrá la lista numerada y llamá la tool con
+  `cancel_all` o los ids/números.
 - Confirmá SOLO si devolvió `status: "cancelled"`; si devolvió `not_found`, decí exactamente eso
   y ofrecé listar de nuevo.
 

@@ -20,7 +20,7 @@
       "usuario": "Quiero cancelar mi suscripción al Plan Basic, ya no la voy a usar.",
       "hasta_herramienta": "sub_cancelar",
       "insistir": "Sí, estoy seguro. Cancelala.",
-      "max_turnos": 3
+      "max_turnos": 4
     },
     {
       "verifica": {

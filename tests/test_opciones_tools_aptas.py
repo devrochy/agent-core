@@ -19,8 +19,8 @@ RAIZ = Path(__file__).resolve().parent.parent
 # nada financiero, destructivo ni que escriba a terceros) y la fila correspondiente en el runbook
 # `docs/runbooks/opciones-directas.md`.
 APTAS_REVISADAS = {"list_client_appointments"}
-# Solo lee: no hace falta forzar la confirmación del cliente.
-SENSIBLES: set[str] = set()
+# Acciones con efecto en dinero o contrato: el cliente las confirma también fuera de una opción (HU-ARCH-36).
+SENSIBLES = {"confirmar_cotizacion", "cob_registrar_abono", "sub_cancelar", "sub_cambiar_plan", "cancel_calendar_event"}
 
 
 def _tools_del_codigo() -> dict[str, Any]:

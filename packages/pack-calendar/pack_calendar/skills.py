@@ -717,8 +717,9 @@ class CalendarSkill(BaseSkill):
                     "pide cancelar su cita/demo, NUNCA escales a un humano ni digas 'paso tu solicitud': "
                     "usá SIEMPRE esta tool. Para cancelar VARIAS o TODAS, primero llamá "
                     "list_client_appointments y usá los event_ids que devuelve, o pasá cancel_all=true. "
-                    "Úsala SOLO cuando el cliente pidió cancelar explícitamente y confirmó. Después, "
-                    "comunicá EXACTAMENTE lo que devolvió la tool (status 'cancelled' o 'not_found'). "
+                    "Úsala SOLO cuando el cliente pidió cancelar explícitamente: la primera llamada no "
+                    "cancela, deja la pregunta pendiente; con su sí, llamala otra vez con los mismos "
+                    "datos. Después, comunicá EXACTAMENTE lo que devolvió la tool (status 'cancelled' o 'not_found'). "
                     "NUNCA inventes un event_id: si no estás seguro, omitilo (el sistema busca por "
                     "la conversación)."
                 ),
@@ -741,6 +742,7 @@ class CalendarSkill(BaseSkill):
                     "required": [],
                 },
                 handler=self.cancel_event,
+                sensible=True,
                 connection_predicate=self._connections_ok,
             ),
             MCPTool(

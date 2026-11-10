@@ -66,6 +66,7 @@ class PromptContext:
     entity_profile: str = ""          # Capa 2 (perfil del cliente)
     relacion: str = ""                # ficha de la relación con cada módulo (HU-CRM-14); "" sin datos
     referencias: list[str] = field(default_factory=list)  # ids vigentes de la conversación (ADR-0130)
+    accion_por_confirmar: str = ""    # acción que espera el sí del cliente (HU-ARCH-36); "" sin pendiente
     state_card: str = ""              # tarjeta de estado (ADR-0114); "" con aos_procedures apagada
     team_notes: str = ""              # notas del equipo sobre el cliente (ADR-0147); "" sin notas
     service_hours: str = ""           # horario del equipo humano (HU-AOS-58); "" si no es informativo
@@ -175,6 +176,9 @@ def bloque_dinamico(ctx: PromptContext) -> str:
         # Ya saneadas por el core (`core/orchestrator/referencias.py`): solo datos.
         referencias = "\n".join(ctx.referencias)
         dynamic_parts.append(f"## Referencias vigentes de esta conversación\n{referencias}")
+    if ctx.accion_por_confirmar:
+        # Ya serializada y escapada por `core/kernel/confirmacion_pendiente.py` (rótulos en su playbook).
+        dynamic_parts.append(ctx.accion_por_confirmar)
     if ctx.team_notes:
         # Ya serializadas y escapadas por `core/memory/notas.py` (rótulos en su playbook del kernel).
         dynamic_parts.append(ctx.team_notes)
