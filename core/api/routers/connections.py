@@ -175,7 +175,16 @@ class ConsoleConnection(BaseModel):
     channel: str
     type_id: str | None
     label: str
-    external_id: str
+    external_id: str = Field(
+        description="Clave de ruteo del canal; en WhatsApp oficial es el phone_number_id de Meta, no el número."
+    )
+    display_phone_number: str | None = Field(
+        default=None,
+        description=(
+            "WhatsApp oficial: el número como lo sincronizó Meta (p. ej. «+57 300 1234567»). "
+            "Null en los demás canales o si el número aún no se sincronizó."
+        ),
+    )
     conversational: bool
     active: bool
     is_primary: bool
@@ -278,6 +287,7 @@ async def connections_console(
                 type_id=c.type_id,
                 label=c.label,
                 external_id=c.external_id,
+                display_phone_number=c.display_phone_number,
                 conversational=c.conversational,
                 active=c.active,
                 is_primary=c.is_primary,

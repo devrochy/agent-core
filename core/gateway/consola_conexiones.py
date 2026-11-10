@@ -5,7 +5,9 @@ Meta, ADR-0115, y el chat web), que es la fila a la que apuntan `agent_instances
 `connection_releases` y `usage_ledger.connection_id`. Las cuentas de Meta (`meta_connections`)
 no son filas propias: aportan su estado (salud y pausa, ADR-0122) a sus canónicas.
 
-Por fila: Coordinador y agentes vivos con la versión que corre en la release activa
+Por fila: el número visible del WhatsApp oficial (`phone_numbers.display_phone_number`, lo último
+que sincronizó Meta; `external_id` es el phone_number_id, la clave de ruteo, que no le dice nada al
+dueño); Coordinador y agentes vivos con la versión que corre en la release activa
 (`release_components`) y la última publicada; release activa y canary; salud; consumo de los
 últimos 7 días (`usage_ledger`, índice parcial `ix_usage_ledger_conn` de 0071). Todas las
 consultas van en lote por los ids de la página, nunca una por fila.
@@ -95,6 +97,9 @@ class ConexionFila:
     active_release: ReleaseFila | None = None
     canary_release: ReleaseFila | None = None
     usage_7d: ConsumoFila = ConsumoFila()
+    # Número de WhatsApp como lo muestra Meta («+57 300 1234567»); None si no es de Meta o aún no se
+    # sincronizó. Sale de la tabla, sin llamar a Meta.
+    display_phone_number: str | None = None
 
 
 @dataclass(frozen=True)
@@ -180,11 +185,17 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                 text(
                     "SELECT cc.id, cc.channel, cc.type_id, cc.label, cc.external_id, "
                     "  coalesce(ct.produces_conversations, true), cc.active, cc.is_primary, cc.created_at, "
-                    "  cc.meta_connection_id, mc.status, cc.active_release_id, cc.canary_release_id "
+                    "  cc.meta_connection_id, mc.status, cc.active_release_id, cc.canary_release_id, "
+                    "  pn.display_phone_number "
                     "FROM channel_connections cc "
                     "LEFT JOIN connection_types ct ON ct.id = cc.type_id "
                     "LEFT JOIN meta_connections mc "
                     "  ON mc.tenant_id = cc.tenant_id AND mc.id = cc.meta_connection_id AND mc.deleted_at IS NULL "
+                    # Por número, no por cuenta: una cuenta con varios números da a cada conexión el
+                    # suyo. `uq_phone_numbers_tenant_phone` deja una fila como mucho.
+                    "LEFT JOIN phone_numbers pn "
+                    "  ON pn.tenant_id = cc.tenant_id AND pn.connection_id = cc.meta_connection_id "
+                    "  AND pn.phone_number_id = cc.external_id AND pn.deleted_at IS NULL "
                     "WHERE cc.tenant_id = :t AND cc.deleted_at IS NULL "
                     "  AND cc.type_id IS DISTINCT FROM 'playground' "
                     "  AND (cc.meta_connection_id IS NULL OR mc.id IS NOT NULL) "
@@ -226,6 +237,7 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                 active_release=releases.get(activa) if activa is not None else None,
                 canary_release=releases.get(f[12]) if f[12] is not None else None,
                 usage_7d=consumo.get(cid, ConsumoFila()),
+                display_phone_number=f[13] or None,
             )
         )
     return Consola(
