@@ -153,12 +153,14 @@ class SubscriptionSkill(BaseSkill):
             MCPTool(
                 name="sub_cancelar",
                 description=(
-                    "Cancela la suscripción del cliente (fin del servicio). Solo cuando "
-                    "lo pida explícitamente y confirme."
+                    "Cancela la suscripción del cliente (fin del servicio). Solo cuando lo pida "
+                    "explícitamente: la primera llamada no cancela, deja la pregunta pendiente; con "
+                    "su sí, llamala otra vez."
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.cancelar,
                 connection_predicate=predicate,
+                sensible=True,
             ),
             MCPTool(
                 name="sub_cambiar_plan",
@@ -166,7 +168,8 @@ class SubscriptionSkill(BaseSkill):
                     "Cambia la suscripción del cliente a otro plan del catálogo. Pasá solo el SKU "
                     "del plan nuevo: el precio lo pone el sistema. Subir de plan genera un cobro "
                     "por la diferencia prorrateada (el plan cambia al pagarlo); bajar de plan queda "
-                    "programado para el próximo período, sin reembolso."
+                    "programado para el próximo período, sin reembolso. La primera llamada no lo "
+                    "cambia, deja la pregunta pendiente; con su sí, llamala otra vez con el mismo SKU."
                 ),
                 parameters={
                     "type": "object",
@@ -182,6 +185,7 @@ class SubscriptionSkill(BaseSkill):
                 # Con el motor activo el cambio de plan va por el procedimiento (botón con el
                 # monto del servidor): esta tool no se ofrece (HU-AOS-08). Sin la bandera, igual.
                 connection_predicate=sin_motor_activo(predicate),
+                sensible=True,
             ),
             MCPTool(
                 name="sub_cotizar_cambio_plan",

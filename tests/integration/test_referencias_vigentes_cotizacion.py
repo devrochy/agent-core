@@ -389,6 +389,9 @@ async def _compra(monkeypatch, sin_referencias: bool = False):  # type: ignore[n
     conv, _ = await _conversacion(tid)
     modelo = _Comprador(variante)
     monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *a, **k: modelo)
+    # Estas compras prueban las referencias del prompt: la confirmación tiene su propio test abajo y en
+    # `test_confirmacion_accion.py` (HU-ARCH-36).
+    monkeypatch.setattr("core.orchestrator.loop._requiere_confirmacion", lambda *_a: False)
     if sin_referencias:
         async def ninguna(*_a, **_k):  # type: ignore[no-untyped-def]
             return []
@@ -435,6 +438,43 @@ async def test_sin_referencias_el_error_con_quote_id_vigente_igual_cierra(monkey
     quote_id = str(cotizaciones[0].id)
     assert modelo.ids_usados == ["PLAN-PREMIUM", quote_id, "PLAN-PREMIUM", quote_id]
     assert len(pedidos) == 1 and cotizaciones[0].status == "convertida"
+
+
+async def test_confirmar_cotizacion_espera_el_si_del_cliente(monkeypatch, packs_activos) -> None:
+    """HU-ARCH-36: con la tool real, la primera llamada no acepta la cotización; con el sí, sí."""
+    from pack_commerce.models import Quote
+    from sqlalchemy import select
+
+    from core.db.models import Message
+    from core.db.session import get_session
+    from core.orchestrator.loop import process_conversation
+    from core.shared.tenant import tenant_scope
+
+    tid, variante = await _negocio()
+    conv, _ = await _conversacion(tid)
+    modelo = _Comprador(variante)
+    monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *a, **k: modelo)
+
+    async def turno(texto: str) -> None:
+        async with tenant_scope(tid):
+            async with get_session() as s:
+                s.add(Message(tenant_id=tid, conversation_id=conv, direction="inbound", sender_type="customer", content=texto))
+            resultado = await process_conversation(conv, texto)
+            async with get_session() as s:
+                s.add(Message(tenant_id=tid, conversation_id=conv, direction="outbound", sender_type="agent", content=resultado.text))
+
+    async def estado_cotizacion() -> str:
+        async with tenant_scope(tid):
+            async with get_session() as s:
+                return (await s.execute(select(Quote.status).where(Quote.tenant_id == tid, Quote.conversation_id == conv))).scalar_one()
+
+    await turno("Hola, quiero el Plan Premium")
+    await turno("Sí, confirmo ese total")
+    assert await estado_cotizacion() == "draft", "la primera llamada solo deja la pregunta pendiente"
+
+    await turno("Sí, confirmo ese total")
+    assert await estado_cotizacion() == "aceptada"
+    assert "Acción esperando la confirmación del cliente" in modelo.prompts[-1]
 
 
 # ------------------------------------------------------------------ journey: dos compras
@@ -503,6 +543,9 @@ async def _dos_compras(monkeypatch, referencias_viejas: bool = False):  # type: 
     conv, _ = await _conversacion(tid)
     modelo = _CompradorDosCompras(str(basic), premium)
     monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *a, **k: modelo)
+    # Estas compras prueban las referencias del prompt: la confirmación tiene su propio test abajo y en
+    # `test_confirmacion_accion.py` (HU-ARCH-36).
+    monkeypatch.setattr("core.orchestrator.loop._requiere_confirmacion", lambda *_a: False)
     if referencias_viejas:
         reales = loop.cargar_referencias
 

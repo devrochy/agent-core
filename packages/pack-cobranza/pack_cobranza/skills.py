@@ -280,8 +280,9 @@ class CobranzaSkill(BaseSkill):
             MCPTool(
                 name="cob_registrar_abono",
                 description=(
-                    "Registra un abono parcial del cliente a su préstamo. Usar solo cuando el "
-                    "cliente confirme que va a abonar y el monto."
+                    "Registra un abono parcial del cliente a su préstamo. Usar cuando diga que va a "
+                    "abonar y el monto: la primera llamada no registra, deja la pregunta pendiente; "
+                    "con su sí, llamala otra vez con los mismos datos."
                 ),
                 parameters={
                     "type": "object",
@@ -292,6 +293,7 @@ class CobranzaSkill(BaseSkill):
                     "required": ["valor"],
                 },
                 handler=self.registrar_abono,
+                sensible=True,
             ),
             MCPTool(
                 name="cob_consultar_suscripcion",

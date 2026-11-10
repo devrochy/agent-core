@@ -1104,10 +1104,11 @@ class OrderSkill(BaseSkill):
             MCPTool(
                 name="confirmar_cotizacion",
                 description=(
-                    "Marca una cotización como aceptada por el cliente. Llamala SOLO cuando el "
-                    "cliente ya vio el total final (con la promoción aplicada si corresponde) y "
-                    "dijo que sí explícitamente. Es el paso OBLIGATORIO antes de crear_pedido -- "
-                    "esa tool falla si la cotización no pasó por acá."
+                    "Marca una cotización como aceptada por el cliente. Llamala al mostrarle el total "
+                    "final (con la promoción aplicada si corresponde): la primera llamada no la "
+                    "acepta, deja la pregunta pendiente. Cuando el cliente diga que sí "
+                    "explícitamente, llamala otra vez con el mismo quote_id. Es el paso OBLIGATORIO "
+                    "antes de crear_pedido -- esa tool falla si la cotización no pasó por acá."
                 ),
                 parameters={
                     "type": "object",
@@ -1117,6 +1118,7 @@ class OrderSkill(BaseSkill):
                     "required": ["quote_id"],
                 },
                 handler=self.confirmar_cotizacion,
+                sensible=True,
             ),
             MCPTool(
                 name="crear_pedido",

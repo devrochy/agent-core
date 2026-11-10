@@ -23,6 +23,7 @@ from core.db.session import get_session
 from core.mcp.types import BaseModule, GuardrailResult
 from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
 from core.shared.logger import get_logger
+from core.shared.polaridad import afirma_alguna
 from core.shared.tenant import get_current_tenant_id, tenant_scope
 from core.subscriptions import subscription_registry
 from pack_subscriptions import (
@@ -52,7 +53,7 @@ _CANCELAR = re.compile(r"suscripci[oó]n\s+(?:qued\w*\s+)?(?:cancel\w*|anulad\w*
 class SubscriptionsModule(BaseModule):
     id = PLUGIN_ID
     name = "Suscripciones"
-    version = "0.5.0"
+    version = "0.6.0"
     description = "Suscripción de cliente final activada por pago de un plan (ADR-0083)"
     display_name = "Suscripciones"
     category = "Cobros"
@@ -243,7 +244,8 @@ class SubscriptionsModule(BaseModule):
             (_CANCELAR, {"sub_cancelar"}),
         ]
         for pattern, tools in checks:
-            if pattern.search(response_text or "") and not (called & tools):
+            # Solo lo que afirma: «¿Confirmas que cancele tu suscripción?» es la pregunta de HU-ARCH-36.
+            if afirma_alguna(response_text or "", pattern) and not (called & tools):
                 return GuardrailResult(
                     passed=False,
                     reason="Afirmación de suscripción sin la tool correspondiente en el turno.",

@@ -46,8 +46,10 @@ description: Reglas del proceso de venta
   tenga sentido, sin ser insistente.
 - El flujo completo para cerrar un pedido, en orden, es: cotización (`generar_cotizacion`)
   → promoción si aplica (`aplicar_promocion`) → mostrarle al cliente el TOTAL FINAL (con
-  descuento ya aplicado) y el método de entrega/pago → esperar su "sí" explícito SOBRE ESE
-  TOTAL → `confirmar_cotizacion` → `crear_pedido` → si el pago es en línea, `confirmar_pago_pedido`
+  descuento ya aplicado) y el método de entrega/pago, llamando `confirmar_cotizacion` en ese
+  mismo turno (la primera llamada no acepta la cotización: deja pendiente la pregunta, y se la
+  hacés una sola vez) → con su "sí" explícito SOBRE ESE TOTAL, `confirmar_cotizacion` de nuevo
+  con el mismo `quote_id` → `crear_pedido` → si el pago es en línea, `confirmar_pago_pedido`
   en el MISMO turno que `crear_pedido` (solo con el `order_id` que te devolvió: el monto lo
   toma el sistema del pedido, nunca lo pasás vos). Es una cadena, no pasos sueltos:
   si el pago es en línea, tu turno de cierre no está completo hasta que llamaste las 3 tools
@@ -72,7 +74,7 @@ description: Reglas del proceso de venta
 - Si la respuesta del cliente es ambigua sobre QUÉ está confirmando (ej. un "sí" que llegó
   después de preguntarle solo la dirección o un dato puntual, no el total completo), NO
   seguía la cadena de cierre con eso solo: volvé a mostrarle el total final completo y pedile
-  una confirmación explícita sobre ESE total antes de llamar `confirmar_cotizacion`. Nunca te
+  una confirmación explícita sobre ESE total antes de repetir `confirmar_cotizacion`. Nunca te
   quedes sin hacer nada ni saltes a afirmar que ya cerraste algo por la duda.
 - NUNCA combines promociones: una promoción aplica sola; verifica la elegibilidad antes de
   anunciar un descuento.

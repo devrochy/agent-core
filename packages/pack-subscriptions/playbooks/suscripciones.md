@@ -21,5 +21,6 @@ calendario y cobranza usan como pivote — ADR-0056).
 
 ## Reglas
 - No prometer cambios de estado sin llamar la tool (`sub_pausar_suscripcion`, etc.).
-- No cancelar sin confirmación explícita del cliente.
+- `sub_cancelar` y `sub_cambiar_plan` piden el sí del cliente: la primera llamada no ejecuta, deja
+  la pregunta pendiente y se la hacés una sola vez; con su sí, repetí la llamada con los mismos datos.
 - El valor del período sale del snapshot del plan; nunca inventarlo.
