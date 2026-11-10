@@ -137,6 +137,8 @@ async def test_la_pregunta_de_cancelar_no_se_bloquea_y_la_afirmacion_si() -> Non
 
     modulo = SubscriptionsModule.__new__(SubscriptionsModule)
     assert (await modulo._completion_guardrail("¿Confirmas que cancele tu suscripción?", [])).passed
+    assert (await modulo._completion_guardrail("Voy a cancelar tu suscripción. ¿Confirmas?", [])).passed
+    assert not (await modulo._completion_guardrail("Cancelé tu suscripción.", [])).passed
     assert not (await modulo._completion_guardrail("Tu suscripción quedó cancelada.", [])).passed
 
 
@@ -146,3 +148,5 @@ async def test_la_pregunta_del_abono_no_se_bloquea_y_el_abono_ejecutado_respalda
     assert (await promesa_guardrail("¿Confirmas que registre tu abono de 50.000?", [])).passed
     assert not (await promesa_guardrail("Registré tu abono de 50.000.", [])).passed
     assert (await promesa_guardrail("Registré tu abono de 50.000.", [{"_tool_name": "cob_registrar_abono"}])).passed
+    fallido = [{"_tool_name": "cob_registrar_abono", "_ok": False}]
+    assert not (await promesa_guardrail("Registré tu abono de 50.000.", fallido)).passed

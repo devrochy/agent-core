@@ -47,7 +47,8 @@ log = get_logger(__name__)
 PLUGIN_ID = "pack_subscriptions"
 
 _PAUSAR = re.compile(r"suscripci[oó]n\s+(?:qued\w*\s+)?pausad\w*|paus\w+\s+(?:tu\s+)?suscripci", re.IGNORECASE)
-_CANCELAR = re.compile(r"suscripci[oó]n\s+(?:qued\w*\s+)?(?:cancel\w*|anulad\w*)|cancel\w+\s+(?:tu\s+)?suscripci", re.IGNORECASE)
+# Solo lo hecho: «Voy a cancelar tu suscripción» es como se plantea la acción antes de confirmarla (HU-ARCH-36).
+_CANCELAR = re.compile(r"suscripci[oó]n\s+(?:qued\w*\s+)?(?:cancelad\w*|anulad\w*)|cancel(?:é|ó|amos)\s+(?:tu\s+)?suscripci", re.IGNORECASE)
 
 
 class SubscriptionsModule(BaseModule):
