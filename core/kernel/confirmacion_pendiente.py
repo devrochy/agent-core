@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from functools import cache
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db.models import Conversation
@@ -100,7 +100,13 @@ async def resolver_llamada(
     Con la fila bloqueada y tocando solo su clave: dos turnos a la vez no ejecutan la acción dos
     veces ni pisan el resto del estado de la conversación."""
     async with get_session() as session:
-        conversacion = await session.get(Conversation, conversation_id, with_for_update=True)
+        conversacion = (
+            await session.execute(
+                select(Conversation)
+                .where(Conversation.id == conversation_id, Conversation.tenant_id == tenant_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
         if conversacion is None:
             return False
         entrantes = await leer_entrantes(session, tenant_id, conversation_id)

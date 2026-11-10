@@ -304,19 +304,29 @@ async def test_el_pendiente_no_pisa_el_resto_del_estado(negocio: uuid.UUID, herr
 async def test_aislamiento_otro_negocio_no_confirma_con_sus_mensajes(negocio: uuid.UUID, herramienta: Herramienta) -> None:
     from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
-    from core.kernel.confirmacion_pendiente import leer_entrantes
+    from core.kernel.confirmacion_pendiente import leer_entrantes, resolver_llamada
     from core.shared.tenant import tenant_scope
     from core.tenants import deactivate_tenant, purge_tenant
 
     c = await _charla(negocio)
     await _preguntada(c)
+    await c.mensaje("inbound")
+    antes = await c.estado()
     slug = f"confb-{uuid.uuid4().hex[:8]}"
     otro, _ = await onboard_tenant(name=f"Otro {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
     try:
         async with tenant_scope(otro):
             async with get_session() as s:
                 entrantes = await leer_entrantes(s, otro, c.conv.id)
+            assert await resolver_llamada(otro, c.conv.id, TOOL, ARGS) is False
+        # Con la sesión del dueño, el filtro por negocio de la consulta es el que responde.
+        async with tenant_scope(negocio):
+            async with get_session() as s:
+                cruzados = await leer_entrantes(s, otro, c.conv.id)
+            assert await resolver_llamada(otro, c.conv.id, TOOL, ARGS) is False
         assert entrantes.ultimo is None and entrantes.respondido is None
+        assert cruzados.ultimo is None and cruzados.respondido is None
+        assert await c.estado() == antes, "el estado del negocio dueño no cambia"
     finally:
         await deactivate_tenant(str(otro))
         await purge_tenant(str(otro), f"ELIMINAR {slug}")
