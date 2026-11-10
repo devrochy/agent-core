@@ -528,6 +528,7 @@ async def _herramientas_desde(ctx: Contexto, desde: datetime) -> list[dict[str, 
                         AuditLog.tenant_id == ctx.tenant_id,
                         AuditLog.conversation_id == ctx.conversation_id,
                         AuditLog.actor.like("tool:%"),
+                        AuditLog.action != "confirmation_required",  # pidió el sí: todavía no corrió
                         AuditLog.created_at >= desde,
                     )
                     .order_by(AuditLog.created_at)

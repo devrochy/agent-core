@@ -83,7 +83,7 @@ def test_turno_avanza_sin_tools() -> None:
 
 def _fake_session(conversation: SimpleNamespace):
     class FakeSession:
-        async def get(self, model, id_):
+        async def get(self, model, id_, **_kwargs):
             return conversation
 
         async def __aenter__(self):

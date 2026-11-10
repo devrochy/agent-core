@@ -46,7 +46,8 @@ _PROMESA_CLAIM = re.compile(
 # cobro), porque el verbo es de calendario; un "registré" o un "acordamos" no.
 _AGENDA_PAGO_CLAIM = re.compile(_cerca(_AGENDA, _PAGO), re.IGNORECASE)
 
-_TOOLS_PROMESA = {"cob_registrar_promesa_pago", "cob_registrar_promesa_saldo"}
+# `cob_registrar_abono` respalda «registré tu abono» una vez que el cliente confirmó (HU-ARCH-36).
+_TOOLS_PROMESA = {"cob_registrar_promesa_pago", "cob_registrar_promesa_saldo", "cob_registrar_abono"}
 # Por nombre, sin importar pack_calendar (los packs no se importan entre sí).
 _TOOLS_CITA = {"create_calendar_event", "update_calendar_event"}
 
@@ -62,9 +63,10 @@ def _cita_del_turno(tool_results: list[dict[str, Any]]) -> bool:
 
 
 def _afirma_promesa(texto: str, tool_results: list[dict[str, Any]]) -> bool:
-    if _PROMESA_CLAIM.search(texto):
+    # Solo lo que afirma: «¿Confirmas que registre tu abono?» es la pregunta de HU-ARCH-36.
+    if afirma_alguna(texto, _PROMESA_CLAIM):
         return True
-    return bool(_AGENDA_PAGO_CLAIM.search(texto)) and not _cita_del_turno(tool_results)
+    return afirma_alguna(texto, _AGENDA_PAGO_CLAIM) and not _cita_del_turno(tool_results)
 
 
 async def promesa_guardrail(

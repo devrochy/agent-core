@@ -35,7 +35,7 @@ from core.datos_cliente.ajustes import herramientas_de as datos_del_cliente_acti
 from core.datos_cliente.aviso_chat import texto_a_anexar as aviso_en_el_chat
 from core.db.models import AppSettings, AuditLog, Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
-from core.kernel import horario_de_servicio
+from core.kernel import confirmacion_pendiente, horario_de_servicio
 from core.kernel.decisions import (
     anotar_foco,
     anotar_uso,
@@ -459,6 +459,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         entity_profile=entity_memory.profile_to_prompt(profile),
         relacion=relacion,
         referencias=referencias,
+        accion_por_confirmar=await _accion_por_confirmar(conversation, active_tools),
         state_card=state_card,
         team_notes=team_notes,
         service_hours=horario_de_servicio.para_prompt(
@@ -561,6 +562,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     all_tool_results: list[dict[str, Any]] = []
     # Un comando del hilo aplicado (HU-AOS-06) resuelve el turno aunque no sea una acción.
     hubo_comando_ok = False
+    # La acción espera el sí del cliente (HU-ARCH-36): ni resuelve el turno ni suma como estancado.
+    hubo_confirmacion_pedida = False
     guardrail_retries = 0
     # Borrador que ya pasó todo salvo el largo (`persona.maxLength`, adenda de ADR-0050):
     # si el texto de su único reintento falla una verificación dura, se entrega este.
@@ -691,6 +694,9 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                     # Un comando no es evidencia (su tarjeta trae datos que escribió el modelo): el
                     # estado entra al verificador por `_estado_del_verificador` (HU-AOS-06).
                     hubo_comando_ok = hubo_comando_ok or result.get("ok") is True
+                elif isinstance(result, dict) and result.get("status") == STATUS_CONFIRMACION_REQUERIDA:
+                    # No ocurrió: no es evidencia para el verificador ni para los guardrails de cierre.
+                    hubo_confirmacion_pedida = True
                 else:
                     all_tool_results.append(
                         {
@@ -933,7 +939,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             final_text,
             resolved=bool(all_tool_results) or hubo_comando_ok,
             count_unresolved=not _turno_avanza_sin_tools(
-                latest_message, final_text, bool(all_tool_results) or hubo_comando_ok
+                latest_message, final_text, bool(all_tool_results) or hubo_comando_ok or hubo_confirmacion_pedida
             ),
             image_url=extras.image_url if confirmacion is None else None,
         )
@@ -958,6 +964,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         resultado = await _close_turn(
             conversation_id, spec, app_settings, usage, turn_span, latest_message, texto_kernel,
             resolved=bool(all_tool_results) or hubo_comando_ok,
+            count_unresolved=not hubo_confirmacion_pedida,
             image_url=extras.image_url if confirmacion is None else None,
         )
         if confirmacion is not None and not resultado.escalated:
@@ -1050,9 +1057,9 @@ def _ejecutor_del_motor(conversation: Conversation, customer: Customer, spec):  
     """Precondiciones del motor (HU-AOS-05): corren como cualquier acción del turno (permisos,
     salud del pack, auditoría), sin volver a pasar por el motor."""
     async def ejecutar(nombre: str, args: dict[str, Any], clave: str) -> dict[str, Any]:
-        # Una precondición es una lectura: si el binding pide confirmación, no se ejecuta (y no deja
+        # Una precondición es una lectura: si la acción pide confirmación, no se ejecuta (y no deja
         # una confirmación v2 pendiente con los datos de la tarea).
-        if _binding_requires_confirmation(spec, nombre):
+        if _requiere_confirmacion(spec, nombre):
             return {"error": "precondicion_requiere_confirmacion"}
         llamada = LLMToolCall(id=clave, name=nombre, arguments=args)  # clave estable: idempotente
         return await _execute_tool_safely(conversation, customer, llamada, spec)
@@ -1077,13 +1084,16 @@ def _ejecutor_de_consulta(conversation: Conversation, customer: Customer):  # ty
             skills=actual.skills,
             tenant_plugins=actual.tenant_plugins,
         )
-        if _binding_requires_confirmation(spec, nombre):
+        if _requiere_confirmacion(spec, nombre):
             return {"error": "consulta_requiere_confirmacion"}
         llamada = LLMToolCall(id=clave, name=nombre, arguments=args)
         return await _execute_tool_safely(conversation, customer, llamada, spec, identidad=destino, solo_lectura=True)
 
     return ejecutar
 
+
+# Estado y acción de auditoría de una acción que espera el sí del cliente: no ocurrió todavía.
+STATUS_CONFIRMACION_REQUERIDA = "confirmation_required"
 
 # "Afirmación de 'agendada' sin…" (guardrails de cierre de los packs): la etiqueta sale del código
 # o de la config del negocio, nunca del borrador.
@@ -1239,57 +1249,34 @@ async def _execute_tool_safely(
     # tarea (los mismos que firma la confirmación); el historial del modelo no se toca.
     argumentos = previo.args if previo is not None and previo.args is not None else tool_call.arguments
 
-    # v2.0.0 (ADR-0050): human-in-the-loop. Un binding con `requiresConfirmation`
-    # no ejecuta de una: la primera vez deja el pedido pendiente y se lo devuelve
-    # al modelo para que pida confirmación al cliente; la siguiente llamada con
-    # los MISMOS argumentos (el cliente ya dijo "sí") sí ejecuta.
-    # El objeto `conversation` se actualiza en memoria para que la repetición
-    # dentro del MISMO turno ya cuente como confirmada (no re-lee de BD).
+    # v2.0.0 (ADR-0050, adenda HU-ARCH-36): human-in-the-loop. Una acción `sensible` o con
+    # `requiresConfirmation` en su binding no ejecuta de una: la primera llamada deja el pedido
+    # pendiente y se lo devuelve al modelo para que pregunte al cliente; la repetición con los
+    # MISMOS argumentos solo ejecuta si el cliente contestó en un mensaje posterior.
     # Con la acción gobernada por la etapa en foco (leída bajo lock), la confirmación es la del
     # motor, que también aplica el `requiresConfirmation` del binding (ADR-0113 §4).
     gobernada = previo is not None and previo.gobernada
-    if spec is not None and not gobernada and not ya_confirmada and _binding_requires_confirmation(spec, tool_call.name):
-        pending = dict(conversation.state.get("pending_confirmation") or {})
-        already = (
-            pending.get("tool") == tool_call.name
-            and pending.get("arguments") == tool_call.arguments
+    if (
+        spec is not None
+        and not gobernada
+        and not ya_confirmada
+        and _requiere_confirmacion(spec, tool_call.name)
+        and not await confirmacion_pendiente.resolver_llamada(
+            conversation.tenant_id, conversation.id, tool_call.name, tool_call.arguments
         )
-        if not already:
-            state = dict(conversation.state)
-            state["pending_confirmation"] = {
-                "tool": tool_call.name,
-                "arguments": tool_call.arguments,
-            }
-            conversation.state = state
-            async with get_session() as session:
-                row = await session.get(Conversation, conversation.id)
-                if row is not None:
-                    row.state = state
-            result = {
-                "status": "confirmation_required",
-                "message": (
-                    f"Antes de ejecutar '{tool_call.name}' pedile confirmación explícita "
-                    "al cliente y, si acepta, volvé a llamar la herramienta con los "
-                    "mismos argumentos."
-                ),
-            }
-            await record_audit(
-                actor=f"{actor_de_auditoria}:{tool_call.name}",
-                action="confirmation_required",
-                conversation_id=conversation.id,
-                input_data=tool_call.arguments,
-                output_data=result,
-            )
-            return result
-        # Ya confirmada: se ejecuta y se limpia el pendiente (no queda vivo para
-        # siempre -- una llamada futura pide confirmación de nuevo).
-        state = dict(conversation.state)
-        state.pop("pending_confirmation", None)
-        conversation.state = state
-        async with get_session() as session:
-            row = await session.get(Conversation, conversation.id)
-            if row is not None:
-                row.state = state
+    ):
+        result = {
+            "status": STATUS_CONFIRMACION_REQUERIDA,
+            "message": confirmacion_pendiente.mensaje_al_modelo(tool_call.name),
+        }
+        await record_audit(
+            actor=f"{actor_de_auditoria}:{tool_call.name}",
+            action=STATUS_CONFIRMACION_REQUERIDA,
+            conversation_id=conversation.id,
+            input_data=tool_call.arguments,
+            output_data=result,
+        )
+        return result
 
     try:
         # Prioridad al host: una tool declarativa NO puede shadowear una tool
@@ -1459,6 +1446,15 @@ def _binding_requires_confirmation(spec, tool_name: str) -> bool:  # type: ignor
     return False
 
 
+def _requiere_confirmacion(spec, tool_name: str) -> bool:  # type: ignore[no-untyped-def]
+    """Lo pide el binding o la marca `sensible` de la tool (adenda HU-ARCH-36 de ADR-0050): un binding
+    en `false` no quita ese piso. Las declarativas no están en el host, así que su `sensible` no aplica."""
+    if _binding_requires_confirmation(spec, tool_name):
+        return True
+    herramienta = mcp_host.get_tool(tool_name)
+    return herramienta is not None and herramienta.sensible
+
+
 async def _tool_calls_in_conversation(conversation_id: uuid.UUID, tool_name: str) -> int:
     """Cuántas veces se EJECUTÓ `tool_name` en esta conversación (audit_log, ADR-0050).
 
@@ -1563,6 +1559,18 @@ def _pregunta_de_avance(texto: str) -> bool:
     return "?" in texto or "¿" in texto
 
 
+async def _accion_por_confirmar(conversation: Conversation, ofrecidas: list[Any]) -> str:
+    """El pendiente que el cliente acaba de contestar, si su acción se ofrece en este turno."""
+    pendiente = conversation.state.get(confirmacion_pendiente.CLAVE)
+    if not isinstance(pendiente, dict):
+        return ""
+    herramienta = next((t for t in ofrecidas if t.name == pendiente.get("tool")), None)
+    if herramienta is None:
+        return ""
+    propiedades = (herramienta.parameters or {}).get("properties") or {}
+    return await confirmacion_pendiente.para_prompt(conversation.tenant_id, conversation.id, pendiente, propiedades)
+
+
 def _turno_avanza_sin_tools(latest_message: str, final_text: str, hubo_tools: bool) -> bool:
     """¿El turno representa avance para el autoescalado por turnos sin resolver
     (ADR-0051, enmendada por ADR-0104)?
@@ -1634,7 +1642,8 @@ async def _finish_turn(
 
     unresolved = 0
     async with get_session() as session:
-        conversation = await session.get(Conversation, conversation_id)
+        # Con candado: `state` se reescribe entero y puede traer un pendiente de confirmación.
+        conversation = await session.get(Conversation, conversation_id, with_for_update=True)
         if conversation is not None:
             state = dict(conversation.state)
             anterior = int(state.get("turnos_sin_resolver", 0))
@@ -1669,7 +1678,7 @@ def _response_cost(provider, response) -> float:  # type: ignore[no-untyped-def]
 async def _mark_budget_exhausted(conversation_id: uuid.UUID) -> None:
     """Marca la conversación para que los próximos inbound no gasten LLM (ADR-0015)."""
     async with get_session() as session:
-        conversation = await session.get(Conversation, conversation_id)
+        conversation = await session.get(Conversation, conversation_id, with_for_update=True)
         if conversation is not None:
             state = dict(conversation.state)
             state["budget_exhausted"] = True

@@ -145,7 +145,7 @@ class CoreSkill(BaseSkill):
         if not note:
             return {"error": "note vacío"}
         async with get_session() as session:
-            conversation = await session.get(Conversation, ctx.conversation_id)
+            conversation = await session.get(Conversation, ctx.conversation_id, with_for_update=True)
             if conversation is None:
                 return {"error": "conversación no encontrada"}
             state = dict(conversation.state)

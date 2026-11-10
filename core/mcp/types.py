@@ -379,8 +379,9 @@ class MCPTool:
     # Es necesario pero no suficiente: además hace falta binding explícito y habilitado, pack
     # activo y que ningún procedimiento habilitado la gobierne.
     apta_para_opcion: bool = False
-    # SPEC-40: acción con efecto que el cliente debe confirmar (optc/optn) antes de ejecutarse
-    # desde una opción, aunque la definición no lo pida.
+    # SPEC-40 y HU-ARCH-36: acción con efecto que el cliente debe confirmar antes de ejecutarse,
+    # aunque la definición de la opción o el binding no lo pidan. En el bucle solo aplica a las
+    # tools registradas: las declarativas POST nacen `sensible` (para opciones) y quedan fuera.
     sensible: bool = False
 
 
