@@ -67,6 +67,18 @@ def upgrade() -> None:
     op.execute(
         f"CREATE POLICY tenant_isolation ON {_TABLA} USING (tenant_id = {RLS}) WITH CHECK (tenant_id = {RLS})"
     )
+    # Mínimo privilegio: el runtime no borra (borrado lógico, invariante 8).
+    op.execute(
+        f"""
+        DO $do$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_runtime') THEN
+                REVOKE ALL ON {_TABLA} FROM app_runtime;
+                GRANT SELECT, INSERT, UPDATE ON {_TABLA} TO app_runtime;
+            END IF;
+        END $do$;
+        """
+    )
 
     op.add_column("pack_payments_transactions", sa.Column("cuenta_id", _UUID, nullable=True))
     op.add_column("pack_payments_transactions", sa.Column("agent_id", _UUID, nullable=True))

@@ -152,8 +152,9 @@ async def _apply_webhook_event(
         if transaction is None:
             log.warning("wompi_webhook_no_matching_transaction", provider_reference=event.provider_reference)
             return None
-        if cuenta_id is not None and transaction.cuenta_id != cuenta_id:
-            # El evento de una cuenta no confirma un link creado con otra (ni con la config del negocio).
+        if transaction.cuenta_id != cuenta_id:
+            # En los dos sentidos: el evento de una cuenta no confirma un link de otra, y la URL del negocio
+            # (`cuenta_id` None, secreto de `plugin_configs`) no confirma un link creado con una cuenta.
             log.warning("wompi_webhook_cuenta_ajena", cuenta_id=str(cuenta_id))
             return None
 
