@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Index, Numeric, Text, text
+from sqlalchemy import Boolean, DateTime, Index, Integer, Numeric, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -70,8 +70,29 @@ class PaymentTransaction(TenantMixin, Base):
     currency: Mapped[str] = mapped_column(Text, default="COP")
     payment_link_url: Mapped[str | None] = mapped_column(Text, default=None)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # ADR-0190 §6 (0004): la cuenta Wompi con la que se creó el link y el agente que lo pidió. Nulos en los
+    # links pedidos con la config del negocio (hasta la resiembra, HU-AOS-65).
+    cuenta_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     # Último payload de webhook recibido (auditoría/debug, nunca se muestra al LLM).
     last_webhook_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class CuentaWompi(TenantMixin, Base):
+    """Cuenta Wompi del negocio (ADR-0190 §6). Los secretos van cifrados en `secretos_cifrados`."""
+
+    __tablename__ = "pack_payments_accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    nombre: Mapped[str] = mapped_column(Text, nullable=False)
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    secretos_cifrados: Mapped[str] = mapped_column(Text, nullable=False)
+    sandbox: Mapped[bool] = mapped_column(Boolean, default=True)
+    link_expira_horas: Mapped[int] = mapped_column(Integer, default=24)
+    monto_minimo: Mapped[float | None] = mapped_column(Numeric(12, 2), default=None)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import io
+import uuid
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -69,9 +70,16 @@ class PaymentCapability(Protocol):
         ...
 
     async def create_link(
-        self, *, reference: str, amount: float, description: str = "", method: str | None = None
+        self,
+        *,
+        reference: str,
+        amount: float,
+        description: str = "",
+        method: str | None = None,
+        agent_id: uuid.UUID | None = None,
     ) -> PaymentLink:
-        """Crea un link de pago correlacionado con `reference` (del caller)."""
+        """Crea un link de pago correlacionado con `reference` (del caller). Con `agent_id` (ADR-0190 §7) cobra con
+        la cuenta del agente que lo pide; sin él, con la del negocio."""
         ...
 
 

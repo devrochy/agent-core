@@ -142,7 +142,7 @@ def sin_base(monkeypatch):
             raise RuntimeError("sin config")
         return SimpleNamespace(currency="COP", link_expira_horas=24)
 
-    async def _guardar(reference, amount, currency, provider_name, nuevo, *, reemplaza):  # type: ignore[no-untyped-def]
+    async def _guardar(reference, amount, currency, provider_name, nuevo, *, reemplaza, cuenta_id=None, agent_id=None):  # type: ignore[no-untyped-def]
         estado.guardadas.append(reemplaza)
         return PaymentTransaction(
             reference=reference, payment_link_url=nuevo.payment_link_url, status="pendiente", amount=amount

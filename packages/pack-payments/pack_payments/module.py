@@ -10,6 +10,7 @@ pago sin importarlo.
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -62,11 +63,27 @@ async def wompi_webhook(request: Request, slug: str) -> dict[str, Any]:
     return {"status": "ignored" if resultado in (SIN_CONFIG, FIRMA_INVALIDA) else "ok"}
 
 
+@admin_router.post("/{slug}/{cuenta_id}")
+async def wompi_webhook_de_cuenta(request: Request, slug: str, cuenta_id: uuid.UUID) -> dict[str, Any]:
+    """URL de eventos de UNA cuenta Wompi del negocio (ADR-0190 §6): Wompi admite una URL por cuenta, así que la
+    firma se valida con el secreto de ESA cuenta y solo se aplican transacciones creadas con ella."""
+    from core.tenants import is_tenant_active, resolve_tenant_by_slug
+
+    tenant_id = await resolve_tenant_by_slug(slug)
+    if tenant_id is None or not await is_tenant_active(tenant_id):
+        log.warning("wompi_webhook_cuenta_tenant_invalido", slug=slug)
+        return {"status": "ignored"}
+    payload = await request.json()
+    async with tenant_scope(tenant_id):
+        resultado = await procesar_evento_de_wompi(payload, cuenta_id=cuenta_id)
+    return {"status": "ignored" if resultado in (SIN_CONFIG, FIRMA_INVALIDA) else "ok"}
+
+
 SIN_CONFIG = "sin_config"
 FIRMA_INVALIDA = "firma_invalida"
 
 
-async def procesar_evento_de_wompi(payload: dict[str, Any]) -> str:
+async def procesar_evento_de_wompi(payload: dict[str, Any], *, cuenta_id: uuid.UUID | None = None) -> str:
     """Verifica y aplica un evento de Wompi en el negocio actual (`tenant_scope`).
 
     Lo usan el webhook propio del pack y, si la cuenta de Wompi es la misma que la de la
@@ -77,9 +94,14 @@ async def procesar_evento_de_wompi(payload: dict[str, Any]) -> str:
     """
     tenant_id = get_current_tenant_id()
     try:
-        config = await tenant_config()
-    except PluginError:
-        log.warning("wompi_webhook_not_configured", tenant_id=str(tenant_id))
+        if cuenta_id is not None:
+            from pack_payments.cuentas import config_de_cuenta
+
+            config = await config_de_cuenta(cuenta_id)
+        else:
+            config = await tenant_config()
+    except (PluginError, LookupError):
+        log.warning("wompi_webhook_not_configured", tenant_id=str(tenant_id), cuenta_id=str(cuenta_id or ""))
         return SIN_CONFIG
 
     provider = build_provider(config)
@@ -93,7 +115,7 @@ async def procesar_evento_de_wompi(payload: dict[str, Any]) -> str:
     # evento no existe. Wompi reintenta la entrega por red (mismo evento);
     # la escritura es idempotente por `dedupe_key`, así que un reenvío no
     # duplica el efecto.
-    transaction = await _apply_webhook_event(event, payload, provider.provider_name)
+    transaction = await _apply_webhook_event(event, payload, provider.provider_name, cuenta_id=cuenta_id)
     return "aplicado" if transaction is not None else "sin_transaccion"
 
 
@@ -115,7 +137,7 @@ def _monto_coincide(pagado: float | None, esperado: float | Decimal | None) -> b
 
 
 async def _apply_webhook_event(
-    event: WebhookEvent, raw_payload: dict[str, Any], provider_name: str
+    event: WebhookEvent, raw_payload: dict[str, Any], provider_name: str, *, cuenta_id: uuid.UUID | None = None
 ) -> PaymentTransaction | None:
     alerta: dict[str, Any] | None = None
     async with get_session() as session:
@@ -129,6 +151,10 @@ async def _apply_webhook_event(
         ).scalar_one_or_none()
         if transaction is None:
             log.warning("wompi_webhook_no_matching_transaction", provider_reference=event.provider_reference)
+            return None
+        if cuenta_id is not None and transaction.cuenta_id != cuenta_id:
+            # El evento de una cuenta no confirma un link creado con otra (ni con la config del negocio).
+            log.warning("wompi_webhook_cuenta_ajena", cuenta_id=str(cuenta_id))
             return None
 
         if (

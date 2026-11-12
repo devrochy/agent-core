@@ -45,7 +45,7 @@ class _FakeCapability:
     def methods(self):
         return []
 
-    async def create_link(self, *, reference: str, amount: float, description: str = "", method=None):
+    async def create_link(self, *, reference: str, amount: float, description: str = "", method=None, agent_id=None):
         from core.payments import MONTO_BAJO_MINIMO, PaymentCapabilityError, PaymentLink
 
         self.calls.append((reference, amount))

@@ -333,7 +333,9 @@ async def _link_de_cargo(cargo: SubscriptionCharge, sub: Subscription, descripci
     if cap is None:
         return {}
     try:
-        link = await cap.create_link(reference=f"sub-{cargo.id}", amount=float(cargo.monto or 0), description=descripcion)
+        link = await cap.create_link(
+            reference=f"sub-{cargo.id}", amount=float(cargo.monto or 0), description=descripcion, agent_id=sub.agent_id
+        )
     except PaymentCapabilityError:
         log.info("subs_cargo_sin_link", charge_id=str(cargo.id), monto=str(cargo.monto))
         return {}
@@ -933,6 +935,7 @@ class SubscriptionCapabilityImpl:
                 reference=reference,
                 amount=float(cargo.monto or 0),
                 description=f"Suscripción {sub.concepto}",
+                agent_id=sub.agent_id,
             )
         except PaymentCapabilityError as exc:
             raise SubscriptionError(

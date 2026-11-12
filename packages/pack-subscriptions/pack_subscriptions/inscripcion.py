@@ -276,6 +276,15 @@ async def _plan_o_error(plan_code: str) -> Plan:
 
 
 # ----------------------------------------------------------------------------- inscribir
+def _agente_del_turno() -> uuid.UUID | None:
+    """El agente en foco del turno (ADR-0190 §4): la suscripción lo guarda para cobrar con su cuenta Wompi. `None`
+    fuera de una conversación (panel) o sin release."""
+    from core.shared import release_vigente
+
+    agente = release_vigente.agente_del_turno()
+    return agente.agent_id if agente is not None else None
+
+
 async def inscribir(
     *,
     customer_id: uuid.UUID,
@@ -619,6 +628,7 @@ async def _crear(
         valor_periodo=precio,
         moneda=plan.moneda,
         periodicidad=plan.periodicidad,
+        agent_id=_agente_del_turno(),
     )
     cargo: SubscriptionCharge | None = None
     if precio == 0:
