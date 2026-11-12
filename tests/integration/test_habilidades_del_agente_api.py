@@ -118,6 +118,10 @@ async def test_acciones_agrupadas_y_pagos_por_agente(app_client) -> None:
     grupos = {a["tool"]: a["group"] for a in r.json()["items"]}
     assert grupos["crear_pedido"] == "pedidos" and grupos["crear_lead"] == "leads"
     assert all(a["pack_id"] == "pack_commerce" for a in r.json()["items"])
+    # D-67: el superpoder «tomar pedido» concede `crear_pedido` aunque el borrador no tenga su binding.
+    por_tool = {a["tool"]: a for a in r.json()["items"]}
+    assert por_tool["crear_pedido"]["by_superpower"] is True
+    assert por_tool["crear_lead"]["by_superpower"] is False or por_tool["crear_lead"]["in_agent"]
 
     r = await app_client.get(f"{BASE}/{agente}/skills", headers=h)
     assert r.status_code == 200, r.text

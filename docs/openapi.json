@@ -78104,6 +78104,11 @@
             "type": "boolean",
             "title": "In Agent"
           },
+          "by_superpower": {
+            "type": "boolean",
+            "title": "By Superpower",
+            "default": false
+          },
           "max_calls_per_conversation": {
             "anyOf": [
               {
