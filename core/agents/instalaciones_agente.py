@@ -228,6 +228,26 @@ __all__ = [
 ]
 
 
+CONOCIMIENTO = "pack_knowledge"
+
+
+async def _usa_conocimiento(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> bool:
+    """¿El borrador o alguna versión del agente declara la acción de búsqueda en documentos?"""
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                text(
+                    "SELECT 1 FROM agent_drafts WHERE tenant_id = :t AND agent_id = :a "
+                    "AND content::text LIKE '%buscar_conocimiento%' "
+                    "UNION ALL SELECT 1 FROM agent_versions WHERE tenant_id = :t AND agent_id = :a "
+                    "AND content::text LIKE '%buscar_conocimiento%' LIMIT 1"
+                ),
+                {"t": tenant_id, "a": agent_id},
+            )
+        ).first()
+    return fila is not None
+
+
 async def backfill_habilidades_por_agente(
     tenant_ids: list[uuid.UUID] | None = None, *, aplicar: bool = False
 ) -> list[dict[str, object]]:
@@ -278,7 +298,11 @@ async def backfill_habilidades_por_agente(
                 if plantilla is None:
                     continue
                 propias = set(await instaladas_en_agente(tid, agente.id, solo_activas=False))
-                quiere = (set(plantilla.habilidades) | (set(plantilla.opcionales) & del_negocio)) - propias
+                quiere = set(plantilla.habilidades) | (set(plantilla.opcionales) & del_negocio)
+                if CONOCIMIENTO in del_negocio and await _usa_conocimiento(tid, agente.id):
+                    # Un agente que ya busca en documentos no puede perderlo en su próxima release.
+                    quiere.add(CONOCIMIENTO)
+                quiere -= propias
                 quiere &= del_negocio | set(plantilla.habilidades)
                 if aplicar:
                     for pack in sorted(quiere):

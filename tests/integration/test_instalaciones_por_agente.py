@@ -256,3 +256,32 @@ async def test_backfill_instala_en_agentes_existentes_sin_borrar() -> None:
     assert otra[0]["instaladas"] == [] and otra[0]["ya"] == ["pack_commerce"]
     async with tenant_scope(tid):
         assert await instaladas_en_agente(tid, aid) == ["pack_commerce"]
+
+
+async def test_backfill_suma_conocimiento_si_el_agente_lo_usa(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Un agente que ya busca en documentos (`buscar_conocimiento` en su borrador) recibe Conocimiento si el negocio lo
+    tiene: así no lo pierde en su próxima release. Dry-run (el venv local puede no registrar el pack)."""
+    import core.agents.spec as spec_mod
+    from core.agents.instalaciones_agente import backfill_habilidades_por_agente
+    from core.alta_negocio import onboard_tenant
+
+    original = spec_mod.enabled_packs
+    monkeypatch.setattr(spec_mod, "enabled_packs", lambda spec: set(original(spec)) | {"pack_knowledge"})
+    slug = uniq("hpakn")
+    tid, _ = await onboard_tenant(
+        name=f"HPA {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False, plan="premium"
+    )
+    usa, no_usa = uuid.uuid4(), uuid.uuid4()
+    for aid, key in ((usa, "ventas"), (no_usa, "cobranza")):
+        await _sql(
+            tid, "insert into agents (id, tenant_id, key, kind, name) values (:a, :t, :k, 'specialist', 'X')",
+            a=aid, t=tid, k=key,
+        )
+    await _sql(
+        tid,
+        "insert into agent_drafts (tenant_id, agent_id, content) values (:t, :a, cast(:c as jsonb))",
+        t=tid, a=usa, c='{"tools": [{"tool": "buscar_conocimiento"}]}',
+    )
+    filas = {f["agente"]: f["instaladas"] for f in await backfill_habilidades_por_agente([tid])}
+    assert "pack_knowledge" in filas["ventas"]
+    assert "pack_knowledge" not in filas["cobranza"]
