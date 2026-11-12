@@ -176,9 +176,10 @@ async def test_legacy_corre_y_deja_evento() -> None:
 
 
 @pytest.mark.usefixtures("registradas", "turno")
-async def test_la_marca_de_otro_negocio_no_aplica() -> None:
+async def test_la_marca_de_otro_negocio_niega_en_vez_de_abrir() -> None:
     release_vigente.marcar_v3_sin_release(uuid.uuid4())
-    assert not release_vigente.exige_concesion()
+    assert release_vigente.exige_concesion()
+    assert await _tool_denial(make_spec([]), "send_email") is not None
 
 
 @pytest.mark.usefixtures("registradas", "turno")
