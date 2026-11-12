@@ -1,7 +1,8 @@
 """HU-BILL-05 · planes por agentes: agentes publicados, colaboradores y crédito (D-35, ADR-0142).
 
-- Free (1 agente) con el General incorporado: el primer especialista entra; el segundo da 409
-  `plan_limit_agentes`, por la API de la conexión y por el editor (antes de publicar la versión).
+- Free (1 agente) con el General incorporado: el primer especialista entra; al tope, crear otro
+  borrador (`agent-templates` y `from-script`) o publicar una versión da 409 `plan_limit_agentes`,
+  sin escribir nada.
 - Premium permite 5 agentes; el sexto da 409. Un agente que ya está en una conexión no ocupa otro cupo.
 - Ni el General ni el Coordinador cuentan (enmienda del ADR-0142, 2026-10-27): el General viene
   incorporado y se puede volver a poner sin cupo.
@@ -216,19 +217,57 @@ async def test_el_general_se_puede_volver_a_poner_con_el_cupo_lleno(app_client) 
     assert await _agentes(tid) == 1
 
 
-async def test_free_el_editor_no_publica_la_version_si_no_hay_cupo(app_client) -> None:
+async def test_free_el_editor_no_crea_el_borrador_si_no_hay_cupo(app_client) -> None:
     tid, cid = await _negocio("free")
     hm = await api_headers(app_client, tid)
     await _llenar_cupo(app_client, hm, cid, "soporte")  # Free al tope: 1 de 1
     h = await _dueno(app_client, tid)
+
+    # Ni desde plantilla ni desde el guion: 409 y nada escrito (tampoco se habilitan habilidades).
+    for ruta, cuerpo in (
+        ("/api/v1/admin/agent-templates/ventas/agents", {}),
+        ("/api/v1/admin/agents/from-script", {"template_key": "cobranza", "answers": {}}),
+    ):
+        r = await app_client.post(ruta, headers=h, json=cuerpo)
+        assert _limite(r) == (409, "plan_limit_agentes", {"metric": "agentes", "used": 1, "limit": 1}), r.text
+        assert "mejora tu plan" in r.json()["error"]["message"].lower()
+    assert await _sql(tid, "select 1 from agents where tenant_id = :t and key in ('ventas', 'cobranza')", t=tid) == []
+
+    from core.agents.editor import habilitados_del_negocio
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        assert "pack_cobranza" not in await habilitados_del_negocio(tid)
+
+
+async def test_free_el_editor_no_publica_la_version_si_no_hay_cupo(app_client) -> None:
+    tid, cid = await _negocio("free")
+    h = await _dueno(app_client, tid)
+    # El borrador se crea con cupo libre; después se llena el cupo y publicar ya no entra.
     r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
     assert r.status_code == 201, r.text
     aid = r.json()["agent"]["id"]
+    hm = await api_headers(app_client, tid)
+    await _llenar_cupo(app_client, hm, cid, "soporte")  # Free al tope: 1 de 1
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
     assert _limite(r) == (409, "plan_limit_agentes", {"metric": "agentes", "used": 1, "limit": 1}), r.text
     # Antes de escribir: ni versión nueva ni instancia.
     assert await _sql(tid, "select 1 from agent_versions where agent_id = :a", a=uuid.UUID(aid)) == []
     assert await _instancias_vivas(tid, aid) == 0
+
+
+async def test_overview_trae_la_cuota_de_agentes(app_client) -> None:
+    tid, cid = await _negocio("free")
+    h = await _dueno(app_client, tid)
+    r = await app_client.get("/api/v1/admin/agents/overview", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["cuota_agentes"] == {"used": 0, "limit": 1, "allowed": True}
+
+    hm = await api_headers(app_client, tid)
+    await _llenar_cupo(app_client, hm, cid, "soporte")
+    r = await app_client.get("/api/v1/admin/agents/overview", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["cuota_agentes"] == {"used": 1, "limit": 1, "allowed": False}
 
 
 async def test_premium_permite_cinco_agentes_y_el_sexto_da_409(app_client) -> None:

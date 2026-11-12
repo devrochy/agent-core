@@ -14,7 +14,7 @@ from core.billing.enforcement import QuotaExceeded
 _MENSAJES = {
     "agentes": (
         "Tu plan permite {limit} agente(s) publicado(s) y ya tienes {used}. "
-        "Mejora tu plan para publicar otro agente."
+        "Mejora tu plan para crear otro agente."
     ),
     "colaboradores": (
         "Tu plan permite {limit} colaborador(es) y ya tienes {used}, contando las invitaciones "

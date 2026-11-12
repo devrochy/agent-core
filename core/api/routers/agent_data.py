@@ -1,7 +1,8 @@
 """Mi agente y su data (HU-AOS-47, ADR-0140), solo lectura.
 
 - `GET /api/v1/admin/agents/overview` — runtime del negocio, agentes (sin el Coordinador) con sus
-  conexiones y actividad de 30 días, y lo no atribuido aparte (`sin_atribuir`).
+  conexiones y actividad de 30 días, lo no atribuido aparte (`sin_atribuir`) y la cuota del plan
+  (`cuota_agentes`) para avisar antes de crear otro agente.
 - `GET /api/v1/admin/agents/{ref}/conversations` — conversaciones que atendió (conexión y versión
   del último turno), paginadas.
 - `GET /api/v1/admin/agents/{ref}/customers` — clientes que atendió, paginados.
@@ -39,8 +40,10 @@ from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
 from core.plugin_manager import plugin_manager
+from core.shared.logger import get_logger
 
 router = APIRouter(prefix="/admin/agents", tags=["admin · agentes"])
+log = get_logger(__name__)
 
 _REF_RE = re.compile(r"general|[0-9a-fA-F-]{36}")
 _KIND_PATTERN = r"^[a-z0-9_]{1,40}$"
@@ -74,10 +77,20 @@ class AgentOverviewItem(Activity):
     incluye_sin_atribuir: bool
 
 
+class AgentCreationQuota(BaseModel):
+    """Cupo de agentes del plan para saber si se puede abrir el asistente de creación."""
+
+    used: int
+    limit: int | None
+    allowed: bool
+
+
 class AgentsOverview(BaseModel):
     runtime: str
     items: list[AgentOverviewItem]
     sin_atribuir: Activity
+    # Sin plan, sin la métrica o si el billing no respondió: null (no se bloquea la vista).
+    cuota_agentes: AgentCreationQuota | None = None
 
 
 class AgentConversation(BaseModel):
@@ -232,11 +245,20 @@ def _ref(ref: str) -> str:
 # ------------------------------------------------------------------ rutas
 @router.get("/overview", response_model=AgentsOverview)
 async def agents_overview(principal: Annotated[Principal, Depends(require("agents"))]) -> AgentsOverview:
-    datos = await svc.resumen(_tenant(principal))
+    tid = _tenant(principal)
+    datos = await svc.resumen(tid)
     if not await _puede(principal, "costs"):
         for fila in [*datos["items"], datos["sin_atribuir"]]:
             fila["cost_usd"] = None
-    return AgentsOverview.model_validate(datos)
+    cuota = None
+    try:
+        from core.billing.enforcement import quota_decision
+
+        decision = await quota_decision(tid, "agentes")
+        cuota = AgentCreationQuota(used=decision.used, limit=decision.limit, allowed=decision.allowed)
+    except Exception as exc:  # el billing no debe tumbar la vista de agentes
+        log.warning("agents_quota_failed", tenant_id=str(tid), error=type(exc).__name__)
+    return AgentsOverview.model_validate({**datos, "cuota_agentes": cuota})
 
 
 @router.get("/{ref}/conversations", response_model=Page[AgentConversation])

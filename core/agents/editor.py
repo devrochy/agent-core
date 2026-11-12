@@ -27,8 +27,8 @@ HU-AOS-14 y plantillas de HU-AOS-46):
   días de `usage_ledger`); sin historial, sin estimado (no se inventan tokens).
 
 Todo corre dentro del `tenant_scope` del negocio (RLS) y además filtra por `tenant_id`. El
-límite de agentes del plan Free queda pendiente: no hay métrica de agentes en
-`core.billing.metrics` y aquí no se inventa.
+tope de `agentes` del plan (ADR-0142) se aplica al crear el borrador y al publicar: si el
+negocio ya tiene todos sus agentes publicados, `QuotaExceeded` (409 `plan_limit_agentes`).
 """
 
 from __future__ import annotations
@@ -308,6 +308,11 @@ async def crear_desde_plantilla(
             f"Ya tienes un agente «{plantilla.nombre}»: edítalo en vez de crear otro.",
             {"agent_id": str(existente)},
         )
+    # Tope de agentes publicados del plan (D-35, ADR-0142): no se crea ni el borrador. Va antes
+    # de habilitar habilidades para que un 409 no deje efectos a medias.
+    from core.billing.enforcement import enforce_metric
+
+    await enforce_metric(tenant_id, "agentes")
     por_habilitar = sorted(set(plantilla.habilidades) - habilitados)
     habilitadas: list[str] = []
     sin_configurar: dict[str, str] = {}
