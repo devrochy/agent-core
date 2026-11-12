@@ -11,7 +11,8 @@ instalación nunca apunta al agente de otro negocio (ADR-0116 §4). El CHECK de 
 Tabla vacía de filas `agent` al aplicar: no hay backfill (D-68, no hay data real). Los locks: el ALTER toma ACCESS
 EXCLUSIVE sobre `pack_installations` (pocas filas: la `core` de secretos y las de conexión) con `lock_timeout`.
 
-Reversible mientras no haya filas `agent`: el downgrade las rechaza en vez de borrarlas (invariante 8).
+Reversible: el downgrade QUITA las filas `agent` (son configuración que se recrea al instalar; la bajada es solo para
+rollback y pruebas, y no hay otra forma de volver al CHECK de dos scopes).
 
 Revision ID: 0125
 Revises: 0124
@@ -58,12 +59,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute(
         """
-        DO $$
-        BEGIN
-          IF EXISTS (SELECT 1 FROM pack_installations WHERE scope = 'agent') THEN
-            RAISE EXCEPTION 'hay instalaciones por agente: no se bajan sin decidir qué hacer con ellas';
-          END IF;
-        END $$;
+        DELETE FROM pack_installations WHERE scope = 'agent';
         DROP INDEX ix_pack_installations_agente;
         DROP INDEX uq_pack_installations_scope;
         CREATE UNIQUE INDEX uq_pack_installations_scope ON pack_installations
