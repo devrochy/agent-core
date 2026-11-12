@@ -134,6 +134,10 @@ async def configurar(
     if not instalada:
         await desinstalar_de_agente(tenant_id, agent_id, pack_id, actor=actor)
         return HabilidadDelAgente(pack_id=pack_id, instalada=False, status=None, config={})
+    # El negocio tiene la habilidad si algún agente la tiene: crons, panel y `payment_registry` leen la del negocio.
+    from core.agents.habilitacion import asegurar_habilidades
+
+    await asegurar_habilidades(tenant_id, [pack_id], actor=actor)
     requiere = pack_id == PAGOS
     await instalar_en_agente(tenant_id, agent_id, pack_id, requiere_config=requiere, actor=actor)
     if config is not None:

@@ -138,6 +138,10 @@ async def test_acciones_agrupadas_y_pagos_por_agente(app_client) -> None:
     assert r.status_code == 200, r.text
     assert r.json() == {"pack_id": "pack_payments", "installed": True, "status": "active", "config": {"cuenta_id": str(cuenta.id)}}
     assert "prv_test_x" not in r.text
+    from core.agents.editor import habilitados_del_negocio
+
+    async with tenant_scope(tid):
+        assert "pack_payments" in await habilitados_del_negocio(tid)  # el negocio la tiene porque un agente la tiene
 
     r = await app_client.put(f"{BASE}/{agente}/skills/pack_payments", headers=h, json={"installed": False})
     assert r.status_code == 200 and r.json()["installed"] is False
