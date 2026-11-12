@@ -39,6 +39,8 @@ class Accion:
     grupo: str
     enabled: bool
     en_el_agente: bool  # tiene binding en el borrador
+    # La concede un superpoder (procedimiento) que el agente declara (D-67): corre en su etapa aunque no tenga binding.
+    por_superpoder: bool
     max_calls_per_conversation: int | None
     requires_confirmation: bool
 
@@ -71,8 +73,24 @@ async def packs_del_agente(tenant_id: uuid.UUID, agent_id: uuid.UUID, habilitado
     return propias or set(habilitados)
 
 
+def _de_superpoderes(contenido: dict[str, Any], packs: set[str]) -> frozenset[str]:
+    """Acciones que nombran los procedimientos que el borrador declara (D-67: declarar un procedimiento concede sus
+    acciones), entre los disponibles para esas habilidades."""
+    from core.kernel.opciones.lint import acciones_de_procedimientos
+    from core.kernel.procedures import registro
+
+    declarados = {
+        str(p.get("id")) for p in contenido.get("procedures") or [] if isinstance(p, dict) and p.get("id")
+    }
+    if not declarados:
+        return frozenset()
+    disponibles = registro.disponibles(packs)
+    return acciones_de_procedimientos(p for pid, p in disponibles.items() if pid in declarados)
+
+
 def acciones(contenido: dict[str, Any], packs: set[str]) -> list[Accion]:
     """Las acciones de `packs` con el binding del borrador `contenido` (`agentspec/3`), ordenadas por grupo."""
+    concedidas = _de_superpoderes(contenido, packs)
     bindings = {
         str(b.get("tool")): b for b in contenido.get("tools") or [] if isinstance(b, dict) and b.get("tool")
     }
@@ -90,6 +108,7 @@ def acciones(contenido: dict[str, Any], packs: set[str]) -> list[Accion]:
                 grupo=_grupo(tool.name, pack_id),
                 enabled=bool(binding.get("enabled", True)) if binding else False,
                 en_el_agente=binding is not None,
+                por_superpoder=tool.name in concedidas,
                 max_calls_per_conversation=binding.get("maxCallsPerConversation") if binding else None,
                 requires_confirmation=bool(binding.get("requiresConfirmation", False)) if binding else False,
             )

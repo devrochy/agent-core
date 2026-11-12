@@ -549,6 +549,8 @@ class AgentAction(BaseModel):
     enabled: bool
     # Tiene binding en el borrador del agente. Sin binding la acción solo corre si la concede un superpoder (D-67).
     in_agent: bool
+    # La concede un superpoder que el agente declara (D-67): corre en su etapa aunque no tenga binding.
+    by_superpower: bool = False
     max_calls_per_conversation: int | None
     requires_confirmation: bool
 
@@ -595,6 +597,7 @@ async def list_agent_actions(
             group=a.grupo,
             enabled=a.enabled,
             in_agent=a.en_el_agente,
+            by_superpower=a.por_superpoder,
             max_calls_per_conversation=a.max_calls_per_conversation,
             requires_confirmation=a.requires_confirmation,
         )
