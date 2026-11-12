@@ -836,3 +836,31 @@ def presets_v2(
             console.print(f"[red]Error:[/red] {r.tenant_id}: {error}")
     if any(r.fallo for r in reportes):
         raise typer.Exit(1)
+
+
+@app.command("habilidades-por-agente")
+def habilidades_por_agente(
+    tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
+    todos: bool = typer.Option(False, "--todos", help="Todos los negocios vivos."),
+    aplicar: bool = typer.Option(False, "--aplicar", help="Escribe. Sin esto es dry-run: reporta lo que haría."),
+) -> None:
+    """ADR-0190 (HU-AOS-65): instala en cada agente especialista existente las habilidades de su plantilla (y las
+    opcionales que el negocio ya tiene), sin borrar nada. Idempotente; dry-run por defecto. Pagos queda pendiente de
+    elegir la cuenta Wompi."""
+    import asyncio
+
+    from cli.tenant_ref import resolve_tenant
+    from core.agents.instalaciones_agente import backfill_habilidades_por_agente
+
+    if bool(tenant) == todos:
+        raise typer.BadParameter("Indica --tenant <slug> o --todos (uno de los dos).")
+
+    async def _run() -> list[dict[str, object]]:
+        ids = [await resolve_tenant(tenant)] if tenant else None
+        return await backfill_habilidades_por_agente(ids, aplicar=aplicar)
+
+    filas = asyncio.run(_run())
+    console.print("Habilidades por agente" + ("" if aplicar else " (dry-run: no se escribió nada)"))
+    for f in filas:
+        console.print(f"  {f['negocio']} · {f['agente']}: instala {f['instaladas'] or '—'} (ya tenía {f['ya'] or '—'})")
+    console.print(f"{len(filas)} agente(s).")

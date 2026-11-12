@@ -219,9 +219,70 @@ __all__ = [
     "MAX_POR_AGENTE",
     "SCOPE_AGENTE",
     "AgenteNoEncontrado",
+    "backfill_habilidades_por_agente",
     "config_del_agente",
     "desinstalar_de_agente",
     "guardar_config_del_agente",
     "instaladas_en_agente",
     "instalar_en_agente",
 ]
+
+
+async def backfill_habilidades_por_agente(
+    tenant_ids: list[uuid.UUID] | None = None, *, aplicar: bool = False
+) -> list[dict[str, object]]:
+    """`agent-core db habilidades-por-agente` (ADR-0190, HU-AOS-65): instala en cada agente especialista vivo las
+    habilidades de su plantilla (por `key` o `source_template`) y las opcionales que el negocio ya tiene, SIN borrar
+    nada. Idempotente: lo que ya está instalado no se toca. Pagos nace `pending_config` (falta elegir la cuenta).
+    Dry-run por defecto. Devuelve una fila por agente con lo que instaló (o instalaría)."""
+    from core.agents.spec import enabled_packs, leer_spec_activo
+    from core.presets import PresetError, load_plantilla
+    from core.shared.tenant import tenant_scope
+
+    async with get_session() as session:
+        negocios = (
+            await session.execute(
+                text(
+                    "SELECT id, slug FROM tenants WHERE deleted_at IS NULL "
+                    "AND (cast(:ids AS uuid[]) IS NULL OR id = ANY(cast(:ids AS uuid[]))) ORDER BY slug"
+                ),
+                {"ids": [str(t) for t in tenant_ids] if tenant_ids else None},
+            )
+        ).all()
+    filas: list[dict[str, object]] = []
+    for tid, slug in negocios:
+        async with tenant_scope(tid):
+            activo = await leer_spec_activo(tid)
+            del_negocio = set(enabled_packs(activo[1])) if activo else set()
+            async with get_session() as session:
+                agentes = (
+                    await session.execute(
+                        select(AgentRecord).where(
+                            AgentRecord.tenant_id == tid,
+                            AgentRecord.kind == "specialist",
+                            AgentRecord.status == "active",
+                            AgentRecord.deleted_at.is_(None),
+                        )
+                    )
+                ).scalars().all()
+            for agente in agentes:
+                plantilla = None
+                for clave in (agente.source_template, agente.key):
+                    if not clave:
+                        continue
+                    try:
+                        plantilla = load_plantilla(clave)
+                        break
+                    except PresetError:
+                        continue
+                if plantilla is None:
+                    continue
+                propias = set(await instaladas_en_agente(tid, agente.id, solo_activas=False))
+                quiere = (set(plantilla.habilidades) | (set(plantilla.opcionales) & del_negocio)) - propias
+                quiere &= del_negocio | set(plantilla.habilidades)
+                if aplicar:
+                    for pack in sorted(quiere):
+                        await instalar_en_agente(tid, agente.id, pack, requiere_config=pack == "pack_payments")
+                filas.append({"negocio": slug, "agente": agente.key, "instaladas": sorted(quiere), "ya": sorted(propias)})
+    log.info("habilidades_por_agente_backfill", aplicar=aplicar, agentes=len(filas))
+    return filas
