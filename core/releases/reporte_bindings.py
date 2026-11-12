@@ -10,7 +10,7 @@ tools):
 - `flujo`: las del flujo de la release, solo para el agente por defecto de la conexión.
 
 Cuentan como concedidas las que tienen binding (habilitado o no: un binding deshabilitado ya es una
-decisión), las declarativas de la versión y las de sus procedimientos publicados (ADR-0118 §3). Las del flujo
+decisión), las declarativas de la versión y las de los procedimientos que declara (ADR-0118 §3). Las del flujo
 en un especialista no son faltantes, se cuentan aparte: el turno deja de ofrecérselas.
 """
 
@@ -88,12 +88,16 @@ async def _revisar_release(
 ) -> None:
     from core.kernel.opciones.lint import acciones_de_procedimientos
 
+    todos = release.procedimientos()
     for agente in release.componentes:
         if agente.role == "core":
             continue
         reporte.agentes_revisados += 1
-        # Los mismos que concede el turno: los publicados que la versión declara.
-        propios = release.procedimientos_de(agente.instance_id).values()
+        # Los mismos que concede el turno: los publicados y los abiertos que la versión declara.
+        propios = [*release.procedimientos_de(agente.instance_id).values()]
+        if release.con_procedimientos_por_agente:
+            declarados = {str(p.get("id")) for p in agente.content.get("procedures") or [] if isinstance(p, Mapping)}
+            propios += [todos[pid] for pid in sorted(declarados) if pid in todos]
         compilado = await release.compilado(agente)
         flujo = compilado.flujo if compilado is not None else None
         faltantes, fuera = sin_binding(
