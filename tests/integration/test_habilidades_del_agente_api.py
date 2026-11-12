@@ -180,3 +180,22 @@ async def test_cuentas_wompi_por_api(app_client) -> None:
     assert r.status_code == 409 and r.json()["error"]["details"]["agent_ids"] == [agente]
     r = await app_client.patch(f"/api/v1/pack/payments/accounts/{cuenta['id']}", headers=h, json={"public_key": "pub_test_rotadaxx"})
     assert r.status_code == 200 and r.json()["public_key"] == "pub_test_rotadaxx"
+
+
+async def test_catalogo_de_opciones_por_agente(app_client) -> None:
+    """HU-AOS-67: con `agent_id`, el catálogo de acciones de las opciones sale de las habilidades y los bindings de ese
+    agente. La acción apta de Agenda no se ofrece en el agente de Ventas, que no tiene Agenda."""
+    from core.admin import plantillas_opciones_service as svc
+    from core.shared.tenant import tenant_scope
+
+    tid, h, ventas = await _negocio_con_ventas(app_client)
+    r = await app_client.post(f"{BASE}/from-script", headers=h, json={"template_key": "agenda", "answers": {}})
+    assert r.status_code == 201, r.text
+    agenda = r.json()["agent"]["id"]
+    async with tenant_scope(tid):
+        de_ventas = {a["tool"] for a in await svc.catalogo_acciones(tid, uuid.UUID(ventas))}
+        de_agenda = {a["tool"] for a in await svc.catalogo_acciones(tid, uuid.UUID(agenda))}
+        fichas_ventas = await svc.fichas_del_negocio(tid, uuid.UUID(ventas))
+    assert "list_client_appointments" not in de_ventas
+    assert not fichas_ventas["list_client_appointments"].pack_activo
+    assert de_agenda <= {"list_client_appointments"}

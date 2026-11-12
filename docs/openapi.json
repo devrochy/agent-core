@@ -30162,9 +30162,26 @@
           "plantillas con opciones"
         ],
         "summary": "Catalogo Acciones",
-        "description": "Las tools que el negocio puede usar como acción de una opción: elegibles (marca de su autor, pack activo,\nbinding explícito y habilitado, sin gobernar por un procedimiento), con su JSON Schema y si son sensibles.",
+        "description": "Las tools que el negocio puede usar como acción de una opción: elegibles (marca de su autor, pack activo,\nbinding explícito y habilitado, sin gobernar por un procedimiento), con su JSON Schema y si son sensibles.\nCon `?agent_id=` (ADR-0190, HU-AOS-67), solo las encendidas en ESE agente (el que atiende la conexión); 404 si\nno es del negocio.",
         "operationId": "catalogo_acciones_api_v1_plantillas_opciones_catalogo_acciones_get",
         "parameters": [
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          },
           {
             "name": "X-Tenant-Id",
             "in": "header",

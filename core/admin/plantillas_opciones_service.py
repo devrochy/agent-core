@@ -124,9 +124,12 @@ def _forma_o_vacia(almacenada: Any) -> Definicion | None:
 
 
 # ------------------------------------------------------------------ catálogos
-async def fichas_del_negocio(tenant_id: uuid.UUID) -> dict[str, FichaTool]:
+async def fichas_del_negocio(tenant_id: uuid.UUID, agent_id: uuid.UUID | None = None) -> dict[str, FichaTool]:
     """Una ficha por tool del negocio (registradas en el host y declarativas del AgentSpec), con el binding
-    EXPLÍCITO del AgentSpec activo. Sin AgentSpec activo: vacío (no se siembra nada desde una consulta)."""
+    EXPLÍCITO del AgentSpec activo. Sin AgentSpec activo: vacío (no se siembra nada desde una consulta).
+
+    Con `agent_id` (ADR-0190, HU-AOS-67): las del AGENTE que atiende la conexión — sus habilidades instaladas (o
+    las del negocio si no tiene propias) y los bindings de su borrador, que es lo que el dueño ve en «Acciones»."""
     _scope(tenant_id)
     from core.agents.spec import enabled_packs, leer_spec_activo
     from core.kernel.procedures import registro
@@ -148,19 +151,39 @@ async def fichas_del_negocio(tenant_id: uuid.UUID) -> dict[str, FichaTool]:
     if declarativas:
         packs_activos.add(DECLARATIVE_PLUGIN_ID)
     gobernadas = lint.acciones_de_procedimientos(registro.disponibles(habilitados, inactivos).values())
-    return lint.fichas_de_tools([*registradas.values(), *declarativas], spec.tools, packs_activos, gobernadas)
+    bindings: list[Any] = list(spec.tools)
+    if agent_id is not None:
+        from types import SimpleNamespace
+
+        from core.agents import versiones
+        from core.agents.habilidades_del_agente import packs_del_agente
+
+        packs_activos &= await packs_del_agente(tenant_id, agent_id, set(habilitados)) | {DECLARATIVE_PLUGIN_ID}
+        borrador = await versiones.obtener_borrador(tenant_id, agent_id)
+        bindings = [
+            SimpleNamespace(
+                tool=str(b["tool"]),
+                enabled=bool(b.get("enabled", True)),
+                requiresConfirmation=bool(b.get("requiresConfirmation", False)),
+            )
+            for b in (borrador.content or {}).get("tools") or []
+            if isinstance(b, dict) and b.get("tool")
+        ]
+    return lint.fichas_de_tools([*registradas.values(), *declarativas], bindings, packs_activos, gobernadas)
 
 
-async def contexto_del_lint(tenant_id: uuid.UUID) -> ContextoLint:
-    return ContextoLint(herramientas=await fichas_del_negocio(tenant_id), variables=set(contexto.catalogo_de_variables()))
+async def contexto_del_lint(tenant_id: uuid.UUID, agent_id: uuid.UUID | None = None) -> ContextoLint:
+    return ContextoLint(
+        herramientas=await fichas_del_negocio(tenant_id, agent_id), variables=set(contexto.catalogo_de_variables())
+    )
 
 
-async def catalogo_acciones(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
+async def catalogo_acciones(tenant_id: uuid.UUID, agent_id: uuid.UUID | None = None) -> list[dict[str, Any]]:
     """Las tools elegibles como acción de una opción, con su JSON Schema, su marca de sensible y si la
-    confirmación del cliente es obligatoria. Orden estable por nombre."""
+    confirmación del cliente es obligatoria. Orden estable por nombre. Con `agent_id`, solo las de ese agente."""
     from core.mcp.host import mcp_host
 
-    fichas = await fichas_del_negocio(tenant_id)
+    fichas = await fichas_del_negocio(tenant_id, agent_id)
     descripciones = {t.name: t.description for t in mcp_host.get_tools()}
     salida: list[dict[str, Any]] = []
     for nombre in sorted(fichas):
