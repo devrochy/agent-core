@@ -43,7 +43,10 @@ async def _sql(tid: uuid.UUID | None, sql: str, **params: Any) -> list[Any]:
 @pytest.fixture(scope="module", autouse=True)
 async def _packs_registrados() -> None:
     from core.plugin_manager import plugin_manager
+    from core.releases.packs import sync_packs
 
+    reporte = await sync_packs(plugin_manager.scan())
+    assert not reporte.fallo, reporte
     await plugin_manager.sync_registry()
 
 
@@ -223,3 +226,33 @@ async def test_la_release_congela_las_habilidades_del_agente() -> None:
     assert release is not None
     agente = next(a for a in release.componentes if a.key == "general")
     assert agente.packs == frozenset({"pack_commerce"})
+
+
+async def test_backfill_instala_en_agentes_existentes_sin_borrar() -> None:
+    """HU-AOS-65: el backfill instala en el agente `ventas` existente las habilidades de su plantilla; dry-run no
+    escribe y reaplicar no duplica."""
+    from core.agents.instalaciones_agente import (
+        backfill_habilidades_por_agente,
+        instaladas_en_agente,
+    )
+    from core.alta_negocio import onboard_tenant
+    from core.shared.tenant import tenant_scope
+
+    slug = uniq("hpabf")
+    tid, _ = await onboard_tenant(
+        name=f"HPA {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False, plan="premium"
+    )
+    aid = uuid.uuid4()
+    await _sql(
+        tid, "insert into agents (id, tenant_id, key, kind, name) values (:a, :t, 'ventas', 'specialist', 'Ventas')",
+        a=aid, t=tid,
+    )
+    seco = await backfill_habilidades_por_agente([tid])
+    assert seco == [{"negocio": slug, "agente": "ventas", "instaladas": ["pack_commerce"], "ya": []}]
+    async with tenant_scope(tid):
+        assert await instaladas_en_agente(tid, aid) == []
+    await backfill_habilidades_por_agente([tid], aplicar=True)
+    otra = await backfill_habilidades_por_agente([tid], aplicar=True)
+    assert otra[0]["instaladas"] == [] and otra[0]["ya"] == ["pack_commerce"]
+    async with tenant_scope(tid):
+        assert await instaladas_en_agente(tid, aid) == ["pack_commerce"]
