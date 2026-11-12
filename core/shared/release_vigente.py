@@ -54,6 +54,9 @@ class AgenteCongelado:
     # transitoria de HU-AOS-05).
     is_default: bool = False
     procedimientos: tuple[tuple[str, str], ...] | None = None
+    # ADR-0190 §5: habilidades instaladas en el agente, congeladas en el build. `None` = sin instalaciones
+    # propias (hereda las de la release).
+    packs: frozenset[str] | None = None
 
     @property
     def tools(self) -> frozenset[str]:

@@ -545,6 +545,7 @@ async def _componentes(
                     if con_procedimientos
                     else None
                 ),
+                packs=frozenset(str(s) for s in c["skills"]) if isinstance(c.get("skills"), list) else None,
             )
         )
     return tuple(salida), total
