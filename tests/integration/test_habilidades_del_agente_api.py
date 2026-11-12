@@ -153,3 +153,26 @@ async def test_agente_de_otro_negocio_es_404(app_client) -> None:
     ):
         r = await getattr(app_client, metodo)(ruta, headers=h, **({"json": cuerpo} if cuerpo else {}))
         assert r.status_code == 404, (ruta, r.text)
+
+
+async def test_cuentas_wompi_por_api(app_client) -> None:
+    _tid, h, agente = await _negocio_con_ventas(app_client)
+    cuerpo = {"name": "Principal", "public_key": "pub_test_abcdefgh", "private_key": "prv_test_abcdefgh", "events_secret": "evsecreto"}
+    r = await app_client.post("/api/v1/pack/payments/accounts", headers=h, json=cuerpo)
+    assert r.status_code == 201, r.text
+    cuenta = r.json()
+    assert "prv_test" not in r.text and "evsecreto" not in r.text
+    assert cuenta["events_url"].endswith(f"/webhooks/payments/wompi/{cuenta['events_url'].split('/')[-2]}/{cuenta['id']}")
+    assert (await app_client.post("/api/v1/pack/payments/accounts", headers=h, json=cuerpo)).status_code == 409
+
+    r = await app_client.put(
+        f"{BASE}/{agente}/skills/pack_payments", headers=h, json={"installed": True, "config": {"cuenta_id": cuenta["id"]}}
+    )
+    assert r.status_code == 200, r.text
+    (listada,) = (await app_client.get("/api/v1/pack/payments/accounts", headers=h)).json()
+    assert listada["agent_ids"] == [agente]
+
+    r = await app_client.delete(f"/api/v1/pack/payments/accounts/{cuenta['id']}", headers=h)
+    assert r.status_code == 409 and r.json()["error"]["details"]["agent_ids"] == [agente]
+    r = await app_client.patch(f"/api/v1/pack/payments/accounts/{cuenta['id']}", headers=h, json={"public_key": "pub_test_rotadaxx"})
+    assert r.status_code == 200 and r.json()["public_key"] == "pub_test_rotadaxx"

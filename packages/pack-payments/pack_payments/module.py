@@ -271,18 +271,17 @@ class PaymentsModule(BaseModule):
     min_plan = "basic"
     action_summary: ClassVar[list[str]] = ["Generar links de pago", "Confirmar pagos por webhook"]
     setup_guide = "Configura tus llaves de Wompi (sandbox o producción)."
-    requires_config = True
+    # ADR-0190 §6: se activa sin formulario; las llaves van en las cuentas Wompi (Conexiones › Pagos).
+    requires_config = False
     config_schema = PaymentsConfig
     # Salida a red de la capacidad y del panel (ADR-0052): solo la API de Wompi.
     network_allowlist: ClassVar[tuple[str, ...]] = wompi.NETWORK
     admin_router = admin_router
 
     def on_activate(self, host: MCPHost) -> None:
-        config = self.config
-        if not isinstance(config, PaymentsConfig):
-            from core.shared.exceptions import PluginConfigError
-
-            raise PluginConfigError(PLUGIN_ID, "Config inválida o ausente")
+        # ADR-0190 §6: las credenciales viven en las cuentas Wompi que elige cada agente; la config del negocio
+        # (`plugin_configs`) es opcional y solo queda como respaldo. La capacidad se registra siempre: sin cuenta ni
+        # config, `create_link` responde `sin_pasarela` y el consumidor cae a transferencia.
         # Sin tools: el link de un pedido lo pide pack-commerce con `confirmar_pago_pedido`
         # (ADR-0087). `generar_link_pago`, con referencia y monto del LLM, se retiró.
         from pack_payments.payments import WompiPaymentCapability
@@ -292,3 +291,9 @@ class PaymentsModule(BaseModule):
     def extra_admin_routers(self) -> list[APIRouter]:
         """Router de la pestaña "Pagos" de Configuración (ADR-0049)."""
         return [admin_config_router]
+
+    def admin_api_routes(self) -> list[APIRouter]:
+        """API de las cuentas Wompi para el panel (ADR-0190 §6)."""
+        from pack_payments.admin_api import router
+
+        return [router]

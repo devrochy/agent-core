@@ -118,7 +118,6 @@ async def test_probar_y_guardar_no_persiste_si_wompi_falla(app_client, monkeypat
     from pack_payments.providers.base import PaymentRequestRejected
 
     from core.plugin_manager import plugin_manager
-    from core.shared.exceptions import PluginConfigError
     from core.shared.tenant import tenant_scope
 
     async def _boom(self, **kwargs):
@@ -143,10 +142,9 @@ async def test_probar_y_guardar_no_persiste_si_wompi_falla(app_client, monkeypat
     assert "danger" in r.headers["location"]
 
     async with tenant_scope(tid):
-        # `load_config` lanza PluginConfigError si el tenant no tiene config
-        # (plugin `requires_config`): eso ES "no se persistió".
-        with pytest.raises(PluginConfigError):
-            await plugin_manager.load_config("pack_payments")
+        # Pagos ya no exige config del negocio (ADR-0190 §6: las llaves van en las cuentas Wompi):
+        # sin config guardada `load_config` devuelve None, y eso ES "no se persistió".
+        assert await plugin_manager.load_config("pack_payments") is None
 
 
 async def test_url_directa_sin_pack_habilitado_rechaza(app_client) -> None:
