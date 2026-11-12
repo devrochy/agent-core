@@ -552,8 +552,8 @@ async def get_version(
 async def _resueltos(v: Any) -> list[ResolvedProcedure]:
     """Los `procedures` de un AgentSpec v3 resueltos contra los packs habilitados del negocio
     (el binario de hoy). Vacío para un KernelSpec."""
+    from core.agents.procedimientos_de_negocio import procedimientos_publicados
     from core.agents.spec import enabled_packs, load_active_spec
-    from core.agents.tolerante import procedimientos_publicados
     from core.releases.procedimientos import publicados_por_id, resolver_refs
 
     refs = v.content.get("procedures") if v.contract == "agentspec/3" else None

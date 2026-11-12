@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 from agentcore_contracts import AgentSpec
 
+from core.agents.claves import KEY_COORDINADOR, KEY_GENERAL
 from core.agents.flow import FlowSection, compose_flow, load_core_flow, load_pack_flows
 from core.agents.spec_de_release import (
     VistaInvalida,
@@ -23,7 +24,7 @@ from core.agents.spec_de_release import (
     spec_del_turno,
     spec_v2_desde_release,
 )
-from core.agents.tolerante import KEY_COORDINADOR, KEY_GENERAL, candidatas_del_spec, convertir_v2
+from core.agents.tolerante import candidatas_del_spec, convertir_v2
 from core.kernel.procedures import ActionInfo, catalogo_de_acciones
 from core.kernel.release_del_turno import con_release
 from core.plugin_manager import plugin_manager

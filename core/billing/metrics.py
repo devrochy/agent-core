@@ -243,7 +243,7 @@ async def _count_agents(session, tenant_id: uuid.UUID) -> int:
     `agent_instances` (un agente en WhatsApp y en el chat web es uno). El General (`key = general`)
     viene incorporado en todo negocio y no cuenta; tampoco el Coordinador (`kind = core`), y el
     back-office (HU-AOS-37) es otra dimensión."""
-    from core.agents.tolerante import KEY_GENERAL
+    from core.agents.claves import KEY_GENERAL
 
     instanciado = (
         select(AgentInstanceRecord.id)

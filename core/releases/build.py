@@ -124,8 +124,8 @@ async def _conexion_conversacional(tenant_id: uuid.UUID, connection_id: uuid.UUI
 async def _general_sigue_siendo_del_lector(tenant_id: uuid.UUID) -> bool:
     """¿La última versión del General la produjo el lector tolerante? (`legacy_agent_spec_id`
     no nulo.) Si el dueño publicó una versión propia, no se refresca."""
+    from core.agents.claves import KEY_GENERAL
     from core.agents.instancias import agentes_base
-    from core.agents.tolerante import KEY_GENERAL
 
     async with get_session() as session:
         aid = (await agentes_base(session, tenant_id)).get(KEY_GENERAL)
@@ -155,11 +155,10 @@ async def refrescar_desde_v2(
     Coordinador queda en su última versión."""
     from core.agents import versiones
     from core.agents.backfill_agentes import backfill_agentes
+    from core.agents.claves import KEY_COORDINADOR, KEY_GENERAL
     from core.agents.instancias import agentes_base
     from core.agents.spec import leer_spec_activo
     from core.agents.tolerante import (
-        KEY_COORDINADOR,
-        KEY_GENERAL,
         ConversionFallida,
         convertir_negocio,
     )

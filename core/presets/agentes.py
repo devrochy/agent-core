@@ -207,7 +207,7 @@ def derivar_contenido(
     Lanza `PresetError("sin_procedimientos")` si no queda ningún procedimiento."""
     from agentcore_contracts import AgentSpecV3
 
-    from core.agents.tolerante import _declarados
+    from core.agents.procedimientos_de_negocio import declarados as _declarados
     from core.kernel.procedures.catalogo import CORE_OWNER
     from core.releases.procedimientos import ofrecible
     from core.subscriptions.tools import SOLO_PROCEDIMIENTO
@@ -716,9 +716,9 @@ async def _aplicar(
     modules: Iterable[Any] | None,
     aplicar: bool,
 ) -> ReportePresetV2:
+    from core.agents.claves import KEY_COORDINADOR, KEY_GENERAL
     from core.agents.instancias import agentes_base
     from core.agents.spec import enabled_business_packs, leer_spec_activo
-    from core.agents.tolerante import KEY_COORDINADOR, KEY_GENERAL
     from core.kernel.procedures import catalogo_de_acciones
     from core.plugin_manager import plugin_manager
 

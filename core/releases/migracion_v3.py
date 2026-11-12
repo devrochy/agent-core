@@ -171,10 +171,9 @@ async def _conexiones(tenant_id: uuid.UUID) -> list[tuple[uuid.UUID, uuid.UUID |
 async def _hashes_del_v2(tenant_id: uuid.UUID, modulos: list[Any]) -> dict[str, str] | None:
     """`{key: content_hash}` de la conversión ACTUAL del AgentSpec v2 activo (en memoria, sin
     escribir): lo que el build congelaría hoy para el Coordinador y el General."""
+    from core.agents.claves import KEY_COORDINADOR, KEY_GENERAL
     from core.agents.spec import leer_spec_activo
     from core.agents.tolerante import (
-        KEY_COORDINADOR,
-        KEY_GENERAL,
         ConversionFallida,
         convertir_negocio,
     )

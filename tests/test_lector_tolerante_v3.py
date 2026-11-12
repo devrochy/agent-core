@@ -13,10 +13,10 @@ from typing import Any
 import pytest
 from agentcore_contracts import AgentSpec, SecretRef
 
+from core.agents.claves import KEY_GENERAL
 from core.agents.contrato_v3 import revisar_spec
 from core.agents.flow import FlowSection, compose_flow, load_core_flow, load_pack_flows
 from core.agents.tolerante import (
-    KEY_GENERAL,
     ConversionFallida,
     acciones_ofrecidas,
     candidatas_del_spec,

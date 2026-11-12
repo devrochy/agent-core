@@ -64,12 +64,11 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from core.agents import versiones
+from core.agents.claves import KEY_COORDINADOR, KEY_GENERAL
 from core.agents.contrato_v3 import Contrato, revisar_spec
 from core.agents.credenciales import referencias_de_tool
 from core.agents.instancias import ConexionNoConversacional
 from core.agents.tolerante import (
-    KEY_COORDINADOR,
-    KEY_GENERAL,
     ConversionFallida,
     ConversionV3,
     convertir_negocio,

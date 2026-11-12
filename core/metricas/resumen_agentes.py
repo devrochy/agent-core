@@ -42,8 +42,8 @@ from core.admin.resumen_registry import (
     ResumenProvider,
     resumen_registry,
 )
+from core.agents.claves import KEY_GENERAL
 from core.agents.spec import enabled_packs, load_active_spec
-from core.agents.tolerante import KEY_GENERAL
 from core.billing.tipos_de_uso import NO_ES_ACTIVIDAD
 from core.db.models import (
     AgentInstanceRecord,

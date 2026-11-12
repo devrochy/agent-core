@@ -48,6 +48,11 @@ from agentcore_contracts import (
 )
 from pydantic import SecretStr
 
+from core.agents.claves import (
+    KEY_COORDINADOR,
+    KEY_GENERAL,
+    KEYS_RESERVADAS,
+)
 from core.agents.credenciales import (
     CredencialMixta,
     credenciales_en_body,
@@ -64,13 +69,12 @@ from core.agents.flow import (
     confirmed_actions_v2,
     flow_to_procedures,
 )
+from core.agents.procedimientos_de_negocio import declarados as _declarados
+from core.agents.procedimientos_de_negocio import procedimientos_publicados
 from core.kernel.procedures.catalogo import CORE_OWNER, Catalogo
 
 # Keys reservadas de los agentes que crea el lector tolerante (adenda de ADR-0113): el
 # backfill de HU-AOS-13 crea `coordinador` (core) y `general` (specialist) por negocio.
-KEY_GENERAL = "general"
-KEY_COORDINADOR = "coordinador"
-KEYS_RESERVADAS = frozenset({KEY_GENERAL, KEY_COORDINADOR})
 
 _DECLARATIVE_NAME_RE = re.compile(r"^[a-zA-Z0-9_]{1,60}$")
 _HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,80}$")
@@ -529,36 +533,6 @@ class VistaV3:
     avisos: list[str]
 
 
-def _declarados(publicados: Iterable[Procedure], ya: set[str]) -> list[dict[str, str]]:
-    """Refs `^M.0` de los procedimientos publicados, uno por id (la versión más alta), sin
-    repetir un id abierto (el linter rechaza repetidos)."""
-    from core.releases.procedimientos import parsear_version, rango_compatible
-
-    por_id: dict[str, Procedure] = {}
-    for proc in publicados:
-        actual = por_id.get(proc.id)
-        if actual is None or parsear_version(proc.version) > parsear_version(actual.version):
-            por_id[proc.id] = proc
-    return [
-        {"id": pid, "version": rango_compatible(por_id[pid].version)}
-        for pid in sorted(por_id)
-        if pid not in ya
-    ][:60]
-
-
-def procedimientos_publicados(spec: AgentSpec) -> list[Procedure]:
-    """Los procedimientos `procedure/1` que publican los packs habilitados del spec (de sus
-    carpetas `procedures/`, el mismo cargador que los registra), solo los ofrecibles: su
-    habilidad y todo su `requires` habilitados (ADR-0113 §1)."""
-    from core.agents.spec import enabled_packs
-    from core.kernel.procedures.de_pack import cargar
-    from core.releases.procedimientos import ofrecible
-
-    habilitados = enabled_packs(spec)
-    salida: list[Procedure] = []
-    for pack_id in sorted(habilitados - {CORE_OWNER}):
-        salida.extend(p for p in cargar(pack_id) if ofrecible(p, habilitados))
-    return salida
 
 
 def candidatas_del_spec(spec: AgentSpec, catalogo: Catalogo) -> tuple[list[str], set[str]]:

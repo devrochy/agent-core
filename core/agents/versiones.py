@@ -28,9 +28,9 @@ from agentcore_contracts import AgentSpecV3
 from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
+from core.agents.claves import KEYS_RESERVADAS
 from core.agents.contrato_v3 import Contrato, revisar_spec, validar_spec
 from core.agents.credenciales import referencias_de_tool
-from core.agents.tolerante import KEYS_RESERVADAS
 from core.db.models import AgentDraftRecord, AgentRecord, AgentVersionRecord
 from core.db.session import get_session
 from core.kernel.procedures import Catalogo, Issue

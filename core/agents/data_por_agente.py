@@ -29,7 +29,7 @@ from typing import Any
 from sqlalchemy import ColumnElement, and_, false, func, literal, or_, select, text
 from sqlalchemy.dialects.postgresql import array_agg
 
-from core.agents.tolerante import KEY_GENERAL
+from core.agents.claves import KEY_GENERAL
 from core.billing.tipos_de_uso import NO_ES_ACTIVIDAD
 from core.db.models import (
     AgentInstanceRecord,

@@ -214,7 +214,7 @@ async def _base_del_general(tenant_id: uuid.UUID) -> dict[str, Any]:
     Si el General fue recortado (HU-AOS-52, `coordinacion.recortar_general`), sus `tools` y `playbooks`
     ya no traen lo del pack que pasó a un especialista; se recuperan de sus versiones anteriores (la más
     reciente que los tuvo) para que otra plantilla siga derivando con la configuración que el dueño dio."""
-    from core.agents.tolerante import KEY_GENERAL
+    from core.agents.claves import KEY_GENERAL
     from core.agents.versiones import contenido_inicial
 
     async with get_session() as session:

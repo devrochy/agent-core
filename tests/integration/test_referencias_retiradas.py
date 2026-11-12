@@ -81,8 +81,8 @@ async def _negocio(*, packs: list[str] | None = None) -> tuple[uuid.UUID, str, u
 
 
 async def _general(tid: uuid.UUID) -> uuid.UUID:
+    from core.agents.claves import KEY_GENERAL
     from core.agents.instancias import agentes_base
-    from core.agents.tolerante import KEY_GENERAL
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 

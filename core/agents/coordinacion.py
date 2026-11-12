@@ -235,7 +235,7 @@ async def acoplar_especialista(
     """Enlaza al General con el especialista recién publicado y, con la bandera, lo recorta. No hace
     nada si el agente no es de una plantilla o el negocio no tiene General. Idempotente."""
     from core.agents import versiones
-    from core.agents.tolerante import KEY_GENERAL
+    from core.agents.claves import KEY_GENERAL
     from core.presets import PresetError, load_plantilla
 
     _exigir_scope(tenant_id)

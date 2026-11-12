@@ -44,7 +44,7 @@ from typing import Any, Literal
 from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
-from core.agents.tolerante import KEY_COORDINADOR, KEY_GENERAL
+from core.agents.claves import KEY_COORDINADOR, KEY_GENERAL
 from core.db.models import (
     AgentInstanceRecord,
     AgentRecord,

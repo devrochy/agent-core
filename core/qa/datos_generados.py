@@ -168,8 +168,8 @@ async def _agente(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> Agente:
 
 async def _eleccion(tenant_id: uuid.UUID, agente: Agente) -> Eleccion | str:
     """La forma de datos del agente, o el motivo por el que no tiene."""
+    from core.agents.claves import KEY_GENERAL
     from core.agents.editor import habilitados_del_negocio
-    from core.agents.tolerante import KEY_GENERAL
     from core.plugin_manager import plugin_manager
 
     if agente.kind != "specialist" or agente.key == KEY_GENERAL:
