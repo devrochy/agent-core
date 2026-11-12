@@ -59,7 +59,7 @@ def test_el_entorno_apunta_a_la_base_de_eval_y_a_otro_indice_de_redis() -> None:
     assert e["DATABASE_URL"].endswith("/agentcore_eval")
     assert e["MIGRATIONS_DATABASE_URL"].endswith("/agentcore_eval")
     assert e["REDIS_URL"] == "redis://:pw@h:6379/15"
-    assert e["AOS_CONNECTION_ROUTING"] == "true"
+    assert "AOS_CONNECTION_ROUTING" not in e
 
 
 def test_el_entorno_no_lleva_las_claves_de_la_plataforma() -> None:

@@ -281,7 +281,6 @@ async def v3() -> AsyncIterator[tuple[tuple[uuid.UUID, uuid.UUID], tuple[uuid.UU
     (Un binding AUSENTE no sirve de caso negativo: la conversión a v3 crea uno por cada acción ofrecida sin
     binding —el consentimiento del lector tolerante— y la release ya lo trae explícito.)"""
     from core.alta_negocio import onboard_tenant
-    from core.config import get_settings
     from core.plugin_manager import plugin_manager
     from core.releases.packs import sync_packs
     from core.releases.release_uno import backfill_releases
@@ -289,9 +288,6 @@ async def v3() -> AsyncIterator[tuple[tuple[uuid.UUID, uuid.UUID], tuple[uuid.UU
 
     await journeys._preparar_proceso()
     assert not (await sync_packs(plugin_manager.scan())).fallo
-    settings = get_settings()
-    antes = settings.aos_connection_routing
-    settings.aos_connection_routing = True  # v3 lo exige (ADR-0112)
     creados: list[tuple[uuid.UUID, str]] = []
     salida: list[tuple[uuid.UUID, uuid.UUID]] = []
     registro = pytest.MonkeyPatch()
@@ -322,7 +318,6 @@ async def v3() -> AsyncIterator[tuple[tuple[uuid.UUID, uuid.UUID], tuple[uuid.UU
         salida.append((tid, cid))
     registro.undo()
     yield salida[0], salida[1]
-    settings.aos_connection_routing = antes
     for tid, slug in creados:
         await deactivate_tenant(str(tid))
         await purge_tenant(str(tid), f"ELIMINAR {slug}")

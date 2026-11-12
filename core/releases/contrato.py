@@ -398,8 +398,6 @@ async def contraer(
     reporte = ReporteContrato(dry_run=dry_run)
     if not dry_run and not confirmado:
         reporte.bloqueos.append("aplicar es un punto sin retorno: confirma con --confirmo-sin-vuelta-atras")
-    if not get_settings().aos_connection_routing:
-        reporte.bloqueos.append("AOS_CONNECTION_ROUTING está apagada en este entorno (orden de banderas, ADR-0112)")
 
     negocios = await _negocios(tenant_ids)
     reporte.negocios = len(negocios)

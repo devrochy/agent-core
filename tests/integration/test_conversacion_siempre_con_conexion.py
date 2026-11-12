@@ -192,9 +192,7 @@ async def _entrada(tid: uuid.UUID, cliente: str, phone_id: str) -> Any:
 
 
 async def test_un_numero_sin_fila_canonica_la_recibe_con_el_primer_mensaje(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from core.config import get_settings
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
     tid, cuenta, _waba, phone = await _negocio_con_byok()
     assert await _sql(tid, "select 1 from channel_connections where external_id = :p", p=phone) == []
 
@@ -211,16 +209,6 @@ async def test_un_numero_sin_fila_canonica_la_recibe_con_el_primer_mensaje(monke
     otra = await _entrada(tid, uniq("cli2"), phone)
     assert otra.connection_id == conversacion.connection_id
     assert len(await _sql(tid, "select 1 from channel_connections where tenant_id = :t and external_id = :p", t=tid, p=phone)) == 1
-
-
-async def test_con_el_ruteo_apagado_el_consumer_no_crea_conexiones(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from core.config import get_settings
-
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", False)
-    tid, _cuenta, _waba, phone = await _negocio_con_byok()
-    conversacion = await _entrada(tid, uniq("cli"), phone)
-    assert await _sql(tid, "select 1 from channel_connections where external_id = :p", p=phone) == []
-    assert conversacion.connection_id is None
 
 
 # ---------------------------------------------------------------- revisión del auditor
@@ -266,11 +254,9 @@ async def test_en_vuelo_no_se_crea_para_un_numero_liberado_ni_de_una_cuenta_dada
 
 
 async def test_en_vuelo_solo_para_whatsapp(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from core.config import get_settings
     from core.orchestrator import consumer
     from core.shared.tenant import tenant_scope
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
     tid, _cuenta, _waba, phone = await _negocio_con_byok()
     async with tenant_scope(tid):
         conversacion, _, _ = await consumer._resolve_conversation(
@@ -283,12 +269,10 @@ async def test_en_vuelo_solo_para_whatsapp(monkeypatch) -> None:  # type: ignore
 async def test_el_turno_de_prueba_no_es_un_release_missing_en_un_negocio_v3(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from _api_helpers import banderas_como_dueno
 
-    from core.config import get_settings
     from core.kernel import release_del_turno
     from core.shared import release_vigente
     from core.shared.tenant import tenant_scope
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
     tid = await _negocio()
     conversacion = await _conversacion_de_prueba(tid)
     await banderas_como_dueno(tid, aos_runtime="v3")

@@ -19,7 +19,6 @@ from typing import Any
 
 from sqlalchemy import text
 
-from core.config import get_settings
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
 
@@ -73,7 +72,7 @@ async def probar(tenant_id: uuid.UUID, connection_id: uuid.UUID, frase: str) -> 
             raise SinReleaseActiva(str(connection_id))
         banderas = await banderas_del_negocio(session, tenant_id)
     routing = release.ruteo()
-    bandera = banderas.ruteo if get_settings().aos_connection_routing and banderas.runtime == "v3" else "off"
+    bandera = banderas.ruteo if banderas.runtime == "v3" else "off"
     entrada = router.Entrada(texto=frase[: router.MAX_TEXTO], channel=str(fila[1] or ""))
     ruta = router.decidir(release, routing, entrada, release.foco(None))
     procedimientos = release.procedimientos()

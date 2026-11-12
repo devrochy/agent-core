@@ -34,7 +34,6 @@ from typing import Any
 
 from sqlalchemy import text
 
-from core.config import get_settings
 from core.db.session import get_session
 from core.kernel.banderas import (
     APAGADAS,
@@ -205,7 +204,7 @@ async def _correr(
     pasos = planificar(actual, objetivo)  # ObjetivoInvalido → 422
     if "runtime_legacy" in pasos:
         raise ObjetivoInvalido(MENSAJE_SIN_LEGACY)
-    global_ = bool(get_settings().aos_connection_routing)
+    global_ = True  # el ruteo por conexión ya no es una bandera (ADR-0191)
     res = Resultado(actual, objetivo, actual, "sin_cambios", global_, pasos=list(pasos))
     if not pasos:
         return res
@@ -251,11 +250,6 @@ async def _correr(
             # `ya_estaba` / `ya_legacy` (carrera con otro cambio): se escribe el resto igual.
             await _escribir(tenant_id, objetivo, admin_id, actor)
     else:
-        if objetivo.runtime == "v3" and not global_:
-            # v3 ya encendido pero el entorno lo apagó: sin la global el runtime no lee releases.
-            res.bloqueos.append("AOS_CONNECTION_ROUTING está apagada en este entorno: v3 no corre (ADR-0112)")
-            res.accion = "bloqueado"
-            return res
         if dry_run:
             res.accion = "listo"
             return res

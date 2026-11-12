@@ -75,7 +75,6 @@ def entorno(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     from core.config import get_settings
 
     monkeypatch.setattr(get_settings(), "qa_testers_enabled", True)
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
     monkeypatch.setattr(get_settings(), "landing_base_url", LANDING)
     return monkeypatch
 
@@ -210,34 +209,6 @@ async def test_negocio_nuevo_queda_listo_para_el_agent_os(app_client: Any, tenan
 
 
 # ---------------------------------------------------------------- negocio legacy existente
-async def test_re_preparar_un_negocio_legacy_existente(app_client: Any, tenant_setup: Any, entorno: Any) -> None:
-    from core.config import get_settings
-
-    t1, _t2 = tenant_setup
-    headers = await _tester(app_client, t1)
-
-    # Como los `qa-` de test: preparados antes, con el Agent OS apagado.
-    entorno.setattr(get_settings(), "aos_connection_routing", False)
-    r = await app_client.post("/api/v1/admin/qa/datos", headers=headers)
-    assert r.status_code == 201, r.text
-    datos = r.json()
-    tid = uuid.UUID(datos["negocio"]["id"])
-    assert datos["estado"] == "listo" and datos["error"] is None
-    assert datos["agent_os"]["estado"] == "error" and "AOS_CONNECTION_ROUTING" in datos["agent_os"]["motivo"]
-    assert await _banderas(tid) == ("legacy", False, "off")
-    assert (await _sql(tid, "select count(*) from agents where tenant_id = :t", t=tid))[0][0] == 0
-
-    # Se enciende la variable y el tester vuelve a pulsar: se completa.
-    entorno.setattr(get_settings(), "aos_connection_routing", True)
-    r = await app_client.post("/api/v1/admin/qa/datos", headers=headers)
-    assert r.status_code == 200, r.text
-    _verificar_listo(r.json())
-    await _verificar_negocio(tid, r.json()["agent_os"]["chat_web"]["clave"])
-
-    antes = await _foto(tid)
-    r = await app_client.post("/api/v1/admin/qa/datos", headers=headers)
-    assert r.status_code == 200, r.text
-    assert await _foto(tid) == antes
 
 
 async def test_un_fallo_a_medias_se_reintenta_sin_perder_las_reglas(app_client: Any, tenant_setup: Any, entorno: Any) -> None:

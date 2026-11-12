@@ -127,7 +127,6 @@ async def _negocio(slug: str, pagos: Any) -> tuple[uuid.UUID, uuid.UUID]:
 async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID, uuid.UUID, Any]]:
     import pack_payments.payments as capacidad
 
-    from core.config import get_settings
     from core.releases.packs import sync_packs
     from core.tenants import deactivate_tenant, purge_tenant
 
@@ -138,11 +137,7 @@ async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID, uuid.UUID, Any
     slugs = [f"cache35-a-{uuid.uuid4().hex[:6]}", f"cache35-b-{uuid.uuid4().hex[:6]}"]
     a, cid_a = await _negocio(slugs[0], pagos)
     b, _ = await _negocio(slugs[1], pagos)
-    settings = get_settings()
-    antes = settings.aos_connection_routing
-    settings.aos_connection_routing = True
     yield a, cid_a, b, pagos
-    settings.aos_connection_routing = antes
     capacidad.build_provider = original
     for tid, slug in zip((a, b), slugs, strict=True):
         await deactivate_tenant(str(tid))

@@ -42,9 +42,8 @@ PREMIUM = "quiero el plan premium"
 
 @pytest.fixture
 def _ruteo(monkeypatch: Any) -> None:
-    from core.config import get_settings
+    pass
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
 
 
 async def _reporte(tid: uuid.UUID) -> Any:

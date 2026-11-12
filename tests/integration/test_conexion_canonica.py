@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import uuid
 
@@ -103,11 +102,6 @@ async def _estado(tid: uuid.UUID, cid: uuid.UUID, status: str) -> None:
         async with get_session() as session:
             (await session.get(MetaConnection, cid)).status = status
 
-
-def _bandera(monkeypatch, encendida: bool) -> None:
-    from core.config import get_settings
-
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", encendida)
 
 
 # ---------------------------------------------------------------- altas posteriores
@@ -255,6 +249,12 @@ async def test_las_guardas_pausan_por_la_cuenta_de_la_conexion_con_y_sin_connect
 
     con = await _entrada(tid, uniq("wa-con"), numero)
     sin = await _entrada(tid, uniq("wa-sin"), viejo)
+    # Una conversación sin conexión ya no nace por el consumer (le asegura al número su conexión):
+    # se siembra como la dejaba el camino anterior, para cubrir el respaldo por la cuenta.
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            (await session.get(Conversation, sin.id)).connection_id = None
+    sin.connection_id = None
     assert con.connection_id == fila.id
     assert sin.connection_id is None and sin.meta_connection_id == cuenta
 
@@ -398,51 +398,6 @@ async def test_las_plantillas_se_buscan_en_la_cuenta_de_la_conexion() -> None:
 
 
 # ---------------------------------------------------------------- ruteo
-async def test_bandera_apagada_una_conversacion_por_cliente_y_limpia_la_release(monkeypatch) -> None:
-    from sqlalchemy import text
-
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    _bandera(monkeypatch, False)
-    tid, cuenta, _waba, _phone = await _negocio_con_byok()
-    uno, dos = uniq("ph-a"), uniq("ph-b")
-    await _alta_numero(tid, cuenta, uno)
-    await _alta_numero(tid, cuenta, dos)
-    (conexion_uno,) = await _conexiones(tid, uno)
-    (conexion_dos,) = await _conexiones(tid, dos)
-    cliente = uniq("wa-off")
-
-    primera = await _entrada(tid, cliente, uno)
-    manifest_hash = hashlib.sha256(b"{}").hexdigest()
-    async with tenant_scope(tid):
-        async with get_session() as session:
-            release = (
-                await session.execute(
-                    text(
-                        "insert into connection_releases (tenant_id, connection_id, number, manifest, manifest_hash) "
-                        "values (:t, :c, 1, '{}'::jsonb, :h) returning id"
-                    ),
-                    {"t": tid, "c": conexion_uno.id, "h": manifest_hash},
-                )
-            ).scalar_one()
-            await session.execute(
-                text("update conversations set release_id = :r, release_lane = 'stable' where id = :id"),
-                {"r": release, "id": primera.id},
-            )
-
-    segunda = await _entrada(tid, cliente, dos)
-    assert segunda.id == primera.id
-    assert segunda.connection_id == conexion_dos.id
-    async with tenant_scope(tid):
-        async with get_session() as session:
-            fila = (
-                await session.execute(
-                    text("select connection_id, release_id, release_lane from conversations where id = :id"),
-                    {"id": primera.id},
-                )
-            ).one()
-    assert (fila.connection_id, fila.release_id, fila.release_lane) == (conexion_dos.id, None, None)
 
 
 async def test_bandera_encendida_una_conversacion_por_conexion_sin_reescribir(monkeypatch) -> None:
@@ -450,7 +405,6 @@ async def test_bandera_encendida_una_conversacion_por_conexion_sin_reescribir(mo
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
-    _bandera(monkeypatch, True)
     tid, cuenta, _waba, viejo = await _negocio_con_byok()
     uno, dos = uniq("ph-a"), uniq("ph-b")
     await _alta_numero(tid, cuenta, uno)
@@ -459,12 +413,13 @@ async def test_bandera_encendida_una_conversacion_por_conexion_sin_reescribir(mo
     cliente = uniq("wa-on")
 
     # Una conversación abierta de antes del backfill (sin conexión, por la misma cuenta) se
-    # adopta en vez de abrir otra. Nace con la bandera apagada: encendida, el consumer le
-    # asegura al número su conexión y la conversación ya nace con ella (adenda 2026-10-24).
-    _bandera(monkeypatch, False)
+    # adopta en vez de abrir otra. Hoy ya no nace así (el consumer le asegura al número su
+    # conexión, adenda 2026-10-24): se siembra directo, como la dejaba el camino anterior.
     previa = await _entrada(tid, cliente, viejo)
-    assert previa.connection_id is None
-    _bandera(monkeypatch, True)
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            fila = await session.get(Conversation, previa.id)
+            fila.connection_id = None
     por_uno = await _entrada(tid, cliente, uno)
     assert por_uno.id == previa.id
     assert por_uno.connection_id == conexion_uno.id
@@ -488,10 +443,6 @@ async def test_bandera_encendida_una_conversacion_por_conexion_sin_reescribir(mo
             duplicada_id = duplicada.id
     assert (await _entrada(tid, cliente, uno)).id == duplicada_id
 
-    # Volver a apagarla es seguro: el camino anterior toma la más reciente del cliente.
-    _bandera(monkeypatch, False)
-    assert (await _entrada(tid, cliente, dos)).id == duplicada_id
-
 
 # ---------------------------------------------------------------- backfill
 async def test_backfill_idempotente_con_dry_run_choques_tipos_y_conversaciones() -> None:
@@ -506,7 +457,15 @@ async def test_backfill_idempotente_con_dry_run_choques_tipos_y_conversaciones()
     # Cuenta con un número (de antes: sin fila canónica) y una conversación por el puente.
     tid, cuenta, _waba, numero = await _negocio_con_byok()
     sola = await _entrada(tid, uniq("wa-bf"), numero)
-    assert sola.connection_id is None
+    # Como quedaban antes del backfill: el número sin fila canónica y la conversación sin conexión
+    # (hoy el consumer las asegura al entrar; se retiran con borrado lógico).
+    from datetime import UTC, datetime
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            asegurada = sola.connection_id
+            (await session.get(Conversation, sola.id)).connection_id = None
+            (await session.get(ChannelConnection, asegurada)).deleted_at = datetime.now(UTC)
 
     # Cuenta con dos números (conversación ambigua), un número con conexión manual (choque) y
     # una conexión vieja sin tipo.

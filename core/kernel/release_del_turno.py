@@ -58,7 +58,6 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.config import get_settings
 from core.shared import release_vigente
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -623,14 +622,11 @@ async def _es_conexion_de_pruebas(tenant_id: uuid.UUID, connection_id: uuid.UUID
 
 
 async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar: bool = True) -> Asignacion | None:
-    """Punto de enganche del loop. None (sin consultas) con `AOS_CONNECTION_ROUTING` apagada;
-    None con `aos_runtime = 'legacy'`, sin conexión o sin release activa (el turno sigue como
+    """Punto de enganche del loop. None con `aos_runtime = 'legacy'`, sin conexión o sin release activa (el turno sigue como
     siempre). Fail-closed con v3: un error de base sube por el camino de error del turno.
     `texto`: el mensaje del cliente, para el router (solo con `aos_routing` ≠ off). `enrutar=False`:
     asigna la release y el dueño sticky SIN correr el router ni consumir el payload de botón que
     espera el turno diferido (lo usa el toque de una opción directa, que no es un turno)."""
-    if not get_settings().aos_connection_routing:
-        return None
     tenant_id = get_current_tenant_id()
     connection_id = getattr(conversation, "connection_id", None)
     if tenant_id is None or str(getattr(conversation, "tenant_id", "")) != str(tenant_id):

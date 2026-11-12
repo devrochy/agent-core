@@ -233,7 +233,6 @@ async def test_conversacion_sin_conexion_en_v3_queda_marcada(
     async def _banderas(_s: Any, _t: Any) -> Any:
         return SimpleNamespace(runtime=runtime)
 
-    monkeypatch.setattr(rdt, "get_settings", lambda: SimpleNamespace(aos_connection_routing=True))
     monkeypatch.setattr(session_mod, "get_session", _sesion)
     monkeypatch.setattr(banderas_mod, "banderas_del_negocio", _banderas)
     conversacion = SimpleNamespace(id=uuid.uuid4(), tenant_id=T, connection_id=None)

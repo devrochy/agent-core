@@ -77,7 +77,6 @@ async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID]]:
     """A (lo opera el master) y B (testigo), legacy, con una conexión y sin backfills hechos."""
     import pack_payments.payments as capacidad
 
-    from core.config import get_settings
     from core.releases.packs import sync_packs
     from core.tenants import deactivate_tenant, purge_tenant
 
@@ -88,11 +87,7 @@ async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID]]:
     slugs = [f"aosm-a-{uuid.uuid4().hex[:6]}", f"aosm-b-{uuid.uuid4().hex[:6]}"]
     a, _ = await _negocio(slugs[0], pagos)
     b, _ = await _negocio(slugs[1], pagos)
-    settings = get_settings()
-    antes = settings.aos_connection_routing
-    settings.aos_connection_routing = True
     yield a, b
-    settings.aos_connection_routing = antes
     capacidad.build_provider = original
     for tid, slug in zip((a, b), slugs, strict=True):
         await deactivate_tenant(str(tid))
@@ -161,25 +156,6 @@ async def test_combinaciones_fuera_de_orden_se_rechazan(app_client, negocios) ->
     assert rechazo.value.codigo == "permiso"
     assert await _banderas(a) == ("legacy", False, "off")
     assert await _auditoria(a) == []
-
-
-async def test_sin_la_global_el_cambio_se_bloquea_sin_escribir(app_client, negocios) -> None:  # type: ignore[no-untyped-def]
-    from core.config import get_settings
-
-    a, _b = negocios
-    master = await api_headers(app_client, a)
-    settings = get_settings()
-    settings.aos_connection_routing = False
-    try:
-        r = await app_client.put(_url(a), headers=master, json=_objetivo("v3"))
-        estado = (await app_client.get(_url(a), headers=master)).json()
-    finally:
-        settings.aos_connection_routing = True
-    assert (r.status_code, r.json()["error"]["code"]) == (409, "agent_os_bloqueado"), r.text
-    assert any("AOS_CONNECTION_ROUTING" in x for x in r.json()["error"]["details"]["bloqueos"])
-    assert estado["aos_connection_routing"] is False
-    assert await _banderas(a) == ("legacy", False, "off")
-    assert await _contar(a, "agents") == 0
 
 
 async def test_simular_aplicar_y_no_volver_con_auditoria_y_sin_tocar_al_otro(app_client, negocios) -> None:  # type: ignore[no-untyped-def]

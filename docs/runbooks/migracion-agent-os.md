@@ -1,5 +1,7 @@
 # Migración al Agent OS (runbook de HU-AOS-15)
 
+> **ADR-0191 (2026-11-12, HU-AOS-69):** `AOS_CONNECTION_ROUTING` ya no existe: el ruteo por conexión es siempre. Lo que este runbook dice de encenderla o apagarla es historia; el retiro de `legacy` y de `--volver` llega en la misma HU.
+>
 > **D-60 (2026-11-03):** el Agent OS es el único motor. El panel del master ya no vuelve un negocio a `legacy` (422); el rollback de emergencia es solo por consola, `agent-core db migrar-a-v3 --volver --tenant <slug>`, mientras no se aplique el *contract*. Los negocios nuevos nacen en v3 si `AOS_CONNECTION_ROUTING=true`.
 
 Cómo pasar un negocio del runtime anterior (`legacy`) al runtime por releases (`v3`), encender el motor de procedimientos y, al final de todo, cerrar la migración con el *contract*. Es el runbook que pide la

@@ -120,9 +120,7 @@ async def test_con_el_ruteo_encendido_el_negocio_nuevo_nace_en_v3_y_queda_audita
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from core.alta_negocio import onboard_tenant
-    from core.config import get_settings
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
     slug = uniq("hu53")
     tid, pasos = await onboard_tenant(name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
 
@@ -131,21 +129,6 @@ async def test_con_el_ruteo_encendido_el_negocio_nuevo_nace_en_v3_y_queda_audita
     # El recorte lo escribe el escritor auditado, no un UPDATE suelto.
     auditoria = await _sql(tid, "select actor from audit_log where action = 'agent_os_recorte_general'")
     assert [a for (a,) in auditoria] == ["alta"]
-
-
-async def test_con_el_ruteo_apagado_el_negocio_nuevo_queda_en_legacy_y_lo_avisa(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from core.alta_negocio import onboard_tenant
-    from core.config import get_settings
-
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", False)
-    slug = uniq("hu53")
-    tid, pasos = await onboard_tenant(name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
-
-    assert await _runtime(tid) == "legacy"
-    assert any(p.startswith("runtime v3 pendiente") for p in pasos)
-    assert await _agentes(tid) == {"coordinador": "core", "general": "specialist"}  # los agentes igual nacen
 
 
 async def test_fijar_bandera_audita_solo_si_cambia() -> None:

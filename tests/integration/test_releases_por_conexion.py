@@ -666,14 +666,12 @@ async def test_api_releases_permisos_aislamiento_y_rollback(app_client) -> None:
 
 
 async def test_fijar_release_del_turno_solo_con_v3(monkeypatch) -> None:
-    from core.config import get_settings
     from core.db.models import Conversation
     from core.db.session import get_session
     from core.kernel.release_del_turno import con_release, fijar_release_del_turno
     from core.shared import release_vigente
     from core.shared.tenant import tenant_scope
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
     tid, _, cid = await _negocio()
     await _release_uno(tid)
     uno = await _activa(tid, cid)

@@ -78,9 +78,8 @@ async def _proceso() -> None:
 
 @pytest.fixture(autouse=True)
 def _ruteo(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.config import get_settings
+    pass
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
 
 
 async def _negocio(runtime: str = "v3", *, otra_conexion: bool = False) -> tuple[uuid.UUID, uuid.UUID]:
@@ -287,15 +286,11 @@ async def test_regla_que_el_dueno_ya_tiene_no_se_toca() -> None:
 
 
 async def test_con_banderas_apagadas_no_escribe(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.config import get_settings
 
     tid, _cid = await _negocio(runtime="legacy")
     antes = await _foto(tid)
     assert (await _aplicar(tid)).omitido == "banderas_apagadas"
 
-    await _runtime(tid, "v3")
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", False)
-    assert (await _aplicar(tid)).omitido == "banderas_apagadas"
     assert await _foto(tid) == antes
 
 

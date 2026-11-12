@@ -55,9 +55,8 @@ async def _packs_registrados() -> None:
 
 @pytest.fixture
 def ruteo_encendido(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.config import get_settings
+    pass
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
 
 
 async def _negocio() -> tuple[uuid.UUID, str, uuid.UUID]:
@@ -152,16 +151,13 @@ async def test_un_negocio_listo_no_tiene_bloqueos(ruteo_encendido) -> None:  # t
     assert reporte.bloqueos == [] and reporte.dry_run and not reporte.aplicado
 
 
-async def test_bloquea_si_el_ruteo_esta_apagado_o_el_negocio_sigue_en_legacy(  # type: ignore[no-untyped-def]
+async def test_bloquea_si_el_negocio_sigue_en_legacy(  # type: ignore[no-untyped-def]
     monkeypatch,
 ) -> None:
-    from core.config import get_settings
 
     tid, slug, cid = await _negocio()
     await _con_dos_releases(tid, cid)
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", False)
     reporte = await _revisar(tid)
-    assert any("AOS_CONNECTION_ROUTING" in b for b in reporte.bloqueos)
     assert any(slug in b and "legacy" in b and "migrar-a-v3" in b for b in reporte.bloqueos)
 
 
@@ -315,12 +311,10 @@ async def test_aplicar_exige_confirmacion_y_el_contract_es_global(ruteo_encendid
     tid, _slug, _cid = await _negocio()
     with pytest.raises(ValueError):
         await contraer(dry_run=False, confirmado=True, tenant_ids=[tid])
-    from core.config import get_settings
 
     # Sin confirmación explícita no aplica, aunque todo lo demás estuviera bien.
     reporte = await contraer(dry_run=False, confirmado=False)
     assert any("--confirmo-sin-vuelta-atras" in b for b in reporte.bloqueos) and not reporte.aplicado
-    assert get_settings().aos_connection_routing
 
 
 # ---------------------------------------------------------------- DDL en un esquema descartable

@@ -349,8 +349,6 @@ async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     from core.shared.tenant import tenant_scope
 
     settings = get_settings()
-    if not settings.aos_connection_routing:
-        raise SystemExit("--runtime v3 exige AOS_CONNECTION_ROUTING=true (orden de banderas, ADR-0112).")
     url = settings.migrations_database_url or settings.database_url
     _exigir_base_local(url, settings.database_url, que="El runtime v3 de los journeys")
     conexion = uuid.uuid4()

@@ -44,9 +44,8 @@ async def _proceso() -> None:
 
 @pytest.fixture
 def _ruteo(monkeypatch: Any) -> None:
-    from core.config import get_settings
+    pass
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
 
 
 async def test_la_frase_va_al_agente_del_disparador_y_el_saludo_al_por_defecto(_ruteo: None, app_client) -> None:
@@ -66,7 +65,7 @@ async def test_la_frase_va_al_agente_del_disparador_y_el_saludo_al_por_defecto(_
 
 
 async def test_con_el_enrutamiento_apagado_se_simula_y_lo_dice(app_client) -> None:
-    tid, cid, _inst = await _con_dos_especialistas("active")
+    tid, cid, _inst = await _con_dos_especialistas("off")
     r = await app_client.post(URL, headers=await api_headers(app_client, tid), json={"connection_id": str(cid), "text": "quiero agendar una demo"})
     assert r.status_code == 200 and r.json()["mode"] == "off" and r.json()["agent_key"] == "agenda"
 

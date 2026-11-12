@@ -264,9 +264,8 @@ async def _tareas(tid: uuid.UUID, conv: uuid.UUID) -> list[Any]:
 
 @pytest.fixture
 def _ruteo(monkeypatch: Any) -> None:
-    from core.config import get_settings
+    pass
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
 
 
 async def _modo(tid: uuid.UUID, modo: str) -> None:

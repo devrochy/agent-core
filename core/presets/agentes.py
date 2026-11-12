@@ -678,14 +678,12 @@ async def aplicar_agentes(
     aplicar: bool = True,
 ) -> ReportePresetV2:
     """Instala los agentes del preset v2 en el negocio (ver el docstring del módulo)."""
-    from core.orchestrator.ruta_de_conversacion import ruteo_por_conexion
-
     _exigir_scope(tenant_id)
     reporte = ReportePresetV2(tenant_id, manifest.id, manifest.version, aplicar)
     if not manifest.es_v2:
         reporte.omitido = "preset_v1"
         return reporte
-    if not ruteo_por_conexion() or await _runtime(tenant_id) != "v3":
+    if await _runtime(tenant_id) != "v3":
         reporte.omitido = "banderas_apagadas"
         return reporte
     plantillas = plantillas_del_preset(manifest)

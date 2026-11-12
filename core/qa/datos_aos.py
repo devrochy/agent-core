@@ -235,8 +235,6 @@ async def preparar(tenant_id: uuid.UUID, slug: str) -> str | None:
 
     if not testers_habilitados():
         return "Los datos de prueba solo existen en el entorno de test (QA_TESTERS_ENABLED)."
-    if not get_settings().aos_connection_routing:
-        return "AOS_CONNECTION_ROUTING está apagada en este entorno: el negocio sigue en el motor anterior."
     async with get_session() as candado:
         from core.kernel.banderas import CANDADO_SQL
 

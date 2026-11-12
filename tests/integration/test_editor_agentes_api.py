@@ -81,9 +81,8 @@ async def _proceso() -> None:
 
 @pytest.fixture(autouse=True)
 def _ruteo(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.config import get_settings
+    pass
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
 
 
 async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:

@@ -387,9 +387,6 @@ async def _encender(
     escribir: Escritor,
 ) -> None:
     tid = negocio.tenant_id
-    if not get_settings().aos_connection_routing:
-        negocio.bloqueos.append("AOS_CONNECTION_ROUTING está apagada: enciéndela antes (orden de banderas, ADR-0112)")
-        return
     if negocio.runtime_antes == "legacy" and backfills and not dry_run:
         async with tenant_scope(tid):
             motivo = await ejecutar_backfills(tid, modulos)

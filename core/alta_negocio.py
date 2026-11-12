@@ -144,17 +144,9 @@ async def _runtime_al_alta(tenant_id: uuid.UUID) -> str:
 
     Usa el escritor de siempre, `migrar_a_v3` (rol dueño, orden de banderas y auditoría; el mismo
     camino de «Preparar mis datos»), sin construir ni promover releases: la release de cada
-    conexión llega con ella, y mientras no la tenga el turno sigue por el motor de siempre. Con
-    `AOS_CONNECTION_ROUTING` apagada (entorno) o ante cualquier bloqueo, el negocio queda en `legacy`
+    conexión llega con ella, y mientras no la tenga el turno sigue por el motor de siempre. Ante
+    cualquier bloqueo, el negocio queda en `legacy`
     y se registra: el alta no depende del Agent OS y el master puede migrarlo después."""
-    from core.config import get_settings
-
-    if not get_settings().aos_connection_routing:
-        log.info("alta_runtime_pendiente", tenant_id=str(tenant_id), motivo="AOS_CONNECTION_ROUTING apagada")
-        return (
-            "runtime v3 pendiente (AOS_CONNECTION_ROUTING apagada en este entorno): el negocio queda en legacy y "
-            "su dueño no podrá crear agentes hasta migrarlo con `agent-core db migrar-a-v3`"
-        )
     try:
         from core.releases.migracion_v3 import migrar_a_v3
 

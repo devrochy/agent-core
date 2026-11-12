@@ -250,11 +250,7 @@ class Settings(BaseSettings):
     message_split_style: SplitStyle = Field(default="un_mensaje", alias="MESSAGE_SPLIT_STYLE")
 
     # --- Agent OS (ADR-0112) ---
-    # Ruteo por (conexión, cliente) de ADR-0115: global por entorno porque su *contract* es
-    # global. Apagada, el consumer usa la conversación abierta del cliente (la de siempre).
-    # Se enciende antes que `tenants.aos_runtime = 'v3'` y se apaga después de volver todos a
-    # `legacy`.
-    aos_connection_routing: bool = Field(default=False, alias="AOS_CONNECTION_ROUTING")
+    # El ruteo por (conexión, cliente) de ADR-0115 ya no es una bandera: es siempre (ADR-0191).
 
     # --- Onboarding obligatorio (HU-SH-10, adenda a ADR-0124) ---
     # Fecha de corte (AAAA-MM-DD): solo los negocios creados desde ese día pasan por el recorrido

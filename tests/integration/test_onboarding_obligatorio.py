@@ -79,7 +79,6 @@ def _alta_con_agent_os():
 def _ruteo_y_corte(monkeypatch: pytest.MonkeyPatch) -> None:
     from core.config import get_settings
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
     monkeypatch.setattr(get_settings(), "onboarding_desde", date(2020, 1, 1))
 
 

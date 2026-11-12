@@ -138,7 +138,6 @@ async def negocios(request) -> AsyncIterator[tuple[uuid.UUID, uuid.UUID, uuid.UU
     """A (migra a v3 durante los tests) y B (legacy siempre), cada uno con su release 1."""
     import pack_payments.payments as capacidad
 
-    from core.config import get_settings
     from core.releases.packs import sync_packs
     from core.tenants import deactivate_tenant, purge_tenant
 
@@ -151,12 +150,7 @@ async def negocios(request) -> AsyncIterator[tuple[uuid.UUID, uuid.UUID, uuid.UU
     b, _ = await _negocio(slugs[1], pagos)
     await _release_uno(a)
     await _release_uno(b)
-    # v3 exige AOS_CONNECTION_ROUTING (ADR-0112): encendida para todo el módulo.
-    settings = get_settings()
-    antes = settings.aos_connection_routing
-    settings.aos_connection_routing = True
     yield a, cid_a, b, pagos
-    settings.aos_connection_routing = antes
     capacidad.build_provider = original
     for tid, slug in zip((a, b), slugs, strict=True):
         await deactivate_tenant(str(tid))
@@ -452,14 +446,6 @@ async def test_migrar_a_v3_precondiciones_encendido_y_vuelta(negocios) -> None: 
         [negocio] = reporte.negocios
         return negocio
 
-    # Sin la bandera global: bloqueado.
-    settings = get_settings()
-    settings.aos_connection_routing = False
-    try:
-        n = await correr(dry_run=True)
-    finally:
-        settings.aos_connection_routing = True
-    assert n.accion == "bloqueado" and "AOS_CONNECTION_ROUTING" in n.bloqueos[0]
 
     # Listo en dry-run (release 1 al día); encendido de verdad; idempotente.
     n = await correr(dry_run=True)
