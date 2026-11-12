@@ -33301,6 +33301,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_agentes`, `error.details = {metric, used, limit}`; no se escribió nada."
           }
         }
       }
@@ -33378,6 +33381,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_agentes`, `error.details = {metric, used, limit}`; no se escribió nada."
           }
         }
       }
@@ -65906,6 +65912,17 @@
           },
           "sin_atribuir": {
             "$ref": "#/components/schemas/Activity"
+          },
+          "cuota_agentes": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentCreationQuota"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cuota Agentes"
           }
         },
         "type": "object",
@@ -78490,6 +78507,36 @@
         "additionalProperties": false,
         "type": "object",
         "title": "PaymentAccountPatch"
+      },
+      "AgentCreationQuota": {
+        "properties": {
+          "used": {
+            "type": "integer",
+            "title": "Used"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          },
+          "allowed": {
+            "type": "boolean",
+            "title": "Allowed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "used",
+          "limit",
+          "allowed"
+        ],
+        "title": "AgentCreationQuota"
       }
     }
   }

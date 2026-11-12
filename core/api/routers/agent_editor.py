@@ -8,10 +8,10 @@ el editor del panel necesita y no existía:
   HABILITA sus habilidades (`will_enable`): no hace falta activarlas de antemano.
 - `POST /api/v1/admin/agent-templates/{key}/agents` — `{name?}` → especialista con la key de la
   plantilla y su borrador derivado (sin publicar). 409 `key_taken` (con `fields.agent_id`) si
-  ya existe; 409 `template_unavailable` si el despliegue no trae una habilidad; 403
-  `skills_forbidden` si hay habilidades por habilitar y falta `plugins:write`; 409
-  `concurrent_edit` (reintentable) si otra edición del negocio ganó la carrera. `enabled_skills`
-  trae lo que esta llamada habilitó.
+  ya existe; 409 `plan_limit_agentes` si el plan ya tiene todos sus agentes publicados; 409
+  `template_unavailable` si el despliegue no trae una habilidad; 403 `skills_forbidden` si hay
+  habilidades por habilitar y falta `plugins:write`; 409 `concurrent_edit` (reintentable) si otra
+  edición del negocio ganó la carrera. `enabled_skills` trae lo que esta llamada habilitó.
 - `POST /api/v1/admin/agents/from-script` — `{template_key, answers, name?}` → lo mismo desde las
   respuestas del guion de la plantilla (`questions` de `agent-templates`, HU-AOS-48), más los
   `requirements` pendientes. 422 `invalid_answers` por pregunta; 409 igual que arriba.
@@ -319,7 +319,10 @@ async def list_templates(
 
 
 @router.post(
-    "/agent-templates/{template_key}/agents", response_model=FromTemplateOut, status_code=status.HTTP_201_CREATED
+    "/agent-templates/{template_key}/agents",
+    response_model=FromTemplateOut,
+    status_code=status.HTTP_201_CREATED,
+    responses=plan_limit_responses("agentes"),
 )
 async def create_from_template(
     template_key: Annotated[str, Path(pattern=r"^[a-z0-9_]{2,40}$")],
@@ -347,7 +350,12 @@ async def create_from_template(
     )
 
 
-@router.post("/agents/from-script", response_model=FromScriptOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/agents/from-script",
+    response_model=FromScriptOut,
+    status_code=status.HTTP_201_CREATED,
+    responses=plan_limit_responses("agentes"),
+)
 async def create_from_script(
     payload: FromScriptIn,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
