@@ -247,3 +247,46 @@ async def subscription_overview(tenant_id: uuid.UUID) -> SubscriptionOverview:
         limits=dict(plan.limits) if plan else {},
         dia_ancla=sub.dia_ancla,
     )
+
+
+@dataclass(frozen=True)
+class PlanSummary:
+    """Resumen mínimo del plan para el shell de panel y app (HU-BILL-15).
+
+    No consulta el estado operativo ni el consumo: `GET /admin/me` se llama en cada
+    navegación y solo necesita saber si el negocio está en Free y cuánto le queda.
+    """
+
+    plan_id: str | None
+    plan_name: str
+    status: str
+    days_left: int | None
+    trial_ends_at: datetime | None
+    has_plan: bool
+
+
+async def plan_summary(tenant_id: uuid.UUID | None) -> PlanSummary | None:
+    """Plan activo del negocio, sin efectos secundarios ni métricas de consumo."""
+    if tenant_id is None:
+        return None
+    sub = await get_active_subscription(tenant_id)
+    if sub is None:
+        return PlanSummary(
+            plan_id=None,
+            plan_name="—",
+            status="sin_suscripcion",
+            days_left=None,
+            trial_ends_at=None,
+            has_plan=False,
+        )
+    plan = get_plan(sub.plan_id)
+    deadline = _deadline(sub)
+    days_left = max(0, (deadline - datetime.now(UTC)).days) if deadline is not None else None
+    return PlanSummary(
+        plan_id=sub.plan_id,
+        plan_name=plan.name if plan else sub.plan_id,
+        status=sub.status,
+        days_left=days_left,
+        trial_ends_at=sub.trial_ends_at,
+        has_plan=True,
+    )

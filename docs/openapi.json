@@ -51141,6 +51141,65 @@
         ],
         "title": "ManualSaveRequest"
       },
+      "MePlanSummary": {
+        "properties": {
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "plan_name": {
+            "type": "string",
+            "title": "Plan Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "days_left": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days Left"
+          },
+          "trial_ends_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trial Ends At"
+          },
+          "has_plan": {
+            "type": "boolean",
+            "title": "Has Plan"
+          }
+        },
+        "type": "object",
+        "required": [
+          "plan_id",
+          "plan_name",
+          "status",
+          "has_plan"
+        ],
+        "title": "MePlanSummary",
+        "description": "Plan del negocio activo, para el shell del panel y de la app (HU-BILL-15)."
+      },
       "MeResponse": {
         "properties": {
           "admin_id": {
@@ -51236,6 +51295,16 @@
             "type": "boolean",
             "title": "Qa Testers Habilitados",
             "default": false
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MePlanSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
