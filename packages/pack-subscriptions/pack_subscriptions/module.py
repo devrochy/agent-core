@@ -20,7 +20,7 @@ from sqlalchemy import select
 
 import pack_subscriptions.jobs  # noqa: F401  # registra el @register_cron (ADR-0083/#156)
 from core.db.session import get_session
-from core.mcp.types import BaseModule, GuardrailResult
+from core.mcp.types import BaseModule, GuardrailResult, config_de_agente
 from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
 from core.shared.logger import get_logger
 from core.shared.polaridad import afirma_alguna
@@ -52,6 +52,9 @@ _CANCELAR = re.compile(r"suscripci[oó]n\s+(?:qued\w*\s+)?(?:cancelad\w*|anulad\
 
 
 class SubscriptionsModule(BaseModule):
+    tipo = "especialidad"  # ADR-0190 §1
+    # Lo que es de CADA agente de este tipo; el resto de `SubscriptionConfig` es del negocio (SPEC-44, design.md §2).
+    config_agente = config_de_agente(SubscriptionConfig, ("monto_alto_inscripcion",), "ConfigDeAgenteDeSuscripciones")
     id = PLUGIN_ID
     name = "Suscripciones"
     version = "0.6.0"

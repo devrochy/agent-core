@@ -171,7 +171,9 @@ class PluginManager:
             if record and record.status == "detected":
                 record.status = "configured"
 
-    async def load_config(self, plugin_id: str) -> BasePluginConfig | None:
+    async def load_config(self, plugin_id: str, agent_id: uuid.UUID | None = None) -> BasePluginConfig | None:
+        """Config del negocio para `plugin_id`. Con `agent_id` (ADR-0190 §3), los campos de `config_agente`
+        guardados en la instalación de ese agente pisan a los del negocio; el resto sale del negocio."""
         module = self._require(plugin_id)
         if module.config_schema is None:
             return None
@@ -190,6 +192,12 @@ class PluginManager:
                 raise PluginConfigError(plugin_id, "El plugin requiere configuración previa")
             return None
         values = get_secret_box().decrypt_json(stored.config_encrypted)
+        if agent_id is not None and module.config_agente is not None and tenant_id is not None:
+            from core.agents.instalaciones_agente import config_del_agente
+
+            propios = await config_del_agente(tenant_id, agent_id, plugin_id) or {}
+            campos = set(module.config_agente.model_fields)
+            values = {**values, **{k: v for k, v in propios.items() if k in campos}}
         try:
             return module.config_schema.model_validate(values)
         except ValidationError as exc:

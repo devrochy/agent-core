@@ -24,6 +24,7 @@ PLUGIN_ID = "pack_knowledge"
 
 
 class KnowledgeModule(BaseModule):
+    tipo = "transversal"  # ADR-0190 §1
     id = PLUGIN_ID
     name = "Conocimiento"
     version = "0.3.0"

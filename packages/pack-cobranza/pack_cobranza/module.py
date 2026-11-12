@@ -46,6 +46,7 @@ PLUGIN_ID = "pack_cobranza"
 
 
 class CobranzaModule(BaseModule):
+    tipo = "especialidad"  # ADR-0190 §1
     id = PLUGIN_ID
     name = "Cobranza"
     version = "0.6.0"

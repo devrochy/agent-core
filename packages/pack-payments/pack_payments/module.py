@@ -234,6 +234,7 @@ async def _alertar_monto_distinto(alerta: dict[str, Any]) -> None:
 
 
 class PaymentsModule(BaseModule):
+    tipo = "transversal"  # ADR-0190 §1
     id = PLUGIN_ID
     name = "Pagos (Wompi)"
     version = "0.1.0"
