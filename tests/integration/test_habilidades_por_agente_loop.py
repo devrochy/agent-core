@@ -281,12 +281,17 @@ async def test_el_general_con_release_ve_lo_mismo_que_sin_release(_ruteo: None, 
         PLAN, CITA, "pack_commerce.tomar_pedido", "pack_subscriptions.cambiar_plan",
     }
 
+    # HU-ARCH-34: con release, el General ve lo mismo que sin el filtro de concesión (su versión
+    # declara todo lo que ofrece el loop); un negocio v3 sin conexión solo ve los comandos del hilo.
     sin_release = await _conversacion(tid, None)
     con_release = await _conversacion(tid, cid)
-    a = await _turno(tid, sin_release, monkeypatch, ["Hola, ¿en qué te ayudo?"])
+    s0 = await _turno(tid, sin_release, monkeypatch, ["Hola, ¿en qué te ayudo?"])
+    with monkeypatch.context() as m:
+        m.setattr("core.orchestrator.loop._solo_las_concedidas", lambda _spec, tools: tools)
+        a = await _turno(tid, await _conversacion(tid, cid), m, ["Hola, ¿en qué te ayudo?"])
     b = await _turno(tid, con_release, monkeypatch, ["Hola, ¿en qué te ayudo?"])
     assert await _release_del_turno(tid, sin_release) is None
-    assert await _release_del_turno(tid, con_release) == rid  # el turno sí tuvo release
+    assert s0.tools[0] == ["iniciar_procedimiento"]
     assert b.tools == a.tools
     assert b.enums == a.enums
     assert a.enums[0] and PLAN in a.enums[0] and CITA in a.enums[0]
@@ -296,7 +301,8 @@ async def test_el_general_con_release_ve_lo_mismo_que_sin_release(_ruteo: None, 
 # ---------------------------------------------------------------- especialistas: cada uno lo suyo
 async def test_cada_especialista_ve_solo_lo_suyo(_ruteo: None, monkeypatch: Any) -> None:
     tid, cid = await _negocio()
-    ventas = await _especialista(tid, cid, "ventas", PLAN, {"consultar_inventario"}, defecto=True)
+    # HU-ARCH-34: lo del core también necesita binding; `escalate_to_human` va concedida, `remember_fact` no.
+    ventas = await _especialista(tid, cid, "ventas", PLAN, {"consultar_inventario", "escalate_to_human"}, defecto=True)
     agenda = await _especialista(tid, cid, "agenda", CITA, {"list_appointment_types", "check_availability"}, defecto=False)
     rid = await _publicar_release(tid, cid)
 
@@ -309,7 +315,8 @@ async def test_cada_especialista_ve_solo_lo_suyo(_ruteo: None, monkeypatch: Any)
     assert await _release_del_turno(tid, conv) == rid
     assert g.enums[0] == [PLAN]
     assert not (set(g.tools[0]) & DE_AGENDA)
-    assert {"escalate_to_human", "iniciar_procedimiento"} <= set(g.tools[0])  # core y comandos siguen
+    assert {"escalate_to_human", "iniciar_procedimiento"} <= set(g.tools[0])  # core concedido y comandos
+    assert "remember_fact" not in g.tools[0]  # del core sin binding: no se ofrece (HU-ARCH-34)
     assert "consultar_inventario" in g.tools[0]
     assert len(g.resultados) == 2 and all("error" in r.lower() or "no " in r.lower() for r in g.resultados)
     assert await _tareas(tid, conv) == []

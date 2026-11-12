@@ -46,6 +46,7 @@ from core.kernel.decisions import (
 )
 from core.kernel.ingress import QUOTA_EXHAUSTED_REPLY as QUOTA_EXHAUSTED_REPLY
 from core.kernel.ingress import conversacion_bloqueada, politicas_del_turno
+from core.kernel.opciones.lint import acciones_de_procedimientos
 from core.kernel.procedures import comandos as comandos_del_hilo
 from core.kernel.procedures.ejecucion import (
     VUELTAS_LIBRES_DE_COMANDOS,
@@ -415,6 +416,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         flow_summary = ""
 
     active_tools = [t for t in active_tools if await _connections_ok(t, connected_types)]
+    active_tools = _solo_las_concedidas(spec, active_tools)
 
     # Ids vigentes de la conversación (ADR-0130): el historial es solo texto y el modelo
     # no ve el `quote_id` que devolvió una tool en un turno anterior.
@@ -1219,18 +1221,23 @@ async def _execute_tool_safely(
     # inyección) no debe ejecutar tools de un pack que el tenant no tiene, ni
     # una tool deshabilitada por binding. La denegación es un error de negocio
     # limpio, SIN auto_disable.
-    if spec is not None:
-        denial = await _tool_denial(spec, tool_call.name, conversation.id)
-        if denial is not None:
-            result = {"error": denial}
-            await record_audit(
-                actor=f"{actor_de_auditoria}:{tool_call.name}",
-                action="denied",
-                conversation_id=conversation.id,
-                input_data=tool_call.arguments,
-                output_data=result,
-            )
-            return result
+    if spec is None and release_vigente.exige_concesion():
+        denial: str | None = f"La herramienta '{tool_call.name}' no está disponible para este agente."
+    elif spec is not None:
+        # La consulta entre agentes no usa la concesión por procedimiento: exige binding del destino.
+        denial = await _tool_denial(spec, tool_call.name, conversation.id, por_procedimiento=identidad is None)
+    else:
+        denial = None
+    if denial is not None:
+        result = {"error": denial}
+        await record_audit(
+            actor=f"{actor_de_auditoria}:{tool_call.name}",
+            action="denied",
+            conversation_id=conversation.id,
+            input_data=tool_call.arguments,
+            output_data=result,
+        )
+        return result
 
     # Motor de procedimientos (HU-AOS-05): con tarea en foco, una acción fuera de la etapa se
     # deniega y lo que compromete espera la confirmación del cliente, atada a estos argumentos.
@@ -1358,8 +1365,56 @@ def _entrada_auditable(tool_call: LLMToolCall, ya_confirmada: bool) -> dict[str,
     return {"keys": sorted(tool_call.arguments)[:40], "args_hash": hash_de_argumentos(tool_call.name, tool_call.arguments)}
 
 
+def _por_procedimiento() -> frozenset[str]:
+    """Acciones de los procedimientos que la versión del agente en foco declara (ADR-0118 §3): los
+    publicados y los abiertos del flujo. Vacío con `release/1` (regla transitoria) o sin foco."""
+    actual = release_vigente.vigente()
+    agente = release_vigente.agente_del_turno()
+    if actual is None or agente is None or actual.procedimientos_por_agente is None:
+        return frozenset()
+    declarados = {
+        str(p.get("id")) for p in agente.content.get("procedures") or [] if isinstance(p, dict)
+    }
+    propios = [*(release_vigente.procedimientos_del_agente() or {}).values()]
+    propios += [actual.procedimientos[pid] for pid in sorted(declarados) if pid in actual.procedimientos]
+    return acciones_de_procedimientos(propios)
+
+
+def _concedida(  # type: ignore[no-untyped-def]
+    spec, tool_name: str, *, es_declarativa: bool, de_procedimientos: frozenset[str] = frozenset()
+) -> bool:
+    """¿La versión del agente en foco concede la acción? Binding, declarativa o procedimiento declarado
+    (ADR-0118 §3). Sin agente en foco no hay versión publicada que conceda: el spec v2 es mutable."""
+    if release_vigente.agente_del_turno() is None:
+        return False
+    return es_declarativa or tool_name in de_procedimientos or any(b.tool == tool_name for b in spec.tools)
+
+
+def _solo_las_concedidas(spec, tools: list[Any]) -> list[Any]:  # type: ignore[no-untyped-def]
+    """Con v3 no se ofrece lo que se negaría al ejecutar (HU-ARCH-34). Va antes del motor: los bloques
+    fijos compilados (HU-AOS-35) no cambian y los comandos del hilo se agregan después."""
+    if not release_vigente.exige_concesion():
+        return tools
+    from core.mcp.declarative import tools_for_spec
+
+    deshabilitadas = {b.tool for b in spec.tools if not b.enabled}
+    declarativas = {t.name for t in tools_for_spec(spec)}
+    de_procedimientos = _por_procedimiento()
+    return [
+        t
+        for t in tools
+        if t.name not in deshabilitadas
+        and _concedida(
+            spec,
+            t.name,
+            es_declarativa=t.name in declarativas and mcp_host.get_tool(t.name) is None,
+            de_procedimientos=de_procedimientos,
+        )
+    ]
+
+
 async def _tool_denial(
-    spec, tool_name: str, conversation_id: uuid.UUID | None = None
+    spec, tool_name: str, conversation_id: uuid.UUID | None = None, *, por_procedimiento: bool = True
 ) -> str | None:
     """Razón de denegación de una tool según el AgentSpec (ADR-0019/ADR-0050), o None.
 
@@ -1369,8 +1424,8 @@ async def _tool_denial(
     - La tool de un plugin con salud rota PARA ESTE TENANT (ADR-0024) también
       se deniega acá -- mismo camino de defensa en profundidad que el punto
       anterior, para un tool_call fuera de schema.
-    - Si hay ToolBinding con enabled=false se deniega. Fail-open transitorio:
-      sin binding, la tool corre (las migraciones de bindings van después).
+    - Si hay ToolBinding con enabled=false se deniega. En v3 lo que la versión no concede no corre
+      (HU-ARCH-34, enmienda de ADR-0019); en legacy, sin binding la tool corre y queda el evento.
     - v2.0.0 (ADR-0050): un binding con `maxCallsPerConversation` limita cuántas
       veces puede llamarse esa tool en la MISMA conversación (corta abuso/costo);
       `scopes` es autorización fina que un guardrail/pack puede exigir.
@@ -1414,6 +1469,14 @@ async def _tool_denial(
                     f"La herramienta '{tool_name}' no está disponible: falta conectar "
                     f"{', '.join(missing)}."
                 )
+    es_declarativa = tool is None and tool_name in declarative_names
+    if release_vigente.exige_concesion():
+        de_procedimientos = _por_procedimiento() if por_procedimiento else frozenset()
+        if not _concedida(spec, tool_name, es_declarativa=es_declarativa, de_procedimientos=de_procedimientos):
+            log.warning("tool_sin_binding", tenant_id=str(get_current_tenant_id()), tool=tool_name)
+            return f"La herramienta '{tool_name}' no está disponible para este agente."
+    elif not es_declarativa and not any(b.tool == tool_name for b in spec.tools):
+        log.info("tool_sin_binding_legacy", tenant_id=str(get_current_tenant_id()), tool=tool_name)
     for binding in spec.tools:
         if binding.tool != tool_name:
             continue

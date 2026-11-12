@@ -633,11 +633,7 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar
         return None
     tenant_id = get_current_tenant_id()
     connection_id = getattr(conversation, "connection_id", None)
-    if (
-        tenant_id is None
-        or connection_id is None
-        or str(getattr(conversation, "tenant_id", "")) != str(tenant_id)
-    ):
+    if tenant_id is None or str(getattr(conversation, "tenant_id", "")) != str(tenant_id):
         return None
     from core.db.session import get_session
     from core.kernel.banderas import banderas_del_negocio
@@ -646,6 +642,11 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar
     async with get_session() as session:
         banderas = await banderas_del_negocio(session, tenant_id)
         if banderas.runtime != "v3":
+            return None
+        if connection_id is None:
+            # Sin conexión no hay release posible: mismo fail-closed que sin release activa (HU-ARCH-34).
+            log.error("release_missing", connection_id=None)
+            release_vigente.marcar_v3_sin_release(tenant_id)
             return None
         ruteo = None
         if enrutar and banderas.ruteo != "off":
