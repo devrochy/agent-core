@@ -363,6 +363,12 @@ async def crear_desde_plantilla(
         )
     except versiones.Conflicto:
         raise ErrorDelEditor(409, "key_taken", f"Ya tienes un agente «{plantilla.nombre}».") from None
+    # ADR-0190 §2 (reemplaza ADR-0173): las habilidades de la plantilla quedan instaladas EN ESTE agente. En el
+    # negocio siguen habilitadas como unión de las de sus agentes (lo que leen crons y panel).
+    from core.agents.instalaciones_agente import instalar_en_agente
+
+    for pack in sorted(set(plantilla.habilidades)):
+        await instalar_en_agente(tenant_id, agente.id, pack, actor=actor)
     borrador = await versiones.guardar_borrador(tenant_id, agente.id, contenido, 0, catalogo=catalogo, actor=actor)  # type: ignore[arg-type]
     return agente, borrador, avisos, habilitadas
 

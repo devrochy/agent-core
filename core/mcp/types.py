@@ -27,9 +27,9 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, create_model
 
 from core.shared.logger import get_logger
 
@@ -527,6 +527,19 @@ class BasePluginConfig(BaseModel):
     """
 
 
+def config_de_agente(
+    base: type[BasePluginConfig], campos: tuple[str, ...], nombre: str
+) -> type[BasePluginConfig]:
+    """Esquema de la config de CADA agente (ADR-0190 §3): los `campos` de `base`, con sus tipos, valores por
+    defecto y descripciones. Los nombres son los mismos para que `load_config(..., agent_id)` pise los del negocio
+    y el resultado siga validando contra `base`."""
+    faltan = [c for c in campos if c not in base.model_fields]
+    if faltan:
+        raise ValueError(f"{nombre}: campos que no existen en {base.__name__}: {', '.join(faltan)}")
+    definiciones: dict[str, Any] = {c: (base.model_fields[c].annotation, base.model_fields[c]) for c in campos}
+    return create_model(nombre, __base__=BasePluginConfig, **definiciones)
+
+
 class PackProfileEdit(BaseModel):
     """Cómo se edita un perfil: `kind` es una cadena abierta que el cliente reconoce o ignora."""
 
@@ -561,6 +574,18 @@ class BaseModule(ABC):
     description: str = ""
     requires_config: bool = True  # False = se activa sin formulario (ej. plugins internos)
     config_schema: type[BasePluginConfig] | None = None
+
+    # --- Habilidades por agente (ADR-0190 §1 y §3) ---
+    # `especialidad`: el pack define un tipo de agente (Ventas, Agenda, Cobranza, Suscripciones).
+    # `transversal`: se instala en uno o varios agentes (Pagos en línea, Conocimiento).
+    # Vacío: plomería que no se instala en agentes.
+    tipo: ClassVar[Literal["especialidad", "transversal", ""]] = ""
+    # Esquema de la configuración que es de CADA agente (comportamiento en la conversación). Vive en
+    # `pack_installations.config_encrypted` del agente; `config_schema` queda para lo que es del negocio.
+    config_agente: ClassVar[type[BasePluginConfig] | None] = None
+    # Grupo de cada acción del pack, por lo que hace (ADR-0190 §8): `{nombre_de_la_tool: clave}`. Solo la clave; la
+    # etiqueta la pone el panel. Una acción sin grupo cae en `otras`.
+    grupos_de_acciones: ClassVar[dict[str, str]] = {}
 
     # --- Catálogo de habilidades (HU-FWK-04, SPEC-16) ---
     # Nombre visible al cliente (glosario: "habilidad", no "plugin"/"pack"). Si

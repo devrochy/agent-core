@@ -70,7 +70,9 @@ async def ensure_pack_activated(pack: str) -> str | None:
         return None
     try:
         module = plugin_manager.get(pack)
-        if module is not None and module.config_schema is not None:
+        # Un pack que no exige config del negocio (`requires_config = False`, p. ej. Pagos con cuentas por agente,
+        # ADR-0190 §6) se activa sin fila.
+        if module is not None and module.config_schema is not None and module.requires_config:
             async with get_session() as session:
                 has_config = (
                     await session.execute(
@@ -96,7 +98,7 @@ async def _config_del_negocio(pack: str) -> str | None:
     negocio): este negocio puede no tener su fila de configuración. Se completa con la config vacía
     si el schema lo permite; si exige campos reales, se devuelve el aviso."""
     module = plugin_manager.get(pack)
-    if module is None or module.config_schema is None:
+    if module is None or module.config_schema is None or not module.requires_config:
         return None
     async with get_session() as session:
         tiene = (

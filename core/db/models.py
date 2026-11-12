@@ -2523,15 +2523,17 @@ class PackInstallationRecord(Base):
     """Habilidad instalada con scope (ADR-0118 §2). En esta HU solo se usa la instalación
     `core` de scope negocio, que guarda los secretos de las `declarativeTools` (ADR-0118 §5):
     no habilita nada y no cuenta para el tope del plan. `config_encrypted` lleva AAD
-    `(tenant_id, installation_id)` (`core.agents.secretos.aad_instalacion`)."""
+    `(tenant_id, installation_id)` (`core.agents.secretos.aad_instalacion`). Con `scope='agent'` (0125,
+    ADR-0190) la habilidad es de UN agente y `config_encrypted` guarda la config de ese agente."""
 
     __tablename__ = "pack_installations"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     pack_id: Mapped[str] = mapped_column(Text, nullable=False)
-    scope: Mapped[str] = mapped_column(Text, nullable=False)  # tenant | connection
+    scope: Mapped[str] = mapped_column(Text, nullable=False)  # tenant | connection | agent (ADR-0190 §2)
     connection_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     status: Mapped[str] = mapped_column(Text, default="pending_config", server_default="pending_config")
     config_encrypted: Mapped[str | None] = mapped_column(Text)
     installed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

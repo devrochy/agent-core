@@ -10,6 +10,7 @@ pago sin importarlo.
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -62,11 +63,27 @@ async def wompi_webhook(request: Request, slug: str) -> dict[str, Any]:
     return {"status": "ignored" if resultado in (SIN_CONFIG, FIRMA_INVALIDA) else "ok"}
 
 
+@admin_router.post("/{slug}/{cuenta_id}")
+async def wompi_webhook_de_cuenta(request: Request, slug: str, cuenta_id: uuid.UUID) -> dict[str, Any]:
+    """URL de eventos de UNA cuenta Wompi del negocio (ADR-0190 §6): Wompi admite una URL por cuenta, así que la
+    firma se valida con el secreto de ESA cuenta y solo se aplican transacciones creadas con ella."""
+    from core.tenants import is_tenant_active, resolve_tenant_by_slug
+
+    tenant_id = await resolve_tenant_by_slug(slug)
+    if tenant_id is None or not await is_tenant_active(tenant_id):
+        log.warning("wompi_webhook_cuenta_tenant_invalido", slug=slug)
+        return {"status": "ignored"}
+    payload = await request.json()
+    async with tenant_scope(tenant_id):
+        resultado = await procesar_evento_de_wompi(payload, cuenta_id=cuenta_id)
+    return {"status": "ignored" if resultado in (SIN_CONFIG, FIRMA_INVALIDA) else "ok"}
+
+
 SIN_CONFIG = "sin_config"
 FIRMA_INVALIDA = "firma_invalida"
 
 
-async def procesar_evento_de_wompi(payload: dict[str, Any]) -> str:
+async def procesar_evento_de_wompi(payload: dict[str, Any], *, cuenta_id: uuid.UUID | None = None) -> str:
     """Verifica y aplica un evento de Wompi en el negocio actual (`tenant_scope`).
 
     Lo usan el webhook propio del pack y, si la cuenta de Wompi es la misma que la de la
@@ -77,9 +94,14 @@ async def procesar_evento_de_wompi(payload: dict[str, Any]) -> str:
     """
     tenant_id = get_current_tenant_id()
     try:
-        config = await tenant_config()
-    except PluginError:
-        log.warning("wompi_webhook_not_configured", tenant_id=str(tenant_id))
+        if cuenta_id is not None:
+            from pack_payments.cuentas import config_de_cuenta
+
+            config = await config_de_cuenta(cuenta_id)
+        else:
+            config = await tenant_config()
+    except (PluginError, LookupError):
+        log.warning("wompi_webhook_not_configured", tenant_id=str(tenant_id), cuenta_id=str(cuenta_id or ""))
         return SIN_CONFIG
 
     provider = build_provider(config)
@@ -93,7 +115,7 @@ async def procesar_evento_de_wompi(payload: dict[str, Any]) -> str:
     # evento no existe. Wompi reintenta la entrega por red (mismo evento);
     # la escritura es idempotente por `dedupe_key`, así que un reenvío no
     # duplica el efecto.
-    transaction = await _apply_webhook_event(event, payload, provider.provider_name)
+    transaction = await _apply_webhook_event(event, payload, provider.provider_name, cuenta_id=cuenta_id)
     return "aplicado" if transaction is not None else "sin_transaccion"
 
 
@@ -115,7 +137,7 @@ def _monto_coincide(pagado: float | None, esperado: float | Decimal | None) -> b
 
 
 async def _apply_webhook_event(
-    event: WebhookEvent, raw_payload: dict[str, Any], provider_name: str
+    event: WebhookEvent, raw_payload: dict[str, Any], provider_name: str, *, cuenta_id: uuid.UUID | None = None
 ) -> PaymentTransaction | None:
     alerta: dict[str, Any] | None = None
     async with get_session() as session:
@@ -129,6 +151,11 @@ async def _apply_webhook_event(
         ).scalar_one_or_none()
         if transaction is None:
             log.warning("wompi_webhook_no_matching_transaction", provider_reference=event.provider_reference)
+            return None
+        if getattr(transaction, "cuenta_id", None) != cuenta_id:
+            # En los dos sentidos: el evento de una cuenta no confirma un link de otra, y la URL del negocio
+            # (`cuenta_id` None, secreto de `plugin_configs`) no confirma un link creado con una cuenta.
+            log.warning("wompi_webhook_cuenta_ajena", cuenta_id=str(cuenta_id))
             return None
 
         if (
@@ -234,6 +261,7 @@ async def _alertar_monto_distinto(alerta: dict[str, Any]) -> None:
 
 
 class PaymentsModule(BaseModule):
+    tipo = "transversal"  # ADR-0190 §1
     id = PLUGIN_ID
     name = "Pagos (Wompi)"
     version = "0.1.0"
@@ -243,18 +271,17 @@ class PaymentsModule(BaseModule):
     min_plan = "basic"
     action_summary: ClassVar[list[str]] = ["Generar links de pago", "Confirmar pagos por webhook"]
     setup_guide = "Configura tus llaves de Wompi (sandbox o producción)."
-    requires_config = True
+    # ADR-0190 §6: se activa sin formulario; las llaves van en las cuentas Wompi (Conexiones › Pagos).
+    requires_config = False
     config_schema = PaymentsConfig
     # Salida a red de la capacidad y del panel (ADR-0052): solo la API de Wompi.
     network_allowlist: ClassVar[tuple[str, ...]] = wompi.NETWORK
     admin_router = admin_router
 
     def on_activate(self, host: MCPHost) -> None:
-        config = self.config
-        if not isinstance(config, PaymentsConfig):
-            from core.shared.exceptions import PluginConfigError
-
-            raise PluginConfigError(PLUGIN_ID, "Config inválida o ausente")
+        # ADR-0190 §6: las credenciales viven en las cuentas Wompi que elige cada agente; la config del negocio
+        # (`plugin_configs`) es opcional y solo queda como respaldo. La capacidad se registra siempre: sin cuenta ni
+        # config, `create_link` responde `sin_pasarela` y el consumidor cae a transferencia.
         # Sin tools: el link de un pedido lo pide pack-commerce con `confirmar_pago_pedido`
         # (ADR-0087). `generar_link_pago`, con referencia y monto del LLM, se retiró.
         from pack_payments.payments import WompiPaymentCapability
@@ -264,3 +291,9 @@ class PaymentsModule(BaseModule):
     def extra_admin_routers(self) -> list[APIRouter]:
         """Router de la pestaña "Pagos" de Configuración (ADR-0049)."""
         return [admin_config_router]
+
+    def admin_api_routes(self) -> list[APIRouter]:
+        """API de las cuentas Wompi para el panel (ADR-0190 §6)."""
+        from pack_payments.admin_api import router
+
+        return [router]

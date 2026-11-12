@@ -523,6 +523,14 @@ async def _instalar_plantilla(
             await _anotar_creado(tenant_id, plantilla.key)
             resultado.version = await _publicar_v1(agent_id, contenido)
 
+    if aplicar and agent_id is not None:
+        # ADR-0190 §2: las habilidades de la plantilla (y las opcionales que el negocio ya tiene, p. ej. Pagos en el
+        # preset de comercio) quedan instaladas en ESTE agente. Idempotente: lo que ya estaba no se toca.
+        from core.agents.instalaciones_agente import instalar_en_agente
+
+        propias = set(plantilla.habilidades) | (set(plantilla.opcionales) & habilitados)
+        for pack in sorted(propias):
+            await instalar_en_agente(tenant_id, agent_id, pack, requiere_config=pack == "pack_payments")
     previas = await _instancias_previas(tenant_id, agent_id) if agent_id is not None else {}
     for cid in efectivas:
         if cid in previas:

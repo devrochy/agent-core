@@ -107,6 +107,8 @@ class Subscription(Base):
     # SPEC-43: plan del catálogo (FK compuesta `(tenant_id, plan_id)`).
     plan_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     numero_publico: Mapped[str] = mapped_column(Text, nullable=False)  # `SUB-0001`, único por negocio
+    # ADR-0190 §4 (0014): el agente que la vendió; sus cobros usan la cuenta Wompi de ese agente.
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     # Sin documento: solo alimenta la huella del antiabuso del core. {negocio, vertical, email, telefono, nombre}.
     # `none_as_null`: sin datos el valor es NULL de SQL, no el JSON `null` (que el CHECK de objeto rechaza).
     datos_alta: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), default=None)

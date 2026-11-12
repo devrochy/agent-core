@@ -59,17 +59,26 @@ class WompiPaymentCapability:
             )
         ]
 
-    async def monto_minimo(self) -> float | None:
-        """Mínimo por link del ambiente del negocio (sandbox o producción), para quien decide
-        antes de intentar el cobro (`core.payments.monto_minimo`). `None` si no hay config."""
+    async def monto_minimo(self, agent_id: uuid.UUID | None = None) -> float | None:
+        """Mínimo por link del ambiente de la cuenta (sandbox o producción), para quien decide
+        antes de intentar el cobro (`core.payments.monto_minimo`). Con `agent_id`, el de la cuenta
+        Wompi que eligió ese agente (y su mínimo propio si lo tiene). `None` si no hay config."""
+        from pack_payments.cuentas import config_de_cobro
+
         try:
-            config = await tenant_config()
+            config, _cuenta = await config_de_cobro(agent_id=agent_id, respaldo=tenant_config)
         except Exception:
             return None
         return float(min_amount_cop(config.sandbox))
 
     async def create_link(
-        self, *, reference: str, amount: float, description: str = "", method: str | None = None
+        self,
+        *,
+        reference: str,
+        amount: float,
+        description: str = "",
+        method: str | None = None,
+        agent_id: uuid.UUID | None = None,
     ) -> PaymentLink:
         """Idempotente por `reference`: si ya hay un link vigente con ese monto, se
         devuelve ese (antes se creaba otro en Wompi y el insert chocaba con el índice
@@ -82,8 +91,11 @@ class WompiPaymentCapability:
         """
         transacciones = await _transacciones(reference)
         _rechazar_si_no_cobrable(reference, transacciones)
+        from pack_payments.cuentas import config_de_cobro
+
         try:
-            config = await tenant_config()
+            # ADR-0190 §7: la cuenta Wompi del agente que pide el link; sin agente, la del negocio.
+            config, cuenta_id = await config_de_cobro(agent_id=agent_id, respaldo=tenant_config)
         except Exception as exc:  # config ausente/inválida del tenant
             raise PaymentCapabilityError(
                 "La pasarela de pagos no está configurada.", code=SIN_PASARELA
@@ -112,7 +124,14 @@ class WompiPaymentCapability:
             ) from exc
 
         guardada = await _guardar(
-            reference, amount, config.currency, provider.provider_name, nuevo, reemplaza=viva
+            reference,
+            amount,
+            config.currency,
+            provider.provider_name,
+            nuevo,
+            reemplaza=viva,
+            cuenta_id=cuenta_id,
+            agent_id=agent_id,
         )
         if guardada is not None:
             if viva is not None:
@@ -140,6 +159,16 @@ class WompiPaymentCapability:
             "No se pudo generar el link de pago ahora. Intentá de nuevo en un momento.",
             code=NO_DISPONIBLE,
         )
+
+    async def cuenta_existe(self, cuenta_id: uuid.UUID) -> bool:
+        """Operación opcional (`core.payments.cuenta_existe`): la cuenta Wompi está viva en el negocio actual."""
+        from pack_payments.cuentas import CuentaNoEncontrada, config_de_cuenta
+
+        try:
+            await config_de_cuenta(cuenta_id)
+        except CuentaNoEncontrada:
+            return False
+        return True
 
     async def procesar_evento(self, payload: dict[str, Any]) -> str:
         """Operación opcional (HU-SH-04, ADR-0123, riesgo R-05): un evento de Wompi que llegó
@@ -240,6 +269,8 @@ async def _guardar(
     nuevo: PaymentLinkResult,
     *,
     reemplaza: PaymentTransaction | None,
+    cuenta_id: uuid.UUID | None = None,
+    agent_id: uuid.UUID | None = None,
 ) -> PaymentTransaction | None:
     """Guarda la transacción del link nuevo; `None` si la viva cambió desde que se leyó.
 
@@ -277,6 +308,8 @@ async def _guardar(
                 # idempotencia por reference la garantiza el índice único, este
                 # key solo debe satisfacer el NOT NULL (ADR-0067).
                 idempotency_key=str(uuid.uuid4()),
+                cuenta_id=cuenta_id,
+                agent_id=agent_id,
             )
             session.add(transaction)
             # Dos llamadas sin viva a la vez: la segunda choca con el índice único

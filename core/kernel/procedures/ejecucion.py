@@ -2572,6 +2572,10 @@ async def contexto_del_motor(
         from core.kernel.oferta import declaradas_por
 
         packs = frozenset((*release.skills, *release.tenant_plugins))
+        agente_en_foco = release_vigente.agente_del_turno()
+        if agente_en_foco is not None and agente_en_foco.packs is not None:
+            # ADR-0190: el agente solo usa las habilidades que tiene instaladas (y los plugins propios del negocio).
+            packs = (frozenset(release.skills) & agente_en_foco.packs) | frozenset(release.tenant_plugins)
         comunes["permitidos"] = frozenset((packs | {CORE_OWNER}) - set(disabled))
         comunes["de_la_release"] = {
             pid: p for pid, p in release.procedimientos.items() if p.version != "0.0.0"

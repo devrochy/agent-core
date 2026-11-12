@@ -1933,6 +1933,7 @@ class OrderSkill(BaseSkill):
                 amount=total,
                 description=f"Pedido {base_reference}",
                 method="online",
+                agent_id=context.agent_id,  # ADR-0190 §7: la cuenta Wompi del agente que vende
             )
         except PaymentCapabilityError as exc:
             # Rechazo de NEGOCIO: resultado controlado, NO una falla que apague el

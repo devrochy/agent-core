@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import io
+import uuid
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -69,9 +70,16 @@ class PaymentCapability(Protocol):
         ...
 
     async def create_link(
-        self, *, reference: str, amount: float, description: str = "", method: str | None = None
+        self,
+        *,
+        reference: str,
+        amount: float,
+        description: str = "",
+        method: str | None = None,
+        agent_id: uuid.UUID | None = None,
     ) -> PaymentLink:
-        """Crea un link de pago correlacionado con `reference` (del caller)."""
+        """Crea un link de pago correlacionado con `reference` (del caller). Con `agent_id` (ADR-0190 §7) cobra con
+        la cuenta del agente que lo pide; sin él, con la del negocio."""
         ...
 
 
@@ -98,6 +106,16 @@ class PaymentRegistry:
 
 
 payment_registry = PaymentRegistry()
+
+
+async def cuenta_existe(cuenta_id: uuid.UUID) -> bool:
+    """¿Alguna capacidad registrada tiene esa cuenta viva en el negocio actual? (ADR-0190 §6). Operación opcional:
+    el core no importa el pack de pagos, pregunta a quien la implemente."""
+    for capability in payment_registry.all():
+        operacion = getattr(capability, "cuenta_existe", None)
+        if operacion is not None and await operacion(cuenta_id):
+            return True
+    return False
 
 
 async def procesar_evento(capability: PaymentCapability, payload: dict) -> str | None:

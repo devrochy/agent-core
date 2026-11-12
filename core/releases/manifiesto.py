@@ -60,6 +60,9 @@ class Componente:
     is_default: bool = False
     # `(id, versión exacta)` resueltos en el build; vacío en el KernelSpec.
     procedures: tuple[tuple[str, str], ...] = ()
+    # ADR-0190 §5: ids de las habilidades instaladas en el agente al construir (nunca su config). `None` = el
+    # agente no tiene instalaciones propias y hereda las del negocio (hasta la resiembra, HU-AOS-65).
+    skills: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +84,7 @@ def _componente(c: Componente) -> dict[str, Any]:
         "contract": c.contract,
         "is_default": c.is_default,
         "procedures": [{"id": pid, "version": v} for pid, v in sorted(c.procedures)],
+        **({"skills": sorted(c.skills)} if c.skills is not None else {}),
     }
 
 

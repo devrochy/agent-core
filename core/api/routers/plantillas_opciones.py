@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field
 
 from core.admin import plantillas_opciones_service as svc
@@ -254,10 +254,23 @@ class OpcionesVariablesOut(BaseModel):
 # ------------------------------------------------------------------ catálogos y herramientas sin clave
 # (van antes de las rutas con `/{clave}` por claridad; los nombres con guion no pueden ser una clave)
 @router.get("/catalogo-acciones", response_model=OpcionesAccionesOut)
-async def catalogo_acciones(principal: Annotated[Principal, Depends(lectura)]) -> dict[str, Any]:
+async def catalogo_acciones(
+    principal: Annotated[Principal, Depends(lectura)],
+    agent_id: Annotated[uuid.UUID | None, Query()] = None,
+) -> dict[str, Any]:
     """Las tools que el negocio puede usar como acción de una opción: elegibles (marca de su autor, pack activo,
-    binding explícito y habilitado, sin gobernar por un procedimiento), con su JSON Schema y si son sensibles."""
-    return {"acciones": await svc.catalogo_acciones(_negocio(principal))}
+    binding explícito y habilitado, sin gobernar por un procedimiento), con su JSON Schema y si son sensibles.
+    Con `?agent_id=` (ADR-0190, HU-AOS-67), solo las encendidas en ESE agente (el que atiende la conexión); 404 si
+    no es del negocio."""
+    tid = _negocio(principal)
+    if agent_id is not None:
+        from core.agents import versiones
+
+        try:
+            await versiones.obtener_borrador(tid, agent_id)
+        except versiones.AgenteNoEncontrado:
+            raise ApiError.not_found("Agente no encontrado.") from None
+    return {"acciones": await svc.catalogo_acciones(tid, agent_id)}
 
 
 @router.get("/catalogo-variables", response_model=OpcionesVariablesOut)

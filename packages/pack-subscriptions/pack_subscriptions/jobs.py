@@ -375,6 +375,7 @@ async def generar_cargo_de(session, tenant_id: uuid.UUID, sub: Subscription, now
                 reference=f"sub-{cargo.id}",
                 amount=float(cargo.monto or 0),
                 description=f"Suscripción {sub.concepto}",
+                agent_id=sub.agent_id,
             )
             cargo.referencia = link.reference
             cargo.link_url = link.url

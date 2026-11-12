@@ -259,6 +259,19 @@ async def _componentes(
         ).all()
         if not any(rol == "core" for _i, _a, _k, rol, _d in instancias):
             raise ErrorDelBuild("sin_coordinador", "La conexión no tiene Coordinador.")
+        # ADR-0190 §5: ids de las habilidades ACTIVAS instaladas en cada agente (solo la referencia, nunca config).
+        habilidades_por_agente: dict[uuid.UUID, list[str]] = {}
+        for agente_id, pack_id in (
+            await session.execute(
+                text(
+                    "SELECT agent_id, pack_id FROM pack_installations WHERE tenant_id = :t AND scope = 'agent' "
+                    "AND status = 'active' AND deleted_at IS NULL AND agent_id = ANY(cast(:a AS uuid[])) "
+                    "ORDER BY pack_id"
+                ),
+                {"t": tenant_id, "a": [str(a) for _i, a, _k, _r, _d in instancias]},
+            )
+        ).all():
+            habilidades_por_agente.setdefault(agente_id, []).append(str(pack_id))
         salida: list[_Instancia] = []
         problemas: list[str] = []
         for iid, aid, key, rol, por_defecto in instancias:
@@ -292,6 +305,9 @@ async def _componentes(
                         content_hash=huella,
                         contract=contrato,
                         is_default=bool(por_defecto),
+                        skills=(
+                            tuple(habilidades_por_agente[aid]) if aid in habilidades_por_agente and rol != "core" else None
+                        ),
                     ),
                     contenido,
                 )
