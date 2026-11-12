@@ -53,3 +53,14 @@ fail-open deje correr una tool sensible sin consentimiento — señal de apretar
 `core/agents/spec.py` (helper `enabled_packs`), `core/orchestrator/loop.py` (skills+consent),
 `core/orchestrator/guardrails.py`, `plugins/pack_commerce/.../module.py` (eventos) y
 `jobs.py` (crons), `core/mcp/types.py` (`MCPTool.scopes`), `core/plugin_manager.py`.
+## Adenda (2026-11-09, HU-ARCH-34): fail-closed en v3
+
+**Estado:** aceptada por el dueño el 2026-11-09. Reemplaza el fail-open de la decisión 3 solo para el runtime v3; lo anticipaba «Qué haría que revisáramos esto».
+
+- **En un turno v3 una acción sin concesión no corre.** Es un error de negocio, queda `denied` en la auditoría, sin `auto_disable`, y deja el evento `tool_sin_binding`.
+- **Qué concede una versión:** un binding de la acción, una declarativa de esa versión o un procedimiento que la versión declara (ADR-0118 §3). Un binding deshabilitado sigue negando y `antes_de_accion` sigue exigiendo la etapa. Con `release/1` no hay concesión por procedimiento.
+- **Sin agente en foco se niega todo.** Un negocio v3 sin release, sin conexión o con release sin foco cae al spec v2, que es mutable y no es una versión publicada.
+- **Una acción no concedida tampoco se ofrece.** El filtro va antes del motor y no toca los bloques fijos compilados (HU-AOS-35). En sombra, un especialista deja de ver lo que no tiene; el General no cambia.
+- **Sin exención para el core:** `send_email` y las de suscripciones tienen efecto. Las esenciales del core llevan binding en la versión.
+- **Siguen abiertos, con el evento `tool_sin_binding_legacy`:** `aos_runtime = 'legacy'`, que se retira con D-60; la bandera `AOS_CONNECTION_ROUTING` apagada, que es el rollback global, y la conexión interna del Centro de pruebas, que no tiene release. El Centro de pruebas puede dar un falso verde: una acción puede pasar ahí y negarse en WhatsApp.
+- **Antes de encender:** `agent-core db reporte-bindings` en 0 en las releases activas y canary, y pasado `episode.idleMinutes`, porque una promoción no corta un episodio en curso. El rollback es revertir el cambio; no hay bandera que reabra este control.

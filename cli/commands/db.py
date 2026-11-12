@@ -502,6 +502,44 @@ def ruteo(
     console.print(f"aos_routing = {modo}")
 
 
+@app.command("reporte-bindings")
+def reporte_bindings(
+    tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID); por defecto, todos los v3."),
+) -> None:
+    """Agent OS (HU-ARCH-34): acciones que un agente de una release activa o canary debe tener concedidas
+    y no tiene. Solo lectura. Debe dar 0 antes de encender el fail-closed; sale con error si hay faltantes."""
+    import asyncio
+
+    from rich.markup import escape
+    from rich.table import Table
+
+    from cli.tenant_ref import resolve_tenant
+    from core.plugin_manager import plugin_manager
+    from core.releases.reporte_bindings import ReporteBindings, reporte_de_bindings
+
+    async def _run() -> ReporteBindings:
+        ids = [await resolve_tenant(tenant)] if tenant else None
+        return await reporte_de_bindings(plugin_manager.scan(), ids)
+
+    reporte = asyncio.run(_run())
+    tabla = Table(title=f"Acciones sin conceder ({reporte.agentes_revisados} agentes revisados)")
+    for columna in ("Negocio", "Conexión", "Release", "Agente", "Versión", "Acción", "Motivo"):
+        tabla.add_column(columna)
+    for f in reporte.faltantes:
+        tabla.add_row(
+            escape(f.negocio), str(f.conexion)[:8], str(f.release), escape(f.agente), str(f.version),
+            escape(f.accion), f.motivo,
+        )
+    console.print(tabla)
+    for (negocio, agente), cuantas in sorted(reporte.fuera_de_alcance.items()):
+        console.print(f"Fuera de alcance (dejan de ofrecerse): {escape(negocio)} / {escape(agente)}: {cuantas}")
+    for error in reporte.errores:
+        console.print(f"[red]Error:[/red] {escape(error)}")
+    console.print(f"Faltantes: {len(reporte.faltantes)}")
+    if not reporte.limpio:
+        raise typer.Exit(1)
+
+
 @app.command("reporte-ruteo")
 def reporte_ruteo(
     tenant: str = typer.Option(..., "--tenant", help="El negocio (slug o UUID)."),

@@ -210,6 +210,7 @@ def derivar_contenido(
     from core.agents.tolerante import _declarados
     from core.kernel.procedures.catalogo import CORE_OWNER
     from core.releases.procedimientos import ofrecible
+    from core.subscriptions.tools import SOLO_PROCEDIMIENTO
 
     avisos: list[str] = []
     con_core = habilitados | {CORE_OWNER}
@@ -238,6 +239,13 @@ def derivar_contenido(
 
     tools = [dict(b) for b in general.get("tools") or [] if _propia(str(b.get("tool", "")))]
     nombres = {b["tool"] for b in tools}
+    # HU-ARCH-34: en v3 se niega lo que la versión no concede. Las del core que el turno ofrece siempre
+    # llevan binding aunque el General sea anterior a la acción; las de procedimiento no: declararlo
+    # ya las concede (ADR-0118 §3).
+    for nombre, info in sorted(catalogo.items()):
+        if info.owner == CORE_OWNER and nombre not in nombres and nombre not in SOLO_PROCEDIMIENTO and _propia(nombre):
+            tools.append({"tool": nombre, "enabled": True, "scopes": list(getattr(info, "scopes", ()))})
+            nombres.add(nombre)
     guardrails = [
         dict(g)
         for g in general.get("guardrails") or []

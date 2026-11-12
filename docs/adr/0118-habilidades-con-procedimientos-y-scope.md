@@ -156,3 +156,12 @@ agente; moverlas a los packs queda para la parte 2 de HU-AOS-16. Detalle en ADR-
 - **Sin motor de procedimientos no hay filtro por agente:** `oferta.py` solo actúa con release/2 y
   motor. Una tool que tiene que ser fail-closed por agente lo comprueba en su
   `connection_predicate`, leyendo `agente_del_turno().tools`. Es lo que hace `buscar_conocimiento`.
+
+## Adenda (2026-11-09, HU-ARCH-34): la ejecución también es fail-closed
+
+**Estado:** aceptada por el dueño el 2026-11-09. Precisa §3 y la nota de la adenda anterior «Sin motor de procedimientos no hay filtro por agente».
+
+- «Declarar un procedimiento consiente los scopes de sus acciones» rige también en la ejecución: las acciones, precondiciones y confirmaciones de un procedimiento que la versión declara cuentan como concedidas, sin binding propio. Un binding opcional sigue aplicando si existe.
+- Se descartó exigir un binding por acción: en test eran 150 bindings en 19 agentes, y cada versión menor que agrega una acción a una etapa obligaría a republicar por negocio (ADR-0139).
+- La consulta entre agentes no usa esta concesión: exige binding habilitado del destino (HU-AOS-19).
+- Con release, el filtro por agente rige también sin motor activo (enmienda de ADR-0019). `oferta.py` no cambia.

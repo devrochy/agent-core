@@ -335,3 +335,31 @@ def test_acciones_opcionales_de_las_plantillas_existen_en_su_habilidad() -> None
             for accion in acciones:
                 info = catalogo.get(accion)
                 assert info is not None and info.owner == pack, (plantilla.key, pack, accion)
+
+
+@pytest.mark.parametrize("preset_id", sorted(AGENTES_POR_PRESET))
+def test_agente_de_preset_lleva_binding_de_las_del_core(preset_id: str) -> None:
+    """HU-ARCH-34: aunque el General no tenga bindings, lo que el turno ofrece siempre queda concedido."""
+    from core.kernel.procedures.catalogo import CORE_OWNER, catalogo_de_acciones
+    from core.kernel.procedures.de_pack import cargar
+    from core.plugin_manager import plugin_manager
+    from core.subscriptions.tools import SOLO_PROCEDIMIENTO
+
+    catalogo = catalogo_de_acciones(plugin_manager.scan())
+    manifest = load_preset(preset_id)
+    for plantilla in plantillas_del_preset(manifest):
+        packs = {*plantilla.habilidades, *plantilla.opcionales}
+        contenido, _ = derivar_contenido(
+            plantilla,
+            {**_general(), "tools": []},
+            catalogo=catalogo,
+            habilitados=set(manifest.packs),
+            publicados=[p for pack in sorted(packs) for p in cargar(pack)],
+            playbooks_de_packs=set(),
+        )
+        concedidas = {b["tool"] for b in contenido["tools"]}
+        esperadas = {
+            n for n, info in catalogo.items()
+            if info.owner == CORE_OWNER and n not in SOLO_PROCEDIMIENTO and not n.startswith("sub_")
+        }
+        assert esperadas <= concedidas, plantilla.key
