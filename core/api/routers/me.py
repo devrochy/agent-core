@@ -18,6 +18,7 @@ from __future__ import annotations
 import mimetypes
 import re
 import uuid
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Response, UploadFile
@@ -32,6 +33,7 @@ from core.almacenamiento import StorageInvalido, abrir, borrar, guardar, resolve
 from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
 from core.api.schemas import TenantOption
+from core.billing.enforcement import plan_summary
 from core.db.models import Admin
 from core.db.session import get_session
 
@@ -39,6 +41,17 @@ router = APIRouter(prefix="/admin", tags=["admin · sesión"])
 
 MAX_BYTES_AVATAR = 2 * 1024 * 1024
 _USERNAME = re.compile(r"^[A-Za-z0-9._-]{3,40}$")
+
+
+class MePlanSummary(BaseModel):
+    """Plan del negocio activo, para el shell del panel y de la app (HU-BILL-15)."""
+
+    plan_id: str | None
+    plan_name: str
+    status: str
+    days_left: int | None = None
+    trial_ends_at: datetime | None = None
+    has_plan: bool
 
 
 class MeResponse(BaseModel):
@@ -54,6 +67,8 @@ class MeResponse(BaseModel):
     permissions: dict[str, str | None]
     invitaciones_pendientes: int
     qa_testers_habilitados: bool = False
+    # Plan del negocio activo: el banner de Free y la campana lo leen sin otra petición.
+    plan: MePlanSummary | None = None
 
 
 class PerfilUpdate(BaseModel):
@@ -76,6 +91,7 @@ async def _me_response(principal: Principal, admin: Admin) -> MeResponse:
         ),
         None,
     )
+    resumen_del_plan = await plan_summary(principal.tenant_id)
     return MeResponse(
         admin_id=admin.id,
         email=admin.email,
@@ -90,6 +106,18 @@ async def _me_response(principal: Principal, admin: Admin) -> MeResponse:
         invitaciones_pendientes=await contar_pendientes(admin.id),
         # El panel muestra «Testers» y su aviso solo si el rol existe en este entorno (ADR-0134).
         qa_testers_habilitados=testers_habilitados(),
+        plan=(
+            MePlanSummary(
+                plan_id=resumen_del_plan.plan_id,
+                plan_name=resumen_del_plan.plan_name,
+                status=resumen_del_plan.status,
+                days_left=resumen_del_plan.days_left,
+                trial_ends_at=resumen_del_plan.trial_ends_at,
+                has_plan=resumen_del_plan.has_plan,
+            )
+            if resumen_del_plan is not None
+            else None
+        ),
     )
 
 
