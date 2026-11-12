@@ -33,7 +33,7 @@ from _api_helpers import api_headers, uniq
 from test_api_registrar_numero import _negocio_con_byok
 from test_backfill_agentes import _modules, _sql
 from test_byok_produccion import _negocio
-from test_conexion_canonica import _alta_numero, _bandera, _conexiones
+from test_conexion_canonica import _alta_numero, _conexiones
 from test_instancias_por_conexion_api import _con_agentes, _instancias
 
 pytestmark = [
@@ -286,21 +286,18 @@ async def test_backfill_convierte_el_widget_y_liga_las_conversaciones_web() -> N
 
 
 # ---------------------------------------------------------------- ruteo
-async def test_ruteo_web_con_la_bandera_apagada_y_encendida(app_client, monkeypatch) -> None:
+async def test_ruteo_web_adopta_la_abierta_sin_conexion_del_visitante(app_client, monkeypatch) -> None:
     tid = await _negocio()
     visitante = uniq("vis")
     vieja = await _conversacion_web(tid, visitante)  # de antes de la conexión
     key = (await _guardar(app_client, tid))["key"]
     (fila,) = await _webchat(tid)
 
-    # Encendida: adopta la abierta sin conexión del visitante (no abre otra ni gasta cuota).
-    _bandera(monkeypatch, True)
+    # Adopta la abierta sin conexión del visitante (no abre otra ni gasta cuota).
     conversacion = await _entrada_web(tid, key, visitante)
     assert (conversacion.id, conversacion.connection_id) == (vieja, fila.id)
     assert (await _entrada_web(tid, key, visitante)).id == vieja
-
-    # Apagada: el camino de siempre, la conversación del visitante con la conexión del widget.
-    _bandera(monkeypatch, False)
+    # Un visitante nuevo nace con la conexión del widget.
     otro = uniq("vis")
     conversacion = await _entrada_web(tid, key, otro)
     assert conversacion.connection_id == fila.id
@@ -366,7 +363,6 @@ async def test_webhook_de_meta_a_dos_numeros_responde_por_cada_numero(app_client
 
     secreto = get_settings().whatsapp_app_secret or "ci-meta-app-secret-not-real"
     monkeypatch.setattr(get_settings(), "whatsapp_app_secret", secreto)
-    _bandera(monkeypatch, True)
     tid, cuenta, waba_id, _viejo = await _negocio_con_byok()
     uno, dos = uniq("ph-uno"), uniq("ph-dos")
     await _alta_numero(tid, cuenta, uno)
