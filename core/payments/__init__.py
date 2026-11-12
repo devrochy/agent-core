@@ -108,6 +108,16 @@ class PaymentRegistry:
 payment_registry = PaymentRegistry()
 
 
+async def cuenta_existe(cuenta_id: uuid.UUID) -> bool:
+    """¿Alguna capacidad registrada tiene esa cuenta viva en el negocio actual? (ADR-0190 §6). Operación opcional:
+    el core no importa el pack de pagos, pregunta a quien la implemente."""
+    for capability in payment_registry.all():
+        operacion = getattr(capability, "cuenta_existe", None)
+        if operacion is not None and await operacion(cuenta_id):
+            return True
+    return False
+
+
 async def procesar_evento(capability: PaymentCapability, payload: dict) -> str | None:
     """Operación opcional de la capacidad (HU-SH-04, ADR-0123, riesgo R-05): aplicar un evento
     de la pasarela que llegó por otra URL. La capacidad verifica la firma con SUS credenciales.

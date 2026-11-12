@@ -538,3 +538,122 @@ async def publish_to_connections(
         general_updated=resultado.general_actualizado,
     )
 
+
+
+# ------------------------------------------------------------------ habilidades y acciones del agente (ADR-0190)
+class AgentAction(BaseModel):
+    tool: str
+    pack_id: str
+    # Clave del grupo (`pedidos`, `citas`, `leads`…, `otras`); la etiqueta la pone el panel.
+    group: str
+    enabled: bool
+    # Tiene binding en el borrador del agente. Sin binding la acción solo corre si la concede un superpoder (D-67).
+    in_agent: bool
+    max_calls_per_conversation: int | None
+    requires_confirmation: bool
+
+
+class AgentSkill(BaseModel):
+    pack_id: str
+    installed: bool
+    status: Literal["active", "pending_config"] | None
+    # Config del agente para esta habilidad, sin secretos (Pagos: `cuenta_id`).
+    config: dict[str, object]
+
+
+class AgentSkillIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    installed: bool
+    config: dict[str, object] | None = None
+
+
+async def _agente_o_404(tid: uuid.UUID, agent_id: uuid.UUID) -> None:
+    try:
+        await versiones.obtener_agente(tid, agent_id)
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+
+
+@router.get("/agents/{agent_id}/actions", response_model=Page[AgentAction])
+async def list_agent_actions(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+    params: Paginados,
+) -> Page[AgentAction]:
+    """Las acciones de las habilidades del agente, agrupadas por lo que hacen, con su binding del borrador."""
+    from core.agents import habilidades_del_agente as hda
+
+    tid = _tenant(principal)
+    await _agente_o_404(tid, agent_id)
+    borrador = await versiones.obtener_borrador(tid, agent_id)
+    packs = await hda.packs_del_agente(tid, agent_id, await svc.habilitados_del_negocio(tid))
+    items = [
+        AgentAction(
+            tool=a.tool,
+            pack_id=a.pack_id,
+            group=a.grupo,
+            enabled=a.enabled,
+            in_agent=a.en_el_agente,
+            max_calls_per_conversation=a.max_calls_per_conversation,
+            requires_confirmation=a.requires_confirmation,
+        )
+        for a in hda.acciones(dict(borrador.content or {}), packs)
+    ]
+    return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
+
+
+def _skill(h: object) -> AgentSkill:
+    return AgentSkill(
+        pack_id=h.pack_id,  # type: ignore[attr-defined]
+        installed=h.instalada,  # type: ignore[attr-defined]
+        status=h.status,  # type: ignore[attr-defined]
+        config=h.config,  # type: ignore[attr-defined]
+    )
+
+
+@router.get("/agents/{agent_id}/skills", response_model=Page[AgentSkill])
+async def list_agent_skills(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+    params: Paginados,
+) -> Page[AgentSkill]:
+    """Habilidades que se agregan a uno o varios agentes (Pagos en línea, Conocimiento) y si este agente las tiene."""
+    from core.agents import habilidades_del_agente as hda
+
+    tid = _tenant(principal)
+    await _agente_o_404(tid, agent_id)
+    items = [_skill(h) for h in await hda.transversales(tid, agent_id)]
+    return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
+
+
+@router.put("/agents/{agent_id}/skills/{pack_id}", response_model=AgentSkill)
+async def put_agent_skill(
+    agent_id: uuid.UUID,
+    pack_id: Annotated[str, Path(pattern=r"^[a-z0-9_]{2,60}$")],
+    payload: AgentSkillIn,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> AgentSkill:
+    """Instala, quita o configura una habilidad del agente. Pagos en línea exige `config.cuenta_id`, una cuenta
+    Wompi del negocio; sin ella queda `pending_config`. 404 si el agente o la habilidad no existen; 422 si la
+    config no valida (sin devolver los valores)."""
+    from core.agents import habilidades_del_agente as hda
+    from core.agents.instalaciones import ConflictoInstalacion, InstalacionNoEncontrada
+
+    tid = await _puede_escribir(principal)
+    await _agente_o_404(tid, agent_id)
+    try:
+        h = await hda.configurar(
+            tid, agent_id, pack_id, instalada=payload.installed, config=payload.config, actor=principal.admin.id
+        )
+    except hda.HabilidadNoDisponible:
+        raise ApiError.not_found("Habilidad no disponible para agentes.") from None
+    except InstalacionNoEncontrada:
+        raise ApiError.not_found("El agente no tiene esa habilidad.") from None
+    except ConflictoInstalacion as exc:
+        raise ApiError(409, exc.code, str(exc)) from None
+    except ValueError as exc:
+        # Sin los valores: la config puede traer datos del negocio.
+        campo = "cuenta_id" if str(exc) == "cuenta_id" else "config"
+        raise ApiError(422, "invalid_config", "Revisa la configuración de la habilidad.", {campo: "Valor inválido."}) from None
+    return _skill(h)

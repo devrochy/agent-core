@@ -402,6 +402,16 @@ def _parse_custom_completion_claims(raw: str) -> dict[str, tuple[re.Pattern[str]
 
 class GoogleCalendarModule(BaseModule):
     tipo = "especialidad"  # ADR-0190 §1
+    grupos_de_acciones: ClassVar[dict[str, str]] = {
+        "create_calendar_event": "citas",
+        "update_calendar_event": "citas",
+        "cancel_calendar_event": "citas",
+        "list_client_appointments": "citas",
+        "check_availability": "disponibilidad",
+        "find_next_available": "disponibilidad",
+        "list_appointment_types": "disponibilidad",
+        "list_calendars": "disponibilidad",
+    }
     # Lo que es de CADA agente de este tipo; el resto de `CalendarConfig` es del negocio (SPEC-44, design.md §2).
     config_agente = config_de_agente(CalendarConfig, ("multi_agenda_modo", "slot_minutes", "appointments_cancelled_summary", "confirmacion_texto", "completion_claims_disabled", "completion_claims_custom",), "ConfigDeAgenteDeAgenda")
     id = PLUGIN_ID

@@ -47,6 +47,21 @@ PLUGIN_ID = "pack_cobranza"
 
 class CobranzaModule(BaseModule):
     tipo = "especialidad"  # ADR-0190 §1
+    grupos_de_acciones: ClassVar[dict[str, str]] = {
+        "cob_consultar_saldo": "cartera",
+        "cob_estado_cuenta": "cartera",
+        "cob_registrar_abono": "cartera",
+        "cob_opciones_promesa": "promesas",
+        "cob_registrar_promesa_pago": "promesas",
+        "cob_registrar_promesa_saldo": "promesas",
+        "cob_evaluar_negociacion": "promesas",
+        "cob_crear_suscripcion": "suscripciones",
+        "cob_consultar_suscripcion": "suscripciones",
+        "cob_renovar_suscripcion": "suscripciones",
+        "cob_pausar_suscripcion": "suscripciones",
+        "cob_cancelar_suscripcion": "suscripciones",
+        "cob_link_suscripcion": "pagos",
+    }
     id = PLUGIN_ID
     name = "Cobranza"
     version = "0.6.0"

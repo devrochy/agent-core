@@ -583,6 +583,9 @@ class BaseModule(ABC):
     # Esquema de la configuración que es de CADA agente (comportamiento en la conversación). Vive en
     # `pack_installations.config_encrypted` del agente; `config_schema` queda para lo que es del negocio.
     config_agente: ClassVar[type[BasePluginConfig] | None] = None
+    # Grupo de cada acción del pack, por lo que hace (ADR-0190 §8): `{nombre_de_la_tool: clave}`. Solo la clave; la
+    # etiqueta la pone el panel. Una acción sin grupo cae en `otras`.
+    grupos_de_acciones: ClassVar[dict[str, str]] = {}
 
     # --- Catálogo de habilidades (HU-FWK-04, SPEC-16) ---
     # Nombre visible al cliente (glosario: "habilidad", no "plugin"/"pack"). Si

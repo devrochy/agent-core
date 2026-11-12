@@ -160,6 +160,16 @@ class WompiPaymentCapability:
             code=NO_DISPONIBLE,
         )
 
+    async def cuenta_existe(self, cuenta_id: uuid.UUID) -> bool:
+        """Operación opcional (`core.payments.cuenta_existe`): la cuenta Wompi está viva en el negocio actual."""
+        from pack_payments.cuentas import CuentaNoEncontrada, config_de_cuenta
+
+        try:
+            await config_de_cuenta(cuenta_id)
+        except CuentaNoEncontrada:
+            return False
+        return True
+
     async def procesar_evento(self, payload: dict[str, Any]) -> str:
         """Operación opcional (HU-SH-04, ADR-0123, riesgo R-05): un evento de Wompi que llegó
         por la URL de la plataforma porque la cuenta es compartida. Se verifica con el
