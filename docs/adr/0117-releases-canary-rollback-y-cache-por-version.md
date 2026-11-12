@@ -1,6 +1,7 @@
 # ADR-0117 — Releases por conexión, canary sticky por episodio, rollback en un clic y caché por versión
 
 - **Estado:** aceptado (2026-10-09, HU-AOS-01)
+- **Nota de estado:** ADR-0191 (propuesto, 2026-11-12): la release 1 deja de construirse desde el lector tolerante y cada conexión conversacional nace con su release 1; sin release el turno falla cerrado.
 - **Fecha:** 2026-10-08
 - **Contexto:** HU-AOS-14, HU-AOS-32 y HU-AOS-35 (SPEC-26). Generaliza ADR-0009. Enmienda ADR-0051 §1 y §4
   (rollback por *flip* de `is_active`; `eval_runs` gana `release_id`), ADR-0026 y ADR-0109 (overrides y secciones del

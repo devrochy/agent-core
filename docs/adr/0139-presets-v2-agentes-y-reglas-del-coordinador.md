@@ -1,6 +1,7 @@
 # ADR-0139 — Presets v2: agentes especialistas desde plantillas y reglas del Coordinador
 
 - **Estado:** propuesto (2026-10-18, HU-AOS-46; decisiones revisables por el dueño en el PR)
+- **Nota de estado:** ADR-0191 y ADR-0192 (propuestos, 2026-11-12): `aplicar_agentes` deja de depender de la bandera global y los especialistas ya no se derivan del General.
 - **Fecha:** 2026-10-18
 - **Contexto:** HU-AOS-46 (SPEC-26), adelantada de R3 por la decisión D-35 («SolversHub vende agentes»).
   Enmienda ADR-0110 §1 y §3 y ADR-0118 §1 (dónde viven las plantillas de agente). Usa ADR-0112 (banderas),

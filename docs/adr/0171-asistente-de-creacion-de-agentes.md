@@ -1,6 +1,7 @@
 # ADR-0171 — Asistente de creación de agentes, General de coordinación y poderes propios
 
 - **Estado:** propuesto (se acepta al mergear la parte 1 de HU-AOS-48; los puntos 4 y 5 esperan el OK del dueño, P-34 y D-SPEC-39-5/6).
+- **Nota de estado:** ADR-0192 (propuesto, 2026-11-12): el General de coordinación se retira; el Coordinador enruta a un especialista por defecto.
 - **Fecha:** 2026-10-26
 - **Contexto:** SPEC-39 (D-49, REQ-AOS-18, REQ-AOS-20 y REQ-UX-30); absorbe HU-AOS-48 de SPEC-31.
 - **Enmienda:**
