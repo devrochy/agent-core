@@ -406,6 +406,22 @@ async def test_el_loop_guarda_la_procedencia_al_ejecutar_la_tool() -> None:
                 )
             ]
 
+    def _spec_que_concede() -> Any:
+        from agentcore_contracts import AgentSpec
+
+        return AgentSpec.model_validate(
+            {
+                "id": "ventas", "version": "ventas@v3:3", "tenantId": str(tid),
+                "persona": {
+                    "role": "r", "tone": "cercano", "warmth": 3, "emojis": "sparse", "maxLength": 500,
+                    "forbiddenPhrases": [],
+                },
+                "model": {"primary": "m"}, "memory": {"shortTermTurns": 10}, "playbooks": [],
+                "tools": [{"tool": "tool_de_prueba_procedencia", "enabled": True, "scopes": []}],
+                "policies": {"maxToolCallsPerTurn": 3}, "packs": ["pack_commerce"],
+            }
+        )
+
     e = await _escenario()
     tid = e["tid"]
     mcp_host.begin_activation("pack_commerce")
@@ -430,7 +446,8 @@ async def test_el_loop_guarda_la_procedencia_al_ejecutar_la_tool() -> None:
                     )
                 )
                 llamada = LLMToolCall(id=f"call_{uuid.uuid4().hex[:8]}", name="tool_de_prueba_procedencia", arguments={})
-                resultado = await _execute_tool_safely(conversation, customer, llamada)
+                # HU-ARCH-34: en v3 solo corre lo que la versión concede; aquí, por binding.
+                resultado = await _execute_tool_safely(conversation, customer, llamada, _spec_que_concede())
             finally:
                 release_vigente.cerrar(token)
         assert resultado.get("reserva_id") == ref
