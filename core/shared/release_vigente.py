@@ -211,6 +211,17 @@ def vigente() -> ArtefactosDeRelease | None:
     return ranura.valor
 
 
+def exige_concesion() -> bool:
+    """¿Este turno solo ejecuta lo que concede la versión del agente (HU-ARCH-34, enmienda de ADR-0019)?
+    True en un negocio v3, con o sin release; False en legacy, con la bandera global apagada y en la
+    conexión interna del Centro de pruebas, que no marcan la ranura."""
+    if vigente() is not None:
+        return True
+    ranura = _ranura.get()
+    actual = get_current_tenant_id()
+    return ranura is not None and actual is not None and ranura.v3_sin_release == actual
+
+
 def agente_del_turno() -> AgenteCongelado | None:
     """El especialista en foco de la release del turno (HU-AOS-15); None sin release."""
     actual = vigente()
