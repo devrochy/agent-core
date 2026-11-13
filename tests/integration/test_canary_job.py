@@ -71,10 +71,10 @@ def _solo_los_de_este_test(monkeypatch: Any) -> None:
     """El job recorre solo los negocios de cada test (la base de test es compartida)."""
     _NEGOCIOS.clear()
 
-    async def _v3(_session: Any) -> list[uuid.UUID]:
+    async def _activos(_session: Any) -> list[uuid.UUID]:
         return list(_NEGOCIOS)
 
-    monkeypatch.setattr("core.kernel.banderas.negocios_v3", _v3)
+    monkeypatch.setattr("core.kernel.banderas.negocios_activos", _activos)
 
 
 async def _revisar(no_inferioridad: bool, ahora: datetime = LUEGO) -> dict[str, int]:
@@ -166,13 +166,13 @@ async def test_habilidad_retirada_detiene_sin_bloquear(monkeypatch: Any) -> None
             assert not bloqueada(*await ultimo_ciclo(s, tid, dos))
 
 
-async def test_un_negocio_no_ve_el_de_otro_y_legacy_se_salta() -> None:
+async def test_un_negocio_no_ve_el_de_otro() -> None:
     from core.releases.build import ConexionNoEncontrada
     from core.releases.canary_job import revisar_conexion
 
     tid, cid, uno, dos, inicio = await _iniciado()
     otro, _s, cid_otro = await _negocio()
-    await _release_uno(otro)  # legacy: el job no lo recorre
+    await _release_uno(otro)  # sin canary: el job no lo toca
     await _sembrar(tid, cid, uno, "stable", 30, inicio)
     await _sembrar(tid, cid, dos, "canary", 20, inicio, fallidas=8)
     from core.shared.tenant import tenant_scope

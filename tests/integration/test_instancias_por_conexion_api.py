@@ -21,7 +21,7 @@ import uuid
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _api_helpers import api_headers, uniq
 from _ayudas_sql import _conexion, _modules, _sql
 from test_agentes_versionados import PASSWORD, _dueno, spec_en_su_enfoque
 from test_byok_produccion import GraphFalso, _alta, _byok_de_prueba, _instalar, _negocio, _num, _url
@@ -483,8 +483,6 @@ async def test_las_escrituras_piden_ver_la_conexion_y_no_cruzan_negocios_como_du
 
     tid, _c, _p, cid = await _con_agentes()
     otro, _c2, _p2, cid_otro = await _con_agentes()
-    for negocio in (tid, otro):
-        await banderas_como_dueno(negocio, aos_runtime="v3")
     ventas = await _especialista(app_client, await api_headers(app_client, tid), "ventas")
 
     # Un dueño de este negocio (v3) no alcanza la conexión del otro.

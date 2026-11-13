@@ -117,7 +117,6 @@ class PeriodoOut(BaseModel):
 
 class ResumenPorAgente(BaseModel):
     periodo: PeriodoOut
-    runtime: str
     general: BloqueGeneral
     agentes: list[AgenteResumen]
 

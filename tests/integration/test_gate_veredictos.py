@@ -11,7 +11,7 @@ import uuid
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _api_helpers import api_headers, uniq
 from sqlalchemy import text
 
 pytestmark = [
@@ -196,7 +196,6 @@ async def test_solo_el_master_fuerza_con_motivo_y_queda_auditado(app_client) -> 
     from core.db.session import get_session
 
     tid, cid, uno = await _negocio()
-    await banderas_como_dueno(tid, aos_runtime="v3")
     dos = await _candidata(tid, cid, "Forzada")
     await _registrar(tid, cid, dos, uno, aprueba=False)
     base = f"/api/v1/admin/connections/{cid}/releases/{dos}/promote"

@@ -120,7 +120,6 @@ class Consistencia:
 class Consola:
     items: list[ConexionFila]
     total: int
-    runtime: str
     routing: str
     consistency: Consistencia | None
     unassigned_agents: list[AgenteSinConexion]
@@ -243,7 +242,6 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
     return Consola(
         items=items,
         total=total,
-        runtime=banderas.runtime,
         routing=banderas.ruteo,
         consistency=consistencia,
         unassigned_agents=sin_conexion,
@@ -338,7 +336,7 @@ async def _releases(
 async def _consumo(
     session: Any, tenant_id: uuid.UUID, ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, ConsumoFila]:
-    """Últimos 7 días. Con `aos_runtime = legacy` el loop escribe `connection_id` NULL: da cero."""
+    """Últimos 7 días."""
     if not ids:
         return {}
     filas = (

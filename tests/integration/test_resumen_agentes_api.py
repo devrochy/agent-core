@@ -19,7 +19,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno
+from _api_helpers import api_headers
 from _ayudas_sql import _sql
 from test_agent_data_api import (
     _agente,
@@ -155,7 +155,7 @@ async def test_kpis_del_negocio_de_cada_agente_y_de_su_modulo(app_client) -> Non
     r = await app_client.get(_URL, headers=h)
     assert r.status_code == 200, r.text
     datos = r.json()
-    assert datos["runtime"] == "v3"  # nace en v3 (ADR-0191)
+    assert "runtime" not in datos  # todo negocio corre en el Agent OS (ADR-0191)
 
     general = _kpis(datos["general"])
     assert general["conversaciones"]["destino"] == {"ruta": "conversaciones", "params": {}}
@@ -331,7 +331,6 @@ async def test_un_modulo_que_falla_no_tumba_el_resumen(app_client, monkeypatch) 
 async def test_runtime_v3_cuenta_los_escalados_por_agente(app_client) -> None:
     e = await _escenario()
     tid = e["tid"]
-    await banderas_como_dueno(tid, aos_runtime="v3")
     cid = (
         await _sql(
             tid, "select connection_id from agent_instances where agent_id = :a", a=e["ventas"]
@@ -365,7 +364,6 @@ async def test_runtime_v3_cuenta_los_escalados_por_agente(app_client) -> None:
             i=iid,
         )
     datos = (await app_client.get(_URL, headers=await api_headers(app_client, tid))).json()
-    assert datos["runtime"] == "v3"
     esc = _kpis(_agente_por_key(datos, "ventas"))["escalados"]
     assert (esc["valor"], esc["polaridad"]) == (1, "up-bad")
     assert _kpis(_agente_por_key(datos, "agenda"))["escalados"]["valor"] == 0

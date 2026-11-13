@@ -2,7 +2,7 @@
 
 Con `QA_TESTERS_ENABLED` (monkeypatch), sin LLM real:
 
-- **Negocio nuevo:** chat web activo con clave y origen de la landing, `aos_runtime = v3`,
+- **Negocio nuevo:** chat web activo con clave y origen de la landing,
   `aos_procedures`, `aos_routing = active`, Ventas (por defecto) + Agenda en el chat web (Cobranza la crea el tester en el editor y no se toca)
   con las reglas `preset_*` del Coordinador y la release activa; la respuesta trae la clave, el
   enlace y los agentes. Volver a pulsar responde 200 sin contraseñas y no duplica nada.
@@ -88,11 +88,11 @@ async def _tester(app_client: Any, t1: uuid.UUID) -> dict[str, str]:
     return await api_headers(app_client, t1, email=email, password=PASSWORD)
 
 
-async def _banderas(tid: uuid.UUID) -> tuple[str, bool, str]:
-    ((runtime, procedimientos, ruteo),) = await _sql(
-        None, "select aos_runtime, aos_procedures, aos_routing from tenants where id = :t", t=tid
+async def _banderas(tid: uuid.UUID) -> tuple[bool, str]:
+    ((procedimientos, ruteo),) = await _sql(
+        None, "select aos_procedures, aos_routing from tenants where id = :t", t=tid
     )
-    return str(runtime), bool(procedimientos), str(ruteo)
+    return bool(procedimientos), str(ruteo)
 
 
 async def _foto(tid: uuid.UUID) -> dict[str, Any]:
@@ -145,7 +145,7 @@ def _verificar_listo(datos: dict[str, Any]) -> None:
 
 
 async def _verificar_negocio(tid: uuid.UUID, clave: str) -> None:
-    assert await _banderas(tid) == ("v3", True, "active")
+    assert await _banderas(tid) == (True, "active")
     ((cid, activa, origenes),) = await _sql(
         tid,
         "select id, active, settings->'allowed_origins' from channel_connections "
@@ -226,7 +226,7 @@ async def test_un_fallo_a_medias_se_reintenta_sin_perder_las_reglas(app_client: 
     tid = uuid.UUID(datos["negocio"]["id"])
     assert datos["agent_os"]["estado"] == "error" and "promoción caída" in datos["agent_os"]["motivo"]
     # Nace en v3 (ADR-0191); el ruteo no se encendió.
-    assert await _banderas(tid) == ("v3", False, "off")
+    assert await _banderas(tid) == (False, "off")
     assert "preset_agenda_palabras" in await _reglas(tid)
 
     entorno.setattr(datos_aos, "_activar_releases", original)

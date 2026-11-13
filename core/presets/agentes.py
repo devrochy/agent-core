@@ -3,10 +3,7 @@
 `aplicar_agentes(tenant_id, manifest, ...)` instala en un negocio del Agent OS los agentes «para un
 fin» de un preset v2 (`PresetManifest.agentes`, plantillas en `core/presets/plantillas/`):
 
-1. **Solo con el Agent OS encendido:** `AOS_CONNECTION_ROUTING` (global) y
-   `tenants.aos_runtime = 'v3'`. Con cualquiera apagada no lee ni escribe nada más (no-op con
-   motivo): la conducta de un negocio legacy no cambia. Un manifiesto sin `agentes` (v1) tampoco
-   hace nada: el negocio sigue con el General.
+1. Un manifiesto sin `agentes` (v1) no hace nada (no-op con motivo).
 2. **Precondiciones (D-35: un agente publicado tiene al menos una conexión):** el Coordinador y el
    General del backfill de HU-AOS-13 con versión publicada y al menos una conexión conversacional
    con Coordinador vivo. Sin eso no crea ningún agente.
@@ -312,13 +309,6 @@ def agregar_reglas(
 
 
 # ------------------------------------------------------------------ lecturas
-async def _runtime(tenant_id: uuid.UUID) -> str:
-    from core.kernel.banderas import banderas_del_negocio
-
-    async with get_session() as session:
-        return (await banderas_del_negocio(session, tenant_id)).runtime
-
-
 async def _conexiones_con_coordinador(tenant_id: uuid.UUID) -> list[uuid.UUID]:
     """Conexiones conversacionales vivas con un Coordinador vivo, en orden estable."""
     async with get_session() as session:
@@ -685,9 +675,6 @@ async def aplicar_agentes(
     if not manifest.es_v2:
         reporte.omitido = "preset_v1"
         return reporte
-    if await _runtime(tenant_id) != "v3":
-        reporte.omitido = "banderas_apagadas"
-        return reporte
     plantillas = plantillas_del_preset(manifest)
 
     # Una sola corrida a la vez por negocio (la CLI y un `apply_preset`): el lock de transacción
@@ -831,15 +818,14 @@ async def _candidata(
 
 
 # ------------------------------------------------------------------ backfill (CLI)
-async def _negocios_v3(tenant_ids: list[uuid.UUID] | None) -> list[tuple[uuid.UUID, str, str | None]]:
-    """(id, slug, preset registrado) de los negocios vivos en v3 (o de los pedidos, en el estado
-    que estén: el paso mismo los omite si no son v3). `tenants` es tabla de sistema, sin RLS."""
+async def _negocios_vivos(tenant_ids: list[uuid.UUID] | None) -> list[tuple[uuid.UUID, str, str | None]]:
+    """(id, slug, preset registrado) de los negocios vivos (todos, o los pedidos). `tenants` es
+    tabla de sistema, sin RLS."""
     async with get_session() as session:
         filas = await session.execute(
             text(
                 "SELECT id, slug, settings->'preset'->>'id' FROM tenants WHERE deleted_at IS NULL "
-                "AND (cast(:ids AS uuid[]) IS NULL OR id = ANY(cast(:ids AS uuid[]))) "
-                "AND (cast(:ids AS uuid[]) IS NOT NULL OR aos_runtime = 'v3') ORDER BY slug"
+                "AND (cast(:ids AS uuid[]) IS NULL OR id = ANY(cast(:ids AS uuid[]))) ORDER BY slug"
             ),
             {"ids": list(tenant_ids) if tenant_ids else None},
         )
@@ -854,7 +840,7 @@ async def backfill_presets_v2(
     modules: Iterable[Any] | None = None,
 ) -> list[ReportePresetV2]:
     """`agent-core db presets-v2`: aplica el paso de agentes del preset registrado de cada negocio
-    v3 (`tenants.settings["preset"].id`), o de `preset_id` si se pasa (solo con negocios
+    vivo (`tenants.settings["preset"].id`), o de `preset_id` si se pasa (solo con negocios
     explícitos). Dry-run por defecto. Un negocio sin preset queda omitido (`sin_preset`)."""
     from core.presets import load_preset
     from core.shared.tenant import tenant_scope
@@ -862,7 +848,7 @@ async def backfill_presets_v2(
     if preset_id is not None and not tenant_ids:
         raise PresetError("--preset solo con --tenant: no se impone un preset a todos los negocios")
     reportes: list[ReportePresetV2] = []
-    for tid, slug, registrado in await _negocios_v3(tenant_ids):
+    for tid, slug, registrado in await _negocios_vivos(tenant_ids):
         pid = preset_id or registrado
         if not pid:
             reporte = ReportePresetV2(tid, "", 0, aplicar, omitido="sin_preset")

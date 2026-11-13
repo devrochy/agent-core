@@ -96,7 +96,7 @@ class Turno:
     cost_usd: float = 0.0
     verifier: list[dict[str, Any]] = field(default_factory=list)
     verifier_retries: int = 0
-    # Release del turno (HU-AOS-14): NULL con `aos_runtime = 'legacy'`.
+    # Release del turno (HU-AOS-14): NULL si el turno corrió sin release.
     release_id: uuid.UUID | None = None
     release_lane: str | None = None
     # Agente que atiende y tarea en foco (HU-AOS-15): NULL con `legacy` o sin motor activo.

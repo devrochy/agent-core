@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from _api_helpers import banderas_como_dueno, uniq
+from _api_helpers import uniq
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -150,7 +150,6 @@ async def _revisar(tid: uuid.UUID) -> Any:
 async def test_un_negocio_listo_no_tiene_bloqueos(ruteo_encendido) -> None:  # type: ignore[no-untyped-def]
     tid, _slug, cid = await _negocio()
     await _con_dos_releases(tid, cid)
-    await banderas_como_dueno(tid, aos_runtime="v3")
     reporte = await _revisar(tid)
     assert reporte.bloqueos == [] and reporte.dry_run and not reporte.aplicado
 
@@ -158,7 +157,6 @@ async def test_un_negocio_listo_no_tiene_bloqueos(ruteo_encendido) -> None:  # t
 async def test_bloquea_una_conversacion_sin_conexion_aunque_este_cerrada(ruteo_encendido) -> None:  # type: ignore[no-untyped-def]
     tid, slug, cid = await _negocio()
     await _con_dos_releases(tid, cid)
-    await banderas_como_dueno(tid, aos_runtime="v3")
     await _conversacion(tid, None, estado="closed")
     reporte = await _revisar(tid)
     assert reporte.sin_conexion == 1
@@ -170,10 +168,9 @@ async def test_un_negocio_dado_de_baja_no_pide_releases_pero_sus_conversaciones_
     await _conversacion(tid, None, estado="closed")  # sin conexión
     await _conversacion(tid, cid, cliente := uuid.uuid4())
     await _conversacion(tid, cid, cliente)  # repetida
-    await banderas_como_dueno(tid, aos_runtime="legacy")
     await _baja_logica(tid)
     reporte = await _revisar(tid)
-    # Ni runtime ni releases (ya no atiende), pero sí la conversación sin conexión y la repetida.
+    # Sin releases (ya no atiende), pero sí la conversación sin conexión y la repetida.
     assert reporte.sin_conexion == 1 and reporte.duplicadas == 1
     assert all("baja" in b for b in reporte.bloqueos) and len(reporte.bloqueos) == 1, reporte.bloqueos
 
@@ -183,7 +180,6 @@ async def test_pide_dos_releases_estables_sin_rollback(ruteo_encendido) -> None:
     from core.shared.tenant import tenant_scope
 
     tid, _slug, cid = await _negocio()
-    await banderas_como_dueno(tid, aos_runtime="v3")
     # Sin release activa.
     assert any("no tiene release activa" in b for b in (await _revisar(tid)).bloqueos)
 

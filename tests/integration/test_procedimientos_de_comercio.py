@@ -81,8 +81,8 @@ async def _banderas(tid: uuid.UUID, encendidas: bool) -> None:
         async with engine.begin() as conn:
             await conn.execute(text("update tenants set aos_procedures = false where id = :t"), {"t": tid})
             await conn.execute(
-                text("update tenants set aos_runtime = :r, aos_procedures = :p where id = :t"),
-                {"t": tid, "r": "v3" if encendidas else "legacy", "p": encendidas},
+                text("update tenants set aos_procedures = :p where id = :t"),
+                {"t": tid, "p": encendidas},
             )
     finally:
         await engine.dispose()

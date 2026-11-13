@@ -216,10 +216,7 @@ async def test_sin_spec_en_v3_se_niega_y_se_audita(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.usefixtures("turno")
-@pytest.mark.parametrize(("runtime", "marcado"), [("v3", True), ("legacy", False)])
-async def test_conversacion_sin_conexion_en_v3_queda_marcada(
-    monkeypatch: pytest.MonkeyPatch, runtime: str, marcado: bool
-) -> None:
+async def test_conversacion_sin_conexion_queda_marcada(monkeypatch: pytest.MonkeyPatch) -> None:
     from contextlib import asynccontextmanager
 
     import core.db.session as session_mod
@@ -231,13 +228,13 @@ async def test_conversacion_sin_conexion_en_v3_queda_marcada(
         yield None
 
     async def _banderas(_s: Any, _t: Any) -> Any:
-        return SimpleNamespace(runtime=runtime)
+        return SimpleNamespace(ruteo="off")
 
     monkeypatch.setattr(session_mod, "get_session", _sesion)
     monkeypatch.setattr(banderas_mod, "banderas_del_negocio", _banderas)
     conversacion = SimpleNamespace(id=uuid.uuid4(), tenant_id=T, connection_id=None)
     assert await rdt.fijar_release_del_turno(conversacion) is None
-    assert release_vigente.exige_concesion() is marcado
+    assert release_vigente.exige_concesion() is True
 
 
 @pytest.mark.usefixtures("registradas", "turno")

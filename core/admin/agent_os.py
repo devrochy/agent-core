@@ -1,27 +1,21 @@
 """Agent OS por negocio desde el panel del master (HU-AOS-15, criterio «Orden de banderas»).
 
-El master fija el estado objetivo de las tres banderas de un negocio (`aos_runtime`,
-`aos_procedures`, `aos_routing`) y este módulo lo lleva ahí con las MISMAS funciones de la
+El master fija el estado objetivo de las banderas de un negocio (`aos_procedures` y
+`aos_routing`) y este módulo lo lleva ahí con las MISMAS funciones de la
 operación, sin duplicar su lógica:
 
-- `planificar` (puro): rechaza el objetivo fuera de orden (procedimientos o enrutamiento sin v3,
-  `ObjetivoInvalido` → 422) y ordena los pasos: al encender runtime → procedimientos → ruteo; al
-  apagar, el inverso (ADR-0112, ADR-0138).
-- El runtime es siempre v3 (ADR-0191: el negocio nace ahí y no hay paso legacy → v3). Un objetivo
-  en «legacy» es `ObjetivoInvalido` (422): el rollback es la release anterior de v3 o el respaldo.
-  `construir` ya no tiene efecto (lo construía `migrar-a-v3`); sale del contrato con la API.
+- `planificar` (puro): rechaza un modo de enrutamiento desconocido (`ObjetivoInvalido` → 422) y
+  ordena los pasos: al encender procedimientos → ruteo; al apagar, el inverso (ADR-0112, ADR-0138).
+- El runtime ya no es bandera: todo negocio corre en el Agent OS (ADR-0191, HU-AOS-69).
 - La escritura es una sola llamada a `aos_fijar_banderas` (migración 0097) con el `admin_id` del
   master: la base exige que sea master, valida el orden y deja la fila de `audit_log` en la misma
   transacción. El request del master no abre un engine con el rol dueño (el contenedor de la API
   sigue teniendo `MIGRATIONS_DATABASE_URL` para migrar, `sync-packs` y «Preparar mis datos»).
 
-`simular` corre lo mismo en dry-run (nada se escribe): bloqueos, avisos y los pasos que
+`simular` corre lo mismo en dry-run (nada se escribe): avisos y los pasos que
 `aplicar` ejecutaría. Avisos del runbook (no bloquean): el pass^4 de HU-ARCH-28 antes de encender
 procedimientos, una semana en `shadow` con `agent-core db reporte-ruteo` antes de `active`, y que
 sin procedimientos el reporte de sombra no tiene con qué comparar.
-
-`AOS_CONNECTION_ROUTING` es global (entorno): este módulo solo la lee; apagarla con negocios en
-v3 es un cambio de despliegue, fuera del alcance de un endpoint por negocio.
 """
 
 from __future__ import annotations
@@ -46,11 +40,6 @@ from core.shared.logger import get_logger
 
 log = get_logger(__name__)
 
-RUNTIMES = ("legacy", "v3")
-MENSAJE_SIN_LEGACY = (
-    "El Agent OS es el único motor de conversación: desde el panel ya no se vuelve a «legacy». "
-    "El rollback es la release anterior de v3 o el respaldo de la base (ADR-0191)."
-)
 AVISO_PASS_K = (
     "Antes de encender los procedimientos, mide el pass^4 del negocio (HU-ARCH-28) y anótalo en la "
     "bitácora: si empeora, apágalos."
@@ -66,7 +55,7 @@ AVISO_SIN_PROCEDIMIENTOS = (
 
 
 class ObjetivoInvalido(ValueError):
-    """El estado pedido viola el orden de banderas por sí solo (422)."""
+    """El estado pedido no es válido por sí solo (422)."""
 
 
 class NegocioNoEncontrado(Exception):
@@ -80,7 +69,6 @@ class Resultado:
     despues: BanderasAOS
     # sin_cambios | listo | por_preparar | bloqueado | aplicado
     accion: str
-    aos_connection_routing: bool
     pasos: list[str] = field(default_factory=list)
     bloqueos: list[str] = field(default_factory=list)
     avisos: list[str] = field(default_factory=list)
@@ -89,29 +77,19 @@ class Resultado:
 # ------------------------------------------------------------------ planificador (puro)
 def planificar(actual: BanderasAOS, objetivo: BanderasAOS) -> list[str]:
     """Pasos para ir de `actual` a `objetivo`, en el orden de ADR-0112. `ObjetivoInvalido` si el
-    objetivo viola el orden por sí solo. Lista vacía: nada que hacer."""
-    if objetivo.runtime not in RUNTIMES:
-        raise ObjetivoInvalido(f"aos_runtime inválido: {objetivo.runtime}")
-    if objetivo.runtime != "v3":
-        raise ObjetivoInvalido(MENSAJE_SIN_LEGACY)
+    objetivo no es válido. Lista vacía: nada que hacer."""
     if objetivo.ruteo not in MODOS:
         raise ObjetivoInvalido(f"aos_routing inválido: {objetivo.ruteo}")
-    if objetivo.procedimientos and objetivo.runtime != "v3":
-        raise ObjetivoInvalido("Los procedimientos exigen el runtime v3.")
-    if objetivo.ruteo != "off" and objetivo.runtime != "v3":
-        raise ObjetivoInvalido("El enrutamiento exige el runtime v3.")
     encender: list[str] = []
     apagar: list[str] = []
-    if actual.runtime != objetivo.runtime:
-        (encender if objetivo.runtime == "v3" else apagar).append(f"runtime_{objetivo.runtime}")
     if actual.procedimientos != objetivo.procedimientos:
         (encender if objetivo.procedimientos else apagar).append(
             "procedimientos_on" if objetivo.procedimientos else "procedimientos_off"
         )
     if actual.ruteo != objetivo.ruteo:
         (apagar if objetivo.ruteo == "off" else encender).append(f"ruteo_{objetivo.ruteo}")
-    # Apagar va al revés del encendido: ruteo → procedimientos → runtime.
-    orden_apagar = {"ruteo_off": 0, "procedimientos_off": 1, "runtime_legacy": 2}
+    # Apagar va al revés del encendido: ruteo → procedimientos.
+    orden_apagar = {"ruteo_off": 0, "procedimientos_off": 1}
     return sorted(apagar, key=lambda p: orden_apagar[p]) + encender
 
 
@@ -191,17 +169,14 @@ async def _correr(
     objetivo: BanderasAOS,
     *,
     dry_run: bool,
-    construir: bool,
     admin_id: uuid.UUID,
     actor: str,
 ) -> Resultado:
-    del construir  # sin efecto desde ADR-0191 (ver el docstring del módulo)
     actual = await estado(tenant_id)
     if actual is None:
         raise NegocioNoEncontrado("negocio no encontrado")
     pasos = planificar(actual, objetivo)  # ObjetivoInvalido → 422
-    global_ = True  # el ruteo por conexión ya no es una bandera (ADR-0191)
-    res = Resultado(actual, objetivo, actual, "sin_cambios", global_, pasos=list(pasos))
+    res = Resultado(actual, objetivo, actual, "sin_cambios", pasos=list(pasos))
     if not pasos:
         return res
     res.avisos.extend(avisos_del_runbook(actual, objetivo))
@@ -220,19 +195,19 @@ async def _correr(
         "agent_os_banderas",
         tenant_id=str(tenant_id),
         admin_id=str(admin_id),
-        antes=f"{actual.runtime}/{actual.procedimientos}/{actual.ruteo}",
-        despues=f"{res.despues.runtime}/{res.despues.procedimientos}/{res.despues.ruteo}",
+        antes=f"{actual.procedimientos}/{actual.ruteo}",
+        despues=f"{res.despues.procedimientos}/{res.despues.ruteo}",
     )
     return res
 
 
-async def simular(tenant_id: uuid.UUID, objetivo: BanderasAOS, *, construir: bool, admin_id: uuid.UUID) -> Resultado:
+async def simular(tenant_id: uuid.UUID, objetivo: BanderasAOS, *, admin_id: uuid.UUID) -> Resultado:
     """Dry-run: nada se escribe."""
-    return await _correr(tenant_id, objetivo, dry_run=True, construir=construir, admin_id=admin_id, actor="")
+    return await _correr(tenant_id, objetivo, dry_run=True, admin_id=admin_id, actor="")
 
 
 async def aplicar(
-    tenant_id: uuid.UUID, objetivo: BanderasAOS, *, construir: bool, admin_id: uuid.UUID, actor: str
+    tenant_id: uuid.UUID, objetivo: BanderasAOS, *, admin_id: uuid.UUID, actor: str
 ) -> Resultado:
     """Lleva el negocio al objetivo con un candado por negocio (`pg_try_advisory_xact_lock`: los
     cambios del Agent OS no corren dos veces a la vez). `CambioEnCurso` si está tomado."""
@@ -241,7 +216,7 @@ async def aplicar(
         tomado = (await candado.execute(text(CANDADO_SQL), {"t": str(tenant_id)})).scalar_one()
         if not tomado:
             raise CambioEnCurso("Ya hay un cambio del Agent OS en curso para este negocio. Espera un momento.")
-        return await _correr(tenant_id, objetivo, dry_run=False, construir=construir, admin_id=admin_id, actor=actor)
+        return await _correr(tenant_id, objetivo, dry_run=False, admin_id=admin_id, actor=actor)
 
 
 class CambioEnCurso(Exception):

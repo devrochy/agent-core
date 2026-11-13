@@ -9,7 +9,7 @@ from core.config_registro.asistente import (
     GUIONES,
     MOTIVO_VOZ_V3,
     RespuestasInvalidas,
-    guiones_para,
+    guiones_visibles,
     resolver,
 )
 
@@ -26,10 +26,11 @@ def test_todas_las_opciones_del_guion_proponen_valores_validos() -> None:
     assert all(g.preguntas for g in GUIONES.values())
 
 
-def test_tono_directo_cambia_tono_y_calidez() -> None:
+def test_tono_directo_no_cambia_la_persona() -> None:
+    # La voz sale de la versión publicada del agente (ADR-0191): el asistente no la toca.
     p = resolver("voz", {"tono": "directo"}, DE_FABRICA)
-    assert _cambios(p) == {"persona_tone": "neutral", "persona_warmth": 2}
-    assert p.omitidos == []
+    assert p.cambios == []
+    assert {o.clave for o in p.omitidos} == {"persona_tone", "persona_warmth"}
 
 
 def test_pregunta_sin_respuesta_no_cambia_nada() -> None:
@@ -42,17 +43,18 @@ def test_responder_lo_que_ya_hay_no_propone_cambios() -> None:
     assert resolver("voz", {"tono": "directo"}, actual).cambios == []
 
 
-def test_el_largo_cambia_longitud_y_estilo_de_envio() -> None:
+def test_el_largo_cambia_solo_el_estilo_de_envio() -> None:
     p = resolver("voz", {"largo": "detalladas"}, DE_FABRICA)
-    assert _cambios(p) == {"persona_max_length": 900, "split_style": "pocos_cortos"}
+    assert _cambios(p) == {"split_style": "pocos_cortos"}
+    assert [o.clave for o in p.omitidos] == ["persona_max_length"]
 
 
 def test_marca_lo_que_el_dueno_ya_habia_cambiado_a_mano() -> None:
-    actual = {**DE_FABRICA, "persona_emojis": "none"}
-    p = resolver("voz", {"emojis": "muchos"}, actual)
+    actual = {**DE_FABRICA, "split_style": "varios_cortos"}
+    p = resolver("voz", {"largo": "detalladas"}, actual)
     (cambio,) = p.cambios
-    assert (cambio.actual, cambio.propuesto, cambio.editado_a_mano) == ("none", "free", True)
-    sin_tocar = resolver("voz", {"emojis": "muchos"}, DE_FABRICA)
+    assert (cambio.actual, cambio.propuesto, cambio.editado_a_mano) == ("varios_cortos", "pocos_cortos", True)
+    sin_tocar = resolver("voz", {"largo": "detalladas"}, DE_FABRICA)
     assert sin_tocar.cambios[0].editado_a_mano is False
 
 
@@ -65,9 +67,9 @@ def test_las_preguntas_de_varias_conservan_lo_que_escribio_el_dueno() -> None:
 
 
 def test_varias_vacia_quita_lo_sugerido_y_deja_lo_propio() -> None:
-    actual = {**DE_FABRICA, "persona_forbidden": ["gratis", "otra"]}
-    p = resolver("voz", {"prohibidas": []}, actual)
-    assert _cambios(p) == {"persona_forbidden": ["otra"]}
+    actual = {**DE_FABRICA, "escalation_keywords": ["asesor", "mi frase"]}
+    p = resolver("atencion", {"escalar_motivos": []}, actual)
+    assert _cambios(p) == {"escalation_keywords": ["mi frase"]}
 
 
 def test_atender_siempre_omite_lo_que_depende_del_horario() -> None:
@@ -96,19 +98,19 @@ def test_avisar_fuera_de_horario_deja_vacio_el_mensaje_para_usar_el_del_sistema(
     assert _cambios(p)["out_of_hours_message"] == ""
 
 
-def test_con_v3_la_voz_se_omite_y_se_dice_por_que() -> None:
-    p = resolver("voz", {"tono": "directo", "largo": "detalladas"}, DE_FABRICA, aos_runtime="v3")
+def test_la_voz_se_omite_y_se_dice_por_que() -> None:
+    p = resolver("voz", {"tono": "directo", "largo": "detalladas"}, DE_FABRICA)
     assert _cambios(p) == {"split_style": "pocos_cortos"}
     assert {o.clave for o in p.omitidos} == {"persona_tone", "persona_warmth", "persona_max_length"}
     assert {o.motivo for o in p.omitidos} == {MOTIVO_VOZ_V3}
 
 
-def test_con_v3_el_guion_no_ofrece_las_preguntas_solo_de_voz() -> None:
-    ids = {g.seccion: [q.id for q in g.preguntas] for g in guiones_para("v3")}
+def test_el_guion_no_ofrece_las_preguntas_solo_de_voz() -> None:
+    ids = {g.seccion: [q.id for q in g.preguntas] for g in guiones_visibles()}
     assert ids["voz"] == ["largo"]
     assert ids["atencion"] == [q.id for q in GUIONES["atencion"].preguntas]
-    legacy = {g.seccion: [q.id for q in g.preguntas] for g in guiones_para("legacy")}
-    assert legacy["voz"] == ["tono", "emojis", "largo", "prohibidas"]
+    # El registro completo sigue intacto: el filtro es por copia.
+    assert [q.id for q in GUIONES["voz"].preguntas] == ["tono", "emojis", "largo", "prohibidas"]
 
 
 @pytest.mark.parametrize(
@@ -133,14 +135,13 @@ def test_seccion_desconocida() -> None:
 
 
 def test_la_huella_depende_de_lo_propuesto() -> None:
-    a = resolver("voz", {"tono": "directo"}, DE_FABRICA)
-    b = resolver("voz", {"tono": "directo"}, DE_FABRICA)
-    c = resolver("voz", {"tono": "cercano"}, {**DE_FABRICA, "persona_tone": "formal"})
+    a = resolver("voz", {"largo": "detalladas"}, DE_FABRICA)
+    b = resolver("voz", {"largo": "detalladas"}, DE_FABRICA)
+    c = resolver("voz", {"largo": "cortas"}, DE_FABRICA)
     assert a.huella == b.huella != c.huella
 
 
-def test_el_catalogo_incluye_el_guion_y_su_huella_cambia_con_el_runtime() -> None:
-    legacy = catalogo_para(es_master=False, guardrails_disponibles=[])
-    v3 = catalogo_para(es_master=False, guardrails_disponibles=[], aos_runtime="v3")
-    assert [g.seccion for g in legacy.asistente] == ["voz", "atencion"]
-    assert legacy.version != v3.version
+def test_el_catalogo_incluye_el_guion() -> None:
+    catalogo = catalogo_para(es_master=False, guardrails_disponibles=[])
+    assert [g.seccion for g in catalogo.asistente] == ["voz", "atencion"]
+    assert [q.id for q in catalogo.asistente[0].preguntas] == ["largo"]

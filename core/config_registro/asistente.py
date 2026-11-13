@@ -10,7 +10,7 @@ LLM (invariante 3): igual que el resto del paquete, ningún módulo del runtime 
 Reglas:
 - Una pregunta sin respuesta no cambia nada.
 - Lo propuesto se valida contra el registro (lista cerrada o rango) antes de salir.
-- Con `aos_runtime = v3` la voz de la conexión sale de la release publicada, no de la persona que se
+- La voz de la conexión sale de la release publicada, no de la persona que se
   edita aquí; las opciones de persona se omiten y la propuesta lo dice (no promete cambios inertes).
 - Una opción cuya `depende_de` no se cumple en el estado resultante se omite y se dice por qué
   (por ejemplo, el modo «fuera de horario» cuando se elige atender siempre).
@@ -315,14 +315,13 @@ GUIONES: dict[str, Guion] = {g.seccion: g for g in (_VOZ, _ATENCION)}
 
 
 def _es_de_voz(clave: str) -> bool:
-    """Las que viven en la persona del AgentSpec v2 (con `aos_runtime = v3` no surten efecto)."""
+    """Las que viven en la persona del AgentSpec v2 (en el Agent OS no surten efecto: la voz sale de la
+    versión publicada del agente)."""
     return POR_CLAVE[clave].almacen.startswith("spec:persona.")
 
 
-def guiones_para(aos_runtime: str) -> list[Guion]:
-    """El guion que ve un negocio: con `v3` sin las preguntas que solo cambian la voz."""
-    if aos_runtime != "v3":
-        return [g.model_copy(deep=True) for g in GUIONES.values()]
+def guiones_visibles() -> list[Guion]:
+    """El guion que ve un negocio: sin las preguntas que solo cambian la voz."""
     visibles: list[Guion] = []
     for g in GUIONES.values():
         preguntas = [p.model_copy(deep=True) for p in g.preguntas if not all(_es_de_voz(c) for c in p.claves)]
@@ -420,8 +419,6 @@ def resolver(
     seccion: str,
     respuestas: Respuestas,
     actual: Mapping[str, Any],
-    *,
-    aos_runtime: str = "legacy",
 ) -> Propuesta:
     """Traduce las `respuestas` (`id de pregunta` → id de opción, o lista de ids) a cambios sobre
     los valores `actual`es (clave del registro → valor). No toca nada: devuelve la propuesta."""
@@ -442,10 +439,9 @@ def resolver(
                 propuestos[clave] = _lista_con_extras(pregunta, clave, list(valor), actual)
 
     omitidos: list[Omitido] = []
-    if aos_runtime == "v3":
-        for clave in [c for c in propuestos if _es_de_voz(c)]:
-            omitidos.append(Omitido(clave=clave, etiqueta=POR_CLAVE[clave].etiqueta, motivo=MOTIVO_VOZ_V3))
-            del propuestos[clave]
+    for clave in [c for c in propuestos if _es_de_voz(c)]:
+        omitidos.append(Omitido(clave=clave, etiqueta=POR_CLAVE[clave].etiqueta, motivo=MOTIVO_VOZ_V3))
+        del propuestos[clave]
 
     estado = {**actual, **propuestos}
     for clave in [c for c in propuestos if POR_CLAVE[c].depende_de]:

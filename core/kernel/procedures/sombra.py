@@ -2,8 +2,7 @@
 
 Antes de encender `aos_procedures` en un negocio, el motor corre en paralelo al flujo de
 siempre: calcula transiciones y comprobaciones, no responde y registra las diferencias. La
-ventana es `aos_runtime = 'v3'` con `aos_procedures` apagada (adenda de ADR-0112): no hay una
-bandera más y el replay del gate (runtime legacy) no la ejecuta.
+ventana es `aos_procedures` apagada (adenda de ADR-0112): no hay una bandera más.
 
 - Observa cada acción que el loop ejecutó (nombre, args, si terminó bien y su resultado) sobre una
   tarea sombra. La tarea sombra empieza cuando una acción ejecutada es de la primera etapa de

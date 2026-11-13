@@ -19,7 +19,7 @@ import uuid
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _api_helpers import api_headers, uniq
 from sqlalchemy import text
 
 pytestmark = [
@@ -193,7 +193,6 @@ async def test_el_build_congela_solo_las_de_la_conexion_y_falla_cerrado(app_clie
     from core.shared.tenant import tenant_scope
 
     tid, cid = await _negocio(["pack_commerce", "pack_calendar"])
-    await banderas_como_dueno(tid, aos_runtime="v3")
     master = await api_headers(app_client, tid)
     ((uno,),) = await _sql(tid, "select active_release_id from channel_connections where id = :c", c=cid)
     assert await _skills(tid, uno) == ["pack_calendar", "pack_commerce"]  # sin instalaciones: las del negocio

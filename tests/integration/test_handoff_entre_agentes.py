@@ -1,6 +1,6 @@
 """HU-AOS-19 parte 1 · handoff en dos fases con el loop real y un modelo guionado (sin LLM).
 
-Negocio `aos_runtime = v3` con el motor y `pack_commerce`, dos especialistas que declaran
+Negocio con el motor y `pack_commerce`, dos especialistas que declaran
 `contratar_plan` (Ventas por defecto y Soporte) y Agenda, que solo declara `agendar_cita`:
 
 - **Sin pérdida:** Ventas, con una tarea a medias, pasa a Soporte. Al cerrar el turno, el dueño de la

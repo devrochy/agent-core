@@ -5,7 +5,7 @@ Sin LLM ni red. Criterios de la HU:
   overrides de playbooks, secciones del negocio y los campos de `AppSettings` del prompt, con
   `manifest_hash`; no se activa sola; idempotente por hash.
 - **Release 1:** por conexión conversacional, desde el AgentSpec v2 activo, idempotente; con
-  `aos_runtime = legacy` no cambia lo que lee el loop.
+  sin cambio en lo que lee el loop.
 - **Sticky por episodio:** con la 2 publicada, una conversación en la 1 sigue en ella hasta el
   fin del episodio, y su siguiente episodio usa la 2.
 - **Rollback:** cambio de puntero; las conversaciones de la release retirada cambian en su
@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _api_helpers import api_headers, uniq
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
@@ -636,7 +636,6 @@ async def test_api_releases_permisos_aislamiento_y_rollback(app_client) -> None:
 
     # El dueño escribe: sin 403 por runtime (ADR-0191).
     dueno = await api_headers(app_client, tid, email=await _dueno(tid), password=PASSWORD)
-    await banderas_como_dueno(tid, aos_runtime="v3")
     await _cambiar_nombre(tid, "Desde la API")
     r = await app_client.post(f"{base}/releases", headers=dueno, json={"notes": "cambio de nombre"})
     assert r.status_code == 201, r.text

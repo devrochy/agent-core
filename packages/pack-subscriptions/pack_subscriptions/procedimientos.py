@@ -53,7 +53,7 @@ async def plan_destino(valor: Any, ctx: ToolContext, datos: dict[str, Any]) -> R
 
 def registrar(host: Any, plugin_id: str) -> None:
     """Publica los procedimientos, sus resolvers, el resumen y los rótulos (lo llama `on_activate`). Sin banderas
-    encendidas nadie los usa: el motor solo actúa con `tenants.aos_procedures` (o en sombra con `aos_runtime = v3`)."""
+    encendidas nadie los usa: el motor solo actúa con `tenants.aos_procedures` (o en sombra sin ella)."""
     from core.kernel.procedures import de_pack
 
     host.register_resolver(f"{plugin_id}.plan_destino", validar=plan_destino)

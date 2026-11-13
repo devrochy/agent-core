@@ -1,8 +1,6 @@
 """Release del turno: asignación sticky por episodio y revalidación de tareas (ADR-0117 §4, HU-AOS-14).
 
-Solo con `tenants.aos_runtime = 'v3'` (y `AOS_CONNECTION_ROUTING` encendida, que v3 exige): con
-`legacy`, o con la bandera global apagada, `fijar_release_del_turno` no hace nada (ni una
-consulta) y el runtime lee `agent_specs`, el disco y `AppSettings` como siempre.
+Todo negocio corre en el Agent OS (ADR-0191): cada turno con conexión lleva su release.
 
 **Asignación** (en una transacción, con la fila de la conversación bloqueada):
 - Sin release, o al empezar un episodio nuevo (`episode.idleMinutes` del KernelSpec de su release,
@@ -609,8 +607,8 @@ async def _pila(
 
 
 async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar: bool = True) -> Asignacion | None:
-    """Punto de enganche del loop. None con `aos_runtime = 'legacy'`, sin conexión o sin release activa (el turno sigue como
-    siempre). Fail-closed con v3: un error de base sube por el camino de error del turno.
+    """Punto de enganche del loop. None sin conexión o sin release activa (fail-closed, HU-ARCH-34).
+    Un error de base sube por el camino de error del turno.
     `texto`: el mensaje del cliente, para el router (solo con `aos_routing` ≠ off). `enrutar=False`:
     asigna la release y el dueño sticky SIN correr el router ni consumir el payload de botón que
     espera el turno diferido (lo usa el toque de una opción directa, que no es un turno)."""
@@ -624,8 +622,6 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar
 
     async with get_session() as session:
         banderas = await banderas_del_negocio(session, tenant_id)
-        if banderas.runtime != "v3":
-            return None
         if connection_id is None:
             # Sin conexión no hay release posible: mismo fail-closed que sin release activa (HU-ARCH-34).
             log.error("release_missing", connection_id=None)

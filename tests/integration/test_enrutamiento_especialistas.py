@@ -1,6 +1,6 @@
 """HU-AOS-17 · enrutamiento entre especialistas con el loop real y un modelo guionado (sin LLM).
 
-Negocio `aos_runtime = v3` con el motor de procedimientos, `pack_commerce` y `pack_calendar`, dos
+Negocio con el motor de procedimientos, `pack_commerce` y `pack_calendar`, dos
 especialistas publicados (Ventas por defecto con `contratar_plan`, Agenda con `agendar_cita`) y
 `AOS_CONNECTION_ROUTING` encendida:
 
@@ -58,7 +58,7 @@ async def _sql(tid: uuid.UUID | None, sql: str, **params: Any) -> list[Any]:
             return list(resultado.all()) if getattr(resultado, "returns_rows", False) else []
 
 
-async def _banderas(tid: uuid.UUID, runtime: str, procedimientos: bool) -> None:
+async def _banderas(tid: uuid.UUID, procedimientos: bool) -> None:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from core.config import get_settings
@@ -69,8 +69,8 @@ async def _banderas(tid: uuid.UUID, runtime: str, procedimientos: bool) -> None:
         async with engine.begin() as conn:
             await conn.execute(text("update tenants set aos_procedures = false where id = :t"), {"t": tid})
             await conn.execute(
-                text("update tenants set aos_runtime = :r, aos_procedures = :p where id = :t"),
-                {"t": tid, "r": runtime, "p": procedimientos},
+                text("update tenants set aos_procedures = :p where id = :t"),
+                {"t": tid, "p": procedimientos},
             )
     finally:
         await engine.dispose()
@@ -117,7 +117,7 @@ async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:
     )
     reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
-    await _banderas(tid, "v3", True)
+    await _banderas(tid, True)
     return tid, cid
 
 
@@ -438,27 +438,6 @@ async def test_la_ruta_de_un_negocio_no_cruza_a_otro(_ruteo: None, monkeypatch: 
     del conv_a
 
 
-async def test_el_escritor_de_banderas_ya_no_acepta_legacy(_ruteo: None) -> None:
-    """Sin vuelta a legacy (ADR-0191, migración 0126): el escritor único lo rechaza y no cambia nada."""
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-    from core.kernel.banderas import BanderasAOS, BanderasRechazadas, fijar_banderas
-
-    tid, _cid = await _negocio()
-    await _modo(tid, "shadow")
-    engine = create_async_engine(get_settings().migrations_database_url)
-    try:
-        with pytest.raises(BanderasRechazadas):
-            async with engine.begin() as conn:
-                objetivo = BanderasAOS(runtime="legacy", procedimientos=False, ruteo="off")
-                await fijar_banderas(conn, tid, objetivo, actor="test")
-    finally:
-        await engine.dispose()
-    ((runtime, ruteo),) = await _sql(None, "select aos_runtime, aos_routing from tenants where id = :t", t=tid)
-    assert (runtime, ruteo) == ("v3", "shadow")
-
-
 # ---------------------------------------------------------------- punta a punta con los presets v2 (HU-AOS-46)
 async def _negocio_con_preset_suscripciones() -> tuple[uuid.UUID, uuid.UUID, Any, uuid.UUID, dict[str, Any]]:
     """Negocio v3 con commerce, calendar y subscriptions, una conexión y `presets-v2 --aplicar`
@@ -489,7 +468,7 @@ async def _negocio_con_preset_suscripciones() -> tuple[uuid.UUID, uuid.UUID, Any
         id=cid, t=tid, ext=f"ig-{uuid.uuid4().hex[:10]}",
     )
     assert not (await release_inicial(tid, _modules())).fallo
-    await _banderas(tid, "v3", True)
+    await _banderas(tid, True)
 
     (reporte,) = await backfill_presets_v2(tenant_ids=[tid], preset_id="suscripciones", aplicar=True, modules=_modules())
     assert not reporte.fallo, reporte.errores
