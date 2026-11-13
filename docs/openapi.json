@@ -65924,6 +65924,14 @@
       },
       "AgentsOverview": {
         "properties": {
+          "runtime": {
+            "type": "string",
+            "const": "v3",
+            "title": "Runtime",
+            "description": "Deprecado: siempre `v3` (ADR-0191). Solo para la APK instalada; no lo leas.",
+            "default": "v3",
+            "deprecated": true
+          },
           "items": {
             "items": {
               "$ref": "#/components/schemas/AgentOverviewItem"
