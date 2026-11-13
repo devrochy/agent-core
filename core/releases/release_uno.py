@@ -5,10 +5,10 @@
 1. Refresca el Coordinador y el General desde el AgentSpec v2 activo **una vez** (corre el
    backfill B2 de HU-AOS-13, idempotente, y publica la conversión actual si cambió; ver
    `core/releases/build.py`). Un negocio que no pasa el backfill queda con error y no se toca.
-2. Por cada conexión conversacional viva **sin ninguna release**: construye la release 1 desde
+2. Por cada conexión conversacional viva **sin release activa**: construye la release 1 desde
    esas versiones, los artefactos del disco y los campos de `AppSettings` del prompt, y la
-   promueve (`reason = 'release_1'`, actor `system:backfill`). Las que ya tienen una release no
-   se tocan: así una re-corrida cubre solo las conexiones nuevas (idempotente).
+   promueve (`reason = 'release_1'`, actor `system:backfill`). Las que ya tienen una release activa
+   no se tocan: así una re-corrida cubre solo las conexiones nuevas (idempotente).
 
 Sin cambio de conducta: con `tenants.aos_runtime = 'legacy'` el runtime ignora `release_id` y
 lee de `agent_specs` y del disco, con el rollback de ADR-0051 §1. La release solo se lee con
@@ -59,13 +59,13 @@ class ReporteReleases:
 
 
 async def _conexiones(tenant_id: uuid.UUID) -> list[tuple[uuid.UUID, bool]]:
-    """(conexión conversacional viva, ¿ya tiene alguna release?)."""
+    """(conexión conversacional viva, ¿ya tiene release activa?). Una conexión con solo candidatas
+    (p. ej. las que deja el editor) también recibe su release 1 (ADR-0191)."""
     async with get_session() as session:
         filas = (
             await session.execute(
                 text(
-                    "SELECT cc.id, EXISTS (SELECT 1 FROM connection_releases r "
-                    "  WHERE r.tenant_id = cc.tenant_id AND r.connection_id = cc.id) "
+                    "SELECT cc.id, cc.active_release_id IS NOT NULL "
                     "FROM channel_connections cc JOIN connection_types ct ON ct.id = cc.type_id "
                     "WHERE cc.tenant_id = :t AND cc.deleted_at IS NULL AND ct.produces_conversations "
                     "ORDER BY cc.id"

@@ -608,7 +608,8 @@ async def agregar_instancia(
       publicada (si no, el build de la release no tendría qué fijar).
     - La conexión ya tiene su Coordinador (lo pone el sistema: backfill o alta).
     - `is_default`: pasa a ser el agente por defecto (el anterior deja de serlo) y tiene que
-      estar habilitado.
+      estar habilitado. Si la conexión no tiene ningún especialista habilitado por defecto, el
+      agente que se agrega habilitado lo es (ADR-0192 §1): una conexión siempre tiene quién atienda.
     - Si es la primera instancia del agente, aplica el tope de agentes publicados del plan:
       `core.billing.enforcement.QuotaExceeded` (D-35, ADR-0142)."""
     _exigir_scope(tenant_id)
@@ -653,6 +654,8 @@ async def agregar_instancia(
                 )
             if any(i.agent_id == agent_id for i in vivas):
                 raise ConflictoInstancia("already_assigned", "Ese agente ya está en la conexión.")
+            if enabled and not any(i.role == "specialist" and i.is_default and i.enabled for i in vivas):
+                is_default = True
             if len(vivas) >= MAX_INSTANCIAS_POR_CONEXION:
                 raise ConflictoInstancia(
                     "limit_reached", f"La conexión ya tiene {MAX_INSTANCIAS_POR_CONEXION} agentes: quita alguno antes."
