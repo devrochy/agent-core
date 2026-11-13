@@ -695,21 +695,27 @@ async def test_pack_versions_solo_cambia_yanked() -> None:
             await tx.rollback()
 
 
-async def test_banderas_por_negocio_respetan_el_orden(dos_negocios: dict[str, Any]) -> None:
+async def test_banderas_por_negocio_sin_runtime(dos_negocios: dict[str, Any]) -> None:
+    """0127: `aos_runtime` ya no existe y `aos_routing` sigue limitada a sus tres valores."""
     a = dos_negocios["a"]
     async with _owner() as conn:
         async with conn.begin():
+            columnas = (
+                await conn.execute(
+                    text(
+                        "select column_name from information_schema.columns "
+                        "where table_schema = 'public' and table_name = 'tenants' and column_name like 'aos_%'"
+                    )
+                )
+            ).scalars().all()
+            assert sorted(columnas) == ["aos_procedures", "aos_routing"]
             fila = (
-                await conn.execute(
-                    text("select aos_runtime, aos_procedures from tenants where id = :t"), {"t": a}
-                )
+                await conn.execute(text("select aos_procedures, aos_routing from tenants where id = :t"), {"t": a})
             ).one()
-            assert tuple(fila) == ("v3", False), "todo negocio nace en v3 (migración 0126)"
-        with pytest.raises(IntegrityError, match="ck_tenants_aos_order"):
+            assert tuple(fila) == (False, "off")
+        with pytest.raises(IntegrityError, match="ck_tenants_aos_routing"):
             async with conn.begin():
-                await conn.execute(
-                    text("update tenants set aos_runtime = 'legacy', aos_procedures = true where id = :t"), {"t": a}
-                )
+                await conn.execute(text("update tenants set aos_routing = 'on' where id = :t"), {"t": a})
 
 
 async def test_turno_de_otro_negocio_se_rechaza_al_confirmar(dos_negocios: dict[str, Any]) -> None:

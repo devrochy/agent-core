@@ -97,8 +97,8 @@ CANDADO_SQL = "SELECT pg_try_advisory_xact_lock(hashtextextended('agent_os:' || 
 
 
 class BanderasRechazadas(Exception):
-    """La base rechazó el cambio (orden de banderas, permiso o negocio inexistente). `codigo`:
-    `orden` | `permiso` | `no_existe` | `invalido`. El mensaje no lleva datos del negocio."""
+    """La base rechazó el cambio (permiso, negocio inexistente o valores inválidos). `codigo`:
+    `permiso` | `no_existe` | `invalido`. El mensaje no lleva datos del negocio."""
 
     def __init__(self, codigo: str, mensaje: str) -> None:
         super().__init__(mensaje)
@@ -106,7 +106,6 @@ class BanderasRechazadas(Exception):
 
 
 _SQLSTATE = {
-    "23514": ("orden", "combinación de banderas fuera de orden"),
     "42501": ("permiso", "solo el admin master cambia las banderas del Agent OS"),
     "P0002": ("no_existe", "negocio no encontrado"),
     "22023": ("invalido", "valores de banderas inválidos"),
@@ -121,20 +120,18 @@ async def fijar_banderas(
     admin_id: uuid.UUID | None = None,
     actor: str | None = None,
 ) -> bool:
-    """El único escritor de las banderas: `aos_fijar_banderas` (migración 0097, SECURITY DEFINER),
+    """El único escritor de las banderas: `aos_fijar_banderas` (migraciones 0097 y 0127, SECURITY DEFINER),
     que las valida y deja la fila de `audit_log` en la misma transacción. Con `admin_id` la base
     exige que sea master (la API, con `app_runtime`); sin él, la sesión debe ser del rol dueño (CLI
-    y «Preparar mis datos»). Devuelve si cambió algo. El runtime va fijo en `'v3'`, el único que
-    acepta la función desde 0126 (ADR-0191)."""
+    y «Preparar mis datos»). Devuelve si cambió algo."""
     from sqlalchemy.exc import DBAPIError
 
     try:
         resultado = (
             await conn.execute(
-                text("SELECT aos_fijar_banderas(:t, :r, :p, :ru, :a, :actor)"),
+                text("SELECT aos_fijar_banderas(:t, :p, :ru, :a, :actor)"),
                 {
                     "t": tenant_id,
-                    "r": "v3",
                     "p": banderas.procedimientos,
                     "ru": banderas.ruteo,
                     "a": admin_id,
