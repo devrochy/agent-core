@@ -49,9 +49,10 @@ async def test_el_catalogo_trae_el_guion_del_asistente(app_client) -> None:
     r = await app_client.get(f"{BASE}/catalog", headers={"Cookie": cookie})
     assert r.status_code == 200, r.text
     secciones = {g["seccion"]: [q["id"] for q in g["preguntas"]] for g in r.json()["asistente"]}
-    assert secciones["voz"] == ["tono", "emojis", "largo", "prohibidas"]  # negocio nuevo = legacy
+    # Negocio nuevo = v3 (ADR-0191): la voz sale de la release, así que solo queda lo que no es persona.
+    assert secciones["voz"] == ["largo"]
     assert "horario" in secciones["atencion"]
-    assert r.json()["aos_runtime"] == "legacy"
+    assert r.json()["aos_runtime"] == "v3"
 
 
 async def test_vista_previa_no_escribe_y_aplicar_guarda_ambos_almacenes(app_client) -> None:
@@ -68,12 +69,9 @@ async def test_vista_previa_no_escribe_y_aplicar_guarda_ambos_almacenes(app_clie
     assert voz.status_code == 200, voz.text
     assert atencion.status_code == 422  # «tono» no es una pregunta de esa sección
     cambios = {c["clave"]: c["propuesto"] for c in voz.json()["cambios"]}
-    assert cambios == {
-        "persona_tone": "neutral",
-        "persona_warmth": 2,
-        "persona_max_length": 900,
-        "split_style": "pocos_cortos",
-    }
+    assert cambios == {"split_style": "pocos_cortos"}
+    # Configuración ya no edita agentes (ADR-0191 §4): lo de la persona se omite y se dice por qué.
+    assert {o["clave"] for o in voz.json()["omitidos"]} == {"persona_tone", "persona_warmth", "persona_max_length"}
     assert await _identidad(app_client, cookie) == antes  # la vista previa no escribió nada
 
     aplicado = await app_client.post(
@@ -83,9 +81,8 @@ async def test_vista_previa_no_escribe_y_aplicar_guarda_ambos_almacenes(app_clie
     )
     assert aplicado.status_code == 200, aplicado.text
     despues = await _identidad(app_client, cookie)
-    assert despues["persona_tone"] == "neutral"
-    assert despues["persona_warmth"] == 2
-    assert despues["persona_max_length"] == 900  # AgentSpec
+    assert despues["persona_tone"] == antes["persona_tone"]  # la persona no se toca en v3
+    assert despues["persona_max_length"] == antes["persona_max_length"]
     assert despues["split_style"] == "pocos_cortos"  # behavior_config
     assert despues["assistant_name"] == antes["assistant_name"]  # lo que el asistente no toca se conserva
 

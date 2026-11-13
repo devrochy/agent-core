@@ -138,7 +138,7 @@ async def test_kpis_del_negocio_de_cada_agente_y_de_su_modulo(app_client) -> Non
     r = await app_client.get(_URL, headers=h)
     assert r.status_code == 200, r.text
     datos = r.json()
-    assert datos["runtime"] == "legacy"
+    assert datos["runtime"] == "v3"  # nace en v3 (ADR-0191)
 
     general = _kpis(datos["general"])
     assert general["conversaciones"]["destino"] == {"ruta": "conversaciones", "params": {}}
@@ -157,7 +157,7 @@ async def test_kpis_del_negocio_de_cada_agente_y_de_su_modulo(app_client) -> Non
     }
     assert k["tareas_abiertas"]["valor"] == 1 and k["tareas_abiertas"]["previo"] is None
     assert k["costo"]["valor"] == pytest.approx(0.03)
-    assert "escalados" not in k  # legacy: no hay turn_outcomes que atribuir
+    assert k["escalados"]["valor"] == 0  # v3: salen de turn_outcomes (ninguno en el escenario)
 
     # El módulo es el del pack de la plantilla, completo: cuenta 2 pedidos (el cancelado no).
     (modulo,) = ventas["modulos"]

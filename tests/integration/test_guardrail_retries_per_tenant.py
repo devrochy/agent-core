@@ -78,6 +78,10 @@ async def _ensure_max_tool_calls_per_turn(tid: uuid.UUID, value: int) -> None:
             spec = copy.deepcopy(row.spec)
             spec.setdefault("policies", {})["maxToolCallsPerTurn"] = value
             row.spec = spec
+    # En v3 el tope sale de la versión del especialista de la release (ADR-0191): se fija ahí.
+    from release_de_prueba import republicar
+
+    await republicar(tid, politicas_agente={"maxToolCallsPerTurn": value})
 
 
 async def _run_background(seconds: float) -> None:
