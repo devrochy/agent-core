@@ -43,6 +43,7 @@ from core.db.models import (
     UsageLedger,
 )
 from core.db.session import get_session
+from core.shared.tenant import get_current_tenant_id
 from core.shared.test_mode import TEST_CHANNEL
 
 VENTANA_POR_DEFECTO = timedelta(days=30)
@@ -114,9 +115,15 @@ def _utc(valor: datetime) -> datetime:
     return valor.replace(tzinfo=UTC) if valor.tzinfo is None else valor.astimezone(UTC)
 
 
+def _exigir_scope(tenant_id: uuid.UUID) -> None:
+    if get_current_tenant_id() != tenant_id:
+        raise PermissionError("data_por_agente: fuera del tenant_scope del negocio")
+
+
 # ------------------------------------------------------------------ resolución
 async def resolver(tenant_id: uuid.UUID, ref: str) -> Alcance:
     """`ref` es el id de un agente del negocio."""
+    _exigir_scope(tenant_id)
     try:
         agent_id = uuid.UUID(ref)
     except ValueError:
@@ -154,6 +161,7 @@ async def resolver(tenant_id: uuid.UUID, ref: str) -> Alcance:
 async def resumen(tenant_id: uuid.UUID, *, ahora: datetime | None = None) -> dict[str, Any]:
     """Runtime, agentes (sin el Coordinador) con sus conexiones y actividad de 30 días, y lo no
     atribuido aparte."""
+    _exigir_scope(tenant_id)
     desde = (ahora or datetime.now(UTC)) - VENTANA_POR_DEFECTO
     async with get_session() as session:
         runtime = (

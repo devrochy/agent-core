@@ -114,6 +114,8 @@ async def _agentes_base_al_alta(tenant_id: uuid.UUID, *, nuevo: bool) -> list[st
     try:
         async with tenant_scope(tenant_id):
             await asegurar_base_del_negocio(tenant_id)
+    except PermissionError:  # un error de scope es un bug, no un fallo tolerable del alta
+        raise
     except Exception:  # frontera deliberada: el alta no depende del Agent OS
         log.warning("alta_agentes_base_fallo", tenant_id=str(tenant_id), exc_info=True)
         return ["Coordinador pendiente (reintentar el alta)"]
