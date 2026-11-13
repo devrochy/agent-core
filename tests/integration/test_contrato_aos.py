@@ -80,12 +80,13 @@ async def _negocio() -> tuple[uuid.UUID, str, uuid.UUID]:
 
 
 async def _con_dos_releases(tid: uuid.UUID, cid: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
+    from release_de_prueba import release_inicial
+
     from core.releases.build import construir
     from core.releases.promocion import promover
-    from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     (uno,) = (await _sql(tid, "select active_release_id from channel_connections where id = :c", c=cid))[0]
     await _sql(tid, "update app_settings set assistant_name = 'Dos' where tenant_id = :t", t=tid)
@@ -196,9 +197,9 @@ async def test_pide_dos_releases_estables_sin_rollback(ruteo_encendido) -> None:
     # Sin release activa.
     assert any("no tiene release activa" in b for b in (await _revisar(tid)).bloqueos)
 
-    from core.releases.release_uno import backfill_releases
+    from release_de_prueba import release_inicial
 
-    await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    await release_inicial(tid, _modules())
     # Una sola release: no alcanza.
     assert any("se piden 2 estables" in b for b in (await _revisar(tid)).bloqueos)
 

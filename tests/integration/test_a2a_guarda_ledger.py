@@ -63,10 +63,11 @@ async def _packs_registrados() -> None:
 
 async def _negocio(*, v3: bool = True) -> dict[str, Any]:
     """Negocio con una conexión, su release 1 y dos especialistas (ventas, agenda)."""
+    from release_de_prueba import release_inicial
+
     from core.agents import instancias, versiones
     from core.alta_negocio import onboard_tenant
     from core.kernel.procedures import catalogo_de_acciones
-    from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
     slug = uniq("a2a")
@@ -80,7 +81,7 @@ async def _negocio(*, v3: bool = True) -> dict[str, Any]:
         t=tid,
         ext=uniq("ig"),
     )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     if v3:
         await banderas_como_dueno(tid, aos_runtime="v3")

@@ -125,9 +125,9 @@ async def _negocio(slug: str, pagos: Any) -> tuple[uuid.UUID, uuid.UUID]:
 
 
 async def _release_uno(tid: uuid.UUID) -> uuid.UUID:
-    from core.releases.release_uno import backfill_releases
+    from release_de_prueba import release_inicial
 
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     [(rid,)] = await _sql(tid, "select active_release_id from channel_connections where tenant_id = :t "
                                "and type_id = 'instagram_meta'", t=tid)

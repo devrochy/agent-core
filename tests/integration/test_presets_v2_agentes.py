@@ -85,8 +85,9 @@ def _ruteo(monkeypatch: pytest.MonkeyPatch) -> None:
 async def _negocio(runtime: str = "v3", *, otra_conexion: bool = False) -> tuple[uuid.UUID, uuid.UUID]:
     """Negocio con su conexión (y otra, si se pide), release 1 (General por defecto) y el runtime
     pedido. Devuelve (negocio, primera conexión)."""
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
-    from core.releases.release_uno import backfill_releases
 
     slug = f"aos46-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"AOS46 {slug}", slug=slug, packs=PACKS, sembrar_ejemplos=False, plan="premium")
@@ -104,7 +105,7 @@ async def _negocio(runtime: str = "v3", *, otra_conexion: bool = False) -> tuple
             "values (:id, :t, 'instagram', 'meta', :ext, 'instagram_meta', now() + interval '1 second')",
             id=uuid.uuid4(), t=tid, ext=f"ig-{uuid.uuid4().hex[:10]}",
         )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     await _runtime(tid, runtime)
     return tid, cid

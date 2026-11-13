@@ -98,3 +98,37 @@ async def republicar(
             except ConflictoDeRelease:  # el mismo contenido: la release ya es la activa
                 pass
     return anteriores
+
+
+async def release_inicial(tenant_id: uuid.UUID, modules: Any = None, **_: Any) -> Any:
+    """La release 1 de las conexiones conversacionales del negocio, con agentes nativos (Coordinador +
+    especialista «atencion», ADR-0192) en las que todavía no tienen quién atienda. Reemplaza en los
+    tests a `backfill_releases`, que ya no crea el General desde el AgentSpec v2."""
+    from sqlalchemy import text
+
+    from core.db.session import get_session
+    from core.plugin_manager import plugin_manager
+    from core.releases.release_uno import backfill_releases
+    from core.shared.tenant import tenant_scope
+
+    modulos = list(modules) if modules is not None else (plugin_manager.list_modules() or plugin_manager.scan())
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            sin_agente = [
+                fila[0]
+                for fila in (
+                    await session.execute(
+                        text(
+                            "select c.id from channel_connections c join connection_types t on t.id = c.type_id "
+                            "where c.tenant_id = :t and c.deleted_at is null and t.produces_conversations "
+                            "and c.type_id <> 'playground' and not exists (select 1 from agent_instances i "
+                            "where i.connection_id = c.id and i.role = 'specialist' and i.is_default "
+                            "and i.deleted_at is null) order by c.created_at"
+                        ),
+                        {"t": tenant_id},
+                    )
+                ).all()
+            ]
+    for cid in sin_agente:
+        await _journeys().agentes_nativos(tenant_id, cid, modulos)
+    return await backfill_releases(dry_run=False, tenant_id=tenant_id, modules=modulos)

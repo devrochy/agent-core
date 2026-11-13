@@ -115,10 +115,10 @@ async def _negocio(slug: str, pagos: Any) -> tuple[uuid.UUID, uuid.UUID]:
         id=cid, t=tid, ext=f"ig-{cid.hex[:8]}",
     )
     journeys._CONEXION_V3[tid] = cid
-    from core.releases.release_uno import backfill_releases
+    from release_de_prueba import release_inicial
 
     await journeys.agentes_nativos(tid, cid, _modules())  # sin General (ADR-0192)
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     await _admin_sql("update tenants set aos_runtime = 'v3' where id = :t", t=tid)
     return tid, cid

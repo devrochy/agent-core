@@ -95,9 +95,10 @@ async def _proceso() -> None:
 async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:
     """Negocio v3 con commerce y calendar, una conexión conversacional y su release 1 (General
     por defecto, construida en legacy como el backfill). (tid, conexión)."""
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
-    from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
     slug = f"aos16-{uuid.uuid4().hex[:8]}"
@@ -114,7 +115,7 @@ async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:
         "values (:id, :t, 'instagram', 'meta', :ext, 'instagram_meta')",
         id=cid, t=tid, ext=f"ig-{uuid.uuid4().hex[:10]}",
     )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     await _banderas(tid, "v3", True)
     return tid, cid

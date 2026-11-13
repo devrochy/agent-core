@@ -140,7 +140,6 @@ def _alta_sin_agent_os():
     async def _agentes(tenant_id: uuid.UUID, *, nuevo: bool) -> list[str]:
         if _alta_agent_os.ACTIVO:
             return await real(tenant_id, nuevo=nuevo)
-        await _como_negocio_de_antes(tenant_id)
         return []
 
     alta._agentes_base_al_alta = _agentes  # type: ignore[assignment]

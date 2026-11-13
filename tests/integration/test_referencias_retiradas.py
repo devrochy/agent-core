@@ -61,8 +61,9 @@ async def _packs_registrados() -> None:
 
 async def _negocio(*, packs: list[str] | None = None) -> tuple[uuid.UUID, str, uuid.UUID]:
     """Negocio con una conexión conversacional, sus agentes base y la release 1. (tid, slug, conexión)."""
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
-    from core.releases.release_uno import backfill_releases
 
     slug = uniq("aos59")
     tid, _ = await onboard_tenant(name=f"AOS-59 {slug}", slug=slug, persona={"tone": "cercano"}, packs=packs)
@@ -75,7 +76,7 @@ async def _negocio(*, packs: list[str] | None = None) -> tuple[uuid.UUID, str, u
         t=tid,
         ext=uniq("ig"),
     )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     return tid, slug, cid
 

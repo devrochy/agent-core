@@ -280,10 +280,11 @@ async def v3() -> AsyncIterator[tuple[tuple[uuid.UUID, uuid.UUID], tuple[uuid.UU
 
     (Un binding AUSENTE no sirve de caso negativo: la conversión a v3 crea uno por cada acción ofrecida sin
     binding —el consentimiento del lector tolerante— y la release ya lo trae explícito.)"""
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.releases.packs import sync_packs
-    from core.releases.release_uno import backfill_releases
     from core.tenants import deactivate_tenant, purge_tenant
 
     await journeys._preparar_proceso()
@@ -312,7 +313,7 @@ async def v3() -> AsyncIterator[tuple[tuple[uuid.UUID, uuid.UUID], tuple[uuid.UU
             "values (:id, :t, 'instagram', 'meta', :ext, 'instagram_meta')",
             id=cid, t=tid, ext=f"ig-{cid.hex[:8]}",
         )
-        reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=plugin_manager.scan())
+        reporte = await release_inicial(tid, plugin_manager.scan())
         assert not reporte.fallo, reporte.errores
         await _banderas(tid, "v3")
         salida.append((tid, cid))

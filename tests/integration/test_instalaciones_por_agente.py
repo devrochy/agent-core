@@ -185,12 +185,13 @@ async def test_load_config_combina_negocio_y_agente() -> None:
 async def test_la_release_congela_las_habilidades_del_agente() -> None:
     """El componente del agente lleva `skills` (solo ids) y el cargador las expone como `packs`; sin instalaciones
     propias no hay `skills` (hereda las del negocio hasta la resiembra)."""
+    from release_de_prueba import release_inicial
+
     from core.agents.instalaciones_agente import guardar_config_del_agente, instalar_en_agente
     from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.releases.build import construir
     from core.releases.cargar import cargar_release
-    from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
     modulos = plugin_manager.scan()
@@ -205,7 +206,7 @@ async def test_la_release_congela_las_habilidades_del_agente() -> None:
         "values (:id, :t, 'instagram', 'meta', :ext, 'instagram_meta')",
         id=cid, t=tid, ext=uniq("ext"),
     )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=modulos)
+    reporte = await release_inicial(tid, modulos)
     assert not reporte.fallo, reporte.errores
     ((general,),) = await _sql(tid, "select id from agents where tenant_id = :t and key = 'general'", t=tid)
     async with tenant_scope(tid):
