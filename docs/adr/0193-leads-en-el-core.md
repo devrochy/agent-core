@@ -53,8 +53,8 @@ Detalle:
    Captar leads: la lee la API pública, que no conoce al agente (criterio de ADR-0190 §3). El secreto y la llave de
    Turnstile van cifrados como hoy y se copian sin pasar por logs.
 7. **Datos.** Un comando de CLI idempotente y por lotes copia `pack_commerce_leads` y sus tablas hijas a las del core,
-   conservando ids, `customer_id`, historia y seguimiento. También importa el CSV de `GET /admin/leads/export.csv`,
-   para los leads de producción que se exportan antes del salto. Las tablas de commerce no se borran: quedan sin
+   conservando ids, `customer_id`, historia y seguimiento. No importa CSV: producción empieza con una base completamente
+   nueva y sus leads viejos no se importan (❓4 de HU-AOS-70, decisión del dueño del 2026-11-13). Las tablas de commerce no se borran: quedan sin
    escrituras hasta una HU que las retire con borrado lógico o `tenant purge`.
 8. **API del panel.** `/admin/leads` conserva su forma; las columnas de etapa, seguimiento, motivo y valor las aporta
    el provider del core en vez del de commerce. `POST /api/v1/pack/commerce/leads/{customer_id}/seguimiento/hecho`
