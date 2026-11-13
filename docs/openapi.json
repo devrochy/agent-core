@@ -67122,17 +67122,6 @@
             },
             "type": "array",
             "title": "Warnings"
-          },
-          "general_updated": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "General Updated"
           }
         },
         "type": "object",

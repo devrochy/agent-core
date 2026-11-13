@@ -654,9 +654,6 @@ class ResultadoPublicacion:
     created: bool
     connections: list[ResultadoConexion]
     warnings: list[str]
-    # Sin General (ADR-0192): siempre `None`; se conserva hasta retirar el campo de la API.
-    general_actualizado: int | None = None
-
 
 
 def _validar_conexiones(pedidas: Sequence[uuid.UUID], disponibles: Mapping[uuid.UUID, Destino]) -> dict[str, str]:

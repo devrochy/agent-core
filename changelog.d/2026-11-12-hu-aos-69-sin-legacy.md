@@ -28,3 +28,7 @@
 - Una conexión conversacional nueva de un negocio que ya tiene agentes nace con el Coordinador y el especialista por defecto del negocio (el que es el por defecto en sus otras conexiones), en la misma transacción del alta; sin ninguno, queda pendiente y el preset se lo da por `connection.release_1`.
 - El panel del master ya no corre `migrar-a-v3`: el runtime es siempre v3, `construir` no tiene efecto y pedir `legacy` es 422. «Preparar mis datos» asegura el Coordinador y sus instancias en lugar de los backfills.
 - La exención de gate `migrar_a_v3` sale (no queda quien la use); `migrar_a_v3` sigue como motivo en el historial de eventos.
+
+### Quinta tanda: la API sin el General (HU-AOS-68, ADR-0192 §5–6)
+- «Mi agente y su data» y el Resumen por agente ya no tienen un General virtual: el `ref` es siempre el id del agente (el literal `general` es 404) y lo no atribuido, con los módulos que ningún agente cubre, va al especialista por defecto del negocio (`incluye_sin_atribuir` lo marca). Un negocio sin especialistas solo tiene el bloque del negocio. Los schemas no cambian.
+- `general` deja de ser clave reservada: solo `coordinador` lo es. Sale `general_updated` de la respuesta de publicar del editor.

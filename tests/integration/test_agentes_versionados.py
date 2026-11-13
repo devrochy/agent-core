@@ -177,11 +177,13 @@ async def test_borrador_publicacion_concurrencia_y_validacion(app_client) -> Non
 async def test_kernelspec_del_coordinador_y_keys_reservadas(app_client) -> None:
     tid = await _negocio()
     h = await api_headers(app_client, tid)
-    for key in ("general", "coordinador"):
-        r = await app_client.post(
-            "/api/v1/admin/agents", headers=h, json={"key": key, "kind": "specialist", "name": key}
-        )
-        assert r.status_code == 409, r.text
+    r = await app_client.post(
+        "/api/v1/admin/agents", headers=h, json={"key": "coordinador", "kind": "specialist", "name": "coordinador"}
+    )
+    assert r.status_code == 409, r.text
+    # `general` ya no es reservada (ADR-0192 §6): es la clave de un agente cualquiera.
+    r = await app_client.post("/api/v1/admin/agents", headers=h, json={"key": "general", "kind": "specialist", "name": "General"})
+    assert r.status_code == 201, r.text
 
     r = await app_client.post(
         "/api/v1/admin/agents", headers=h, json={"key": "coord_pruebas", "kind": "core", "name": "Coordinador"}

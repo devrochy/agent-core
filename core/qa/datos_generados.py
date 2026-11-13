@@ -168,12 +168,11 @@ async def _agente(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> Agente:
 
 async def _eleccion(tenant_id: uuid.UUID, agente: Agente) -> Eleccion | str:
     """La forma de datos del agente, o el motivo por el que no tiene."""
-    from core.agents.claves import KEY_GENERAL
     from core.agents.editor import habilitados_del_negocio
     from core.plugin_manager import plugin_manager
 
-    if agente.kind != "specialist" or agente.key == KEY_GENERAL:
-        return "El agente General y el Coordinador no usan datos de un pack: genera los de cada especialista."
+    if agente.kind != "specialist":
+        return "El Coordinador no usa datos de un pack: genera los de cada especialista."
     habilitados = await habilitados_del_negocio(tenant_id)
     nombrada = _forma_de_plantilla(agente.key)
     if nombrada is not None:

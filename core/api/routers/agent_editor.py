@@ -214,8 +214,6 @@ class EditorPublishOut(BaseModel):
     created: bool
     connections: list[PublishedConnection]
     warnings: list[str]
-    # Versión nueva del General si esta publicación lo recortó (HU-AOS-52); null si no cambió.
-    general_updated: int | None = None
 
 
 # ------------------------------------------------------------------ utilidades
@@ -542,7 +540,6 @@ async def publish_to_connections(
             for c in resultado.connections
         ],
         warnings=resultado.warnings,
-        general_updated=resultado.general_actualizado,
     )
 
 

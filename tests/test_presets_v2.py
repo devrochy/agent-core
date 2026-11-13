@@ -59,7 +59,7 @@ def test_plantilla_rechaza_prompts_keys_reservadas_y_procedimientos_ajenos() -> 
     with pytest.raises(ValidationError):
         PlantillaAgente.model_validate({**base, "prompt": "Eres el mejor vendedor"})
     with pytest.raises(ValidationError):
-        PlantillaAgente.model_validate({**base, "key": "general"})
+        PlantillaAgente.model_validate({**base, "key": "coordinador"})
     with pytest.raises(ValidationError):
         PlantillaAgente.model_validate({**base, "procedimientos": ["pack_cobranza.promesa_de_pago"]})
     with pytest.raises(ValidationError):  # regla sin condición (DSL del contrato kernelspec/1)
