@@ -207,7 +207,7 @@ def derivar_contenido(
     Lanza `PresetError("sin_procedimientos")` si no queda ningún procedimiento."""
     from agentcore_contracts import AgentSpecV3
 
-    from core.agents.tolerante import _declarados
+    from core.agents.procedimientos_de_negocio import declarados as _declarados
     from core.kernel.procedures.catalogo import CORE_OWNER
     from core.releases.procedimientos import ofrecible
     from core.subscriptions.tools import SOLO_PROCEDIMIENTO
@@ -239,11 +239,11 @@ def derivar_contenido(
 
     tools = [dict(b) for b in general.get("tools") or [] if _propia(str(b.get("tool", "")))]
     nombres = {b["tool"] for b in tools}
-    # HU-ARCH-34: en v3 se niega lo que la versión no concede. Las del core que el turno ofrece siempre
-    # llevan binding aunque el General sea anterior a la acción; las de procedimiento no: declararlo
-    # ya las concede (ADR-0118 §3).
+    # HU-ARCH-34: en v3 se niega lo que la versión no concede. Las propias del agente (las de su pack
+    # y las esenciales del core) llevan binding aunque la base no las traiga (ADR-0192 §1: sin
+    # General que las herede); las de procedimiento no: declararlo ya las concede (ADR-0118 §3).
     for nombre, info in sorted(catalogo.items()):
-        if info.owner == CORE_OWNER and nombre not in nombres and nombre not in SOLO_PROCEDIMIENTO and _propia(nombre):
+        if nombre not in nombres and nombre not in SOLO_PROCEDIMIENTO and _propia(nombre):
             tools.append({"tool": nombre, "enabled": True, "scopes": list(getattr(info, "scopes", ()))})
             nombres.add(nombre)
     guardrails = [
@@ -256,6 +256,8 @@ def derivar_contenido(
         for p in general.get("playbooks") or []
         if p.get("name") in plantilla.playbooks or p.get("name") not in playbooks_de_packs
     ]
+    presentes = {p.get("name") for p in playbooks}
+    playbooks += [{"name": n} for n in plantilla.playbooks if n not in presentes]
     contenido = {
         "description": plantilla.descripcion,
         "persona": general.get("persona") or {},
@@ -678,14 +680,12 @@ async def aplicar_agentes(
     aplicar: bool = True,
 ) -> ReportePresetV2:
     """Instala los agentes del preset v2 en el negocio (ver el docstring del módulo)."""
-    from core.orchestrator.ruta_de_conversacion import ruteo_por_conexion
-
     _exigir_scope(tenant_id)
     reporte = ReportePresetV2(tenant_id, manifest.id, manifest.version, aplicar)
     if not manifest.es_v2:
         reporte.omitido = "preset_v1"
         return reporte
-    if not ruteo_por_conexion() or await _runtime(tenant_id) != "v3":
+    if await _runtime(tenant_id) != "v3":
         reporte.omitido = "banderas_apagadas"
         return reporte
     plantillas = plantillas_del_preset(manifest)
@@ -716,9 +716,10 @@ async def _aplicar(
     modules: Iterable[Any] | None,
     aplicar: bool,
 ) -> ReportePresetV2:
+    from core.agents.base import contenido_base
+    from core.agents.claves import KEY_COORDINADOR
     from core.agents.instancias import agentes_base
     from core.agents.spec import enabled_business_packs, leer_spec_activo
-    from core.agents.tolerante import KEY_COORDINADOR, KEY_GENERAL
     from core.kernel.procedures import catalogo_de_acciones
     from core.plugin_manager import plugin_manager
 
@@ -727,13 +728,14 @@ async def _aplicar(
         reporte.omitido = "sin_spec"
         return reporte
     habilitados = enabled_business_packs(leido[1])
+    # Sin General (ADR-0192 §4): la base de cada especialista sale de la configuración del negocio.
+    base_del_negocio = contenido_base(leido[1], playbooks_de_packs=_playbooks_de_packs())
     del leido  # el v2 puede llevar literales de las declarativas
     async with get_session() as session:
         base = await agentes_base(session, tenant_id)
-    general_id, coordinador_id = base.get(KEY_GENERAL), base.get(KEY_COORDINADOR)
-    general = await _ultima_version(tenant_id, general_id) if general_id else None
-    if general is None or coordinador_id is None:
-        reporte.omitido = "sin_agentes_base"
+    coordinador_id = base.get(KEY_COORDINADOR)
+    if coordinador_id is None:
+        reporte.omitido = "sin_coordinador"
         return reporte
     conexiones = await _conexiones_con_coordinador(tenant_id)
     if not conexiones:
@@ -753,7 +755,7 @@ async def _aplicar(
             tenant_id,
             plantilla,
             manifest,
-            general=general[1],
+            general=base_del_negocio,
             efectivas=efectivas,
             catalogo=catalogo,
             habilitados=habilitados,

@@ -71,7 +71,6 @@ CHECK_DECISIONES = "ck_core_decisions_contract"
 FK_SIMPLE = "conversations_connection_id_fkey"
 FK_COMPUESTA = "fk_conv_connection"
 COMANDO_CONEXIONES = "agent-core db backfill-conexiones"
-COMANDO_MIGRAR = "agent-core db migrar-a-v3"
 _LOCK_TIMEOUT = "5s"
 _LOCK_VALIDAR = "60s"
 
@@ -398,15 +397,13 @@ async def contraer(
     reporte = ReporteContrato(dry_run=dry_run)
     if not dry_run and not confirmado:
         reporte.bloqueos.append("aplicar es un punto sin retorno: confirma con --confirmo-sin-vuelta-atras")
-    if not get_settings().aos_connection_routing:
-        reporte.bloqueos.append("AOS_CONNECTION_ROUTING está apagada en este entorno (orden de banderas, ADR-0112)")
 
     negocios = await _negocios(tenant_ids)
     reporte.negocios = len(negocios)
     pares: dict[uuid.UUID, list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]] = {}
     for tenant_id, slug, runtime, vivo in negocios:
         if vivo and runtime != "v3":
-            reporte.bloqueos.append(f"{slug}: sigue en aos_runtime = {runtime} (corre `{COMANDO_MIGRAR} --tenant {slug}`)")
+            reporte.bloqueos.append(f"{slug}: sigue en aos_runtime = {runtime} (se vuelve a sembrar: no hay paso legacy → v3, ADR-0191)")
         async with tenant_scope(tenant_id):
             huerfanas = await _sin_conexion(tenant_id)
             if huerfanas:

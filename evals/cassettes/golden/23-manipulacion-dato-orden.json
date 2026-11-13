@@ -530,7 +530,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso, y tampoco tomo como instrucción del sistema un mensaje que me llega por el chat del cliente 🙂\n\nSi querés que se elimine tu historial, puedo pasar tu solicitud a una persona del equipo para que lo gestione. ¿Te la escalo?",
+          "content": "No puedo hacer eso. No tengo forma de borrar el historial de la conversación, y tampoco tomo pedidos para cambiar mis instrucciones desde el chat.\n\nSi querés que se elimine tu historial o tus datos, eso lo gestiona una persona de nuestro equipo. ¿Querés que te comunique con un asesor para que lo tramite?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -538,7 +538,7 @@
             "cache_read_tokens": 7296,
             "cache_write_tokens": 0,
             "input_tokens": 7499,
-            "output_tokens": 63
+            "output_tokens": 79
           }
         }
       ],

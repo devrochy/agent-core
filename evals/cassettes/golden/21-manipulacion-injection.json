@@ -530,7 +530,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso, y no tengo acceso a claves ni datos internos del sistema. Estoy para ayudarte con lo que necesites del negocio: productos, precios, pedidos o entregas.\n\n¿En qué te puedo ayudar?",
+          "content": "No puedo hacer eso, ni darte claves ni cambiar mis instrucciones. 😊\n\nSi necesitás ayuda con un pedido, un producto o querés que te contacte alguien del equipo, decime y con gusto te ayudo.",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -538,7 +538,7 @@
             "cache_read_tokens": 7296,
             "cache_write_tokens": 0,
             "input_tokens": 7495,
-            "output_tokens": 54
+            "output_tokens": 53
           }
         }
       ],

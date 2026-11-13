@@ -83,6 +83,7 @@ async def negocio() -> AsyncIterator[tuple[uuid.UUID, Any]]:
     pagos = journeys.PagoSimulado(monto_minimo=150000)
     slug = f"pedagenda-{uuid.uuid4().hex[:8]}"
     tid = await journeys.preparar_negocio(definicion, pagos, slug=slug, motor=False)
+    await journeys.encender_runtime_v3(tid)  # todo turno corre sobre la release de su conexión (ADR-0191)
     yield tid, pagos
     capacidad.build_provider = original
     await deactivate_tenant(str(tid))
@@ -130,4 +131,4 @@ async def test_disponibilidad_con_dato_de_agenda_sigue_bloqueando_y_deja_el_moti
 
 async def test_el_reporte_lee_el_runtime_efectivo(negocio) -> None:  # type: ignore[no-untyped-def]
     tid, _pagos = negocio
-    assert await journeys.runtime_efectivo(tid) == {"aos_runtime": "legacy", "aos_procedures": False}
+    assert await journeys.runtime_efectivo(tid) == {"aos_runtime": "v3", "aos_procedures": False}  # nace en v3 (0126)

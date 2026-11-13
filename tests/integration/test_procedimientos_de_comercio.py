@@ -116,6 +116,7 @@ async def negocio() -> AsyncIterator[tuple[uuid.UUID, Any]]:
     )
     async with tenant_scope(tid):
         await plugin_manager.save_config("pack_commerce", {"checkout_fields": CHECKOUT})
+    await journeys.encender_runtime_v3(tid)  # todo turno corre sobre la release de su conexión (ADR-0191)
     await _banderas(tid, True)
     yield tid, pagos
     capacidad.build_provider = original

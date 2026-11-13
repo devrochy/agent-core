@@ -17,8 +17,8 @@ import uuid
 
 import pytest
 from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _ayudas_sql import _conexion, _sql
 from test_agentes_versionados import PASSWORD
-from test_backfill_agentes import _conexion, _sql
 from test_instancias_por_conexion_api import _con_agentes, _especialista
 
 pytestmark = [
@@ -83,7 +83,7 @@ async def test_consola_muestra_coordinador_agentes_release_salud_y_consumo(app_c
     r = await app_client.get(CONSOLA, headers=h)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert (body["runtime"], body["routing"], body["can_edit"]) == ("legacy", "off", True)
+    assert (body["runtime"], body["routing"], body["can_edit"]) == ("v3", "off", True)  # nace en v3 (ADR-0191)
     assert [a["key"] for a in body["unassigned_agents"]] == ["cobranza"]
     assert body["unassigned_agents"][0]["id"] == huerfano
     filas = {f["id"]: f for f in body["items"]}
@@ -98,7 +98,7 @@ async def test_consola_muestra_coordinador_agentes_release_salud_y_consumo(app_c
     assert fila["coordinator"]["key"] == "coordinador"
     assert fila["coordinator"]["release_version"] == fila["coordinator"]["latest_version"] is not None
     agentes = {a["key"]: a for a in fila["agents"]}
-    assert agentes["general"]["is_default"] is True and agentes["general"]["release_version"] is not None
+    assert agentes["atencion"]["is_default"] is True and agentes["atencion"]["release_version"] is not None
     assert agentes["ventas"]["release_version"] is None  # aplica con la próxima release
     assert agentes["ventas"]["latest_version"] == 1
     assert fila["active_release"]["number"] == 1 and fila["canary_release"] is None

@@ -70,6 +70,9 @@ async def _onboard(slug: str, phone: str, verify_token: str) -> uuid.UUID:
             "verify_token": verify_token,
         },
     )
+    from release_de_prueba import release_inicial
+
+    await release_inicial(tid)  # la conexión del alta con su release (ADR-0191)
     return tid
 
 

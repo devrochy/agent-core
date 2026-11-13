@@ -185,12 +185,13 @@ async def test_load_config_combina_negocio_y_agente() -> None:
 async def test_la_release_congela_las_habilidades_del_agente() -> None:
     """El componente del agente lleva `skills` (solo ids) y el cargador las expone como `packs`; sin instalaciones
     propias no hay `skills` (hereda las del negocio hasta la resiembra)."""
+    from release_de_prueba import release_inicial
+
     from core.agents.instalaciones_agente import guardar_config_del_agente, instalar_en_agente
     from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.releases.build import construir
     from core.releases.cargar import cargar_release
-    from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
     modulos = plugin_manager.scan()
@@ -205,17 +206,17 @@ async def test_la_release_congela_las_habilidades_del_agente() -> None:
         "values (:id, :t, 'instagram', 'meta', :ext, 'instagram_meta')",
         id=cid, t=tid, ext=uniq("ext"),
     )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=modulos)
+    reporte = await release_inicial(tid, modulos)
     assert not reporte.fallo, reporte.errores
-    ((general,),) = await _sql(tid, "select id from agents where tenant_id = :t and key = 'general'", t=tid)
+    ((por_defecto,),) = await _sql(tid, "select id from agents where tenant_id = :t and key = 'atencion'", t=tid)
     async with tenant_scope(tid):
-        await instalar_en_agente(tid, general, "pack_commerce")
-        await instalar_en_agente(tid, general, "pack_payments", requiere_config=True)  # pendiente: no se congela
-        await guardar_config_del_agente(tid, general, "pack_commerce", {"monto_alto_threshold": 7})
+        await instalar_en_agente(tid, por_defecto, "pack_commerce")
+        await instalar_en_agente(tid, por_defecto, "pack_payments", requiere_config=True)  # pendiente: no se congela
+        await guardar_config_del_agente(tid, por_defecto, "pack_commerce", {"monto_alto_threshold": 7})
         resultado = await construir(tid, cid, actor="test", modules=modulos)
     ((manifest,),) = await _sql(tid, "select manifest from connection_releases where id = :r", r=resultado.release_id)
     por_key = {c["agent_key"]: c for c in manifest["components"]}
-    assert por_key["general"]["skills"] == ["pack_commerce"]
+    assert por_key["atencion"]["skills"] == ["pack_commerce"]
     assert "skills" not in por_key[next(k for k, c in por_key.items() if c["role"] == "core")]
     assert "monto_alto_threshold" not in str(manifest)  # nunca la config
     from core.db.session import get_session
@@ -224,7 +225,7 @@ async def test_la_release_congela_las_habilidades_del_agente() -> None:
         async with get_session() as session:
             release = await cargar_release(session, tid, resultado.release_id)
     assert release is not None
-    agente = next(a for a in release.componentes if a.key == "general")
+    agente = next(a for a in release.componentes if a.key == "atencion")
     assert agente.packs == frozenset({"pack_commerce"})
 
 

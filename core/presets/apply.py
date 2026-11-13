@@ -187,12 +187,9 @@ async def _registrar(tenant_id: uuid.UUID, resultado: PresetResult) -> None:
 
 async def _agentes_v2(tenant_id: uuid.UUID, manifest: PresetManifest, resultado: PresetResult) -> None:
     """Presets v2 (ADR-0139, HU-AOS-46): los agentes especialistas y las reglas del Coordinador,
-    solo en un negocio del Agent OS (`AOS_CONNECTION_ROUTING` + `aos_runtime = 'v3'`). Con la
-    bandera global apagada no hace ni una lectura. Un error se registra y el preset sigue
+    solo en un negocio del Agent OS (`aos_runtime = 'v3'`). Un error se registra y el preset sigue
     aplicado (ADR-0110 §3: el alta no falla); se reintenta con `agent-core db presets-v2`."""
-    from core.orchestrator.ruta_de_conversacion import ruteo_por_conexion
-
-    if not manifest.es_v2 or not ruteo_por_conexion():
+    if not manifest.es_v2:
         return
     from core.presets.agentes import aplicar_agentes
 

@@ -122,54 +122,6 @@ async def test_secretos_cifrados_con_aad_y_atados_a_dominios() -> None:
         assert await resolver_secretos(b, ["token_envios"], DOMINIO) == {}
 
 
-async def test_lector_migra_el_literal_antes_de_la_primera_version() -> None:
-    """Gherkin: el literal v2 pasa cifrado a la instalación `core` y la tool queda por
-    referencia; con eso, la primera `agent_version` del General se publica."""
-    from core.agents import versiones
-    from core.agents.spec import load_active_spec
-    from core.agents.tolerante import (
-        candidatas_del_spec,
-        cargar_como_v3,
-        convertir_v2,
-        migrar_secretos,
-    )
-    from core.db.session import get_session
-    from core.kernel.procedures import catalogo_de_acciones
-    from core.plugin_manager import plugin_manager
-    from core.shared.tenant import tenant_scope
-
-    tid = await _negocio([_tool({"Authorization": SECRETO, "X-Cliente": "demo"})])
-    modules = plugin_manager.scan()
-    catalogo = catalogo_de_acciones(modules)
-    async with tenant_scope(tid):
-        vista = await cargar_como_v3(modules=modules)
-        assert vista.secretos_por_migrar == ["consultar_envio_authorization"]
-        spec = await load_active_spec()
-        candidatas, siempre = candidatas_del_spec(spec, catalogo)
-        conversion = convertir_v2(
-            spec, tenant_id=str(tid), catalogo=catalogo, secciones=None, candidatas=candidatas, siempre=siempre
-        )
-        # Sin migrar, la versión no se puede publicar: el secreto no está configurado.
-        aid = uuid.uuid4()
-        async with get_session() as session:
-            await session.execute(
-                text("insert into agents (id, tenant_id, key, kind, name) values (:a, :t, 'general', 'specialist', 'General')"),
-                {"a": aid, "t": tid},
-            )
-        contenido = conversion.general.model_dump(mode="json", by_alias=True)
-        with pytest.raises(versiones.ErroresDeContrato) as exc:
-            await versiones.publicar(tid, aid, catalogo=catalogo, contenido=contenido)
-        assert exc.value.issues[0].code == "secreto_inexistente"
-
-        assert await migrar_secretos(tid, conversion) == []
-        version, creada = await versiones.publicar(tid, aid, catalogo=catalogo, contenido=contenido)
-        assert creada and version.version == 1
-        assert version.content["declarativeTools"][0]["headers"]["Authorization"] == {
-            "secret": "consultar_envio_authorization"
-        }
-        assert SECRETO not in json.dumps(version.content)
-
-
 # ------------------------------------------------------------------ editor /api/v1
 async def test_editor_api_sin_literales(app_client) -> None:
     tid = await _negocio([_tool({"Authorization": SECRETO})])

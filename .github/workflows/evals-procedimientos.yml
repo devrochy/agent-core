@@ -5,12 +5,11 @@ name: pass^k de los procedimientos (LLM real, a demanda)
 # `AOS_PROCEDURES`). Cada intento conversa con el LLM real (cliente simulado + asistente):
 # gasta saldo, solo se lanza a mano con OK del dueño. Nunca corre en PR ni en push.
 #
-#   runtime = legacy → `--runtime legacy`: el mismo set SIN el motor (línea base de un agente).
+#   runtime = sin-motor → `--runtime sin-motor`: el mismo set en v3 SIN procedimientos (línea base de un agente).
 #   runtime = v3     → `--runtime v3`: con el motor (`aos_runtime = v3` + `aos_procedures`).
 #   runtime = ambos  → las dos, una después de la otra, con reportes separados.
 #
-# El motor no usa conexión ni release (el turno de los journeys no tiene `connection_id`), así
-# que este set no necesita `AOS_CONNECTION_ROUTING`.
+# Cada corrida monta una conexión con su release 1 (ADR-0191): todo turno corre sobre una release v3.
 on:
   workflow_dispatch:
     inputs:
@@ -19,12 +18,12 @@ on:
         default: "4"
         type: string
       runtime:
-        description: "legacy (sin motor), v3 (con motor) o ambos"
+        description: "sin-motor (v3 sin procedimientos), v3 (con motor) o ambos"
         default: ambos
         type: choice
         options:
           - ambos
-          - legacy
+          - sin-motor
           - v3
       patron:
         description: "Subconjunto de journeys por nombre (ej: 01,04). Vacío = el set completo"
@@ -102,13 +101,13 @@ jobs:
 
       # El umbral es 0: esto mide, no es un gate. pass@1, pass^k y los inestables quedan en el
       # log y en el reporte; un runtime que sale mal no le quita la medición al otro.
-      - name: Journeys sin el motor (legacy, línea base)
-        if: inputs.runtime == 'legacy' || inputs.runtime == 'ambos'
+      - name: Journeys sin el motor (sin-motor, línea base)
+        if: inputs.runtime == 'sin-motor' || inputs.runtime == 'ambos'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: >-
-          python evals/journeys.py "$PATRON" --set procedimientos --runtime legacy
-          --k "$K" --umbral 0 --reporte evals/reportes/procedimientos-legacy.json
+          python evals/journeys.py "$PATRON" --set procedimientos --runtime sin-motor
+          --k "$K" --umbral 0 --reporte evals/reportes/procedimientos-sin-motor.json
 
       - name: Journeys con el motor (v3 + procedimientos)
         if: always() && (inputs.runtime == 'v3' || inputs.runtime == 'ambos')
@@ -124,7 +123,7 @@ jobs:
         with:
           name: pass-k-procedimientos-${{ github.run_number }}
           path: |
-            evals/reportes/procedimientos-legacy.json
+            evals/reportes/procedimientos-sin-motor.json
             evals/reportes/procedimientos-v3.json
           if-no-files-found: warn
           retention-days: 30

@@ -208,40 +208,19 @@ async def habilitados_del_negocio(tenant_id: uuid.UUID) -> set[str]:
     return set(enabled_business_packs(leido[1])) if leido is not None else set()
 
 
-async def _base_del_general(tenant_id: uuid.UUID) -> dict[str, Any]:
-    """La última versión del General (modelo, persona, memoria...) o los defaults del contrato.
-
-    Si el General fue recortado (HU-AOS-52, `coordinacion.recortar_general`), sus `tools` y `playbooks`
-    ya no traen lo del pack que pasó a un especialista; se recuperan de sus versiones anteriores (la más
-    reciente que los tuvo) para que otra plantilla siga derivando con la configuración que el dueño dio."""
-    from core.agents.tolerante import KEY_GENERAL
+async def _base_del_negocio(tenant_id: uuid.UUID) -> dict[str, Any]:
+    """Base de un agente nuevo desde la configuración del negocio (ADR-0192 §4: sin General;
+    ADR-0191 §4: Configuración siembra el contenido inicial, no edita agentes existentes)."""
+    from core.agents.base import contenido_base
+    from core.agents.spec import leer_spec_activo
     from core.agents.versiones import contenido_inicial
+    from core.presets.agentes import _playbooks_de_packs
 
-    async with get_session() as session:
-        filas = (
-            await session.execute(
-                text(
-                    "SELECT v.content FROM agent_versions v JOIN agents a ON a.id = v.agent_id "
-                    "AND a.tenant_id = v.tenant_id WHERE v.tenant_id = :t AND a.key = :k "
-                    "AND a.deleted_at IS NULL ORDER BY v.version DESC LIMIT 20"
-                ),
-                {"t": tenant_id, "k": KEY_GENERAL},
-            )
-        ).all()
-    versiones_v3 = [dict(f[0]) for f in filas if isinstance(f[0], dict) and f[0].get("contract") == "agentspec/3"]
-    if not versiones_v3:
+    leido = await leer_spec_activo(tenant_id)
+    if leido is None:
         return contenido_inicial("specialist")
-    base = versiones_v3[0]
-    for campo, clave in (("tools", "tool"), ("playbooks", "name")):
-        vistos = {x.get(clave) for x in base.get(campo) or [] if isinstance(x, dict)}
-        recuperados = [
-            x
-            for antes in versiones_v3[1:]
-            for x in antes.get(campo) or []
-            if isinstance(x, dict) and x.get(clave) not in vistos and not vistos.add(x.get(clave))
-        ]
-        if recuperados:
-            base[campo] = [*(base.get(campo) or []), *recuperados]
+    base = contenido_base(leido[1], playbooks_de_packs=_playbooks_de_packs())
+    del leido
     return base
 
 
@@ -343,7 +322,7 @@ async def crear_desde_plantilla(
     try:
         contenido, avisos = derivar_contenido(
             plantilla,
-            await _base_del_general(tenant_id),
+            await _base_del_negocio(tenant_id),
             catalogo=catalogo,
             habilitados=habilitados,
             publicados=publicados,
@@ -675,22 +654,6 @@ class ResultadoPublicacion:
     created: bool
     connections: list[ResultadoConexion]
     warnings: list[str]
-    # Versión nueva del General si esta publicación lo recortó (HU-AOS-52); `None` si no cambió.
-    general_actualizado: int | None = None
-
-
-async def _acoplar_al_general(
-    tenant_id: uuid.UUID, agent_id: uuid.UUID, catalogo: Mapping[str, Any], admin_id: uuid.UUID | None
-) -> Any:
-    """Enlace A2A y recorte del General (`coordinacion`). Un fallo se registra y no tumba la publicación
-    (el especialista ya está publicado); se reintenta al volver a publicar."""
-    from core.agents import coordinacion
-
-    try:
-        return await coordinacion.acoplar_especialista(tenant_id, agent_id, catalogo=catalogo, admin_id=admin_id)
-    except Exception:
-        log.exception("acople_general_fallo", tenant_id=str(tenant_id), agent_id=str(agent_id))
-        return None
 
 
 def _validar_conexiones(pedidas: Sequence[uuid.UUID], disponibles: Mapping[uuid.UUID, Destino]) -> dict[str, str]:
@@ -791,7 +754,6 @@ async def publicar_en_conexiones(
         avisos.append(
             f"Tu negocio fija el modelo {contexto.byok_model} en Configuración: ese manda sobre el del agente."
         )
-    acople = await _acoplar_al_general(tenant_id, agent_id, catalogo, admin_id)
     resultados: list[ResultadoConexion] = []
     for cid in connection_ids:
         resultado = ResultadoConexion(cid, "existing" if disponibles[cid].installed else "created")
@@ -832,7 +794,6 @@ async def publicar_en_conexiones(
         created=creada,
         connections=resultados,
         warnings=avisos,
-        general_actualizado=acople.general_actualizado if acople else None,
     )
 
 

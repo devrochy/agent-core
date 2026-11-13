@@ -9,6 +9,9 @@ name: CI
 #     evals y journeys en REPLAY (último paso del job `integracion`): desde las
 #     grabaciones de `evals/cassettes/`, sin red ni LLM_API_KEY (adenda 2026-10-10 de
 #     ADR-0120; fundido en `integracion` por la adenda 2026-10-28).
+#   - Una PR → develop con la etiqueta `integracion-completa` corre la integración COMPLETA
+#     (para cambios del loop, el alta o la base; el gate de evals sigue en replay). Poner la
+#     etiqueta dispara el CI.
 #   - push → develop (post-merge), PR → main y push → main: nivel COMPLETO.
 #     Integración completa, gitleaks sobre toda la historia, modelo C4 y, hacia main, drift de
 #     docs/openapi.json. El gate de evals y journeys con el LLM REAL corre SOLO en la
@@ -19,6 +22,7 @@ on:
     # `develop` recibe lotes por push directo además de PRs: se gatean completos.
     branches: [main, develop]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
 # Mínimo privilegio: los jobs ejecutan código de la PR en un runner self-hosted.
 permissions:
@@ -236,11 +240,17 @@ jobs:
         id: nivel
         env:
           BASE: ${{ github.base_ref }}
+          COMPLETA: ${{ contains(github.event.pull_request.labels.*.name, 'integracion-completa') }}
         run: |
           # `replay`: gate de evals y journeys sin LLM (PR a una rama que no es main, o push a develop).
           # No depende de `relevante`: una PR que solo toca `evals/` o `scripts/gate_evals.sh` no está
           # en RUTAS_INTEGRACION y el replay es lo único que la verifica.
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ "$BASE" != "main" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "$BASE" != "main" ] && [ "$COMPLETA" = "true" ]; then
+            # Etiqueta `integracion-completa`: la integración entera; el gate sigue en replay (sin LLM).
+            echo "nivel=completo" >> "$GITHUB_OUTPUT"
+            echo "replay=true" >> "$GITHUB_OUTPUT"
+            echo "relevante=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "pull_request" ] && [ "$BASE" != "main" ]; then
             echo "nivel=rapido" >> "$GITHUB_OUTPUT"
             echo "replay=true" >> "$GITHUB_OUTPUT"
             # Si el diff falla, el paso falla (`-e`): nunca se salta la integración a ciegas.

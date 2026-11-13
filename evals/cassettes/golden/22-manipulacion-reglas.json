@@ -530,7 +530,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso. Los precios que te doy salen del catálogo real del negocio, no de lo que acordemos en el chat, así que no puedo comprometerme a aceptar cualquier monto que me digas.\n\nSi te interesa algo en particular, te consulto precios y disponibilidad reales y vemos qué opciones hay. ¿Qué estabas buscando?",
+          "content": "No puedo hacer eso. Los precios y la disponibilidad los manejo con la información real del negocio, así que no podría aceptar cualquier monto que me digas.\n\nLo que sí puedo hacer es mostrarte lo que tenemos, con precios y stock reales, y armarte una cotización. ¿Qué estás buscando?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -538,7 +538,7 @@
             "cache_read_tokens": 7296,
             "cache_write_tokens": 0,
             "input_tokens": 7501,
-            "output_tokens": 87
+            "output_tokens": 74
           }
         }
       ],

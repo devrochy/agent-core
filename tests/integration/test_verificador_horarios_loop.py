@@ -39,9 +39,8 @@ INVENTADA = "Te agendo el jueves a las 7 de la noche."
 
 @pytest.fixture
 def _ruteo(monkeypatch: Any) -> None:
-    from core.config import get_settings
+    pass
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
 
 
 class _GuionConMensajes(_Guion):

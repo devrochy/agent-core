@@ -8,11 +8,10 @@ ya escribe en cada turno:
 - tareas: `conversation_tasks.owner_instance_id`;
 - registros (pedidos, leads, citas, promesas): `agent_record_origins` (0095).
 
-**El General absorbe lo no atribuido** (`agent_instance_id IS NULL`): los turnos del runtime legacy
-y los de antes de pasar a v3 los atendió el AgentSpec v2, que es el General. La respuesta lo marca
-(`incluye_sin_atribuir`) para que el panel no lo presente como atribución exacta. El ref literal
-`general` resuelve al agente `general` del negocio; si el negocio todavía no lo tiene (backfill sin
-correr) o lo borró, a una vista del General que solo ve lo no atribuido.
+**El especialista por defecto del negocio absorbe lo no atribuido** (`agent_instance_id IS NULL`:
+turnos del Coordinador sin especialista en foco e histórico de antes del Agent OS; ADR-0192, ya no hay
+General). La respuesta lo marca (`incluye_sin_atribuir`) para que el panel no lo presente como
+atribución exacta. El `ref` es siempre el id del agente: no hay agente virtual.
 
 Todo corre en el `tenant_scope` de la request (RLS) y además filtra `tenant_id` explícito. Un
 agente de otro negocio es «no encontrado», sin eco del id.
@@ -29,7 +28,7 @@ from typing import Any
 from sqlalchemy import ColumnElement, and_, false, func, literal, or_, select, text
 from sqlalchemy.dialects.postgresql import array_agg
 
-from core.agents.tolerante import KEY_GENERAL
+from core.agents.instancias import especialista_por_defecto
 from core.billing.tipos_de_uso import NO_ES_ACTIVIDAD
 from core.db.models import (
     AgentInstanceRecord,
@@ -44,9 +43,9 @@ from core.db.models import (
     UsageLedger,
 )
 from core.db.session import get_session
+from core.shared.tenant import get_current_tenant_id
 from core.shared.test_mode import TEST_CHANNEL
 
-REF_GENERAL = KEY_GENERAL
 VENTANA_POR_DEFECTO = timedelta(days=30)
 VENTANA_MAXIMA = timedelta(days=366)
 MAX_DIAS_SERIE = 92
@@ -116,38 +115,32 @@ def _utc(valor: datetime) -> datetime:
     return valor.replace(tzinfo=UTC) if valor.tzinfo is None else valor.astimezone(UTC)
 
 
+def _exigir_scope(tenant_id: uuid.UUID) -> None:
+    if get_current_tenant_id() != tenant_id:
+        raise PermissionError("data_por_agente: fuera del tenant_scope del negocio")
+
+
 # ------------------------------------------------------------------ resolución
 async def resolver(tenant_id: uuid.UUID, ref: str) -> Alcance:
-    """`ref` es el id de un agente del negocio o el literal `general`."""
+    """`ref` es el id de un agente del negocio."""
+    _exigir_scope(tenant_id)
+    try:
+        agent_id = uuid.UUID(ref)
+    except ValueError:
+        raise AgenteNoEncontrado from None
     async with get_session() as session:
-        if ref == REF_GENERAL:
-            agente = (
-                await session.execute(
-                    select(AgentRecord).where(
-                        AgentRecord.tenant_id == tenant_id,
-                        AgentRecord.key == KEY_GENERAL,
-                        AgentRecord.deleted_at.is_(None),
-                    )
+        agente = (
+            await session.execute(
+                select(AgentRecord).where(
+                    AgentRecord.tenant_id == tenant_id,
+                    AgentRecord.id == agent_id,
+                    AgentRecord.deleted_at.is_(None),
                 )
-            ).scalar_one_or_none()
-            if agente is None:
-                return Alcance(tenant_id, None, KEY_GENERAL, (), incluye_sin_atribuir=True)
-        else:
-            try:
-                agent_id = uuid.UUID(ref)
-            except ValueError:
-                raise AgenteNoEncontrado from None
-            agente = (
-                await session.execute(
-                    select(AgentRecord).where(
-                        AgentRecord.tenant_id == tenant_id,
-                        AgentRecord.id == agent_id,
-                        AgentRecord.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if agente is None:
-                raise AgenteNoEncontrado
+            )
+        ).scalar_one_or_none()
+        if agente is None:
+            raise AgenteNoEncontrado
+        por_defecto = await especialista_por_defecto(session, tenant_id)
         instancias = (
             await session.execute(
                 select(AgentInstanceRecord.id).where(
@@ -160,7 +153,7 @@ async def resolver(tenant_id: uuid.UUID, ref: str) -> Alcance:
         agente.id,
         agente.key,
         tuple(instancias),
-        incluye_sin_atribuir=agente.key == KEY_GENERAL,
+        incluye_sin_atribuir=agente.id == por_defecto,
     )
 
 
@@ -168,11 +161,12 @@ async def resolver(tenant_id: uuid.UUID, ref: str) -> Alcance:
 async def resumen(tenant_id: uuid.UUID, *, ahora: datetime | None = None) -> dict[str, Any]:
     """Runtime, agentes (sin el Coordinador) con sus conexiones y actividad de 30 días, y lo no
     atribuido aparte."""
+    _exigir_scope(tenant_id)
     desde = (ahora or datetime.now(UTC)) - VENTANA_POR_DEFECTO
     async with get_session() as session:
         runtime = (
             await session.execute(text("select aos_runtime from tenants where id = :t"), {"t": tenant_id})
-        ).scalar_one_or_none() or "legacy"
+        ).scalar_one_or_none() or "v3"
         agentes = (
             await session.execute(
                 select(AgentRecord)
@@ -225,11 +219,11 @@ async def resumen(tenant_id: uuid.UUID, *, ahora: datetime | None = None) -> dic
                 .group_by(UsageLedger.agent_instance_id)
             )
         ).all()
+        por_defecto = await especialista_por_defecto(session, tenant_id)
     por_instancia = {fila[0]: fila for fila in actividad}
     sin_atribuir = por_instancia.get(None)
 
     items: list[dict[str, Any]] = []
-    tiene_general = False
     for agente in agentes:
         propias = [i for i in instancias if i.agent_id == agente.id]
         vivas = [i for i in propias if i.deleted_at is None]
@@ -238,12 +232,11 @@ async def resumen(tenant_id: uuid.UUID, *, ahora: datetime | None = None) -> dic
             for i in vivas
         ]
         filas = [por_instancia[i.id] for i in propias if i.id in por_instancia]
-        es_general = agente.key == KEY_GENERAL
-        tiene_general = tiene_general or es_general
+        absorbe = agente.id == por_defecto  # lo no atribuido (ADR-0192)
         items.append(
             {
                 "id": agente.id,
-                "ref": REF_GENERAL if es_general else str(agente.id),
+                "ref": str(agente.id),
                 "key": agente.key,
                 "name": agente.name,
                 "kind": agente.kind,
@@ -251,28 +244,9 @@ async def resumen(tenant_id: uuid.UUID, *, ahora: datetime | None = None) -> dic
                 "virtual": False,
                 "published": any(i.enabled for i in vivas),
                 "connections": conexiones,
-                "incluye_sin_atribuir": es_general,
-                **_sumar(filas + ([sin_atribuir] if es_general and sin_atribuir else [])),
+                "incluye_sin_atribuir": absorbe,
+                **_sumar(filas + ([sin_atribuir] if absorbe and sin_atribuir else [])),
             }
-        )
-    if not tiene_general:
-        # Negocio sin el agente General (legacy sin backfill, o lo quitaron): su vista solo ve lo
-        # no atribuido, sin romperse.
-        items.insert(
-            0,
-            {
-                "id": None,
-                "ref": REF_GENERAL,
-                "key": KEY_GENERAL,
-                "name": "General",
-                "kind": "specialist",
-                "status": "active",
-                "virtual": True,
-                "published": False,
-                "connections": [],
-                "incluye_sin_atribuir": True,
-                **_sumar([sin_atribuir] if sin_atribuir else []),
-            },
         )
     return {"runtime": runtime, "items": items, "sin_atribuir": _sumar([sin_atribuir] if sin_atribuir else [])}
 

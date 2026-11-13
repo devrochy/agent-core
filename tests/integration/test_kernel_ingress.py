@@ -108,6 +108,9 @@ async def _negocio(**ajustes: Any) -> uuid.UUID:
     )
     if ajustes:
         await _ajustes(tid, **ajustes)
+    from release_de_prueba import montar_release_en
+
+    await montar_release_en(tid, "whatsapp")  # todo turno corre sobre una release (ADR-0191)
     return tid
 
 
@@ -346,6 +349,20 @@ async def test_negocio_pausado_es_kill_switch(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------- turno diferido
+async def _conexion_del_numero_con_release(tid: uuid.UUID, cuenta: uuid.UUID, phone_id: str) -> None:
+    """La conexión canónica del número (la que el consumer asegura al primer mensaje) con su release."""
+    from release_de_prueba import release_inicial
+
+    from core.db.session import get_session
+    from core.gateway.conexion_canonica import asegurar_conexion_en_vuelo
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            await asegurar_conexion_en_vuelo(session, tid, phone_id, cuenta)
+    await release_inicial(tid)
+
+
 async def test_turno_diferido_con_la_conexion_pausada_no_avisa_otra_vez(monkeypatch) -> None:
     from test_api_registrar_numero import _negocio_con_byok
     from test_conexion_ciclo_de_vida import _estado
@@ -353,6 +370,7 @@ async def test_turno_diferido_con_la_conexion_pausada_no_avisa_otra_vez(monkeypa
     from core.orchestrator import debounce
 
     tid, cid, _waba, phone_id = await _negocio_con_byok()
+    await _conexion_del_numero_con_release(tid, cid, phone_id)
     _inmediato(monkeypatch)
     conv = await _entrar(tid, uniq("wa-dif"), "hola", phone=phone_id)  # turno normal
     await _estado(tid, cid, "revoked")

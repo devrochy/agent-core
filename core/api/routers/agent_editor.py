@@ -34,8 +34,7 @@ frente a `/admin/agents/{agent_id}`. Toda lista va paginada (`page`, `page_size`
 
 Permisos (ADR-0136): lectura con la sección `settings`; crear con `settings` en escritura;
 publicar, además, la sección `connections` en escritura (construye releases, como su API); el
-consumo de `agent-models`, la sección `costs`. Como el resto del Agent OS, con
-`aos_runtime = 'legacy'` solo escribe el master (403 `aos_runtime_legacy`).
+consumo de `agent-models`, la sección `costs`.
 """
 
 from __future__ import annotations
@@ -215,8 +214,6 @@ class EditorPublishOut(BaseModel):
     created: bool
     connections: list[PublishedConnection]
     warnings: list[str]
-    # Versión nueva del General si esta publicación lo recortó (HU-AOS-52); null si no cambió.
-    general_updated: int | None = None
 
 
 # ------------------------------------------------------------------ utilidades
@@ -543,7 +540,6 @@ async def publish_to_connections(
             for c in resultado.connections
         ],
         warnings=resultado.warnings,
-        general_updated=resultado.general_actualizado,
     )
 
 

@@ -3,7 +3,7 @@
 Negocio `aos_runtime = v3` con el motor de procedimientos (`aos_procedures`), `pack_commerce` y
 `pack_calendar`, y `AOS_CONNECTION_ROUTING` encendida (la ranura de la release solo se llena así):
 
-- **El General ve lo mismo que sin release** (B3 del arquitecto): con la release del General por
+- **El especialista por defecto ve lo mismo que sin release** (B3 del arquitecto): con la release del especialista por
   defecto, las tools ofrecidas (incluidas las puertas) y el enum de `iniciar_procedimiento` son
   los mismos que en una conversación sin release; los procedimientos abiertos `0.0.0` no entran.
 - **Cada especialista ve lo suyo:** con Ventas (`contratar_plan ^2.0`) por defecto el enum es solo
@@ -93,11 +93,12 @@ async def _proceso() -> None:
 
 
 async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:
-    """Negocio v3 con commerce y calendar, una conexión conversacional y su release 1 (General
-    por defecto, construida en legacy como el backfill). (tid, conexión)."""
+    """Negocio v3 con commerce y calendar, una conexión conversacional y su release 1 (especialista
+    «atencion» por defecto, ADR-0192). (tid, conexión)."""
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
-    from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
     slug = f"aos16-{uuid.uuid4().hex[:8]}"
@@ -114,7 +115,7 @@ async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:
         "values (:id, :t, 'instagram', 'meta', :ext, 'instagram_meta')",
         id=cid, t=tid, ext=f"ig-{uuid.uuid4().hex[:10]}",
     )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     await _banderas(tid, "v3", True)
     return tid, cid
@@ -264,25 +265,24 @@ async def _tareas(tid: uuid.UUID, conv: uuid.UUID) -> list[Any]:
 
 @pytest.fixture
 def _ruteo(monkeypatch: Any) -> None:
-    from core.config import get_settings
-
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
+    pass
 
 
-# ---------------------------------------------------------------- el General: lo mismo que sin release
-async def test_el_general_con_release_ve_lo_mismo_que_sin_release(_ruteo: None, monkeypatch: Any) -> None:
+
+# ---------------------------------------------------------------- el especialista por defecto: lo mismo que sin release
+async def test_el_especialista_por_defecto_con_release_ve_lo_mismo_que_sin_el_filtro(_ruteo: None, monkeypatch: Any) -> None:
     tid, cid = await _negocio()
     rid = await _publicar_release(tid, cid)
     ((manifest,),) = await _sql(tid, "select manifest from connection_releases where id = :r", r=rid)
     assert manifest["schema"] == "release/2"
-    (general,) = [c for c in manifest["components"] if c["agent_key"] == "general"]
-    # El General DECLARA los publicados de los packs habilitados (rango ^M.0, resuelto en el build).
-    assert {p["id"] for p in general["procedures"] if p["version"] != "0.0.0"} == {
+    (por_defecto,) = [c for c in manifest["components"] if c["agent_key"] == "atencion"]
+    # El especialista por defecto DECLARA los publicados de los packs habilitados (rango ^M.0, resuelto en el build).
+    assert {p["id"] for p in por_defecto["procedures"] if p["version"] != "0.0.0"} == {
         PLAN, CITA, "pack_commerce.tomar_pedido", "pack_subscriptions.cambiar_plan",
     }
 
-    # HU-ARCH-34: con release, el General ve lo mismo que sin el filtro de concesión (su versión
-    # declara todo lo que ofrece el loop); un negocio v3 sin conexión solo ve los comandos del hilo.
+    # HU-ARCH-34: con release, el especialista por defecto ve lo mismo que sin el filtro de concesión (su versión
+    # declara todo lo que ofrece el loop); un negocio v3 sin conexión no tiene turno (ADR-0191).
     sin_release = await _conversacion(tid, None)
     con_release = await _conversacion(tid, cid)
     s0 = await _turno(tid, sin_release, monkeypatch, ["Hola, ¿en qué te ayudo?"])
@@ -291,7 +291,7 @@ async def test_el_general_con_release_ve_lo_mismo_que_sin_release(_ruteo: None, 
         a = await _turno(tid, await _conversacion(tid, cid), m, ["Hola, ¿en qué te ayudo?"])
     b = await _turno(tid, con_release, monkeypatch, ["Hola, ¿en qué te ayudo?"])
     assert await _release_del_turno(tid, sin_release) is None
-    assert s0.tools[0] == ["iniciar_procedimiento"]
+    assert s0.tools == []  # el modelo ni se llama
     assert b.tools == a.tools
     assert b.enums == a.enums
     assert a.enums[0] and PLAN in a.enums[0] and CITA in a.enums[0]
@@ -386,7 +386,7 @@ async def test_la_release_de_otro_negocio_no_cambia_lo_que_ve_este(_ruteo: None,
     conv_b = await _conversacion(b, cid_b)
     g = await _turno(b, conv_b, monkeypatch, ["Hola."])
     assert await _release_del_turno(b, conv_b) == rid_b
-    assert CITA in (g.enums[0] or [])  # B sigue con su General: ve todo lo suyo
+    assert CITA in (g.enums[0] or [])  # B sigue con su especialista por defecto: ve todo lo suyo
     # La release de A no existe para B (RLS + tenant_id).
     assert await _sql(b, "select id from connection_releases where id = :r", r=rid_a) == []
     conv_a = await _conversacion(a, cid_a)

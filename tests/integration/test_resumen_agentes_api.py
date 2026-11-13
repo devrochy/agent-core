@@ -2,7 +2,8 @@
 
 - **Contenido:** KPIs del negocio y de cada agente (7 d contra los 7 d previos, con delta) y, bajo
   el agente, los módulos que gestiona; cada KPI con un destino semántico. Lo no atribuido es del
-  General; los módulos que ningún agente cubre cuelgan del General.
+  especialista por defecto; los módulos que ningún agente cubre van en `general.modulos_sin_agente`
+  (ADR-0192).
 - **Permisos (ADR-0136):** un KPI sin la sección que lo respalda se omite, no sale en cero.
 - **Aislamiento:** un negocio no ve la actividad de otro.
 - **Fallo aislado:** un módulo que lanza no tumba el resto.
@@ -19,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from _api_helpers import api_headers, banderas_como_dueno
+from _ayudas_sql import _sql
 from test_agent_data_api import (
     _agente,
     _colaborador,
@@ -26,9 +28,9 @@ from test_agent_data_api import (
     _conversacion,
     _instancia,
     _tarea,
+    _version,
 )
 from test_agentes_versionados import PASSWORD
-from test_backfill_agentes import _sql
 from test_byok_produccion import _negocio
 
 pytestmark = [
@@ -94,18 +96,33 @@ async def _cliente_de(tid, conv) -> uuid.UUID:
     return (await _sql(tid, "select customer_id from conversations where id = :c", c=conv))[0][0]
 
 
+async def _por_defecto(tid: uuid.UUID, cid: uuid.UUID) -> uuid.UUID:
+    """El especialista por defecto de la conexión (ADR-0192), sin actividad propia: absorbe lo no
+    atribuido y los módulos que ningún agente cubre."""
+    aid = await _agente(tid, "atencion")
+    await _version(tid, aid, 1)
+    await _sql(
+        tid,
+        "insert into agent_instances (id, tenant_id, connection_id, agent_id, role, is_default) "
+        "values (:id, :t, :c, :a, 'specialist', true)",
+        id=uuid.uuid4(), t=tid, c=cid, a=aid,
+    )
+    return aid
+
+
 async def _escenario() -> dict:
     tid = await _negocio()
     cid = await _conexion(tid)
     ventas, agenda = await _agente(tid, "ventas"), await _agente(tid, "agenda")
     i_ventas, i_agenda = await _instancia(tid, cid, ventas), await _instancia(tid, cid, agenda)
+    atencion = await _por_defecto(tid, cid)
     c1 = await _conversacion(tid, cid, "Ana Compradora")
     c2 = await _conversacion(tid, cid, "Beto Paciente")
     # Ventas: 3 turnos en los últimos 7 d y 1 en los 7 previos. Agenda: 1 y 0.
     for dias in (1, 2, 3, 9):
         await _turno_hace(tid, c1, i_ventas, cid, dias)
     await _turno_hace(tid, c2, i_agenda, cid, 1)
-    await _turno_hace(tid, c2, None, cid, 1)  # no atribuido: del General
+    await _turno_hace(tid, c2, None, cid, 1)  # no atribuido: del especialista por defecto
     await _tarea(tid, c1, i_ventas, cerrada=False)
     await _tarea(tid, c2, i_agenda, cerrada=True)
     cli = await _cliente_de(tid, c1)
@@ -121,7 +138,7 @@ async def _escenario() -> dict:
         s=datetime.now(UTC) + timedelta(days=2),
         e=datetime.now(UTC) + timedelta(days=2, hours=1),
     )
-    return {"tid": tid, "ventas": ventas, "agenda": agenda}
+    return {"tid": tid, "ventas": ventas, "agenda": agenda, "atencion": atencion}
 
 
 def _kpis(bloque: dict) -> dict:
@@ -138,7 +155,7 @@ async def test_kpis_del_negocio_de_cada_agente_y_de_su_modulo(app_client) -> Non
     r = await app_client.get(_URL, headers=h)
     assert r.status_code == 200, r.text
     datos = r.json()
-    assert datos["runtime"] == "legacy"
+    assert datos["runtime"] == "v3"  # nace en v3 (ADR-0191)
 
     general = _kpis(datos["general"])
     assert general["conversaciones"]["destino"] == {"ruta": "conversaciones", "params": {}}
@@ -157,7 +174,7 @@ async def test_kpis_del_negocio_de_cada_agente_y_de_su_modulo(app_client) -> Non
     }
     assert k["tareas_abiertas"]["valor"] == 1 and k["tareas_abiertas"]["previo"] is None
     assert k["costo"]["valor"] == pytest.approx(0.03)
-    assert "escalados" not in k  # legacy: no hay turn_outcomes que atribuir
+    assert k["escalados"]["valor"] == 0  # v3: salen de turn_outcomes (ninguno en el escenario)
 
     # El módulo es el del pack de la plantilla, completo: cuenta 2 pedidos (el cancelado no).
     (modulo,) = ventas["modulos"]
@@ -172,10 +189,13 @@ async def test_kpis_del_negocio_de_cada_agente_y_de_su_modulo(app_client) -> Non
     assert agenda["id"] == "pack_calendar"
     assert _kpis(agenda)["citas_proximas"]["valor"] == 1
 
-    # El General (sin fila: negocio legacy) absorbe lo no atribuido y los módulos sin agente.
-    gen = _agente_por_key(datos, "general")
-    assert gen["ref"] == "general" and _kpis(gen)["turnos"]["valor"] == 1
-    assert {m["id"] for m in gen["modulos"]} == {"pack_cobranza", "pack_subscriptions"}
+    # El especialista por defecto absorbe lo no atribuido; los módulos sin agente van en el bloque del
+    # negocio (ADR-0192).
+    defecto = _agente_por_key(datos, "atencion")
+    assert defecto["ref"] == str(e["atencion"]) and _kpis(defecto)["turnos"]["valor"] == 1
+    assert defecto["modulos"] == []
+    assert {m["id"] for m in datos["general"]["modulos_sin_agente"]} == {"pack_cobranza", "pack_subscriptions"}
+    assert all(a["key"] != "general" for a in datos["agentes"])  # sin agente virtual
 
 
 async def test_ventana_de_7_dias_y_serie_diaria_por_agente(app_client) -> None:
@@ -190,12 +210,12 @@ async def test_ventana_de_7_dias_y_serie_diaria_por_agente(app_client) -> None:
     assert ventas["ultima_actividad"] is not None
     assert _kpis(ventas)["turnos"]["hint"] == "Últimos 7 días"
 
-    # El General suma lo no atribuido a su propia instancia.
-    general = _agente_por_key(datos, "general")
-    assert len(general["serie"]) == 7
-    assert sum(p["turnos"] for p in general["serie"]) == 1
+    # El especialista por defecto suma lo no atribuido a su propia instancia.
+    defecto = _agente_por_key(datos, "atencion")
+    assert len(defecto["serie"]) == 7
+    assert sum(p["turnos"] for p in defecto["serie"]) == 1
 
-    # `general.serie` es el negocio entero: la suma de todos los agentes (el General incluido).
+    # `general.serie` es el negocio entero: la suma de todos los agentes.
     assert len(datos["general"]["serie"]) == 7
     assert [p["fecha"] for p in datos["general"]["serie"]] == [p["fecha"] for p in ventas["serie"]]
     for campo in ("turnos", "conversaciones"):
@@ -284,11 +304,8 @@ async def test_un_negocio_no_ve_la_actividad_de_otro(app_client) -> None:
     await _escenario()
     otro = await _negocio()
     datos = (await app_client.get(_URL, headers=await api_headers(app_client, otro))).json()
-    (general,) = datos["agentes"]  # solo el General virtual, sin los agentes de A
-    assert general["key"] == "general"
-    assert _kpis(general)["turnos"]["valor"] == 0
+    assert datos["agentes"] == []  # sin agentes propios ni virtuales: nada de A
     assert _kpis(datos["general"])["conversaciones"]["valor"] == 0
-    assert _kpis(general)["costo"]["valor"] == 0
 
 
 async def test_un_modulo_que_falla_no_tumba_el_resumen(app_client, monkeypatch) -> None:

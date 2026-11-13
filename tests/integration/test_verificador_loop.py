@@ -86,11 +86,33 @@ async def _negocio(**behavior: Any) -> uuid.UUID:
     return tid
 
 
+_CON_RELEASE: set[uuid.UUID] = set()
+
+
+async def _con_release(tid: uuid.UUID) -> None:
+    """La primera vez: la conexión de WhatsApp del negocio con su release (ADR-0191), con el agente
+    derivado de la configuración ya ajustada por el test y las tools de comercio que simulan los
+    tests concedidas (HU-ARCH-34)."""
+    if tid in _CON_RELEASE:
+        return
+    from release_de_prueba import conceder_herramientas, montar_release_en
+
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.plugin_manager import plugin_manager
+
+    await montar_release_en(tid, "whatsapp")
+    catalogo = catalogo_de_acciones(plugin_manager.list_modules() or plugin_manager.scan())
+    comercio = [n for n, i in catalogo.items() if i.owner in ("pack_commerce", "pack_payments")]
+    await conceder_herramientas(tid, [{"tool": n, "enabled": True, "scopes": []} for n in sorted(comercio)])
+    _CON_RELEASE.add(tid)
+
+
 async def _conversacion(tid: uuid.UUID) -> uuid.UUID:
     from core.db.models import Conversation, Customer
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
+    await _con_release(tid)
     async with tenant_scope(tid):
         async with get_session() as session:
             customer = Customer(tenant_id=tid, channel="whatsapp", external_id=f"verif:{uuid.uuid4().hex[:8]}")

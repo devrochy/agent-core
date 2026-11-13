@@ -466,7 +466,6 @@ async def get_agent_os(
     """Banderas del Agent OS del negocio, la global del entorno y el último cambio (quién y cuándo)."""
     _require_master_agent_os(principal)
     from core.admin import agent_os
-    from core.config import get_settings
 
     banderas = await agent_os.estado(tenant_id)
     if banderas is None:
@@ -474,7 +473,7 @@ async def get_agent_os(
     cambio = await agent_os.ultimo_cambio(tenant_id)
     return AgentOSEstado(
         **_banderas_out(banderas).model_dump(),
-        aos_connection_routing=bool(get_settings().aos_connection_routing),
+        aos_connection_routing=True,
         ultimo_cambio=AgentOSCambio(actor=cambio["actor"], fecha=cambio["fecha"]) if cambio else None,
     )
 

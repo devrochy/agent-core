@@ -451,7 +451,7 @@ async def escribir_modo(tenant_id: uuid.UUID, modo: str, database_url: str | Non
             if fila is None:
                 raise LookupError("negocio no encontrado")
             if modo != "off" and fila[0] != "v3":
-                raise ValueError("el enrutamiento exige aos_runtime = 'v3' (migrar-a-v3 primero)")
+                raise ValueError("el enrutamiento exige aos_runtime = 'v3' (el negocio nace en v3, ADR-0191)")
             await fijar_banderas(
                 conn,
                 tenant_id,

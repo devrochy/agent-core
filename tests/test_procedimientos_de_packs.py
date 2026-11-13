@@ -157,17 +157,6 @@ def test_las_tools_del_core_del_procedimiento_no_son_always_available() -> None:
         assert herramientas[nombre].always_available
 
 
-def test_los_bindings_del_general_no_cambian(catalogo, monkeypatch) -> None:
-    from core.agents.tolerante import candidatas_del_spec
-
-    monkeypatch.setattr("core.mcp.declarative.tools_for_spec", lambda spec: [])
-    spec = types.SimpleNamespace(packs=["pack_subscriptions", "pack_cobranza", "pack_calendar"])
-    _candidatas, siempre = candidatas_del_spec(spec, catalogo)  # type: ignore[arg-type]
-    assert not (SOLO_PROCEDIMIENTO & siempre)
-    # Informar planes es una consulta del General (ADR-0185); cotizar, confirmar e inscribir no.
-    assert {"sub_consultar", "sub_cambiar_plan", "sub_listar_planes", "escalate_to_human"} <= siempre
-
-
 async def test_oferta_segun_el_motor(monkeypatch) -> None:
     """B2 de la revisión: con el motor activo el modelo no puede saltarse el botón con la tool de
     siempre, y las del procedimiento no se ofrecen sin la bandera (aunque un flujo las nombre).

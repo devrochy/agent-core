@@ -65,9 +65,8 @@ async def _proceso() -> None:
 
 @pytest.fixture
 def _ruteo(monkeypatch: Any) -> None:
-    from core.config import get_settings
+    pass
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
 
 
 async def _equipo(modo: str, enlaces: list[tuple[str, str]] | None) -> tuple[uuid.UUID, uuid.UUID, dict[str, uuid.UUID], dict[str, uuid.UUID]]:

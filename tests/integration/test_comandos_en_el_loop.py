@@ -143,6 +143,14 @@ def _habilitar(pack_de_prueba: Any, monkeypatch) -> None:  # type: ignore[no-unt
     monkeypatch.setattr(registro, "_valido", lambda proc: True)  # sus acciones no están en el catálogo del binario
     monkeypatch.setattr("core.orchestrator.loop.enabled_packs", lambda spec: {"core", PACK})
 
+    # El pack de prueba no existe en el binario, así que ninguna release puede concederlo: estos
+    # Gherkin miden la mecánica del motor y corren el turno sin release (ADR-0191); la concesión por
+    # release la cubren los tests de HU-ARCH-34.
+    async def _sin_release(*_a: Any, **_k: Any) -> None:
+        return None
+
+    monkeypatch.setattr("core.orchestrator.loop.fijar_release_del_turno", _sin_release)
+
 
 @pytest.fixture(scope="module")
 async def negocio() -> AsyncIterator[uuid.UUID]:

@@ -50,8 +50,9 @@ async def _packs_registrados() -> None:
 
 
 async def _negocio(prefijo: str = "gate") -> tuple[uuid.UUID, uuid.UUID]:
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
-    from core.releases.release_uno import backfill_releases
 
     slug = uniq(prefijo)
     tid, _ = await onboard_tenant(name=f"Gate {slug}", slug=slug, persona={"tone": "cercano"})
@@ -64,7 +65,7 @@ async def _negocio(prefijo: str = "gate") -> tuple[uuid.UUID, uuid.UUID]:
         t=tid,
         ext=uniq("ig"),
     )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     return tid, cid
 
@@ -117,8 +118,8 @@ async def test_exenciones_internas_y_qa_solo_en_negocio_de_prueba() -> None:
     assert exc.value.codigo == "exencion_invalida"
     with pytest.raises(ValueError):
         await _promover(tid, cid, dos, exencion="cualquiera")
-    cambio = await _promover(tid, cid, dos, motivo="migrar_a_v3", exencion="migrar_a_v3")
-    assert cambio.gate == "exento_migrar_a_v3"
+    cambio = await _promover(tid, cid, dos, motivo="migrar_referencias", exencion="migrar_referencias")
+    assert cambio.gate == "exento_migrar_referencias"
 
     qa, qa_cid = await _negocio("qa")
     tres = await _candidata(qa, qa_cid, "Datos del tester")

@@ -4,15 +4,15 @@ Cada conexión conversacional tiene exactamente un Coordinador (instancia `core`
 parcial `uq_agent_instances_one_core`) y N especialistas, uno por defecto. Las integraciones
 (calendario, correo saliente) no tienen agentes: `agent_instance_checks()` (0069) lo rechaza.
 
-**Inicializar** una conexión es darle su Coordinador y su General. Solo se inicializa una
-conexión **sin Coordinador vivo**: una que ya lo tiene está configurada y no se toca, así lo
-que el dueño quitó o cambió (el General, el agente por defecto) no vuelve solo en un religar,
-en otra corrida del backfill ni en el build de releases.
+**Inicializar** una conexión es darle su Coordinador y el especialista por defecto del negocio
+(ADR-0192: el que es el agente por defecto en sus otras conexiones; sin ninguno, la conexión queda
+pendiente y lo trae el preset por `connection.release_1`). Solo se inicializa una conexión **sin
+Coordinador vivo**: una que ya lo tiene está configurada y no se toca, así lo que el dueño quitó o
+cambió (el agente por defecto) no vuelve solo en un religar ni en el build de releases.
 
 - `asegurar_instancias_base(session, tid, connection_id)`: inicializa la conexión con el
-  Coordinador y el General del negocio (keys reservadas `coordinador` y `general`). La usan el
-  backfill B2, las altas posteriores (`instancias_al_alta`) y la usará el build de releases
-  (HU-AOS-14).
+  Coordinador y el especialista por defecto del negocio. La usan las altas posteriores
+  (`instancias_al_alta`, `instancias_de_conexion_nueva`).
 - `clonar_instancias(session, tid, desde, hacia)`: copia las instancias de una conexión a otra
   del negocio (promoción de ADR-0127 §3). Devuelve el mapa instancia de origen → de destino,
   solo de pares con el mismo agente: es el contrato con HU-AOS-14, que clona la release
@@ -44,7 +44,7 @@ from typing import Any, Literal
 from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
-from core.agents.tolerante import KEY_COORDINADOR, KEY_GENERAL
+from core.agents.claves import KEY_COORDINADOR
 from core.db.models import (
     AgentInstanceRecord,
     AgentRecord,
@@ -59,8 +59,8 @@ from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
-# `configurada`: la conexión ya tiene Coordinador y el General no está (lo quitó el dueño o
-# nunca lo tuvo): no se recrea.
+# `configurada`: la conexión ya tiene Coordinador y el especialista por defecto del negocio no está
+# (lo quitó el dueño o nunca lo tuvo): no se recrea.
 Resultado = Literal["creada", "ya_estaba", "otro_coordinador", "sin_agente", "configurada"]
 
 PRIORIDAD_POR_DEFECTO = 100
@@ -124,16 +124,38 @@ async def _conexion_conversacional(
 
 
 async def agentes_base(session: Any, tenant_id: uuid.UUID) -> dict[str, uuid.UUID]:
-    """Ids del Coordinador y del General vivos y activos del negocio (los que existan)."""
+    """Id del Coordinador vivo y activo del negocio (`{}` si no existe)."""
     filas = await session.execute(
         select(AgentRecord.key, AgentRecord.id).where(
             AgentRecord.tenant_id == tenant_id,
-            AgentRecord.key.in_((KEY_COORDINADOR, KEY_GENERAL)),
+            AgentRecord.key == KEY_COORDINADOR,
             AgentRecord.status == "active",
             AgentRecord.deleted_at.is_(None),
         )
     )
     return {key: aid for key, aid in filas}
+
+
+async def especialista_por_defecto(session: Any, tenant_id: uuid.UUID) -> uuid.UUID | None:
+    """El especialista por defecto del negocio (ADR-0192): el agente activo, con versión publicada,
+    que es el por defecto habilitado en más conexiones vivas (a igualdad, el de la instancia más
+    antigua). None si el negocio todavía no tiene ninguno."""
+    fila = (
+        await session.execute(
+            text(
+                "SELECT i.agent_id FROM agent_instances i "
+                "JOIN agents a ON a.tenant_id = i.tenant_id AND a.id = i.agent_id "
+                "JOIN channel_connections c ON c.tenant_id = i.tenant_id AND c.id = i.connection_id "
+                "WHERE i.tenant_id = :t AND i.role = 'specialist' AND i.is_default AND i.enabled "
+                "AND i.deleted_at IS NULL AND c.deleted_at IS NULL AND a.deleted_at IS NULL "
+                "AND a.status = 'active' AND EXISTS (SELECT 1 FROM agent_versions v "
+                "WHERE v.tenant_id = a.tenant_id AND v.agent_id = a.id) "
+                "GROUP BY i.agent_id ORDER BY count(*) DESC, min(i.created_at) LIMIT 1"
+            ),
+            {"t": tenant_id},
+        )
+    ).scalar_one_or_none()
+    return fila
 
 
 async def _vivas(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID) -> list[AgentInstanceRecord]:
@@ -208,9 +230,9 @@ def _json(valor: dict[str, Any]) -> str:
 @dataclass(frozen=True)
 class ResultadoInstancias:
     coordinador: Resultado
-    general: Resultado
-    # El General entró sin ser el agente por defecto (la conexión ya tenía otro).
-    general_sin_defecto: bool = False
+    especialista: Resultado
+    # El especialista entró sin ser el agente por defecto (la conexión ya tenía otro).
+    especialista_sin_defecto: bool = False
 
 
 async def asegurar_instancias_base(
@@ -221,18 +243,18 @@ async def asegurar_instancias_base(
     agentes: dict[str, uuid.UUID] | None = None,
     aplicar: bool = True,
 ) -> ResultadoInstancias:
-    """Inicializa la conexión con el Coordinador y el General (por defecto). Idempotente.
+    """Inicializa la conexión con el Coordinador y el especialista por defecto del negocio
+    (`especialista_por_defecto`). Idempotente.
 
     - Solo actúa si la conexión **no tiene Coordinador vivo**. Si lo tiene, no escribe nada:
       `ya_estaba` (el del negocio) u `otro_coordinador` para el Coordinador, y `ya_estaba` o
-      `configurada` (no está y no se recrea) para el General.
-    - `agentes`: `{key: agent_id}` ya resueltos (el lote del backfill los pasa); por defecto
-      se leen con `agentes_base`. Un agente que falta da `sin_agente` (en dry-run, todavía no
-      existe: cuenta como `creada`).
+      `configurada` (no está y no se recrea) para el especialista.
+    - `agentes`: `{key: agent_id}` ya resueltos; por defecto se leen con `agentes_base`. Un
+      agente que falta da `sin_agente` (en dry-run, todavía no existe: cuenta como `creada`).
     - `aplicar = False`: no escribe, dice lo que haría (dry-run). Con `aplicar` bloquea la fila
       de la conexión, como las escrituras de la API.
-    - Otro agente por defecto (un especialista agregado antes que el Coordinador) → el General
-      entra sin serlo.
+    - Otro agente por defecto (un especialista agregado antes que el Coordinador) → el
+      especialista entra sin serlo.
     - Lanza `ConexionNoEncontrada` / `ConexionNoConversacional`; un error del trigger
       `agent_instance_checks()` se propaga (es un error, no un conflicto).
     - `session` tiene que haberse abierto dentro del `tenant_scope` de `tenant_id` (la RLS la
@@ -244,13 +266,13 @@ async def asegurar_instancias_base(
     actuales = [(i.agent_id, i.role, i.is_default) for i in await _vivas(session, tenant_id, connection_id)]
     presentes = {aid for aid, _, _ in actuales}
     id_core = agentes.get(KEY_COORDINADOR)
-    id_general = agentes.get(KEY_GENERAL)
+    id_esp = await especialista_por_defecto(session, tenant_id)
 
     core_vivo = next((aid for aid, rol, _ in actuales if rol == "core"), None)
     if core_vivo is not None:
         return ResultadoInstancias(
             "ya_estaba" if core_vivo == id_core else "otro_coordinador",
-            "ya_estaba" if id_general is not None and id_general in presentes else "configurada",
+            "ya_estaba" if id_esp is not None and id_esp in presentes else "configurada",
         )
 
     async def _una(aid: uuid.UUID | None, rol: str, por_defecto: bool) -> Resultado:
@@ -279,9 +301,11 @@ async def asegurar_instancias_base(
         return "ya_estaba"
 
     coordinador = await _una(id_core, "core", False)
-    otro_defecto = any(d for aid, _, d in actuales if aid != id_general)
-    general = await _una(id_general, "specialist", not otro_defecto)
-    return ResultadoInstancias(coordinador, general, general_sin_defecto=otro_defecto and general == "creada")
+    otro_defecto = any(d for aid, _, d in actuales if aid != id_esp)
+    especialista = await _una(id_esp, "specialist", not otro_defecto)
+    return ResultadoInstancias(
+        coordinador, especialista, especialista_sin_defecto=otro_defecto and especialista == "creada"
+    )
 
 
 # ------------------------------------------------------------------ clon (promoción)
@@ -395,7 +419,7 @@ async def instancias_al_alta(
     Con `aos_runtime = legacy` las instancias no hacen nada y el backfill las repara; un bug
     del Agent OS no debe tumbar las altas de WhatsApp. No hace nada si:
     - el número no tiene conexión canónica ligada a `cuenta` (choque con una manual);
-    - el negocio todavía no tiene su Coordinador y su General: lo hará el backfill;
+    - el negocio todavía no tiene su Coordinador;
     - la conexión ya tiene Coordinador (religar o revivir el número no recrea nada).
 
     `instancias_de` (promoción de ADR-0127 §3): la conexión (`channel_connections`) del número de
@@ -418,7 +442,7 @@ async def instancias_de_conexion_nueva(session: Any, tenant_id: uuid.UUID, conne
     (`connections.save_connection`), `waweb` (`waweb.connections`) o chat web
     (`chat_web_conexion`, al guardar el widget). La misma frontera que `instancias_al_alta`:
     en la sesión del alta, dentro de un SAVEPOINT, un error se registra y el alta sigue; no hace
-    nada si el negocio todavía no tiene su Coordinador y su General, ni si la conexión ya tiene
+    nada si el negocio todavía no tiene su Coordinador, ni si la conexión ya tiene
     Coordinador. El llamador solo la invoca para tipos conversacionales."""
 
     async def _paso() -> None:
@@ -453,21 +477,33 @@ async def _inicializar_al_alta(
     session: Any, tenant_id: uuid.UUID, conexion: uuid.UUID, instancias_de: uuid.UUID | None
 ) -> None:
     agentes = await agentes_base(session, tenant_id)
-    if KEY_COORDINADOR not in agentes or KEY_GENERAL not in agentes:
+    if KEY_COORDINADOR not in agentes:
         return
     clonadas = 0
     if instancias_de is not None and instancias_de != conexion:
         clonadas = (await clonar_instancias(session, tenant_id, instancias_de, conexion)).creadas
     base = await asegurar_instancias_base(session, tenant_id, conexion, agentes=agentes)
-    if clonadas or "creada" in (base.coordinador, base.general):
+    if clonadas or "creada" in (base.coordinador, base.especialista):
         log.info(
             "instancias_alta_creadas",
             tenant_id=str(tenant_id),
             connection_id=str(conexion),
             clonadas=clonadas,
             coordinador=base.coordinador,
-            general=base.general,
+            especialista=base.especialista,
         )
+    # Todo turno corre sobre una release (ADR-0191): la conexión pide por el outbox, después del commit,
+    # su primer especialista (el del preset, ADR-0192 §1) y su release 1.
+    from core.events.outbox import emit_domain
+    from core.shared.events import ON_CONNECTION_RELEASE_1
+
+    await emit_domain(
+        session,
+        tenant_id=tenant_id,
+        topic=ON_CONNECTION_RELEASE_1,
+        dedupe_key=f"release_1:{conexion}",
+        payload={"connection_id": str(conexion)},
+    )
 
 
 # ------------------------------------------------------------------ escrituras de la API
@@ -543,16 +579,8 @@ async def _desmarcar_defecto(session: Any, tenant_id: uuid.UUID, connection_id: 
 
 async def _ya_cuenta_en_el_plan(session: Any, tenant_id: uuid.UUID, agent_id: uuid.UUID) -> bool:
     """¿El agente no necesita un cupo nuevo de `agentes`? Mismo criterio que la métrica
-    (`core.billing.metrics._count_agents`): ya tiene una instancia viva en una conexión viva, o es
-    el General, que viene incorporado y nunca ocupa cupo (enmienda del ADR-0142)."""
-    if (
-        await session.execute(
-            select(AgentRecord.id).where(
-                AgentRecord.tenant_id == tenant_id, AgentRecord.id == agent_id, AgentRecord.key == KEY_GENERAL
-            )
-        )
-    ).first() is not None:
-        return True
+    (`core.billing.metrics._count_agents`): ya tiene una instancia viva en una conexión viva. Sin
+    excepción para el General (ADR-0192 §7)."""
     return (
         await session.execute(
             select(AgentInstanceRecord.id)
@@ -574,7 +602,7 @@ async def _ya_cuenta_en_el_plan(session: Any, tenant_id: uuid.UUID, agent_id: uu
 
 async def agente_cuenta_en_el_plan(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> bool:
     """Lectura para los pre-chequeos (editor): ¿el agente ya ocupa un cupo de `agentes` o no
-    necesita uno (el General)?"""
+    necesita uno?"""
     _exigir_scope(tenant_id)
     async with get_session() as session:
         return await _ya_cuenta_en_el_plan(session, tenant_id, agent_id)
@@ -596,7 +624,8 @@ async def agregar_instancia(
       publicada (si no, el build de la release no tendría qué fijar).
     - La conexión ya tiene su Coordinador (lo pone el sistema: backfill o alta).
     - `is_default`: pasa a ser el agente por defecto (el anterior deja de serlo) y tiene que
-      estar habilitado.
+      estar habilitado. Si la conexión no tiene ningún especialista habilitado por defecto, el
+      agente que se agrega habilitado lo es (ADR-0192 §1): una conexión siempre tiene quién atienda.
     - Si es la primera instancia del agente, aplica el tope de agentes publicados del plan:
       `core.billing.enforcement.QuotaExceeded` (D-35, ADR-0142)."""
     _exigir_scope(tenant_id)
@@ -641,6 +670,8 @@ async def agregar_instancia(
                 )
             if any(i.agent_id == agent_id for i in vivas):
                 raise ConflictoInstancia("already_assigned", "Ese agente ya está en la conexión.")
+            if enabled and not any(i.role == "specialist" and i.is_default and i.enabled for i in vivas):
+                is_default = True
             if len(vivas) >= MAX_INSTANCIAS_POR_CONEXION:
                 raise ConflictoInstancia(
                     "limit_reached", f"La conexión ya tiene {MAX_INSTANCIAS_POR_CONEXION} agentes: quita alguno antes."

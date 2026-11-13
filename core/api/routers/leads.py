@@ -351,12 +351,12 @@ def _clave_de_agente(provider: LeadProvider) -> str:
 
 
 def _meta_de_agentes(providers: list[LeadProvider], registros: list[AgentRecord]) -> list[LeadAgentOut]:
-    """Agentes publicados + los que aportan data, agrupados por clave (General primero)."""
+    """Agentes publicados + los que aportan data, agrupados por clave. `general` es la pestaña del
+    perfil del cliente (va primero), no un agente: ya no hay agente General (ADR-0192)."""
     por_key: dict[str, LeadAgentOut] = {}
-    general = next((r for r in registros if r.key == "general"), None)
     por_key["general"] = LeadAgentOut(
         key="general",
-        name=general.name if general is not None else "General",
+        name="General",
         icon="bot",
         columns=[],
     )

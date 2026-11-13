@@ -1,11 +1,10 @@
 """HU-BILL-05 · planes por agentes: agentes publicados, colaboradores y crédito (D-35, ADR-0142).
 
-- Free (1 agente) con el General incorporado: el primer especialista entra; al tope, crear otro
+- Free (1 agente): el primer especialista entra (y queda por defecto); al tope, crear otro
   borrador (`agent-templates` y `from-script`) o publicar una versión da 409 `plan_limit_agentes`,
   sin escribir nada.
 - Premium permite 5 agentes; el sexto da 409. Un agente que ya está en una conexión no ocupa otro cupo.
-- Ni el General ni el Coordinador cuentan (enmienda del ADR-0142, 2026-10-27): el General viene
-  incorporado y se puede volver a poner sin cupo.
+- El Coordinador no cuenta; el especialista por defecto sí, como cualquiera (ADR-0192 §7: sin General).
 - Colaboradores al tope (Free = 2): el tercero da 409 `plan_limit_colaboradores` sin crear la cuenta; la
   invitación pendiente ocupa cupo.
 - Un negocio por encima del tope (plan bajado) sigue operando: edita, publica versiones de sus agentes,
@@ -82,18 +81,21 @@ async def _proceso() -> None:
 
 @pytest.fixture(autouse=True)
 def _ruteo(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.config import get_settings
+    pass
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
 
 
 async def _negocio(plan: str) -> tuple[uuid.UUID, uuid.UUID]:
-    """Negocio v3 en `plan` con una conexión conversacional: Coordinador y General instanciados."""
+    """Negocio v3 en `plan` con una conexión conversacional y su Coordinador (ADR-0192: sin General)."""
+    from core.agents.base import asegurar_coordinador
+    from core.agents.instancias import asegurar_instancias_base
     from core.alta_negocio import onboard_tenant
-    from core.releases.release_uno import backfill_releases
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
 
     slug = f"bill05-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"BILL05 {slug}", slug=slug, packs=PACKS, sembrar_ejemplos=False, plan=plan)
+    await _runtime_v3(tid)
     cid = uuid.uuid4()
     await _sql(
         tid,
@@ -101,9 +103,10 @@ async def _negocio(plan: str) -> tuple[uuid.UUID, uuid.UUID]:
         "values (:id, :t, 'instagram', 'meta', :ext, 'instagram_meta')",
         id=cid, t=tid, ext=f"ig-{uuid.uuid4().hex[:10]}",
     )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
-    assert not reporte.fallo, reporte.errores
-    await _runtime_v3(tid)
+    async with tenant_scope(tid):
+        await asegurar_coordinador(tid, modules=_modules())
+        async with get_session() as session:
+            await asegurar_instancias_base(session, tid, cid)
     return tid, cid
 
 
@@ -174,10 +177,10 @@ async def _llenar_cupo(
     return aid
 
 
-async def test_free_el_general_no_cuenta_y_un_segundo_agente_da_409(app_client) -> None:
+async def test_free_el_coordinador_no_cuenta_y_un_segundo_agente_da_409(app_client) -> None:
     tid, cid = await _negocio("free")
     h = await api_headers(app_client, tid)  # master: escribe con cualquier runtime
-    # Ni el General ni el Coordinador cuentan: el negocio arranca en 0 con ambos instanciados.
+    # El Coordinador no cuenta: el negocio arranca en 0 con él instanciado (ADR-0192: sin General).
     assert await _agentes(tid) == 0
     kinds = await _sql(
         tid,
@@ -185,12 +188,12 @@ async def test_free_el_general_no_cuenta_y_un_segundo_agente_da_409(app_client) 
         "where i.tenant_id = :t and i.deleted_at is null order by a.key",
         t=tid,
     )
-    assert [tuple(k) for k in kinds] == [("coordinador", "core"), ("general", "specialist")]
+    assert [tuple(k) for k in kinds] == [("coordinador", "core")]
 
     ventas = await _especialista(app_client, h, "ventas")
     assert await _agentes(tid) == 0  # publicado sin instancia: todavía no es unidad facturable
     r = await app_client.post(_agents_url(cid), headers=h, json={"agent_id": ventas})
-    assert r.status_code == 201, r.text  # el primero entra: el General no ocupó el cupo del Free
+    assert r.status_code == 201, r.text  # el primero entra (y queda por defecto): ocupa el cupo del Free
     assert await _agentes(tid) == 1
 
     soporte = await _especialista(app_client, h, "soporte")
@@ -198,22 +201,6 @@ async def test_free_el_general_no_cuenta_y_un_segundo_agente_da_409(app_client) 
     assert _limite(r) == (409, "plan_limit_agentes", {"metric": "agentes", "used": 1, "limit": 1}), r.text
     assert "mejora tu plan" in r.json()["error"]["message"].lower()
     assert await _instancias_vivas(tid, soporte) == 0
-    assert await _agentes(tid) == 1
-
-
-async def test_el_general_se_puede_volver_a_poner_con_el_cupo_lleno(app_client) -> None:
-    tid, cid = await _negocio("free")
-    h = await api_headers(app_client, tid)
-    await _llenar_cupo(app_client, h, cid, por_defecto=True)  # Free al tope: 1 de 1; deja de ser el General
-    (general,) = (await _sql(tid, "select id from agents where tenant_id = :t and key = 'general'", t=tid))[0]
-    (instancia,) = (
-        await _sql(tid, "select id from agent_instances where agent_id = :a and deleted_at is null", a=general)
-    )[0]
-    r = await app_client.delete(f"{_agents_url(cid)}/{instancia}", headers=h)
-    assert r.status_code == 204, r.text
-    # El General no ocupa cupo: volver a ponerlo no se mide contra el tope.
-    r = await app_client.post(_agents_url(cid), headers=h, json={"agent_id": str(general)})
-    assert r.status_code == 201, r.text
     assert await _agentes(tid) == 1
 
 
@@ -274,7 +261,7 @@ async def test_premium_permite_cinco_agentes_y_el_sexto_da_409(app_client) -> No
     tid, cid = await _negocio("premium")
     h = await api_headers(app_client, tid)
     agentes = [await _especialista(app_client, h, f"esp{i}") for i in range(6)]
-    for aid in agentes[:5]:  # el General no cuenta: 5 especialistas llenan el cupo
+    for aid in agentes[:5]:  # 5 especialistas llenan el cupo
         r = await app_client.post(_agents_url(cid), headers=h, json={"agent_id": aid})
         assert r.status_code == 201, r.text
     assert await _agentes(tid) == 5
@@ -295,8 +282,8 @@ async def test_premium_permite_cinco_agentes_y_el_sexto_da_409(app_client) -> No
     )
     async with tenant_scope(tid):
         async with get_session() as session:
-            await instancias.asegurar_instancias_base(session, tid, cid2)
-        nueva = await instancias.agregar_instancia(tid, cid2, uuid.UUID(agentes[0]))
+            await instancias.asegurar_instancias_base(session, tid, cid2)  # hereda el por defecto (esp0)
+        nueva = await instancias.agregar_instancia(tid, cid2, uuid.UUID(agentes[1]))
     assert nueva is not None
     assert await _agentes(tid) == 5
 
@@ -315,7 +302,7 @@ async def test_por_encima_del_tope_sigue_operando_y_solo_no_crece(app_client) ->
         ids[aid] = r.json()["id"]
 
     await _plan(tid, "free")  # baja de plan: 3 agentes con tope 1
-    assert await _agentes(tid) == 3  # el General no suma
+    assert await _agentes(tid) == 3
 
     # Operar no se rompe: cambiar una instancia, publicar otra versión de un agente que ya está.
     r = await app_client.patch(f"{_agents_url(cid)}/{ids[ventas]}", headers=h, json={"priority": 10})

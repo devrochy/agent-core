@@ -88,6 +88,7 @@ async def _negocio(slug: str, pagos: Any) -> uuid.UUID:
     )
     async with tenant_scope(tid):
         await plugin_manager.save_config("pack_commerce", {"checkout_fields": CHECKOUT})
+    await journeys.encender_runtime_v3(tid)  # todo turno corre sobre la release de su conexión (ADR-0191)
     await _banderas(tid, "v3", True)
     return tid
 

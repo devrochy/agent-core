@@ -182,24 +182,18 @@ async def test_peor_se_guarda_una_vez_y_no_se_publica() -> None:
     assert len(await _sql(tid, "select 1 from release_events where release_id = :r and type = 'canary_evaluated'", r=dos)) == 1
 
 
-async def test_exencion_detiene_el_canary_y_requiere_v3() -> None:
+async def test_exencion_detiene_el_canary() -> None:
     from core.releases.promocion import promover
     from core.shared.tenant import tenant_scope
 
     tid, cid, uno, dos = await _con_candidata()
     await _svc(tid, "iniciar", cid, dos, percent=20, actor="test")
     async with tenant_scope(tid):
-        await promover(tid, cid, dos, actor="test", exencion="migrar_a_v3")
+        await promover(tid, cid, dos, actor="test", exencion="migrar_referencias")
     eventos = await _sql(
         tid, "select type, data->>'reason' from release_events where release_id = :r and type in ('canary_stopped','promoted') order by created_at", r=dos
     )
     assert eventos == [("canary_stopped", "reemplazado"), ("promoted", "manual")]
-    # Sin v3 no se inicia (tampoco para el master).
-    tid2, _s, cid2 = await _negocio()
-    await _release_uno(tid2)
-    await _cambiar_nombre(tid2, "Otra")
-    otra = (await _construir(tid2, cid2)).release_id
-    assert await _codigo(_svc(tid2, "iniciar", cid2, otra, percent=10, actor="test")) == "requiere_v3"
     del uno
 
 

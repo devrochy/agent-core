@@ -17,9 +17,8 @@
 - `GET /api/v1/admin/agents/retired-references` y `GET /api/v1/admin/agents/{id}/retired-references` —
   aviso en palabras simples de lo que el agente nombra y ya no existe (HU-AOS-59, ADR-0184). Solo lectura.
 
-Permisos: sección `settings` (lectura; `write` para escribir). Mientras el runtime del negocio
-sea `legacy` (ADR-0112) un agente no hace nada, así que las escrituras quedan para el master o
-para los negocios con `aos_runtime = 'v3'` (403 `aos_runtime_legacy` si no). Las keys del lector
+Permisos: sección `settings` (lectura; `write` para escribir). Todo negocio corre en v3
+(ADR-0191), así que no hay 403 por runtime. Las keys del lector
 tolerante (`general`, `coordinador`) están reservadas para el backfill de HU-AOS-13.
 """
 
@@ -34,7 +33,6 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from core.admin.roles import actua_como_master
 from core.agents import versiones as svc
 from core.agents.aviso_retiros import CODIGO_AVISO, problemas_de_publicacion
 from core.agents.contrato_v3 import MAX_SPEC_BYTES
@@ -248,12 +246,6 @@ def _tenant(principal: Principal) -> uuid.UUID:
 
 async def _puede_escribir(principal: Principal) -> uuid.UUID:
     tid = _tenant(principal)
-    if not actua_como_master(principal.admin) and not await svc.escritura_habilitada(tid):
-        raise ApiError(
-            403,
-            "aos_runtime_legacy",
-            "Los agentes se activan con el Agent OS de este negocio: por ahora solo los edita el administrador.",
-        )
     return tid
 
 
@@ -552,8 +544,8 @@ async def get_version(
 async def _resueltos(v: Any) -> list[ResolvedProcedure]:
     """Los `procedures` de un AgentSpec v3 resueltos contra los packs habilitados del negocio
     (el binario de hoy). Vacío para un KernelSpec."""
+    from core.agents.procedimientos_de_negocio import procedimientos_publicados
     from core.agents.spec import enabled_packs, load_active_spec
-    from core.agents.tolerante import procedimientos_publicados
     from core.releases.procedimientos import publicados_por_id, resolver_refs
 
     refs = v.content.get("procedures") if v.contract == "agentspec/3" else None

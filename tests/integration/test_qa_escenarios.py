@@ -92,7 +92,6 @@ def entorno() -> Any:
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(get_settings(), "qa_testers_enabled", True)
-        mp.setattr(get_settings(), "aos_connection_routing", True)
         mp.setattr(get_settings(), "landing_base_url", LANDING)
         yield mp
 

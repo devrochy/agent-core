@@ -198,7 +198,7 @@ class PlantillaAgente(BaseModel):
 
     @model_validator(mode="after")
     def _coherente(self) -> PlantillaAgente:
-        from core.agents.tolerante import KEYS_RESERVADAS
+        from core.agents.claves import KEYS_RESERVADAS
 
         if self.key in KEYS_RESERVADAS:
             raise ValueError(f"la key {self.key!r} está reservada para los agentes del sistema")

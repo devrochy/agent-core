@@ -12,9 +12,8 @@ su próxima release SOLO esas (reemplazo entero, sin merge). Precondición: el p
 habilitado en el negocio (409 `pack_not_enabled`). La instalación no lleva versión: la fija la
 release. Instalar o quitar aplica con la próxima release de la conexión.
 
-Permisos: lectura con la sección `plugins`; escritura con `plugins` en escritura y, como las
-instancias de agentes, solo el master mientras el negocio esté en `aos_runtime = 'legacy'`
-(403 `aos_runtime_legacy`): sin v3 la release no se lee. 404 si la conexión o la instalación
+Permisos: lectura con la sección `plugins`; escritura con `plugins` en escritura. 404 si la
+conexión o la instalación
 no son del negocio; 409 `connection_not_conversational` para una integración.
 """
 
@@ -27,10 +26,8 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from core.admin.roles import actua_como_master
 from core.agents import instalaciones as svc
 from core.agents.spec import enabled_business_packs, load_active_spec
-from core.agents.versiones import escritura_habilitada
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 
@@ -76,12 +73,6 @@ def _tenant(principal: Principal) -> uuid.UUID:
 
 async def _puede_escribir(principal: Principal) -> uuid.UUID:
     tid = _tenant(principal)
-    if not actua_como_master(principal.admin) and not await escritura_habilitada(tid):
-        raise ApiError(
-            403,
-            "aos_runtime_legacy",
-            "Las habilidades por conexión se activan con el Agent OS de este negocio: por ahora solo las edita el administrador.",
-        )
     return tid
 
 

@@ -17,8 +17,7 @@ Reglas:
 - Fail-closed: un contenido congelado que no valida el contrato es `VistaInvalida` (sube por el
   camino de error del turno). Una tool declarativa con referencias a secretos en la URL o el
   body se omite (hoy `core/mcp/declarative.py` solo resuelve referencias en headers: incluirla
-  mandaría el placeholder literal a un tercero); el comando `migrar-a-v3` la reporta y bloquea
-  el negocio hasta la parte 2.
+  mandaría el placeholder literal a un tercero).
 
 Importa solo contratos y `core.shared.release_vigente` (módulo hoja): nunca `core.releases`.
 """

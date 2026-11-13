@@ -5,7 +5,7 @@ Dos capas:
   borde `Entorno`) es un doble que cuenta ejecuciones. Cubre doble toque, reintento, confirmación, vencimiento,
   versión retirada, deriva, aislamiento entre negocios y `running` colgado.
 - **Entorno real** (`core.orchestrator.opciones_toque`): la tool se registra en el host y corre por
-  `_execute_tool_safely` con el spec y los bindings reales del negocio (legacy y v3), y el camino completo del
+  `_execute_tool_safely` con el spec y los bindings reales del negocio (negocio_opciones y v3), y el camino completo del
   consumer: bandera apagada = comportamiento de siempre; encendida = toque → respuesta fija con el LLM en cero.
 
 Requiere el stack local (Postgres + Redis) y `AGENT_CORE_INTEGRATION=1`.

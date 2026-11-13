@@ -80,7 +80,13 @@ async def _negocio(con_basic: bool = False) -> tuple[uuid.UUID, str]:
                 await s.flush()
                 s.add(Inventory(tenant_id=tid, variant_id=var_basic.id, stock_quantity=1000))
             await s.flush()
-            return tid, str(variante.id)
+            variante_id = str(variante.id)
+    # Todo turno corre sobre la release de su conexión (ADR-0191): el agente nativo trae las acciones de
+    # comercio, el pack habilitado del negocio.
+    from release_de_prueba import montar_release_en
+
+    await montar_release_en(tid, "whatsapp")
+    return tid, variante_id
 
 
 async def _conversacion(tid: uuid.UUID, customer_id: uuid.UUID | None = None) -> tuple[uuid.UUID, uuid.UUID]:

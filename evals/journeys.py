@@ -284,19 +284,18 @@ async def preparar_negocio(
 
 
 def modo_de_runtime(negocio: dict[str, Any], runtime: str | None) -> tuple[bool | None, bool]:
-    """(motor, releases) de la corrida según `--runtime`.
+    """(motor, releases) de la corrida según `--runtime`. Todo turno corre sobre la release v3 de su
+    conexión (ADR-0191): la corrida siempre monta una conexión con su release 1.
 
-    - Sin `--runtime`: lo de siempre (`motor_de_procedimientos` del set, sin releases).
-    - Set con motor: `legacy` es la línea base de un agente, sin el motor; `v3` enciende el
-      motor (`aos_runtime = v3` y `aos_procedures`, HU-AOS-07). Así se mide pass^k con y sin
-      procedimientos sobre el mismo set (ADR-0112). No monta conexión ni release: el motor no
-      las necesita.
-    - Set sin motor: `v3` monta la release 1 por conexión (HU-AOS-15); `legacy`, nada."""
+    - Sin `--runtime`: el motor lo decide el set (`motor_de_procedimientos`).
+    - `sin-motor`: la línea base de un agente, v3 sin procedimientos (antes `legacy`).
+    - `v3`: con el motor si el set lo trae (`aos_procedures`, HU-AOS-07). Así se mide pass^k con y
+      sin procedimientos sobre el mismo set (ADR-0112)."""
     if runtime is None:
-        return None, False
-    if negocio.get("motor_de_procedimientos"):
-        return runtime == "v3", False
-    return False, runtime == "v3"
+        return None, True
+    if runtime == "sin-motor":
+        return False, True
+    return bool(negocio.get("motor_de_procedimientos")), True
 
 
 def separar_los_que_requieren_motor(
@@ -306,8 +305,8 @@ def separar_los_que_requieren_motor(
     procedimiento cuyas acciones el core solo ofrece con el motor encendido (`solo_con_motor_activo`:
     `contratar_plan` y `cambiar_plan`, SPEC-43 / HU-AOS-08): sin él no hay camino a cumplirlo, así
     que medirlo como línea base daría 0 % por diseño y no diría nada del modelo. Solo aplica a
-    `--runtime legacy` sobre un set con motor; con `v3` o sin `--runtime` corren todos."""
-    if runtime != "legacy" or not negocio.get("motor_de_procedimientos"):
+    `--runtime sin-motor` sobre un set con motor; con `v3` o sin `--runtime` corren todos."""
+    if runtime != "sin-motor" or not negocio.get("motor_de_procedimientos"):
         return rutas, []
     a_correr: list[Path] = []
     omitidos: list[str] = []
@@ -334,10 +333,9 @@ def _exigir_base_local(*urls: str | None, que: str) -> None:
 
 async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     """Runtime por releases (HU-AOS-15) para el negocio de la corrida: una conexión
-    conversacional, su release 1 (`backfill_releases`, desde el AgentSpec v2) y
-    `aos_runtime = 'v3'` sin `aos_procedures`. Exige `AOS_CONNECTION_ROUTING=true` en el entorno.
-    Devuelve la conexión: `nuevo_cliente` liga a ella las conversaciones de la corrida. Sirve para
-    medir pass^k legacy vs v3 con el mismo set (`--runtime v3`)."""
+    conversacional, su release 1 (`backfill_releases`) y `aos_runtime = 'v3'` (no toca
+    `aos_procedures`: lo decide el set o `--runtime`). Devuelve la conexión: `nuevo_cliente` liga a
+    ella las conversaciones de la corrida. Toda corrida la monta (ADR-0191)."""
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -349,8 +347,6 @@ async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     from core.shared.tenant import tenant_scope
 
     settings = get_settings()
-    if not settings.aos_connection_routing:
-        raise SystemExit("--runtime v3 exige AOS_CONNECTION_ROUTING=true (orden de banderas, ADR-0112).")
     url = settings.migrations_database_url or settings.database_url
     _exigir_base_local(url, settings.database_url, que="El runtime v3 de los journeys")
     conexion = uuid.uuid4()
@@ -367,6 +363,7 @@ async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     reporte_packs = await sync_packs(modulos)
     if reporte_packs.fallo:
         raise SystemExit(f"sync-packs falló: {reporte_packs.errores}")
+    await agentes_nativos(tenant_id, conexion, modulos)
     reporte = await backfill_releases(dry_run=False, tenant_id=tenant_id, modules=modulos)
     if reporte.fallo:
         raise SystemExit(f"No se pudo construir la release 1 del negocio de la corrida: {reporte.errores}")
@@ -378,6 +375,70 @@ async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
         await engine.dispose()
     _CONEXION_V3[tenant_id] = conexion
     return conexion
+
+
+async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: list[Any]) -> uuid.UUID:
+    """Coordinador y un especialista «atencion» por defecto en la conexión, sin el lector tolerante
+    (ADR-0191/0192): el especialista lleva la base de la configuración del negocio, los bindings de
+    todas las acciones de sus packs habilitados y del core, y los procedimientos que publican. Es lo
+    que hacía el General para la corrida. Devuelve el id del especialista."""
+    from sqlalchemy import select
+
+    from core.agents import versiones
+    from core.agents.base import asegurar_coordinador, contenido_base
+    from core.agents.instancias import (
+        ConflictoInstancia,
+        agregar_instancia,
+        asegurar_instancias_base,
+    )
+    from core.agents.procedimientos_de_negocio import declarados, procedimientos_publicados
+    from core.agents.spec import enabled_packs, leer_spec_activo, load_active_spec
+    from core.db.models import AgentRecord
+    from core.db.session import get_session
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.kernel.procedures.catalogo import CORE_OWNER
+    from core.shared.tenant import tenant_scope
+    from core.subscriptions.tools import SOLO_PROCEDIMIENTO
+
+    async with tenant_scope(tenant_id):
+        await load_active_spec(tenant_id)  # siembra el default si el negocio no tiene uno
+        await asegurar_coordinador(tenant_id, modules=modulos)
+        async with get_session() as session:
+            await asegurar_instancias_base(session, tenant_id, conexion)
+            existente = (
+                await session.execute(
+                    select(AgentRecord.id).where(
+                        AgentRecord.tenant_id == tenant_id, AgentRecord.key == "atencion", AgentRecord.deleted_at.is_(None)
+                    )
+                )
+            ).scalar_one_or_none()
+        if existente is not None:  # idempotente: negocios de prueba que se reusan entre módulos
+            try:
+                await agregar_instancia(tenant_id, conexion, existente, is_default=True)
+            except ConflictoInstancia as exc:
+                if exc.code != "already_assigned":
+                    raise
+            return existente
+        leido = await leer_spec_activo(tenant_id)
+        if leido is None:
+            raise SystemExit("El negocio de la corrida no tiene AgentSpec activo.")
+        spec = leido[1]
+        habilitados = enabled_packs(spec)
+        catalogo = catalogo_de_acciones(modulos)
+        contenido = contenido_base(spec)
+        contenido["tools"] = [
+            {"tool": nombre, "enabled": True, "scopes": list(getattr(info, "scopes", ()))}
+            for nombre, info in sorted(catalogo.items())
+            if (info.owner in habilitados or info.owner == CORE_OWNER) and nombre not in SOLO_PROCEDIMIENTO
+        ]
+        contenido["procedures"] = declarados(procedimientos_publicados(spec), set())
+        del leido, spec
+        agente = await versiones.crear_agente(tenant_id, key="atencion", kind="specialist", name="Atención")
+        await versiones.publicar(
+            tenant_id, agente.id, catalogo=catalogo, contenido=contenido, notes="Agente de la corrida de journeys."
+        )
+        await agregar_instancia(tenant_id, conexion, agente.id, is_default=True)
+        return agente.id
 
 
 # Conexión del negocio de la corrida con `--runtime v3` (las conversaciones nuevas se ligan a ella).
@@ -439,7 +500,7 @@ async def nuevo_cliente(tenant_id: uuid.UUID, nombre: str) -> tuple[uuid.UUID, u
             await session.flush()
             conversacion = Conversation(
                 tenant_id=tenant_id, customer_id=cliente.id, channel=TEST_CHANNEL, status="open", state={"is_test": True},
-                # Con `--runtime v3` la conversación es de la conexión con release (HU-AOS-15).
+                # La conversación es de la conexión de la corrida, con su release (HU-AOS-15, ADR-0191).
                 connection_id=_CONEXION_V3.get(tenant_id),
             )
             session.add(conversacion)
@@ -1081,12 +1142,11 @@ async def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--detalle", action="store_true", help="Imprimir la conversación de cada intento")
     parser.add_argument(
         "--runtime",
-        choices=("legacy", "v3"),
+        choices=("sin-motor", "v3"),
         default=None,
-        help="Sin la opción, como siempre. En un set sin motor: legacy o v3 (el negocio de la corrida corre su "
-        "release 1, HU-AOS-15; exige AOS_CONNECTION_ROUTING=true). En un set con motor de procedimientos: "
-        "legacy es la línea base de un agente (sin el motor) y v3 enciende el motor (ADR-0112). Sirve para "
-        "comparar pass^k entre runtimes.",
+        help="Sin la opción, el motor lo decide el set. Toda corrida corre sobre la release 1 de una conexión "
+        "(ADR-0191). En un set con motor de procedimientos: sin-motor es la línea base de un agente y v3 "
+        "enciende el motor (ADR-0112). Sirve para comparar pass^k con y sin procedimientos.",
     )
     sys.path.insert(0, str(EVALS_DIR))
     import grabaciones

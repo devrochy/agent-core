@@ -2,7 +2,7 @@
 
 Prueba el punto más frágil del ADR-0172: fuera de un turno no hay release ni spec. El entorno del toque los
 resuelve como un turno (`load_active_spec` → `fijar_release_del_turno` → `spec_del_turno` bajo la ranura de la
-release) y la tool corre con sus bindings reales, en legacy y con `aos_runtime = 'v3'`. También el camino
+release) y la tool corre con sus bindings reales, en negocio_opciones y con `aos_runtime = 'v3'`. También el camino
 completo del consumer: bandera apagada = comportamiento de siempre; encendida = toque → respuesta fija con el LLM
 invocado cero veces.
 
@@ -108,6 +108,19 @@ async def _binding(tid: uuid.UUID, *, enabled: bool = True, confirmar: bool = Fa
         async with get_session() as s:
             fila = (await s.execute(select(AgentSpecRecord).where(AgentSpecRecord.tenant_id == tid, AgentSpecRecord.is_active.is_(True)))).scalar_one()
             fila.spec = datos
+    # En v3 el binding vive en la versión del agente de la release (ADR-0191): se concede ahí.
+    from release_de_prueba import conceder_herramientas
+
+    from core.mcp.host import mcp_host
+
+    herramienta = mcp_host._tools.get(TOOL)
+    if herramienta is not None:
+        await conceder_herramientas(
+            tid,
+            [{"tool": TOOL, "enabled": enabled, "scopes": [], "requiresConfirmation": confirmar}],
+            extra=[herramienta],
+            quitar=ninguno,
+        )
 
 
 async def _objetos(tid: uuid.UUID, conv: uuid.UUID, cliente: uuid.UUID) -> tuple[Any, Any]:
@@ -140,20 +153,26 @@ async def tocar_real(envio: Envio, payload: str, conversation: Any, customer: An
 
 
 @pytest.fixture(scope="module")
-async def legacy() -> AsyncIterator[tuple[uuid.UUID, str]]:
+async def negocio_opciones() -> AsyncIterator[tuple[uuid.UUID, str]]:
+    from release_de_prueba import montar_release_en
+
     from core.alta_negocio import onboard_tenant
     from core.tenants import deactivate_tenant, purge_tenant
 
     slug = f"opte-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"Opciones {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
+    # Todo turno corre sobre la release de su conexión (ADR-0191): una por canal que usan los journeys
+    # de este módulo y de los que importan esta fixture (menú de texto, envío).
+    for canal in ("whatsapp", "qr", "web", "messenger", "instagram"):
+        await montar_release_en(tid, canal)
     yield tid, slug
     await deactivate_tenant(str(tid))
     await purge_tenant(str(tid), f"ELIMINAR {slug}")
 
 
-# ---------------------------------------------------------------- legacy: bindings reales
-async def test_la_tool_corre_por_el_loop_con_el_binding_real_y_la_idempotencia_de_la_activacion(legacy, herramienta) -> None:
-    tid, _ = legacy
+# ---------------------------------------------------------------- negocio_opciones: bindings reales
+async def test_la_tool_corre_por_el_loop_con_el_binding_real_y_la_idempotencia_de_la_activacion(negocio_opciones, herramienta) -> None:
+    tid, _ = negocio_opciones
     await _binding(tid)
     conv_id, cliente = await conversacion(tid)
     conv, cust = await _objetos(tid, conv_id, cliente)
@@ -174,12 +193,12 @@ async def test_la_tool_corre_por_el_loop_con_el_binding_real_y_la_idempotencia_d
         "la auditoría de la tool de un toque no copia los valores (vienen del contexto del cliente)"
 
 
-async def test_sin_binding_explicito_la_tool_no_corre_aunque_el_loop_la_dejaria(legacy, herramienta) -> None:
+async def test_sin_binding_explicito_la_tool_no_corre_aunque_el_loop_la_dejaria(negocio_opciones, herramienta) -> None:
     from core.agents.spec import load_active_spec
     from core.orchestrator.loop import _tool_denial
     from core.shared.tenant import tenant_scope
 
-    tid, _ = legacy
+    tid, _ = negocio_opciones
     await _binding(tid, ninguno=True)
     conv_id, cliente = await conversacion(tid)
     conv, cust = await _objetos(tid, conv_id, cliente)
@@ -194,8 +213,8 @@ async def test_sin_binding_explicito_la_tool_no_corre_aunque_el_loop_la_dejaria(
     assert "tool_sin_binding" in fila[0]["codigo"]
 
 
-async def test_binding_deshabilitado_o_tool_no_apta_o_pack_inactivo_no_corren(legacy, herramienta) -> None:
-    tid, _ = legacy
+async def test_binding_deshabilitado_o_tool_no_apta_o_pack_inactivo_no_corren(negocio_opciones, herramienta) -> None:
+    tid, _ = negocio_opciones
     conv_id, cliente = await conversacion(tid)
     conv, cust = await _objetos(tid, conv_id, cliente)
 
@@ -217,8 +236,8 @@ async def test_binding_deshabilitado_o_tool_no_apta_o_pack_inactivo_no_corren(le
     assert herramienta.llamadas == []
 
 
-async def test_tool_gobernada_por_un_procedimiento_no_corre(legacy, herramienta, monkeypatch) -> None:
-    tid, _ = legacy
+async def test_tool_gobernada_por_un_procedimiento_no_corre(negocio_opciones, herramienta, monkeypatch) -> None:
+    tid, _ = negocio_opciones
     await _binding(tid)
     etapa = types.SimpleNamespace(actions=[TOOL], preconditions=[], confirmActions=[])
     proc = types.SimpleNamespace(stages=[etapa])
@@ -232,13 +251,13 @@ async def test_tool_gobernada_por_un_procedimiento_no_corre(legacy, herramienta,
     assert outcome == "denied" and herramienta.llamadas == []
 
 
-async def test_binding_con_requires_confirmation_confirma_con_optc_y_ejecuta_sin_el_pendiente_del_loop(legacy, herramienta) -> None:
+async def test_binding_con_requires_confirmation_confirma_con_optc_y_ejecuta_sin_el_pendiente_del_loop(negocio_opciones, herramienta) -> None:
     from core.agents.spec import load_active_spec
     from core.llm.types import LLMToolCall
     from core.orchestrator.loop import _execute_tool_safely
     from core.shared.tenant import tenant_scope
 
-    tid, _ = legacy
+    tid, _ = negocio_opciones
     await _binding(tid, confirmar=True)
     conv_id, cliente = await conversacion(tid)
     conv, cust = await _objetos(tid, conv_id, cliente)
@@ -280,18 +299,15 @@ async def v3() -> AsyncIterator[tuple[tuple[uuid.UUID, uuid.UUID], tuple[uuid.UU
 
     (Un binding AUSENTE no sirve de caso negativo: la conversión a v3 crea uno por cada acción ofrecida sin
     binding —el consentimiento del lector tolerante— y la release ya lo trae explícito.)"""
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
-    from core.config import get_settings
     from core.plugin_manager import plugin_manager
     from core.releases.packs import sync_packs
-    from core.releases.release_uno import backfill_releases
     from core.tenants import deactivate_tenant, purge_tenant
 
     await journeys._preparar_proceso()
     assert not (await sync_packs(plugin_manager.scan())).fallo
-    settings = get_settings()
-    antes = settings.aos_connection_routing
-    settings.aos_connection_routing = True  # v3 lo exige (ADR-0112)
     creados: list[tuple[uuid.UUID, str]] = []
     salida: list[tuple[uuid.UUID, uuid.UUID]] = []
     registro = pytest.MonkeyPatch()
@@ -316,13 +332,12 @@ async def v3() -> AsyncIterator[tuple[tuple[uuid.UUID, uuid.UUID], tuple[uuid.UU
             "values (:id, :t, 'instagram', 'meta', :ext, 'instagram_meta')",
             id=cid, t=tid, ext=f"ig-{cid.hex[:8]}",
         )
-        reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=plugin_manager.scan())
+        reporte = await release_inicial(tid, plugin_manager.scan())
         assert not reporte.fallo, reporte.errores
         await _banderas(tid, "v3")
         salida.append((tid, cid))
     registro.undo()
     yield salida[0], salida[1]
-    settings.aos_connection_routing = antes
     for tid, slug in creados:
         await deactivate_tenant(str(tid))
         await purge_tenant(str(tid), f"ELIMINAR {slug}")
@@ -356,7 +371,7 @@ async def test_v3_la_tool_corre_con_la_release_y_los_bindings_del_agente_en_foco
     [(args, contexto)] = herramienta.llamadas
     assert args == {"pedido": "A-1"}
     # Prueba de que el contexto de turno SÍ existe fuera del loop: la identidad del agente en foco y su
-    # `memory.writeNamespaces` salen de la release (None en legacy), y la conversación quedó asignada.
+    # `memory.writeNamespaces` salen de la release (None en negocio_opciones), y la conversación quedó asignada.
     assert contexto.agent_id is not None and contexto.agent_version_id is not None
     assert contexto.write_namespaces is not None
     [(release, dueno)] = await _sql(tid, "select release_id, active_agent_instance_id from conversations where id = :c", c=conv_id)
@@ -477,11 +492,11 @@ async def _bandera(tid: uuid.UUID, encendida: bool) -> None:
         await bandera.fijar(tid, encendida, actor="test")
 
 
-async def test_bandera_apagada_el_payload_opt_sigue_el_camino_de_siempre(legacy, herramienta, monkeypatch, recorded) -> None:  # type: ignore[no-untyped-def]
+async def test_bandera_apagada_el_payload_opt_sigue_el_camino_de_siempre(negocio_opciones, herramienta, monkeypatch, recorded) -> None:  # type: ignore[no-untyped-def]
     from core.orchestrator import consumer
     from core.shared.tenant import tenant_scope
 
-    tid, _ = legacy
+    tid, _ = negocio_opciones
     await _binding(tid)
     await _bandera(tid, False)
     _inmediato(monkeypatch)
@@ -498,11 +513,11 @@ async def test_bandera_apagada_el_payload_opt_sigue_el_camino_de_siempre(legacy,
     assert not any("option_tap" in str(f) for f in await _sql(tid, "select action from audit_log where conversation_id = :c", c=conv))
 
 
-async def test_bandera_encendida_journey_toque_respuesta_con_el_llm_en_cero(legacy, herramienta, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+async def test_bandera_encendida_journey_toque_respuesta_con_el_llm_en_cero(negocio_opciones, herramienta, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from core.orchestrator import consumer
     from core.shared.tenant import tenant_scope
 
-    tid, _ = legacy
+    tid, _ = negocio_opciones
     await _binding(tid)
     await _bandera(tid, True)
     _inmediato(monkeypatch)
@@ -522,11 +537,11 @@ async def test_bandera_encendida_journey_toque_respuesta_con_el_llm_en_cero(lega
     assert await estado(envio) == [("ver", "done", None)]
 
 
-async def test_toque_ajeno_con_la_bandera_encendida_no_llega_al_llm_ni_responde(legacy, herramienta, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+async def test_toque_ajeno_con_la_bandera_encendida_no_llega_al_llm_ni_responde(negocio_opciones, herramienta, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from core.orchestrator import consumer
     from core.shared.tenant import tenant_scope
 
-    tid, _ = legacy
+    tid, _ = negocio_opciones
     await _bandera(tid, True)
     _inmediato(monkeypatch)
     cliente = uniq("wa-mal")
@@ -542,11 +557,11 @@ async def test_toque_ajeno_con_la_bandera_encendida_no_llega_al_llm_ni_responde(
     assert len(await _salientes(tid, conv)) == antes, "un payload que no valida se descarta sin responder"
 
 
-async def test_quick_reply_sin_prefijo_sigue_el_flujo_normal_con_la_bandera_encendida(legacy, monkeypatch, recorded) -> None:  # type: ignore[no-untyped-def]
+async def test_quick_reply_sin_prefijo_sigue_el_flujo_normal_con_la_bandera_encendida(negocio_opciones, monkeypatch, recorded) -> None:  # type: ignore[no-untyped-def]
     from core.orchestrator import consumer
     from core.shared.tenant import tenant_scope
 
-    tid, _ = legacy
+    tid, _ = negocio_opciones
     await _bandera(tid, True)
     _inmediato(monkeypatch)
     cliente = uniq("wa-qr")

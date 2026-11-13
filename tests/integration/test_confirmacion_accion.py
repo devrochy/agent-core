@@ -70,6 +70,9 @@ async def negocio() -> AsyncIterator[uuid.UUID]:
 
     slug = f"confa-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"Confirma {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
+    from release_de_prueba import montar_release_en
+
+    await montar_release_en(tid, "whatsapp")  # todo turno corre sobre una release (ADR-0191)
     yield tid
     await deactivate_tenant(str(tid))
     await purge_tenant(str(tid), f"ELIMINAR {slug}")
