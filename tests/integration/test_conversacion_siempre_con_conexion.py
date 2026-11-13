@@ -266,7 +266,9 @@ async def test_en_vuelo_solo_para_whatsapp(monkeypatch) -> None:  # type: ignore
     assert await _sql(tid, "select 1 from channel_connections where external_id = :p", p=phone) == []
 
 
-async def test_el_turno_de_prueba_no_es_un_release_missing_en_un_negocio_v3(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+async def test_el_turno_de_prueba_sin_release_en_un_negocio_v3_falla_cerrado(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Desde ADR-0191 la conexión interna del Centro de pruebas no tiene excepción: un negocio v3 sin
+    ninguna conexión con release queda marcado sin release y el loop no responde (no vuelve al v2)."""
     from _api_helpers import banderas_como_dueno
 
     from core.kernel import release_del_turno
@@ -280,8 +282,8 @@ async def test_el_turno_de_prueba_no_es_un_release_missing_en_un_negocio_v3(monk
     try:
         async with tenant_scope(tid):
             assert await release_del_turno.fijar_release_del_turno(conversacion) is None
-            # No se marca «v3 sin release»: eso dejaría el turno de prueba sin escrituras de memoria.
-            assert release_vigente.write_namespaces_del_turno() is None
+            assert release_vigente.sin_release()
+            assert release_vigente.write_namespaces_del_turno() == frozenset()
     finally:
         release_vigente.cerrar(token)
 

@@ -269,7 +269,7 @@ def _ruteo(monkeypatch: Any) -> None:
 
 
 # ---------------------------------------------------------------- el General: lo mismo que sin release
-async def test_el_general_con_release_ve_lo_mismo_que_sin_release(_ruteo: None, monkeypatch: Any) -> None:
+async def test_el_general_con_release_ve_lo_mismo_que_sin_el_filtro(_ruteo: None, monkeypatch: Any) -> None:
     tid, cid = await _negocio()
     rid = await _publicar_release(tid, cid)
     ((manifest,),) = await _sql(tid, "select manifest from connection_releases where id = :r", r=rid)
@@ -281,7 +281,7 @@ async def test_el_general_con_release_ve_lo_mismo_que_sin_release(_ruteo: None, 
     }
 
     # HU-ARCH-34: con release, el General ve lo mismo que sin el filtro de concesión (su versión
-    # declara todo lo que ofrece el loop); un negocio v3 sin conexión solo ve los comandos del hilo.
+    # declara todo lo que ofrece el loop); un negocio v3 sin conexión no tiene turno (ADR-0191).
     sin_release = await _conversacion(tid, None)
     con_release = await _conversacion(tid, cid)
     s0 = await _turno(tid, sin_release, monkeypatch, ["Hola, ¿en qué te ayudo?"])
@@ -290,7 +290,7 @@ async def test_el_general_con_release_ve_lo_mismo_que_sin_release(_ruteo: None, 
         a = await _turno(tid, await _conversacion(tid, cid), m, ["Hola, ¿en qué te ayudo?"])
     b = await _turno(tid, con_release, monkeypatch, ["Hola, ¿en qué te ayudo?"])
     assert await _release_del_turno(tid, sin_release) is None
-    assert s0.tools[0] == ["iniciar_procedimiento"]
+    assert s0.tools == []  # el modelo ni se llama
     assert b.tools == a.tools
     assert b.enums == a.enums
     assert a.enums[0] and PLAN in a.enums[0] and CITA in a.enums[0]

@@ -291,6 +291,9 @@ async def tenant_setup():
             session.add(t2)
             await session.flush()
         t1_id, t2_id = t1.id, t2.id
+    # Negocios de antes (legacy): nacen en v3 desde la migración 0126 (ADR-0191).
+    for tid in (t1_id, t2_id):
+        await _como_negocio_de_antes(tid)
 
     for tid in (t1_id, t2_id):
         async with tenant_scope(tid):

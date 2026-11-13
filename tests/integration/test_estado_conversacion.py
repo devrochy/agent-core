@@ -68,6 +68,10 @@ async def _negocio() -> tuple[uuid.UUID, str]:
 
     slug = f"estado-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"Estado {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
+    from release_de_prueba import montar_release
+
+    await montar_release(tid)  # todo turno corre sobre la release de su conexión (ADR-0191)
+    await _banderas(tid, False)  # nace apagado: los tests encienden el motor cuando lo necesitan
     return tid, slug
 
 
@@ -78,7 +82,9 @@ async def _conversacion(tid: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
         cliente = Customer(tenant_id=tid, channel="whatsapp", external_id=f"estado:{uuid.uuid4().hex[:8]}")
         s.add(cliente)
         await s.flush()
-        conv = Conversation(tenant_id=tid, customer_id=cliente.id, channel="whatsapp")
+        from release_de_prueba import conexion_de
+
+        conv = Conversation(tenant_id=tid, customer_id=cliente.id, channel="whatsapp", connection_id=conexion_de(tid))
         s.add(conv)
         await s.flush()
         return conv.id, cliente.id

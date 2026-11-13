@@ -279,10 +279,10 @@ async def test_finalizar_lo_valida_el_servidor_y_dejar_listo_publica_y_activa_si
     assert vistas == [uuid.UUID(listo["conexion_id"])]
     assert (await _recorrido(app_client, h))["probado_en"] is not None
 
-    # La prueba de siempre (sin conexión) sigue por la conexión interna del playground, no por la del agente.
+    # La prueba sin conexión elegida va por la conexión real con release (ADR-0191), no por la interna.
     r = await app_client.post("/api/v1/admin/playground/message", headers=h, json={"text": "Hola"})
     assert r.status_code == 200, r.text
-    assert vistas[-1] != uuid.UUID(listo["conexion_id"])
+    assert vistas[-1] == uuid.UUID(listo["conexion_id"])
 
     r = await app_client.post("/api/v1/admin/onboarding/finalizar", headers=h)
     assert r.status_code == 200, r.text

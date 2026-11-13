@@ -12,3 +12,4 @@
 
 ### Tercera tanda
 - Release 1 al alta de la conexión (ADR-0191 §2): cuando una conexión conversacional nueva o revivida recibe sus instancias base, la misma transacción deja `connection.release_1` en el outbox y el handler del core construye y promueve su release 1 después del commit (idempotente; un error reintenta con el backoff del outbox).
+- Sin release no hay turno (ADR-0191 §1): un negocio v3 sin release activa ya no responde con el AgentSpec v2, tampoco en la conexión interna del Centro de pruebas. El playground, sin conexión elegida, prueba un negocio v3 por su conexión conversacional con release activa (la principal primero).

@@ -83,6 +83,7 @@ async def negocio() -> AsyncIterator[tuple[uuid.UUID, Any]]:
     pagos = journeys.PagoSimulado(monto_minimo=150000)
     slug = f"pedagenda-{uuid.uuid4().hex[:8]}"
     tid = await journeys.preparar_negocio(definicion, pagos, slug=slug, motor=False)
+    await journeys.encender_runtime_v3(tid)  # todo turno corre sobre la release de su conexión (ADR-0191)
     yield tid, pagos
     capacidad.build_provider = original
     await deactivate_tenant(str(tid))
