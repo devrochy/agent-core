@@ -4,6 +4,7 @@
 - **Fecha:** 2026-11-12
 - **Contexto:** [SPEC-44](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-44-habilidades-por-agente/spec.md) ([D-68](https://github.com/devrochy/solvershub-docs/blob/main/02-vision-y-decisiones/decisiones.md#d-68--las-habilidades-son-del-agente-comercio-agenda-cobranza-y-suscripciones-son-tipos-de-agente), REQ-AOS-24).
 - **Usa:** D-35 (se venden agentes), ADR-0004 (tablas por pack con prefijo), ADR-0019 (habilitación por tenant, que este ADR lleva al agente), ADR-0117 (releases y caché por versión), ADR-0145 (conocimiento por agente, el precedente), ADR-0171 «asistente de creación de agentes» (el General pierde las acciones del especialista; hay otro ADR-0171, el del resumen por agente, que no aplica) y las invariantes 1 (multi-tenant con RLS), 4 (contratos solo por ADR), 5 (un pack no importa de otro) y 8 (sin borrados físicos).
+- **Nota de estado:** ADR-0193 (propuesto, 2026-11-13): el modelo de leads y las tools de Captar leads pasan al core (D-70); enmienda la decisión 1 y la alternativa `pack_leads`.
 
 ## ADRs que reemplaza o enmienda
 
