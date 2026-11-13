@@ -159,7 +159,7 @@ async def test_master_ve_el_mismo_informe_que_el_cli(app_client) -> None:
     ] == [(f.ambito, f.agente, f.version, f.ruta, f.codigo, f.nombre, f.destino, f.donde) for f in cli.filas]
 
     en_version = _fila(informe, "version", ACCION)
-    assert en_version["agent"] == "general" and en_version["version"] == version.version
+    assert en_version["agent"] == "atencion" and en_version["version"] == version.version
     assert en_version["code"] == "accion_inexistente" and en_version["kind"] == "action"
     assert en_version["path"].startswith("tools[") and en_version["destination"] == "quitar"
     assert en_version["where"] and "release #" in en_version["where"][0]
@@ -211,7 +211,7 @@ async def test_el_dueno_ve_solo_lo_suyo_en_palabras_simples(app_client) -> None:
     aviso = r.json()
     assert aviso["affected_agents"] == 1
     (agente,) = aviso["agents"]
-    assert (agente["agent_id"], agente["key"]) == (str(aid), "general")
+    assert (agente["agent_id"], agente["key"]) == (str(aid), "atencion")
     assert agente["name"] and agente["published_version"] == version.version
     assert agente["in_use"] is True  # la release activa de la conexión lo congeló
     assert agente["blocks_publish"] is False  # el borrador está limpio: publicar no falla

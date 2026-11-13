@@ -164,26 +164,26 @@ async def test_instala_agentes_reglas_y_release_candidata_sin_activarla() -> Non
         "ventas": "creado", "agenda": "creado", "suscripciones": "creado",
     }
     foto = await _foto(tid)
-    assert foto["versiones"] == {"coordinador": 2, "general": 1, "ventas": 1, "agenda": 1, "suscripciones": 1}
+    assert foto["versiones"] == {"coordinador": 2, "atencion": 1, "ventas": 1, "agenda": 1, "suscripciones": 1}
     por_defecto = {k for k, d, viva in foto["instancias"] if d and viva}
-    assert por_defecto == {"general"}  # el General sigue atendiendo hasta HU-AOS-17
+    assert por_defecto == {"atencion"}  # el especialista por defecto no cambia (ADR-0192)
     assert {k for k, _d, viva in foto["instancias"] if viva} == {
-        "coordinador", "general", "ventas", "agenda", "suscripciones",
+        "coordinador", "atencion", "ventas", "agenda", "suscripciones",
     }
 
-    # Cada especialista declara solo lo suyo y hereda el modelo y la memoria del General.
-    general = await _contenido(tid, "general")
+    # Cada especialista declara solo lo suyo; modelo y memoria salen de la configuración del negocio.
+    base = await _contenido(tid, "atencion")
     ventas = await _contenido(tid, "ventas")
     agenda = await _contenido(tid, "agenda")
     assert {p["id"] for p in ventas["procedures"]} == {"pack_commerce.tomar_pedido"}
     assert {p["id"] for p in agenda["procedures"]} == {"pack_calendar.agendar_cita"}
     assert all(p["version"].startswith("^") for p in ventas["procedures"])
-    assert ventas["model"] == general["model"] and ventas["memory"] == general["memory"]
+    assert ventas["model"] == base["model"] and ventas["memory"] == base["memory"]
     assert ventas["declarativeTools"] == []
     tools_agenda = {b["tool"] for b in agenda["tools"]}
     assert "check_availability" in tools_agenda and "crear_pedido" not in tools_agenda
 
-    # Reglas del Coordinador: agregadas, con `defaultAgent` intacto.
+    # Reglas del Coordinador: agregadas, con `defaultAgent` intacto (el del contrato, inerte: manda `is_default`, ADR-0192).
     kernel = await _contenido(tid, "coordinador")
     assert kernel["routing"]["defaultAgent"] == "general"
     assert {(r["id"], r["agent"]) for r in kernel["routing"]["rules"]} == {
@@ -200,13 +200,13 @@ async def test_instala_agentes_reglas_y_release_candidata_sin_activarla() -> Non
         "select c.manifest -> 'components' from connection_releases c where c.connection_id = :c and c.number = 2",
         c=cid,
     )
-    assert {c["agent_key"] for c in componentes[0][0]} == {"coordinador", "general", "ventas", "agenda", "suscripciones"}
+    assert {c["agent_key"] for c in componentes[0][0]} == {"coordinador", "atencion", "ventas", "agenda", "suscripciones"}
     # ADR-0190: cada especialista del preset nace con sus habilidades instaladas y la release las congela.
     por_key = {c["agent_key"]: c for c in componentes[0][0]}
     assert "pack_commerce" in por_key["ventas"]["skills"]
     # Agenda lleva Comercio solo por Captar leads (`crear_lead`): sus bindings no traen `crear_pedido` (arriba).
     assert por_key["agenda"]["skills"] == ["pack_calendar", "pack_commerce"]
-    assert "skills" not in por_key["general"]  # el General sigue heredando las del negocio
+    assert "skills" not in por_key["atencion"]  # sin instalaciones propias: hereda las del negocio
     activa = await _sql(tid, "select active_release_id from channel_connections where id = :c", c=cid)
     assert activa == activa_antes
 
@@ -273,7 +273,7 @@ async def test_regla_que_el_dueno_ya_tiene_no_se_toca() -> None:
     coordinador = (await _sql(tid, "select id from agents where tenant_id = :t and key = 'coordinador'", t=tid))[0][0]
     kernel = await _contenido(tid, "coordinador")
     kernel["routing"]["rules"] = [
-        {"id": "preset_agenda_palabras", "when": {"keywordAny": ["turno"]}, "agent": "general"}
+        {"id": "preset_agenda_palabras", "when": {"keywordAny": ["turno"]}, "agent": "atencion"}
     ]
     async with tenant_scope(tid):
         await versiones.publicar(tid, coordinador, catalogo=catalogo_de_acciones(_modules()), contenido=kernel)
@@ -281,7 +281,7 @@ async def test_regla_que_el_dueno_ya_tiene_no_se_toca() -> None:
     reporte = await _aplicar(tid)
     assert "preset_agenda_palabras" not in reporte.reglas_nuevas
     reglas = {r["id"]: r for r in (await _contenido(tid, "coordinador"))["routing"]["rules"]}
-    assert reglas["preset_agenda_palabras"]["agent"] == "general"
+    assert reglas["preset_agenda_palabras"]["agent"] == "atencion"
     assert reglas["preset_agenda_palabras"]["when"]["keywordAny"] == ["turno"]
     assert reglas["preset_ventas_palabras"]["agent"] == "ventas"
 

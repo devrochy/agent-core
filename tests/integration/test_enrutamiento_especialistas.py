@@ -93,8 +93,8 @@ async def _proceso() -> None:
 
 
 async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:
-    """Negocio v3 con commerce y calendar, una conexión conversacional y su release 1 (General
-    por defecto, construida en legacy como el backfill). (tid, conexión)."""
+    """Negocio v3 con commerce y calendar, una conexión conversacional y su release 1 (especialista
+    «atencion» por defecto, ADR-0192). (tid, conexión)."""
     from release_de_prueba import release_inicial
 
     from core.alta_negocio import onboard_tenant
@@ -514,7 +514,7 @@ REGLAS_SUSCRIPCIONES = {
 async def test_preset_suscripciones_v2_con_ruteo_activo_de_punta_a_punta(_ruteo: None, monkeypatch: Any) -> None:
     """`agent-core db presets-v2 --aplicar` (su función) crea Ventas, Agenda y Suscripciones con las
     reglas `preset_*` del Coordinador; el build de la release no falla con `ruteo_invalido`; el
-    General (por defecto) también declara los procedimientos de los especialistas y aun así una
+    especialista por defecto («atencion») también declara los procedimientos de los especialistas y aun así una
     demo la atiende Agenda, por la regla o por el disparador."""
     from core.releases.promocion import promover
     from core.shared.tenant import tenant_scope
@@ -526,8 +526,8 @@ async def test_preset_suscripciones_v2_con_ruteo_activo_de_punta_a_punta(_ruteo:
         await promover(tid, cid, candidata, actor="test")
     componentes = {c["agent_key"]: c for c in manifest["components"]}
     declarados = {k: {p["id"] for p in c["procedures"]} for k, c in componentes.items() if c["role"] == "specialist"}
-    assert CITA in declarados["agenda"] and CITA in declarados["general"]  # la ambigüedad existe
-    assert componentes["general"]["is_default"] and not componentes["agenda"]["is_default"]
+    assert CITA in declarados["agenda"] and CITA in declarados["atencion"]  # la ambigüedad existe
+    assert componentes["atencion"]["is_default"] and not componentes["agenda"]["is_default"]
     await _modo(tid, "active")
     inst = await _instancias(tid, cid)
 
@@ -539,18 +539,18 @@ async def test_preset_suscripciones_v2_con_ruteo_activo_de_punta_a_punta(_ruteo:
     assert d["active_instance_id"] == str(inst["agenda"]) and await _dueno(tid, conv) == inst["agenda"]
     assert g.enums[0] == [CITA]
 
-    # Por el disparador, sin palabra de regla: el General también declara `agendar_cita`, pero va a Agenda.
+    # Por el disparador, sin palabra de regla: el especialista por defecto también declara `agendar_cita`, pero va a Agenda.
     otra = await _conversacion(tid, cid)
     await _turno(tid, otra, monkeypatch, ["¿A qué hora?"], texto="¿tienen espacio el jueves?")
     d = await _decision(tid, otra)
     assert d["route_source"] == "trigger" and d["active_instance_id"] == str(inst["agenda"])
     assert d["candidates"][0] == {"procedure_id": CITA, "owner": "agenda", "score": d["candidates"][0]["score"]}
 
-    # Un saludo sigue con el General (el de siempre).
+    # Un saludo sigue con el especialista por defecto.
     tercera = await _conversacion(tid, cid)
     await _turno(tid, tercera, monkeypatch, ["Hola."], texto="hola, buenas tardes")
     d = await _decision(tid, tercera)
-    assert d["route_source"] == "default" and d["active_instance_id"] == str(inst["general"])
+    assert d["route_source"] == "default" and d["active_instance_id"] == str(inst["atencion"])
 
 
 # ---------------------------------------------------------------- dogfooding de solvershub (HU-AOS-22)
@@ -593,10 +593,10 @@ async def _ruta(tid: uuid.UUID, cid: uuid.UUID, monkeypatch: Any, texto: str) ->
 
 async def test_dogfooding_solvershub_ventas_agenda_y_suscripciones(_ruteo: None, monkeypatch: Any) -> None:
     """HU-AOS-22: el negocio con el preset `suscripciones` v2 y las frases propias de Ventas.
-    En sombra atiende el General y se registra la ruta; en activo «quiero agendar una demo» va a
+    En sombra atiende el especialista por defecto y se registra la ruta; en activo «quiero agendar una demo» va a
     Agenda, «quiero contratar Premium» y «cuánto cuesta el plan basic» a Suscripciones (que desde
     SPEC-43 vende los planes con `contratar_plan`), «cambiar mi plan» a Suscripciones por su regla
-    y un saludo al General. «cuánto cuesta el plan basic» caía en el disparador de cambiar_plan
+    y un saludo al especialista por defecto. «cuánto cuesta el plan basic» caía en el disparador de cambiar_plan
     hasta publicar las frases de `contratar_plan`."""
     from core.releases.promocion import promover
     from core.shared.tenant import tenant_scope
@@ -606,12 +606,12 @@ async def test_dogfooding_solvershub_ventas_agenda_y_suscripciones(_ruteo: None,
     async with tenant_scope(tid):
         await promover(tid, cid, candidata, actor="test")
     inst = await _instancias(tid, cid)
-    assert {"general", "ventas", "agenda", "suscripciones"} <= set(inst)
+    assert {"atencion", "ventas", "agenda", "suscripciones"} <= set(inst)
 
-    # Sombra: decide y registra, pero atiende el General (el de siempre).
+    # Sombra: decide y registra, pero atiende el especialista por defecto.
     await _modo(tid, "shadow")
     d = await _ruta(tid, cid, monkeypatch, DEMO)
-    assert d["route_source"] == "default" and d["active_instance_id"] == str(inst["general"])
+    assert d["route_source"] == "default" and d["active_instance_id"] == str(inst["atencion"])
     assert d["shadow_route"]["agent_key"] == "agenda" and d["shadow_route"]["rule_id"] == "preset_agenda_palabras"
 
     # Activo, sin las frases de Ventas: la pregunta de precio cae en Suscripciones por el disparador.
@@ -627,7 +627,7 @@ async def test_dogfooding_solvershub_ventas_agenda_y_suscripciones(_ruteo: None,
         ("quiero contratar Premium", "suscripciones", "trigger", None),
         ("cambiar mi plan", "suscripciones", "rule", "preset_suscripciones_mi_plan"),
         ("cuánto cuesta el plan basic", "suscripciones", "trigger", None),
-        ("hola, buenas tardes", "general", "default", None),
+        ("hola, buenas tardes", "atencion", "default", None),
     ]
     for texto, agente, fuente, regla in esperados:
         d = await _ruta(tid, cid, monkeypatch, texto)

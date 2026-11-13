@@ -200,13 +200,13 @@ async def test_el_build_congela_solo_las_de_la_conexion_y_falla_cerrado(app_clie
 
     r = await app_client.post(BASE, headers=master, json={"pack_id": "pack_calendar", "connection_id": str(cid)})
     assert r.status_code == 201
-    # El General declara `tomar_pedido`, que no está en el scope de la conexión: fail-closed.
+    # El especialista por defecto («atencion») declara `tomar_pedido`, que no está en el scope de la conexión: fail-closed.
     with pytest.raises(ErrorDelBuild) as error:
         await _construir(tid, cid)
     assert error.value.codigo == "procedimiento_sin_resolver"
     assert any(PLAN in d for d in error.value.detalle)
 
-    # Con un especialista de Agenda por defecto y sin el General, la release congela solo calendar.
+    # Con un especialista de Agenda por defecto y sin «atencion», la release congela solo calendar.
     agente, version = await _agenda(tid)
     async with tenant_scope(tid):
         await instancias.agregar_instancia(tid, cid, agente, is_default=True)
@@ -229,14 +229,14 @@ async def test_el_build_congela_solo_las_de_la_conexion_y_falla_cerrado(app_clie
         contenido["procedures"] = [{"id": CITA, "version": "^1.0"}]
         await versiones.guardar_borrador(tid, agente, contenido, borrador.lock_version, catalogo=catalogo)
         await versiones.publicar(tid, agente, catalogo=catalogo)
-    ((general,),) = await _sql(
+    ((por_defecto,),) = await _sql(
         tid,
         "select ai.id from agent_instances ai join agents a on a.id = ai.agent_id "
-        "where ai.connection_id = :c and a.key = 'general' and ai.deleted_at is null",
+        "where ai.connection_id = :c and a.key = 'atencion' and ai.deleted_at is null",
         c=cid,
     )
     async with tenant_scope(tid):
-        await instancias.quitar_instancia(tid, cid, general)
+        await instancias.quitar_instancia(tid, cid, por_defecto)
     build = await _construir(tid, cid)
     assert await _skills(tid, build.release_id) == ["pack_calendar"]  # reemplazo entero, sin merge
     ((manifest,),) = await _sql(tid, "select manifest from connection_releases where id = :r", r=build.release_id)
