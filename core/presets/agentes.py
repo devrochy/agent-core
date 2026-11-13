@@ -840,7 +840,7 @@ async def backfill_presets_v2(
     modules: Iterable[Any] | None = None,
 ) -> list[ReportePresetV2]:
     """`agent-core db presets-v2`: aplica el paso de agentes del preset registrado de cada negocio
-    v3 (`tenants.settings["preset"].id`), o de `preset_id` si se pasa (solo con negocios
+    vivo (`tenants.settings["preset"].id`), o de `preset_id` si se pasa (solo con negocios
     explícitos). Dry-run por defecto. Un negocio sin preset queda omitido (`sin_preset`)."""
     from core.presets import load_preset
     from core.shared.tenant import tenant_scope

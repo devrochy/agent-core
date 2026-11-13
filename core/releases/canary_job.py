@@ -120,7 +120,7 @@ async def revisar_conexion(
 
 
 async def revisar(ahora: datetime | None = None, *, no_inferioridad: bool) -> dict[str, int]:
-    """Recorre los negocios v3 y sus conexiones con canary vivo. Un negocio que falla no frena a los
+    """Recorre los negocios activos y sus conexiones con canary vivo. Un negocio que falla no frena a los
     demás. Devuelve cuántas conexiones terminaron en cada resultado."""
     from core.db.session import get_session
     from core.kernel.banderas import negocios_activos

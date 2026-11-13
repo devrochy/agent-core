@@ -177,7 +177,7 @@ async def _activar_releases(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
 async def _banderas(tenant_id: uuid.UUID, slug: str) -> None:
     """`aos_procedures` y `aos_routing = 'active'` con el rol dueño (`aos_fijar_banderas` sin
     admin solo acepta esa sesión, migración 0097). En la misma transacción se bloquea la fila y se
-    exige el slug `qa-` del tester y `v3`."""
+    exige el slug `qa-` del tester."""
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from core.kernel.banderas import BanderasAOS, BanderasRechazadas, fijar_banderas

@@ -545,6 +545,7 @@ async def _negocio_del_tester(admin: Admin) -> Contexto:
 
 
 async def _exigir_agent_os() -> None:
+    # Que el negocio exista, esté vivo y sea `qa-` ya lo valida `_contexto`.
     from core.config import get_settings
 
     if not get_settings().kernel_ledger_enabled:

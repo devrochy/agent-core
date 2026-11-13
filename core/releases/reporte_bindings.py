@@ -126,7 +126,7 @@ def _acciones_siempre_ofrecidas(catalogo: Mapping[str, Any]) -> set[str]:
 async def reporte_de_bindings(
     modules: Iterable[Any], tenant_ids: Iterable[uuid.UUID] | None = None
 ) -> ReporteBindings:
-    """Revisa las releases activa y canary de los negocios v3 (todos, o solo `tenant_ids`). Un negocio que
+    """Revisa las releases activa y canary de los negocios activos (todos, o solo `tenant_ids`). Un negocio que
     falla no frena a los demás y queda en `errores`."""
     from core.db.session import get_session
     from core.kernel.banderas import negocios_activos

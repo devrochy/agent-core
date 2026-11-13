@@ -72,7 +72,7 @@ async def _get_or_create_customer(session, tenant_id: uuid.UUID) -> Customer:
 
 async def conexion_real_para_probar(session: Any, tenant_id: uuid.UUID) -> uuid.UUID | None:
     """La conexión conversacional del negocio con release activa para el Centro de pruebas: la
-    principal primero, luego la más antigua. None en un negocio legacy o sin ninguna."""
+    principal primero, luego la más antigua. None si no hay ninguna."""
     from sqlalchemy import text
 
     fila = (
