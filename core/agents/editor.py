@@ -654,22 +654,9 @@ class ResultadoPublicacion:
     created: bool
     connections: list[ResultadoConexion]
     warnings: list[str]
-    # Versión nueva del General si esta publicación lo recortó (HU-AOS-52); `None` si no cambió.
+    # Sin General (ADR-0192): siempre `None`; se conserva hasta retirar el campo de la API.
     general_actualizado: int | None = None
 
-
-async def _acoplar_al_general(
-    tenant_id: uuid.UUID, agent_id: uuid.UUID, catalogo: Mapping[str, Any], admin_id: uuid.UUID | None
-) -> Any:
-    """Enlace A2A y recorte del General (`coordinacion`). Un fallo se registra y no tumba la publicación
-    (el especialista ya está publicado); se reintenta al volver a publicar."""
-    from core.agents import coordinacion
-
-    try:
-        return await coordinacion.acoplar_especialista(tenant_id, agent_id, catalogo=catalogo, admin_id=admin_id)
-    except Exception:
-        log.exception("acople_general_fallo", tenant_id=str(tenant_id), agent_id=str(agent_id))
-        return None
 
 
 def _validar_conexiones(pedidas: Sequence[uuid.UUID], disponibles: Mapping[uuid.UUID, Destino]) -> dict[str, str]:
@@ -770,7 +757,6 @@ async def publicar_en_conexiones(
         avisos.append(
             f"Tu negocio fija el modelo {contexto.byok_model} en Configuración: ese manda sobre el del agente."
         )
-    acople = await _acoplar_al_general(tenant_id, agent_id, catalogo, admin_id)
     resultados: list[ResultadoConexion] = []
     for cid in connection_ids:
         resultado = ResultadoConexion(cid, "existing" if disponibles[cid].installed else "created")
@@ -811,7 +797,6 @@ async def publicar_en_conexiones(
         created=creada,
         connections=resultados,
         warnings=avisos,
-        general_actualizado=acople.general_actualizado if acople else None,
     )
 
 

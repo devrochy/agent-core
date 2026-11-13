@@ -555,16 +555,8 @@ async def _desmarcar_defecto(session: Any, tenant_id: uuid.UUID, connection_id: 
 
 async def _ya_cuenta_en_el_plan(session: Any, tenant_id: uuid.UUID, agent_id: uuid.UUID) -> bool:
     """¿El agente no necesita un cupo nuevo de `agentes`? Mismo criterio que la métrica
-    (`core.billing.metrics._count_agents`): ya tiene una instancia viva en una conexión viva, o es
-    el General, que viene incorporado y nunca ocupa cupo (enmienda del ADR-0142)."""
-    if (
-        await session.execute(
-            select(AgentRecord.id).where(
-                AgentRecord.tenant_id == tenant_id, AgentRecord.id == agent_id, AgentRecord.key == KEY_GENERAL
-            )
-        )
-    ).first() is not None:
-        return True
+    (`core.billing.metrics._count_agents`): ya tiene una instancia viva en una conexión viva. Sin
+    excepción para el General (ADR-0192 §7)."""
     return (
         await session.execute(
             select(AgentInstanceRecord.id)

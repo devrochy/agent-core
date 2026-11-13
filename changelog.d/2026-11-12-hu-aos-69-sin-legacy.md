@@ -21,3 +21,4 @@
 - El primer especialista nace con la primera conexión conversacional (D-35): el handler de `connection.release_1` aplica los agentes del preset del negocio y construye la release 1; sin especialista posible no reintenta.
 - Los especialistas del preset y del editor parten de la configuración del negocio (`contenido_base`) y nacen con los bindings de todas sus tools propias (su pack y las esenciales del core).
 - La release 1 de un negocio v3 congela las versiones nativas de sus agentes, sin refrescar desde el AgentSpec v2.
+- El especialista por defecto cuenta en el cupo `agentes` del plan (decisión del dueño, ADR-0192 §7): sale la excepción del General en la métrica y en `agregar_instancia`. Se retiran el recorte del General (`core/agents/coordinacion.py`, `agent-core db recorte-general`) y el acople de especialistas al General en el editor; `general_updated` de la publicación queda siempre en `null` hasta retirar el campo.
