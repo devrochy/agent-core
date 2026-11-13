@@ -15,9 +15,13 @@ Un negocio tiene un Coordinador que decide y especialistas que atienden; uno de 
 por defecto de cada conexión conversacional. No existe el agente `general`.
 
 Detalle:
-1. **Alta.** Nacen el Coordinador (KernelSpec por defecto y la voz del alta mapeada a sus campos, sin
-   texto de prompt en el código) y sus instancias; el primer especialista lo trae el preset del tipo
-   de negocio y queda `is_default` en cada conexión.
+1. **Alta.** Nace el Coordinador (KernelSpec por defecto y la voz del alta mapeada a sus campos, sin
+   texto de prompt en el código), antes de aplicar el preset. El primer especialista, del tipo de
+   negocio del preset, nace **con la primera conexión conversacional** (decisión del dueño del
+   2026-11-13: se respeta D-35, un agente publicado tiene al menos una conexión) y queda `is_default`;
+   recién entonces la conexión pide su release 1. Un negocio sin conexión solo tiene el Coordinador.
+   Cada especialista nace con los bindings de las tools de su pack (`plantilla.habilidades`), no solo
+   las del core: sin eso la falla cerrada de HU-ARCH-34 le impediría usarlas.
 2. **Invariante de la conexión.** Una conexión conversacional puede existir pendiente, pero no tiene
    release activa ni queda habilitada sin un especialista `enabled`, `is_default` y con versión
    publicada. El build falla con `sin_especialista` en vez de crear una release a medias.
@@ -30,7 +34,10 @@ Detalle:
    alimentan solo el contenido inicial de un agente nuevo, y cada agente se edita en su ficha.
 6. **Claves.** `general` deja de ser una clave reservada; solo `coordinador` lo es. El panel habilita
    módulos por el tipo del agente publicado, no por su `key`.
-7. **Datos.** Sin migración: test y producción se resiembran (D-68, ADR-0190 §10). El histórico de
+7. **Cupo del plan.** El especialista por defecto cuenta como cualquier agente (decisión del dueño del
+   2026-11-13): deja de aplicar la excepción de ADR-0142 para el General, y en el plan free el negocio
+   tiene ese único agente. Cambia el copy de los planes.
+8. **Datos.** Sin migración: test y producción se resiembran (D-68, ADR-0190 §10). El histórico de
    `usage_ledger` y `agent_record_origins` no se borra.
 
 ## Alternativas consideradas
