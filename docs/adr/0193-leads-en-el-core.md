@@ -39,8 +39,8 @@ Detalle:
 5. **Intake público.** El core expone el intake para todos los negocios, tengan o no comercio, con la misma seguridad
    de hoy: cupo por slug e IP en Redis antes de tocar la base, `X-Intake-Secret` comparado en tiempo constante,
    Turnstile que falla cerrado cuando el negocio lo exige, 404 por slug inexistente y deduplicación del cliente por
-   correo o teléfono y del lead por `idempotency_key`. La ruta propuesta es `POST /api/public/leads/{slug}` y
-   `GET /api/public/leads/intake-config/{slug}` (❓2 de HU-AOS-70, pendiente del dueño). La ruta vieja
+   correo o teléfono y del lead por `idempotency_key`. La ruta es `POST /api/public/leads/{slug}` y
+   `GET /api/public/leads/intake-config/{slug}` (❓2 de HU-AOS-70, decisión del dueño del 2026-11-13). La ruta vieja
    `/api/pack/pack_commerce/leads/{slug}` y su `intake-config` las sirve el core como alias hasta que ninguna landing
    la use; su retiro es otra HU.
 6. **Configuración.** Los campos `lead_intake_*` salen de la config de commerce y pasan a la config del negocio de
