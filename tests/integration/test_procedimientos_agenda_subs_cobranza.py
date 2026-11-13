@@ -132,6 +132,9 @@ async def _negocio(packs: list[str]) -> uuid.UUID:
     tid, _ = await onboard_tenant(name=f"AOS08 {slug}", slug=slug, packs=packs, sembrar_ejemplos=False, plan="premium")
     for pack_id in packs:
         _asegurar_pack(pack_id)
+    from release_de_prueba import montar_release
+
+    await montar_release(tid)  # todo turno corre sobre la release de su conexión (ADR-0191)
     return tid
 
 
@@ -142,7 +145,9 @@ async def _conversacion(tid: uuid.UUID) -> Any:
         cliente = Customer(tenant_id=tid, channel="whatsapp", external_id=f"whatsapp:+57300{uuid.uuid4().int % 10**7:07d}")
         s.add(cliente)
         await s.flush()
-        conv = Conversation(tenant_id=tid, customer_id=cliente.id, channel="whatsapp")
+        from release_de_prueba import conexion_de
+
+        conv = Conversation(tenant_id=tid, customer_id=cliente.id, channel="whatsapp", connection_id=conexion_de(tid))
         s.add(conv)
         await s.flush()
         return types.SimpleNamespace(id=conv.id, tenant_id=tid, customer_id=cliente.id, channel="whatsapp")
