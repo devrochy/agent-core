@@ -110,39 +110,50 @@ async def test_budget_exhausted_corta_el_turno(tenant_setup, recorded, monkeypat
     t1, _t2 = tenant_setup
     recorded.clear()
     conversation_id = await _make_conversation(t1)
-    await _set_spec_policies(t1, budgetUsdPerConversation=0.01)
-    await _seed_spent(t1, conversation_id, 0.02)  # ya superó el presupuesto
+    # El presupuesto vive en el KernelSpec de la release (ADR-0191 §4: Configuración no edita agentes).
+    from release_de_prueba import republicar
 
-    from core.orchestrator.loop import process_conversation
-    from core.shared.tenant import tenant_scope
+    antes = await republicar(t1, politicas_kernel={"budgetUsdPerConversation": 0.01})
+    try:
+        await _seed_spent(t1, conversation_id, 0.02)  # ya superó el presupuesto
 
-    async with tenant_scope(t1):
-        result = await process_conversation(conversation_id, "hola")
+        from core.orchestrator.loop import process_conversation
+        from core.shared.tenant import tenant_scope
 
-    assert result is not None and result.text
-    assert "presupuesto" in result.text.lower()
-    assert len(recorded) == 0, "no debe llamar al LLM con presupuesto agotado"
+        async with tenant_scope(t1):
+            result = await process_conversation(conversation_id, "hola")
 
-    # la conversación queda marcada: el siguiente inbound no gasta
-    async with tenant_scope(t1):
-        second = await process_conversation(conversation_id, "hola de nuevo")
-    assert second is None, "con presupuesto agotado el turno siguiente debe ser silencioso"
-    assert len(recorded) == 0
+        assert result is not None and result.text
+        assert "presupuesto" in result.text.lower()
+        assert len(recorded) == 0, "no debe llamar al LLM con presupuesto agotado"
+
+        # la conversación queda marcada: el siguiente inbound no gasta
+        async with tenant_scope(t1):
+            second = await process_conversation(conversation_id, "hola de nuevo")
+        assert second is None, "con presupuesto agotado el turno siguiente debe ser silencioso"
+        assert len(recorded) == 0
+    finally:
+        await republicar(t1, politicas_kernel=antes["kernel"])
 
 
 async def test_max_tool_calls_corta_el_turno(tenant_setup, monkeypatch) -> None:
     t1, _t2 = tenant_setup
     conversation_id = await _make_conversation(t1)
-    await _set_spec_policies(t1, maxToolCallsPerTurn=1)
+    # El tope vive en la versión del agente de la release (ADR-0191 §4).
+    from release_de_prueba import republicar
 
-    provider = ToolUseProvider()
-    monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *a, **k: provider)
+    antes = await republicar(t1, politicas_agente={"maxToolCallsPerTurn": 1})
+    try:
+        provider = ToolUseProvider()
+        monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *a, **k: provider)
 
-    from core.orchestrator.loop import process_conversation
-    from core.shared.tenant import tenant_scope
+        from core.orchestrator.loop import process_conversation
+        from core.shared.tenant import tenant_scope
 
-    async with tenant_scope(t1):
-        result = await process_conversation(conversation_id, "hola")
+        async with tenant_scope(t1):
+            result = await process_conversation(conversation_id, "hola")
 
-    assert provider.calls == 1, "maxToolCallsPerTurn=1 debe cortar a 1 llamada"
-    assert result is not None and result.escalated, "el loop agotado debe escalar"
+        assert provider.calls == 1, "maxToolCallsPerTurn=1 debe cortar a 1 llamada"
+        assert result is not None and result.escalated, "el loop agotado debe escalar"
+    finally:
+        await republicar(t1, politicas_agente=antes["agente"])

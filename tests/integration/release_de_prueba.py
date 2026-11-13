@@ -33,3 +33,68 @@ async def montar_release(tenant_id: uuid.UUID) -> uuid.UUID:
 def conexion_de(tenant_id: uuid.UUID) -> uuid.UUID | None:
     """La conexión que montó `montar_release` para el negocio (None si no se montó)."""
     return _journeys()._CONEXION_V3.get(tenant_id)
+
+
+async def republicar(
+    tenant_id: uuid.UUID,
+    *,
+    politicas_agente: dict[str, Any] | None = None,
+    politicas_kernel: dict[str, Any] | None = None,
+    agente: str = "atencion",
+) -> dict[str, dict[str, Any]]:
+    """Cambia las políticas de la versión del especialista (`agente`) y/o del Coordinador, publica
+    versiones nuevas y promueve una release nueva en cada conexión con release activa. Configuración
+    ya no edita agentes (ADR-0191 §4): un test que cambia un límite lo hace en la versión del agente.
+    Devuelve las políticas anteriores (`{"agente": ..., "kernel": ...}`) para restaurarlas."""
+    from sqlalchemy import text
+
+    from core.agents import versiones
+    from core.db.session import get_session
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.plugin_manager import plugin_manager
+    from core.releases.build import construir
+    from core.releases.promocion import ConflictoDeRelease, promover
+    from core.shared.tenant import tenant_scope
+
+    modulos = plugin_manager.list_modules() or plugin_manager.scan()
+    catalogo = catalogo_de_acciones(modulos)
+    anteriores: dict[str, dict[str, Any]] = {}
+    async with tenant_scope(tenant_id):
+        for nombre, key, cambios in (("agente", agente, politicas_agente), ("kernel", "coordinador", politicas_kernel)):
+            if not cambios:
+                continue
+            async with get_session() as session:
+                aid, contenido = (
+                    await session.execute(
+                        text(
+                            "select a.id, v.content from agents a join agent_versions v on v.agent_id = a.id "
+                            "and v.tenant_id = a.tenant_id where a.tenant_id = :t and a.key = :k "
+                            "and a.deleted_at is null order by v.version desc limit 1"
+                        ),
+                        {"t": tenant_id, "k": key},
+                    )
+                ).one()
+            contenido = dict(contenido)
+            anteriores[nombre] = dict(contenido.get("policies") or {})
+            contenido["policies"] = {**anteriores[nombre], **cambios}
+            await versiones.publicar(tenant_id, aid, catalogo=catalogo, contenido=contenido, notes="test")
+        async with get_session() as session:
+            conexiones = [
+                fila[0]
+                for fila in (
+                    await session.execute(
+                        text(
+                            "select id from channel_connections where tenant_id = :t and deleted_at is null "
+                            "and active_release_id is not null"
+                        ),
+                        {"t": tenant_id},
+                    )
+                ).all()
+            ]
+        for cid in conexiones:
+            resultado = await construir(tenant_id, cid, actor="test", modules=modulos, fijadas={})
+            try:
+                await promover(tenant_id, cid, resultado.release_id, actor="test")
+            except ConflictoDeRelease:  # el mismo contenido: la release ya es la activa
+                pass
+    return anteriores

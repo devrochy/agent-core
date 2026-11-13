@@ -382,11 +382,18 @@ async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: li
     (ADR-0191/0192): el especialista lleva la base de la configuración del negocio, los bindings de
     todas las acciones de sus packs habilitados y del core, y los procedimientos que publican. Es lo
     que hacía el General para la corrida. Devuelve el id del especialista."""
+    from sqlalchemy import select
+
     from core.agents import versiones
     from core.agents.base import asegurar_coordinador, contenido_base
-    from core.agents.instancias import agregar_instancia, asegurar_instancias_base
+    from core.agents.instancias import (
+        ConflictoInstancia,
+        agregar_instancia,
+        asegurar_instancias_base,
+    )
     from core.agents.procedimientos_de_negocio import declarados, procedimientos_publicados
-    from core.agents.spec import enabled_packs, leer_spec_activo
+    from core.agents.spec import enabled_packs, leer_spec_activo, load_active_spec
+    from core.db.models import AgentRecord
     from core.db.session import get_session
     from core.kernel.procedures import catalogo_de_acciones
     from core.kernel.procedures.catalogo import CORE_OWNER
@@ -394,9 +401,24 @@ async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: li
     from core.subscriptions.tools import SOLO_PROCEDIMIENTO
 
     async with tenant_scope(tenant_id):
+        await load_active_spec(tenant_id)  # siembra el default si el negocio no tiene uno
         await asegurar_coordinador(tenant_id, modules=modulos)
         async with get_session() as session:
             await asegurar_instancias_base(session, tenant_id, conexion)
+            existente = (
+                await session.execute(
+                    select(AgentRecord.id).where(
+                        AgentRecord.tenant_id == tenant_id, AgentRecord.key == "atencion", AgentRecord.deleted_at.is_(None)
+                    )
+                )
+            ).scalar_one_or_none()
+        if existente is not None:  # idempotente: negocios de prueba que se reusan entre módulos
+            try:
+                await agregar_instancia(tenant_id, conexion, existente, is_default=True)
+            except ConflictoInstancia as exc:
+                if exc.code != "already_assigned":
+                    raise
+            return existente
         leido = await leer_spec_activo(tenant_id)
         if leido is None:
             raise SystemExit("El negocio de la corrida no tiene AgentSpec activo.")

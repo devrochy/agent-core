@@ -97,6 +97,34 @@ class FakeOutbound:
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _conversacion_con_su_conexion():
+    """Todo turno corre sobre la release de su conexión (ADR-0191): una conversación que un test crea
+    a mano sin `connection_id` toma la conexión conversacional del negocio con release activa (la
+    principal primero), como la del consumer. Un test que necesita una sin conexión la anula después."""
+    from sqlalchemy import event, text
+
+    from core.db.models import Conversation
+
+    def _antes_de_insertar(_mapper, conexion, conversacion) -> None:  # type: ignore[no-untyped-def]
+        if conversacion.connection_id is not None or conversacion.tenant_id is None:
+            return
+        fila = conexion.execute(
+            text(
+                "select c.id from channel_connections c join connection_types t on t.id = c.type_id "
+                "where c.tenant_id = :t and c.deleted_at is null and c.active_release_id is not null "
+                "and t.produces_conversations order by c.is_primary desc, c.created_at limit 1"
+            ),
+            {"t": conversacion.tenant_id},
+        ).first()
+        if fila is not None:
+            conversacion.connection_id = fila[0]
+
+    event.listen(Conversation, "before_insert", _antes_de_insertar)
+    yield
+    event.remove(Conversation, "before_insert", _antes_de_insertar)
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _alta_sin_agent_os():
     """Casi todos los tests de integración modelan negocios «de antes»: legacy y sin agentes. El alta de
     hoy crea el General y el Coordinador y el negocio nace en v3 (migración 0126, ADR-0191); aquí se
@@ -291,10 +319,6 @@ async def tenant_setup():
             session.add(t2)
             await session.flush()
         t1_id, t2_id = t1.id, t2.id
-    # Negocios de antes (legacy): nacen en v3 desde la migración 0126 (ADR-0191).
-    for tid in (t1_id, t2_id):
-        await _como_negocio_de_antes(tid)
-
     for tid in (t1_id, t2_id):
         async with tenant_scope(tid):
             async with get_session() as session:
@@ -313,9 +337,39 @@ async def tenant_setup():
                             provider="meta",
                             label="it",
                             external_id=PHONE if tid == t1_id else "999",
+                            type_id="whatsapp_meta",  # conversacional: lleva Coordinador y release
                         )
                     )
+    # Todo turno corre sobre una release (ADR-0191): Coordinador + especialista nativos y release 1
+    # en la conexión de cada negocio (sin General, ADR-0192).
+    for tid in (t1_id, t2_id):
+        await _con_release(tid, PHONE if tid == t1_id else "999")
     return t1_id, t2_id
+
+
+async def _con_release(tid: uuid.UUID, external_id: str) -> None:
+    from release_de_prueba import _journeys
+    from sqlalchemy import select
+
+    from core.db.models import ChannelConnection
+    from core.db.session import get_session
+    from core.plugin_manager import plugin_manager
+    from core.releases.release_uno import backfill_releases
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            cid = (
+                await session.execute(
+                    select(ChannelConnection.id).where(
+                        ChannelConnection.tenant_id == tid, ChannelConnection.external_id == external_id
+                    )
+                )
+            ).scalar_one()
+    modulos = plugin_manager.list_modules() or plugin_manager.scan()
+    await _journeys().agentes_nativos(tid, cid, modulos)
+    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=modulos)
+    assert not reporte.fallo, reporte.errores
 
 
 @pytest.fixture(scope="module")
