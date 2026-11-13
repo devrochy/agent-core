@@ -15,9 +15,11 @@ este orden (el trigger depende de la columna por su `UPDATE OF`; la función la 
    nace con `(false, 'off')`) y se recrea el trigger sin la columna en su `UPDATE OF`.
 4. `ALTER TABLE tenants DROP COLUMN aos_runtime`: solo catálogo, sin reescribir la tabla.
 
-Precheck: si queda algún negocio (vivo o dado de baja) con `aos_runtime` distinto de `'v3'`, la
-migración aborta sin tocar nada. Desde 0126 el escritor no acepta otro valor, pero el rol dueño
-todavía podía escribir la columna directo; el DROP no debe descartar ese dato en silencio. La función
+Aviso (no bloquea): si queda algún negocio con `aos_runtime` distinto de `'v3'`, la migración lo
+dice con un WARNING (cuántos vivos y cuántos dados de baja) antes de borrar la columna: el dato no
+se pierde en silencio. No aborta porque una base nueva trae `tenant-1` (0003) en `'legacy'`, el
+valor por defecto de 0070. Que ningún negocio vivo de test o producción esté fuera de `'v3'` se
+comprueba con una consulta antes de desplegar (ver el PR). La función
 nueva la crea el rol que migra (el mismo de 0097: dueño de `tenants`, con BYPASSRLS). `ACCESS EXCLUSIVE` breve sobre
 `tenants` (DROP CONSTRAINT, DROP COLUMN, trigger), con `SET LOCAL lock_timeout` de 5 s; `tenants`
 es chica. Despliegue: esta migración y el código que llama a la función de 5 argumentos van juntos;
@@ -305,11 +307,20 @@ CREATE TRIGGER tenants_aos_banderas_guard
 
 _PRECHECK = """
 DO $$
+DECLARE
+    vivos integer;
+    de_baja integer;
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns
-               WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'aos_runtime')
-       AND EXISTS (SELECT 1 FROM public.tenants WHERE aos_runtime IS DISTINCT FROM 'v3') THEN
-        RAISE EXCEPTION '0127: hay negocios con aos_runtime distinto de v3; vuelve a sembrarlos antes de migrar (ADR-0191)';
+               WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'aos_runtime') THEN
+        -- Dinámico: si la columna ya no existe (re-ejecución), el SQL estático no compilaría.
+        EXECUTE 'SELECT count(*) FILTER (WHERE deleted_at IS NULL), count(*) FILTER (WHERE deleted_at IS NOT NULL) '
+                'FROM public.tenants WHERE aos_runtime IS DISTINCT FROM ''v3'''
+           INTO vivos, de_baja;
+        IF vivos + de_baja > 0 THEN
+            RAISE WARNING '0127: se borra aos_runtime con % negocio(s) vivo(s) y % dado(s) de baja fuera de v3',
+                vivos, de_baja;
+        END IF;
     END IF;
 END $$;
 """
