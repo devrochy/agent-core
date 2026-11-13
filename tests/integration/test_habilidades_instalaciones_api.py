@@ -170,11 +170,9 @@ async def test_api_instalaciones_por_conexion(app_client) -> None:
     assert (await app_client.get(f"{BASE}?connection_id={cid}", headers=master_otro)).json() == []
     assert (await app_client.delete(f"{BASE}/{instalada['id']}", headers=master_otro)).status_code == 404
 
-    # El dueño no escribe mientras el negocio esté en legacy; sí lee.
+    # El dueño lee y escribe: sin 403 por runtime (ADR-0191).
     dueno = await api_headers(app_client, tid, email=await _dueno(tid), password=PASSWORD)
     assert [i["id"] for i in (await app_client.get(BASE, headers=dueno)).json()] == [instalada["id"]]
-    assert (await app_client.delete(f"{BASE}/{instalada['id']}", headers=dueno)).status_code == 403
-    await banderas_como_dueno(tid, aos_runtime="v3")
     assert (await app_client.delete(f"{BASE}/{instalada['id']}", headers=dueno)).status_code == 204
     assert (await app_client.delete(f"{BASE}/{instalada['id']}", headers=dueno)).status_code == 404
     assert (await app_client.get(BASE, headers=dueno)).json() == []

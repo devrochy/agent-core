@@ -634,9 +634,8 @@ async def test_api_releases_permisos_aislamiento_y_rollback(app_client) -> None:
     )
     assert r.status_code == 404
 
-    # El dueño en legacy no escribe (403); con v3 sí.
+    # El dueño escribe: sin 403 por runtime (ADR-0191).
     dueno = await api_headers(app_client, tid, email=await _dueno(tid), password=PASSWORD)
-    assert (await app_client.post(f"{base}/releases", headers=dueno, json={})).status_code == 403
     await banderas_como_dueno(tid, aos_runtime="v3")
     await _cambiar_nombre(tid, "Desde la API")
     r = await app_client.post(f"{base}/releases", headers=dueno, json={"notes": "cambio de nombre"})
