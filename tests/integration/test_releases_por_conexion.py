@@ -664,7 +664,7 @@ async def test_api_releases_permisos_aislamiento_y_rollback(app_client) -> None:
     assert (await app_client.post(f"{base}/rollback", headers=dueno, json={})).status_code == 409
 
 
-async def test_fijar_release_del_turno_solo_con_v3(monkeypatch) -> None:
+async def test_fijar_release_del_turno_fija_la_release_activa(monkeypatch) -> None:
     from core.db.models import Conversation
     from core.db.session import get_session
     from core.kernel.release_del_turno import con_release, fijar_release_del_turno
@@ -684,14 +684,6 @@ async def test_fijar_release_del_turno_solo_con_v3(monkeypatch) -> None:
         asignacion = await fijar_release_del_turno(conversacion)
         return asignacion, release_vigente.vigente()
 
-    async with tenant_scope(tid):
-        asignacion, vigente = await turno()
-    assert asignacion is None and vigente is None  # legacy: nada
-    assert (await _sql(tid, "select release_id from conversations where id = :c", c=conv))[0][
-        0
-    ] is None
-
-    await banderas_como_dueno(tid, aos_runtime="v3")
     async with tenant_scope(tid):
         asignacion, vigente = await turno()
     assert asignacion is not None and asignacion.release_id == uno

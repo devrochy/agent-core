@@ -355,23 +355,6 @@ async def test_aislamiento_entre_negocios(app_client) -> None:
         )
 
 
-async def test_negocio_legacy_ve_al_general_con_lo_que_haya(app_client) -> None:
-    tid = await _negocio()
-    conv = await _conversacion(tid, None, "Cliente Legacy")
-    await _turno(tid, conv, None, None)
-    await _tarea(tid, conv, None, cerrada=False)
-    h = await api_headers(app_client, tid)
-    overview = (await app_client.get(f"{_BASE}/overview", headers=h)).json()
-    assert overview["runtime"] == "legacy"
-    (general,) = overview["items"]
-    assert (general["ref"], general["virtual"], general["turns"]) == ("general", True, 1)
-    r = await app_client.get(f"{_BASE}/general/conversations", headers=h)
-    assert r.status_code == 200 and r.json()["items"][0]["customer_name"] == "Cliente Legacy"
-    assert (await app_client.get(f"{_BASE}/general/tasks", headers=h)).json()["total"] == 1
-    assert (await app_client.get(f"{_BASE}/general/records", headers=h)).json()["total"] == 0
-    assert (await app_client.get(f"{_BASE}/general/usage", headers=h)).json()["incluye_sin_atribuir"] is True
-
-
 async def test_el_loop_guarda_la_procedencia_al_ejecutar_la_tool() -> None:
     """Plomería del turno: `_execute_tool_safely` (el único punto donde la tool corre) deja la
     procedencia con el agente en foco de la release del turno."""

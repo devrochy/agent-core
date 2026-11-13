@@ -155,16 +155,6 @@ async def test_un_negocio_listo_no_tiene_bloqueos(ruteo_encendido) -> None:  # t
     assert reporte.bloqueos == [] and reporte.dry_run and not reporte.aplicado
 
 
-async def test_bloquea_si_el_negocio_sigue_en_legacy(  # type: ignore[no-untyped-def]
-    monkeypatch,
-) -> None:
-
-    tid, slug, cid = await _negocio()
-    await _con_dos_releases(tid, cid)
-    reporte = await _revisar(tid)
-    assert any(slug in b and "legacy" in b and "migrar-a-v3" in b for b in reporte.bloqueos)
-
-
 async def test_bloquea_una_conversacion_sin_conexion_aunque_este_cerrada(ruteo_encendido) -> None:  # type: ignore[no-untyped-def]
     tid, slug, cid = await _negocio()
     await _con_dos_releases(tid, cid)
