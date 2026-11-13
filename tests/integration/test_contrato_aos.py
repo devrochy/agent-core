@@ -73,6 +73,9 @@ async def _negocio() -> tuple[uuid.UUID, str, uuid.UUID]:
         t=tid,
         ext=uniq("ig"),
     )
+    from release_de_prueba import _journeys
+
+    await _journeys().agentes_nativos(tid, cid, _modules())  # Coordinador + especialista (ADR-0192)
     return tid, slug, cid
 
 

@@ -117,6 +117,7 @@ async def _negocio(slug: str, pagos: Any) -> tuple[uuid.UUID, uuid.UUID]:
     journeys._CONEXION_V3[tid] = cid
     from core.releases.release_uno import backfill_releases
 
+    await journeys.agentes_nativos(tid, cid, _modules())  # sin General (ADR-0192)
     reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
     assert not reporte.fallo, reporte.errores
     await _admin_sql("update tenants set aos_runtime = 'v3' where id = :t", t=tid)
@@ -342,7 +343,7 @@ async def test_costos_por_agente_aislado_y_sin_filas_anteriores_al_corte(negocio
     [(instancia, agente)] = await _sql(
         a,
         "select ai.id, ai.agent_id from agent_instances ai join agents ag on ag.tenant_id = ai.tenant_id "
-        "and ag.id = ai.agent_id where ai.tenant_id = :t and ai.connection_id = :c and ag.key = 'general'",
+        "and ag.id = ai.agent_id where ai.tenant_id = :t and ai.connection_id = :c and ag.key = 'atencion'",
         t=a, c=cid,
     )
     # Una fila vieja (sin `cache_write_tokens`), una medible y una que no es actividad.

@@ -363,6 +363,7 @@ async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     reporte_packs = await sync_packs(modulos)
     if reporte_packs.fallo:
         raise SystemExit(f"sync-packs falló: {reporte_packs.errores}")
+    await agentes_nativos(tenant_id, conexion, modulos)
     reporte = await backfill_releases(dry_run=False, tenant_id=tenant_id, modules=modulos)
     if reporte.fallo:
         raise SystemExit(f"No se pudo construir la release 1 del negocio de la corrida: {reporte.errores}")
@@ -374,6 +375,48 @@ async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
         await engine.dispose()
     _CONEXION_V3[tenant_id] = conexion
     return conexion
+
+
+async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: list[Any]) -> uuid.UUID:
+    """Coordinador y un especialista «atencion» por defecto en la conexión, sin el lector tolerante
+    (ADR-0191/0192): el especialista lleva la base de la configuración del negocio, los bindings de
+    todas las acciones de sus packs habilitados y del core, y los procedimientos que publican. Es lo
+    que hacía el General para la corrida. Devuelve el id del especialista."""
+    from core.agents import versiones
+    from core.agents.base import asegurar_coordinador, contenido_base
+    from core.agents.instancias import agregar_instancia, asegurar_instancias_base
+    from core.agents.procedimientos_de_negocio import declarados, procedimientos_publicados
+    from core.agents.spec import enabled_packs, leer_spec_activo
+    from core.db.session import get_session
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.kernel.procedures.catalogo import CORE_OWNER
+    from core.shared.tenant import tenant_scope
+    from core.subscriptions.tools import SOLO_PROCEDIMIENTO
+
+    async with tenant_scope(tenant_id):
+        await asegurar_coordinador(tenant_id, modules=modulos)
+        async with get_session() as session:
+            await asegurar_instancias_base(session, tenant_id, conexion)
+        leido = await leer_spec_activo(tenant_id)
+        if leido is None:
+            raise SystemExit("El negocio de la corrida no tiene AgentSpec activo.")
+        spec = leido[1]
+        habilitados = enabled_packs(spec)
+        catalogo = catalogo_de_acciones(modulos)
+        contenido = contenido_base(spec)
+        contenido["tools"] = [
+            {"tool": nombre, "enabled": True, "scopes": list(getattr(info, "scopes", ()))}
+            for nombre, info in sorted(catalogo.items())
+            if (info.owner in habilitados or info.owner == CORE_OWNER) and nombre not in SOLO_PROCEDIMIENTO
+        ]
+        contenido["procedures"] = declarados(procedimientos_publicados(spec), set())
+        del leido, spec
+        agente = await versiones.crear_agente(tenant_id, key="atencion", kind="specialist", name="Atención")
+        await versiones.publicar(
+            tenant_id, agente.id, catalogo=catalogo, contenido=contenido, notes="Agente de la corrida de journeys."
+        )
+        await agregar_instancia(tenant_id, conexion, agente.id, is_default=True)
+        return agente.id
 
 
 # Conexión del negocio de la corrida con `--runtime v3` (las conversaciones nuevas se ligan a ella).
