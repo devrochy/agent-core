@@ -7,11 +7,9 @@ operación, sin duplicar su lógica:
 - `planificar` (puro): rechaza el objetivo fuera de orden (procedimientos o enrutamiento sin v3,
   `ObjetivoInvalido` → 422) y ordena los pasos: al encender runtime → procedimientos → ruteo; al
   apagar, el inverso (ADR-0112, ADR-0138).
-- Pasar de legacy a v3 es `migrar_a_v3` con los backfills del negocio (idempotentes y neutros en
-  legacy) y, solo si el master lo pide, `construir` (construye y promueve una release nueva: cambia
-  la release activa). No se vuelve a legacy (`ObjetivoInvalido`, 422; ADR-0191): el rollback es la
-  release anterior de v3 o el respaldo. Sus precondiciones
-  fail-closed son los bloqueos (409).
+- El runtime es siempre v3 (ADR-0191: el negocio nace ahí y no hay paso legacy → v3). Un objetivo
+  en «legacy» es `ObjetivoInvalido` (422): el rollback es la release anterior de v3 o el respaldo.
+  `construir` ya no tiene efecto (lo construía `migrar-a-v3`); sale del contrato con la API.
 - La escritura es una sola llamada a `aos_fijar_banderas` (migración 0097) con el `admin_id` del
   master: la base exige que sea master, valida el orden y deja la fila de `audit_log` en la misma
   transacción. El request del master no abre un engine con el rol dueño (el contenedor de la API
@@ -94,6 +92,8 @@ def planificar(actual: BanderasAOS, objetivo: BanderasAOS) -> list[str]:
     objetivo viola el orden por sí solo. Lista vacía: nada que hacer."""
     if objetivo.runtime not in RUNTIMES:
         raise ObjetivoInvalido(f"aos_runtime inválido: {objetivo.runtime}")
+    if objetivo.runtime != "v3":
+        raise ObjetivoInvalido(MENSAJE_SIN_LEGACY)
     if objetivo.ruteo not in MODOS:
         raise ObjetivoInvalido(f"aos_routing inválido: {objetivo.ruteo}")
     if objetivo.procedimientos and objetivo.runtime != "v3":
@@ -195,15 +195,11 @@ async def _correr(
     admin_id: uuid.UUID,
     actor: str,
 ) -> Resultado:
-    from core.plugin_manager import plugin_manager
-    from core.releases.migracion_v3 import migrar_a_v3
-
+    del construir  # sin efecto desde ADR-0191 (ver el docstring del módulo)
     actual = await estado(tenant_id)
     if actual is None:
         raise NegocioNoEncontrado("negocio no encontrado")
     pasos = planificar(actual, objetivo)  # ObjetivoInvalido → 422
-    if "runtime_legacy" in pasos:
-        raise ObjetivoInvalido(MENSAJE_SIN_LEGACY)
     global_ = True  # el ruteo por conexión ya no es una bandera (ADR-0191)
     res = Resultado(actual, objetivo, actual, "sin_cambios", global_, pasos=list(pasos))
     if not pasos:
@@ -214,46 +210,10 @@ async def _correr(
         if abiertas:
             res.avisos.append(f"{abiertas} tarea(s) abierta(s) del motor dejan de gobernarse al apagar los procedimientos")
 
-    escrito = False
-
-    async def escritor(tid: uuid.UUID, runtime: str, _procedimientos: bool | None) -> None:
-        # migrar_a_v3 pide su runtime; se escribe el objetivo completo de una vez (la función
-        # valida el orden del conjunto y audita el cambio).
-        nonlocal escrito
-        if tid != tenant_id or runtime != objetivo.runtime:
-            raise RuntimeError("migrar-a-v3 pidió escribir otro negocio u otro runtime")
-        await _escribir(tenant_id, objetivo, admin_id, actor)
-        escrito = True
-
-    if actual.runtime != objetivo.runtime:
-        reporte = await migrar_a_v3(
-            tenant_ids=[tenant_id],
-            dry_run=dry_run,
-            construir=construir,
-            modules=plugin_manager.list_modules(),
-            backfills=True,
-            escritor=escritor,
-        )
-        negocio = reporte.negocios[0] if reporte.negocios else None
-        if negocio is None:
-            raise NegocioNoEncontrado("negocio no encontrado")
-        res.bloqueos.extend(negocio.bloqueos)
-        res.avisos.extend(negocio.avisos)
-        res.pasos.extend(negocio.pasos)
-        if negocio.accion == "bloqueado":
-            res.accion = "bloqueado"
-            return res
-        if dry_run:
-            res.accion = "por_preparar" if negocio.accion == "por_preparar" else "listo"
-            return res
-        if not escrito:
-            # `ya_estaba` / `ya_legacy` (carrera con otro cambio): se escribe el resto igual.
-            await _escribir(tenant_id, objetivo, admin_id, actor)
-    else:
-        if dry_run:
-            res.accion = "listo"
-            return res
-        await _escribir(tenant_id, objetivo, admin_id, actor)
+    if dry_run:
+        res.accion = "listo"
+        return res
+    await _escribir(tenant_id, objetivo, admin_id, actor)
     res.despues = await estado(tenant_id) or APAGADAS
     res.accion = "aplicado"
     log.info(
@@ -267,7 +227,7 @@ async def _correr(
 
 
 async def simular(tenant_id: uuid.UUID, objetivo: BanderasAOS, *, construir: bool, admin_id: uuid.UUID) -> Resultado:
-    """Dry-run: nada se escribe (ni backfills ni releases ni banderas)."""
+    """Dry-run: nada se escribe."""
     return await _correr(tenant_id, objetivo, dry_run=True, construir=construir, admin_id=admin_id, actor="")
 
 
@@ -275,7 +235,7 @@ async def aplicar(
     tenant_id: uuid.UUID, objetivo: BanderasAOS, *, construir: bool, admin_id: uuid.UUID, actor: str
 ) -> Resultado:
     """Lleva el negocio al objetivo con un candado por negocio (`pg_try_advisory_xact_lock`: los
-    backfills y `construir` no deben correr dos veces a la vez). `CambioEnCurso` si está tomado."""
+    cambios del Agent OS no corren dos veces a la vez). `CambioEnCurso` si está tomado."""
     async with get_session() as candado:
         # El mismo candado que «Preparar mis datos» (`datos_aos.preparar`).
         tomado = (await candado.execute(text(CANDADO_SQL), {"t": str(tenant_id)})).scalar_one()

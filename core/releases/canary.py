@@ -64,7 +64,7 @@ def _porcentaje(percent: int) -> int:
 
 async def _exigir_v3(session: Any, tenant_id: uuid.UUID) -> None:
     runtime = (
-        # FOR SHARE: no se cruza con un `migrar-a-v3 --volver` que escribe la bandera en paralelo.
+        # FOR SHARE: no se cruza con un cambio de banderas en paralelo (`aos_fijar_banderas`).
         await session.execute(text("SELECT aos_runtime FROM tenants WHERE id = :t FOR SHARE"), {"t": tenant_id})
     ).scalar_one_or_none()
     if runtime != "v3":

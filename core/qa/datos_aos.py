@@ -6,23 +6,20 @@ las MISMAS funciones de la operación (sin duplicar su lógica):
 1. **Chat web activo** con su clave (`chat_web_conexion.guardar_widget`, igual que
    Configuración → Chat web): reutiliza la clave si ya existe y agrega el origen de
    `LANDING_BASE_URL`, que sirve `/w/<clave>`. Las demás conexiones no se tocan.
-2. **Backfills** de conexiones, agentes y releases (`migracion_v3.ejecutar_backfills`).
-3. **`migrar_a_v3(construir=True)`**, como `agent-core db migrar-a-v3 --tenant … --construir`.
-4. **Agentes del preset v2** (`aplicar_agentes`) con un manifiesto en memoria: las plantillas
+2. **Coordinador** del negocio y sus instancias en las conexiones (`asegurar_base_del_negocio`, lo
+   mismo que el alta; el negocio ya nace en v3, ADR-0191).
+3. **Agentes del preset v2** (`aplicar_agentes`) con un manifiesto en memoria: las plantillas
    `AGENTES` (Ventas y Agenda, con las keys de sus plantillas). Ningún preset de archivo encaja con
    el negocio de prueba, y uno nuevo en `core/presets/` aparecería en el alta de clientes reales.
    Nunca toca agentes que ya existan (los que creó el tester en el editor, p. ej. Cobranza).
-5. **Release activa** en cada conexión conversacional (`construir` + `promover`, que pasa el
+4. **Release activa** en cada conexión conversacional (`construir` + `promover`, que pasa el
    gate): el tester es el dueño de su negocio de prueba y pulsar el botón es su decisión.
-6. **`aos_procedures = true` y `aos_routing = 'active'`** con `aos_fijar_banderas` y el rol
+5. **`aos_procedures = true` y `aos_routing = 'active'`** con `aos_fijar_banderas` y el rol
    dueño, en la misma transacción que comprueba el slug `qa-` del tester.
 
-Solo con `QA_TESTERS_ENABLED` y `AOS_CONNECTION_ROUTING`, y solo en el negocio de la fila del
+Solo con `QA_TESTERS_ENABLED`, y solo en el negocio de la fila del
 tester. Idempotente: cada paso lo es. Si un paso falla, se guarda el motivo
-(`qa_tester_datasets.error`) y el negocio queda como esté: antes del paso 3 sigue en legacy;
-después ya es un v3 funcional (con el General) y el reintento completa lo que falte. No se vuelve
-a legacy: reconstruir en legacy refrescaría el Coordinador desde el v2 y perdería las reglas del
-preset, que la lápida de ADR-0139 ya no repone.
+(`qa_tester_datasets.error`) y el negocio queda como esté; el reintento completa lo que falte.
 """
 
 from __future__ import annotations
@@ -131,22 +128,11 @@ async def _chat_web(tenant_id: uuid.UUID) -> None:
             await chat_web_conexion.guardar_widget(session, tenant_id, enabled=True, allowed_origins=origenes)
 
 
-async def _backfills(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
-    from core.releases.migracion_v3 import ejecutar_backfills
+async def _coordinador(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
+    from core.agents.base import asegurar_base_del_negocio
 
-    motivo = await ejecutar_backfills(tenant_id, modulos)
-    if motivo:
-        raise FalloAgentOS(motivo)
-
-
-async def _a_v3(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
-    from core.releases.migracion_v3 import migrar_a_v3
-
-    reporte = await migrar_a_v3(tenant_ids=[tenant_id], dry_run=False, construir=True, modules=modulos)
-    negocio = reporte.negocios[0] if reporte.negocios else None
-    if negocio is None or negocio.accion not in ("encendido", "ya_estaba"):
-        bloqueos = "; ".join(negocio.bloqueos) if negocio else "negocio no encontrado"
-        raise FalloAgentOS(f"migrar-a-v3: {bloqueos[:400]}")
+    async with tenant_scope(tenant_id):
+        await asegurar_base_del_negocio(tenant_id, modules=modulos)
 
 
 async def _preset(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
@@ -238,7 +224,7 @@ async def preparar(tenant_id: uuid.UUID, slug: str) -> str | None:
     async with get_session() as candado:
         from core.kernel.banderas import CANDADO_SQL
 
-        # El mismo candado que el panel del master (HU-AOS-15): no se intercalan backfills ni builds.
+        # El mismo candado que el panel del master (HU-AOS-15): no se intercalan builds.
         tomado = (await candado.execute(text(CANDADO_SQL), {"t": str(tenant_id)})).scalar_one()
         if not tomado:
             raise QaError("conflicto", "Tu negocio de prueba se está preparando para el Agent OS. Espera un momento.")
@@ -246,11 +232,7 @@ async def preparar(tenant_id: uuid.UUID, slug: str) -> str | None:
             await _negocio_del_tester(tenant_id, slug)
             modulos = list(plugin_manager.list_modules())
             await _chat_web(tenant_id)
-            await _backfills(tenant_id, modulos)
-            # Otra vez justo antes de escribir `aos_runtime` con el rol dueño (migrar_a_v3 filtra
-            # solo por id): el slug no cambió durante la corrida.
-            await _negocio_del_tester(tenant_id, slug)
-            await _a_v3(tenant_id, modulos)
+            await _coordinador(tenant_id, modulos)
             await _preset(tenant_id, modulos)
             await _activar_releases(tenant_id, modulos)
             await _banderas(tenant_id, slug)

@@ -169,4 +169,30 @@ async def asegurar_coordinador(tenant_id: uuid.UUID, *, modules: Iterable[Any] |
     return agent_id
 
 
-__all__ = ["asegurar_coordinador", "contenido_base", "kernel_del_negocio"]
+async def asegurar_base_del_negocio(tenant_id: uuid.UUID, *, modules: Iterable[Any] | None = None) -> None:
+    """El Coordinador del negocio y sus instancias en las conexiones conversacionales que ya existen
+    (con el especialista por defecto del negocio si lo hay; si no, cada conexión pide el suyo por
+    `connection.release_1`). Idempotente; corre dentro del `tenant_scope` del negocio."""
+    from core.agents.instancias import instancias_de_conexion_nueva
+
+    await asegurar_coordinador(tenant_id, modules=modules)
+    async with get_session() as session:
+        conexiones = [
+            fila[0]
+            for fila in (
+                await session.execute(
+                    text(
+                        "select cc.id from channel_connections cc join connection_types ct on ct.id = cc.type_id "
+                        "where cc.tenant_id = :t and cc.deleted_at is null and ct.produces_conversations "
+                        "order by cc.created_at"
+                    ),
+                    {"t": tenant_id},
+                )
+            ).all()
+        ]
+        for conexion in conexiones:
+            await instancias_de_conexion_nueva(session, tenant_id, conexion)
+        await session.commit()
+
+
+__all__ = ["asegurar_base_del_negocio", "asegurar_coordinador", "contenido_base", "kernel_del_negocio"]

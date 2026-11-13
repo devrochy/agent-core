@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 from _api_helpers import api_headers, uniq
-from test_backfill_agentes import _sql
+from _ayudas_sql import _sql
 
 pytestmark = [
     pytest.mark.aislamiento,  # agente de otro negocio y bandera de entorno (ADR-0120)

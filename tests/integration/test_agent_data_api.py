@@ -22,8 +22,8 @@ from typing import Any
 
 import pytest
 from _api_helpers import api_headers, uniq
+from _ayudas_sql import _sql
 from test_agentes_versionados import PASSWORD
-from test_backfill_agentes import _sql
 from test_byok_produccion import _negocio
 
 pytestmark = [

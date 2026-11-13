@@ -22,3 +22,9 @@
 - Los especialistas del preset y del editor parten de la configuración del negocio (`contenido_base`) y nacen con los bindings de todas sus tools propias (su pack y las esenciales del core).
 - La release 1 de un negocio v3 congela las versiones nativas de sus agentes, sin refrescar desde el AgentSpec v2.
 - El especialista por defecto cuenta en el cupo `agentes` del plan (decisión del dueño, ADR-0192 §7): sale la excepción del General en la métrica y en `agregar_instancia`. Se retiran el recorte del General (`core/agents/coordinacion.py`, `agent-core db recorte-general`) y el acople de especialistas al General en el editor; `general_updated` de la publicación queda siempre en `null` hasta retirar el campo.
+
+### Cuarta tanda: fuera el lector tolerante
+- Se borran `core/agents/tolerante.py`, `core/agents/backfill_agentes.py` y `core/releases/migracion_v3.py`, con los comandos `agent-core db backfill-agentes` y `agent-core db migrar-a-v3`. El build y la release 1 ya no refrescan nada desde el AgentSpec v2 (`refrescar_desde_v2` y el parámetro `refrescar` salen).
+- Una conexión conversacional nueva de un negocio que ya tiene agentes nace con el Coordinador y el especialista por defecto del negocio (el que es el por defecto en sus otras conexiones), en la misma transacción del alta; sin ninguno, queda pendiente y el preset se lo da por `connection.release_1`.
+- El panel del master ya no corre `migrar-a-v3`: el runtime es siempre v3, `construir` no tiene efecto y pedir `legacy` es 422. «Preparar mis datos» asegura el Coordinador y sus instancias en lugar de los backfills.
+- La exención de gate `migrar_a_v3` sale (no queda quien la use); `migrar_a_v3` sigue como motivo en el historial de eventos.

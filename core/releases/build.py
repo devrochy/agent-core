@@ -6,13 +6,8 @@
 1. **Versiones de los agentes.** Por cada instancia viva y habilitada de la conexión, una versión
    exacta: la última publicada de su agente. Exige el Coordinador. Cada versión pasa otra vez el
    validador único del contrato (`revisar_spec`, ADR-0113 §1: el binario pudo cambiar desde que
-   se publicó). Con `aos_runtime = 'legacy'` el Coordinador y el General son el AgentSpec v2
-   activo (lector tolerante): el build primero los **refresca** (corre el backfill B2 del
-   negocio, idempotente, y publica la conversión actual si su hash cambió) y congela esa
-   versión, no "la última". Así la release 1 sale del v2 activo aunque se haya editado en el
-   panel legacy después del backfill o el binario cambie la conversión (adenda de HU-AOS-13 en
-   ADR-0113: "refrescar la versión es decisión del build"). Con `v3` no se refresca nada desde el
-   v2: Configuración ya no edita agentes (ADR-0191 §4) y cada agente congela su última versión.
+   se publicó). No se refresca nada desde el AgentSpec v2: Configuración ya no edita agentes
+   (ADR-0191 §4) y cada agente congela su última versión (o la `fijada` que pase el llamador).
 2. **Habilidades.** Las efectivas en el scope de la conexión (ADR-0118 §2, HU-AOS-16): si la
    conexión tiene instalaciones propias vivas (`pack_installations`, scope `connection`),
    SOLO esas, sin merge; si no, las habilitadas del negocio (`enabled_business_packs` del v2
@@ -119,85 +114,6 @@ async def _conexion_conversacional(tenant_id: uuid.UUID, connection_id: uuid.UUI
 
 
 # ------------------------------------------------------------------ 1. agentes
-
-async def refrescar_desde_v2(
-    tenant_id: uuid.UUID, modules: list[Any]
-) -> dict[uuid.UUID, uuid.UUID]:
-    """`{agent_id: version_id}` del Coordinador y del General que corresponden al AgentSpec v2
-    activo con el binario de hoy (ver el docstring del módulo). Publica una versión nueva solo si
-    la conversión cambió; nunca escribe en `agent_specs` salvo la siembra del default que hace
-    el backfill (la misma que haría el loop en su primer turno)."""
-    from core.agents import versiones
-    from core.agents.backfill_agentes import backfill_agentes
-    from core.agents.claves import KEY_COORDINADOR, KEY_GENERAL
-    from core.agents.instancias import agentes_base
-    from core.agents.spec import leer_spec_activo
-    from core.agents.tolerante import (
-        ConversionFallida,
-        convertir_negocio,
-    )
-    from core.kernel.procedures import catalogo_de_acciones
-
-    reporte = await backfill_agentes(dry_run=False, tenant_id=tenant_id, modules=modules)
-    problemas = [p.mensaje for p in (*reporte.bloqueados, *reporte.errores)]
-    if problemas:
-        raise ErrorDelBuild("backfill_pendiente", "El negocio no pasa el backfill de agentes.", problemas[:5])
-    leido = await leer_spec_activo(tenant_id)
-    if leido is None:
-        raise ErrorDelBuild("sin_spec", "El negocio no tiene AgentSpec activo.")
-    spec_id, spec = leido
-    try:
-        conversion = await convertir_negocio(spec, modules=modules)
-    except ConversionFallida as exc:
-        raise ErrorDelBuild("conversion_fallida", str(exc)[:300]) from None
-    finally:
-        del spec  # el v2 lleva los literales: fuera de los locales del frame
-    contenidos = {
-        KEY_COORDINADOR: conversion.kernel.model_dump(mode="json", by_alias=True),
-        KEY_GENERAL: conversion.general.model_dump(mode="json", by_alias=True),
-    }
-    del conversion
-    async with get_session() as session:
-        ids = await agentes_base(session, tenant_id)
-        con_legacy = {
-            aid
-            for (aid,) in (
-                await session.execute(
-                    text(
-                        "SELECT agent_id FROM agent_versions WHERE tenant_id = :t AND legacy_agent_spec_id = :s"
-                    ),
-                    {"t": tenant_id, "s": spec_id},
-                )
-            ).all()
-        }
-    catalogo = catalogo_de_acciones(modules)
-    salida: dict[uuid.UUID, uuid.UUID] = {}
-    for key, contenido in contenidos.items():
-        aid = ids.get(key)
-        if aid is None:
-            raise ErrorDelBuild("sin_agente", f"Falta el agente reservado '{key}'.")
-        try:
-            version, creada = await versiones.publicar(
-                tenant_id,
-                aid,
-                catalogo=catalogo,
-                contenido=contenido,
-                # El índice único por (agente, fila v2) ya la tiene: el refresco va sin ella.
-                legacy_agent_spec_id=None if aid in con_legacy else spec_id,
-                label="v2 (refresco del build)",
-                notes="Refresco del build de releases (HU-AOS-14): conversión actual del AgentSpec v2 activo.",
-            )
-        except versiones.ErroresDeContrato as exc:
-            raise ErrorDelBuild(
-                "contrato_invalido",
-                f"El agente '{key}' no pasa el contrato.",
-                [f"{i.path} ({i.code})" for i in exc.issues[:10]],
-            ) from None
-        if creada:
-            log.info("release_build_agent_refreshed", agent_key=key, version=version.version)
-        salida[aid] = version.id
-    return salida
-
 
 @dataclass(frozen=True)
 class _Instancia:
@@ -586,17 +502,12 @@ async def armar_manifiesto(
     connection_id: uuid.UUID,
     *,
     modules: Iterable[Any] | None = None,
-    refrescar: bool | None = None,
     fijadas: dict[uuid.UUID, uuid.UUID] | None = None,
 ) -> dict[str, Any]:
-    """El manifiesto que construiría `construir`, sin escribir la release (sí puede refrescar
-    las versiones del v2: ver el docstring del módulo). `refrescar=None`: solo en legacy.
-    `fijadas`: `{agent_id: version_id}` ya refrescadas (el backfill las calcula una vez por
-    negocio); con ellas no se refresca otra vez."""
+    """El manifiesto que construiría `construir`, sin escribir la release. `fijadas`:
+    `{agent_id: version_id}` que se congelan en lugar de la última versión publicada."""
     from core.agents.flow import read_tenant_flow_raw
     from core.agents.spec import enabled_business_packs, leer_spec_activo
-    from core.db.session import get_session as _sesion
-    from core.kernel.banderas import banderas_del_negocio
     from core.kernel.procedures import catalogo_de_acciones
     from core.releases.cargar import derivar_procedimientos
     from core.shared.tenant import tenant_slug
@@ -605,16 +516,7 @@ async def armar_manifiesto(
     await _conexion_conversacional(tenant_id, connection_id)
     modulos = _modulos(modules)
     catalogo = catalogo_de_acciones(modulos)
-    if fijadas is None:
-        if refrescar is None:
-            async with _sesion() as session:
-                legacy = (await banderas_del_negocio(session, tenant_id)).runtime == "legacy"
-            # En v3 Configuración ya no edita agentes (ADR-0191 §4): el General no se refresca desde
-            # el AgentSpec v2; solo un negocio legacy lo hace, hasta retirar ese camino.
-            fijadas = await refrescar_desde_v2(tenant_id, modulos) if legacy else {}
-        else:
-            fijadas = await refrescar_desde_v2(tenant_id, modulos) if refrescar else {}
-    instancias = await _componentes(tenant_id, connection_id, fijadas, catalogo)
+    instancias = await _componentes(tenant_id, connection_id, fijadas or {}, catalogo)
 
     leido = await leer_spec_activo(tenant_id)
     del_negocio = set(enabled_business_packs(leido[1])) if leido else set()
@@ -667,14 +569,13 @@ async def construir(
     origin: str = "owner",
     notas: str = "",
     modules: Iterable[Any] | None = None,
-    refrescar: bool | None = None,
     fijadas: dict[uuid.UUID, uuid.UUID] | None = None,
 ) -> ResultadoBuild:
     """Construye (o devuelve, si ya existe con el mismo hash) la release candidata."""
     if origin not in ("owner", "platform"):
         raise ValueError(f"origin inválido: {origin}")
     manifest = await armar_manifiesto(
-        tenant_id, connection_id, modules=modules, refrescar=refrescar, fijadas=fijadas
+        tenant_id, connection_id, modules=modules, fijadas=fijadas
     )
     huella = man.hash_de(manifest)
     async with get_session() as session:
@@ -792,6 +693,5 @@ __all__ = [
     "armar_manifiesto",
     "construir",
     "habilidades_efectivas",
-    "refrescar_desde_v2",
     "registrar_evento",
 ]

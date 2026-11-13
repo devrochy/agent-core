@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from _api_helpers import api_headers, banderas_como_dueno
+from _ayudas_sql import _sql
 from test_agent_data_api import (
     _agente,
     _colaborador,
@@ -28,7 +29,6 @@ from test_agent_data_api import (
     _tarea,
 )
 from test_agentes_versionados import PASSWORD
-from test_backfill_agentes import _sql
 from test_byok_produccion import _negocio
 
 pytestmark = [

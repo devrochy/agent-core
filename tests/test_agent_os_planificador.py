@@ -1,7 +1,7 @@
 """HU-AOS-15 · planificador del Agent OS del panel del master (puro, sin base).
 
 Orden de banderas de ADR-0112 y ADR-0138: procedimientos y enrutamiento exigen v3; al encender
-runtime → procedimientos → ruteo, al apagar el inverso; apagar solo los procedimientos no fuerza
+runtime → procedimientos → ruteo, al apagar el inverso, sin volver a legacy (ADR-0191); apagar solo los procedimientos no fuerza
 el enrutamiento a `off` (el CHECK de 0094 solo pide v3).
 """
 
@@ -41,15 +41,17 @@ def test_objetivo_fuera_de_orden_se_rechaza(objetivo: BanderasAOS) -> None:
 
 def test_sin_cambios_no_hay_pasos() -> None:
     assert planificar(TODO, TODO) == []
-    assert planificar(LEGACY, LEGACY) == []
+    assert planificar(V3, V3) == []
 
 
 def test_encender_todo_va_en_orden() -> None:
     assert planificar(LEGACY, TODO) == ["runtime_v3", "procedimientos_on", "ruteo_active"]
 
 
-def test_apagar_todo_va_al_reves() -> None:
-    assert planificar(TODO, LEGACY) == ["ruteo_off", "procedimientos_off", "runtime_legacy"]
+def test_apagar_todo_va_al_reves_y_no_vuelve_a_legacy() -> None:
+    assert planificar(TODO, V3) == ["ruteo_off", "procedimientos_off"]
+    with pytest.raises(ObjetivoInvalido):  # un solo motor (ADR-0191)
+        planificar(TODO, LEGACY)
 
 
 def test_apagar_solo_procedimientos_no_toca_el_ruteo() -> None:

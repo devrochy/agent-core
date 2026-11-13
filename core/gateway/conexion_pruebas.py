@@ -4,8 +4,8 @@ La conversación de prueba (`channel == TEST_CHANNEL`) también lleva `connectio
 *contract* lo vuelve obligatorio. Cada negocio tiene UNA conexión de tipo `playground`, creada al
 primer uso (o por `backfill-conexiones` si ya había conversaciones de prueba):
 
-- no es un canal ni produce conversaciones de clientes (no entra en backfills de agentes, releases,
-  `migrar-a-v3` ni en el contract), no tiene credenciales ni release, y no se ve en el panel de
+- no es un canal ni produce conversaciones de clientes (no entra en el backfill de releases ni en
+  el contract), no tiene credenciales ni release, y no se ve en el panel de
   conexiones ni en los filtros de conversaciones;
 - sin release activa, el turno de prueba sigue por el camino de siempre (`asignar` devuelve None).
 """

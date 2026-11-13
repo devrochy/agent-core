@@ -189,7 +189,7 @@ async def test_exencion_detiene_el_canary() -> None:
     tid, cid, uno, dos = await _con_candidata()
     await _svc(tid, "iniciar", cid, dos, percent=20, actor="test")
     async with tenant_scope(tid):
-        await promover(tid, cid, dos, actor="test", exencion="migrar_a_v3")
+        await promover(tid, cid, dos, actor="test", exencion="migrar_referencias")
     eventos = await _sql(
         tid, "select type, data->>'reason' from release_events where release_id = :r and type in ('canary_stopped','promoted') order by created_at", r=dos
     )

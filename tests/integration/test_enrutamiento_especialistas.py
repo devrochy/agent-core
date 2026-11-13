@@ -440,13 +440,21 @@ async def test_la_ruta_de_un_negocio_no_cruza_a_otro(_ruteo: None, monkeypatch: 
 
 async def test_el_escritor_de_banderas_ya_no_acepta_legacy(_ruteo: None) -> None:
     """Sin vuelta a legacy (ADR-0191, migración 0126): el escritor único lo rechaza y no cambia nada."""
-    from core.kernel.banderas import BanderasRechazadas
-    from core.releases.migracion_v3 import _escribir_bandera
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from core.config import get_settings
+    from core.kernel.banderas import BanderasAOS, BanderasRechazadas, fijar_banderas
 
     tid, _cid = await _negocio()
     await _modo(tid, "shadow")
-    with pytest.raises(BanderasRechazadas):
-        await _escribir_bandera(None, tid, runtime="legacy", procedimientos=False)
+    engine = create_async_engine(get_settings().migrations_database_url)
+    try:
+        with pytest.raises(BanderasRechazadas):
+            async with engine.begin() as conn:
+                objetivo = BanderasAOS(runtime="legacy", procedimientos=False, ruteo="off")
+                await fijar_banderas(conn, tid, objetivo, actor="test")
+    finally:
+        await engine.dispose()
     ((runtime, ruteo),) = await _sql(None, "select aos_runtime, aos_routing from tenants where id = :t", t=tid)
     assert (runtime, ruteo) == ("v3", "shadow")
 

@@ -1,5 +1,7 @@
 # Migración al Agent OS (runbook de HU-AOS-15)
 
+> **Histórico (HU-AOS-69, 2026-11-13):** ya no hay paso legacy → v3. Los negocios nacen en v3 (migración 0126) y los comandos `backfill-agentes` y `migrar-a-v3` se retiraron con el lector tolerante. Un negocio que haya quedado en `legacy` se vuelve a sembrar (D-68). Lo que sigue queda como registro de cómo se migró.
+>
 > **ADR-0191 (2026-11-12, HU-AOS-69):** `AOS_CONNECTION_ROUTING` ya no existe: el ruteo por conexión es siempre. Lo que este runbook dice de encenderla o apagarla es historia; el retiro de `legacy` y de `--volver` llega en la misma HU.
 >
 > **D-60 (2026-11-03):** el Agent OS es el único motor. El panel del master ya no vuelve un negocio a `legacy` (422); el rollback de emergencia es solo por consola, `agent-core db migrar-a-v3 --volver --tenant <slug>`, mientras no se aplique el *contract*. Los negocios nuevos nacen en v3 si `AOS_CONNECTION_ROUTING=true`.

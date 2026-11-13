@@ -109,32 +109,11 @@ async def _agentes_base_al_alta(tenant_id: uuid.UUID, *, nuevo: bool) -> list[st
     ella, el primer especialista del preset (con la primera conexión, D-35). Frontera deliberada: un
     fallo se registra y el alta sigue. `nuevo` queda por compatibilidad de firma (los tests la parchean)."""
     del nuevo
-    from sqlalchemy import text
-
-    from core.agents.base import asegurar_coordinador
-    from core.agents.instancias import instancias_de_conexion_nueva
-    from core.db.session import get_session
+    from core.agents.base import asegurar_base_del_negocio
 
     try:
         async with tenant_scope(tenant_id):
-            await asegurar_coordinador(tenant_id)
-            async with get_session() as session:
-                conexiones = [
-                    fila[0]
-                    for fila in (
-                        await session.execute(
-                            text(
-                                "select cc.id from channel_connections cc join connection_types ct on ct.id = cc.type_id "
-                                "where cc.tenant_id = :t and cc.deleted_at is null and ct.produces_conversations "
-                                "order by cc.created_at"
-                            ),
-                            {"t": tenant_id},
-                        )
-                    ).all()
-                ]
-                for conexion in conexiones:
-                    await instancias_de_conexion_nueva(session, tenant_id, conexion)
-                await session.commit()
+            await asegurar_base_del_negocio(tenant_id)
     except Exception:  # frontera deliberada: el alta no depende del Agent OS
         log.warning("alta_agentes_base_fallo", tenant_id=str(tenant_id), exc_info=True)
         return ["Coordinador pendiente (reintentar el alta)"]

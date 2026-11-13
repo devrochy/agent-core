@@ -446,19 +446,10 @@ async def test_crear_desde_el_guion_de_la_plantilla(app_client) -> None:
     assert (r.status_code, r.json()["error"]["code"]) == (409, "key_taken")
     assert r.json()["error"]["fields"]["agent_id"] == creado["agent"]["id"]
 
-    # Sin responder nada: productos (el defecto) y el largo del General.
+    # Sin responder nada: productos (el defecto) y el largo de la configuración del negocio.
     r = await app_client.post("/api/v1/admin/agents/from-script", headers=h, json={"template_key": "agenda"})
     assert r.status_code == 201, r.text
     assert [p["id"] for p in r.json()["draft"]["content"]["procedures"]] == ["pack_calendar.agendar_cita"]
-
-
-async def _general_id(tid: uuid.UUID) -> uuid.UUID:
-    from core.agents.backfill_agentes import backfill_agentes
-
-    reporte = await backfill_agentes(dry_run=False, tenant_id=tid, modules=_modules())
-    assert not reporte.fallo, reporte
-    filas = await _sql(tid, "select id from agents where key = 'general' and deleted_at is null")
-    return filas[0][0]
 
 
 async def _publicar_desde_el_guion(app_client, h, cid, plantilla: str, respuestas: dict[str, str]) -> dict[str, Any]:

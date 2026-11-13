@@ -118,8 +118,8 @@ async def test_exenciones_internas_y_qa_solo_en_negocio_de_prueba() -> None:
     assert exc.value.codigo == "exencion_invalida"
     with pytest.raises(ValueError):
         await _promover(tid, cid, dos, exencion="cualquiera")
-    cambio = await _promover(tid, cid, dos, motivo="migrar_a_v3", exencion="migrar_a_v3")
-    assert cambio.gate == "exento_migrar_a_v3"
+    cambio = await _promover(tid, cid, dos, motivo="migrar_referencias", exencion="migrar_referencias")
+    assert cambio.gate == "exento_migrar_referencias"
 
     qa, qa_cid = await _negocio("qa")
     tres = await _candidata(qa, qa_cid, "Datos del tester")

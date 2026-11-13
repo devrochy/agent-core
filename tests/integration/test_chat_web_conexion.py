@@ -30,8 +30,8 @@ from typing import Any
 
 import pytest
 from _api_helpers import api_headers, uniq
+from _ayudas_sql import _sql
 from test_api_registrar_numero import _negocio_con_byok
-from test_backfill_agentes import _modules, _sql
 from test_byok_produccion import _negocio
 from test_conexion_canonica import _alta_numero, _conexiones
 from test_instancias_por_conexion_api import _con_agentes, _instancias
@@ -252,17 +252,12 @@ async def test_sin_conexion_cae_a_app_settings_como_antes(app_client) -> None:
 
 # ---------------------------------------------------------------- backfill
 async def test_backfill_convierte_el_widget_y_liga_las_conversaciones_web() -> None:
-    from core.agents.backfill_agentes import backfill_agentes
     from core.gateway.conexion_canonica_backfill import backfill_conexiones
 
     tid = await _negocio()
     key = uniq("legacy") + "z" * 24
     await _config_legacy(tid, {"enabled": True, "key": key, "allowed_origins": [ORIGEN], "turnstile_secret": "ts-viejo"})
     abierta = await _conversacion_web(tid, uniq("vis"))
-
-    # El backfill de agentes exige antes la conexión del widget.
-    bloqueo = await backfill_agentes(dry_run=True, tenant_id=tid, modules=_modules())
-    assert bloqueo.bloqueados and "chat web" in bloqueo.bloqueados[0].mensaje
 
     previo = await backfill_conexiones(dry_run=True, tenant_id=tid)
     assert (previo.chat_web["creada"], previo.conversaciones_web_ligadas) == (1, 1)
@@ -277,12 +272,6 @@ async def test_backfill_convierte_el_widget_y_liga_las_conversaciones_web() -> N
 
     otra = await backfill_conexiones(dry_run=False, tenant_id=tid)
     assert (otra.chat_web["ya_estaba"], otra.conversaciones_web_ligadas, otra.abiertas_sin_ligar) == (1, 0, 0)
-
-    # Ahora sí: el widget recibe su Coordinador y su General como las demás conexiones.
-    assert not (await backfill_agentes(dry_run=False, tenant_id=tid, modules=_modules())).fallo
-    assert [(k, rol) for k, rol, *_ in await _instancias(tid, fila.id)] == [
-        ("coordinador", "core"), ("general", "specialist"),
-    ]
 
 
 # ---------------------------------------------------------------- ruteo
@@ -304,13 +293,13 @@ async def test_ruteo_web_adopta_la_abierta_sin_conexion_del_visitante(app_client
 
 
 # ---------------------------------------------------------------- altas posteriores
-async def test_altas_posteriores_nacen_con_coordinador_y_general(app_client, monkeypatch) -> None:
+async def test_altas_posteriores_nacen_con_coordinador_y_su_especialista(app_client, monkeypatch) -> None:
     from core.gateway.connections import save_connection
     from core.shared.tenant import tenant_scope
     from core.waweb.connections import get_or_create_connection
 
     tid, _cuenta, _phone, _cid = await _con_agentes()
-    esperado = [("coordinador", "core"), ("general", "specialist")]
+    esperado = [("coordinador", "core"), ("atencion", "specialist")]  # el por defecto del negocio (ADR-0192)
 
     await _guardar(app_client, tid)
     (widget,) = await _webchat(tid)

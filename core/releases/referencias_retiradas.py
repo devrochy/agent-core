@@ -13,8 +13,7 @@ comparan con el binario de hoy y, con `aplicar`, se publica y se reconstruye.
 - el manifiesto de la release ACTIVA de cada conexión conversacional viva (`release`): las versiones
   que congela (`components[].agent_version_id`) y los procedimientos que resolvió
   (`components[].procedures`). Una release cuenta aunque la versión más nueva del agente ya esté
-  limpia: es lo que corre. Se mira el manifiesto, no el estado del negocio (`migrar-a-v3
-  --dry-run` dice `ya_estaba` aunque la release sea vieja).
+  limpia: es lo que corre. Se mira el manifiesto, no el estado del negocio.
 - las conexiones borradas y las que no producen conversaciones (`playground`, integraciones como
   Google Calendar) se reportan aparte: no tienen release que corra ni cuentan como falla.
 
@@ -26,8 +25,8 @@ publicada (nunca del borrador), recibe el registro de retiros (`core.agents.reti
 con `revisar_spec` (la misma regla que al publicar) y se publica con etiqueta y nota. El reemplazo
 de un procedimiento solo se agrega si todas las conexiones del agente tienen la habilidad que lo
 trae. Luego, por cada conexión viva cuya release activa estaba afectada, se construye la release
-(`build.construir`, sin refrescar desde la ficha v2) y se promueve con la exención
-`migrar_referencias`, la misma ruta de `migrar-a-v3 --construir`. Con un canary en curso la
+(`build.construir`) y se promueve con la exención
+`migrar_referencias`. Con un canary en curso la
 release se construye pero NO se promueve: el canary no se detiene a ciegas. Idempotente: sin
 afectados no hace nada. Sin LLM.
 """
@@ -575,7 +574,7 @@ async def _reconstruir(
     try:
         resultado = await construir(
             tenant_id, conexion.id, actor=ACTOR, origin="platform", modules=modulos,
-            notas="migrar-referencias --aplicar", refrescar=False,
+            notas="migrar-referencias --aplicar",
         )
     except ErrorDelBuild as exc:
         fila.accion = "bloqueada"

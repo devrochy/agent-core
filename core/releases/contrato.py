@@ -71,7 +71,6 @@ CHECK_DECISIONES = "ck_core_decisions_contract"
 FK_SIMPLE = "conversations_connection_id_fkey"
 FK_COMPUESTA = "fk_conv_connection"
 COMANDO_CONEXIONES = "agent-core db backfill-conexiones"
-COMANDO_MIGRAR = "agent-core db migrar-a-v3"
 _LOCK_TIMEOUT = "5s"
 _LOCK_VALIDAR = "60s"
 
@@ -404,7 +403,7 @@ async def contraer(
     pares: dict[uuid.UUID, list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]] = {}
     for tenant_id, slug, runtime, vivo in negocios:
         if vivo and runtime != "v3":
-            reporte.bloqueos.append(f"{slug}: sigue en aos_runtime = {runtime} (corre `{COMANDO_MIGRAR} --tenant {slug}`)")
+            reporte.bloqueos.append(f"{slug}: sigue en aos_runtime = {runtime} (se vuelve a sembrar: no hay paso legacy → v3, ADR-0191)")
         async with tenant_scope(tenant_id):
             huerfanas = await _sin_conexion(tenant_id)
             if huerfanas:
