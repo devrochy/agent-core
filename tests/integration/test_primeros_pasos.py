@@ -201,6 +201,9 @@ async def test_cada_paso_marca_su_avance_solo(app_client) -> None:
 
     await _describir(tenant_id)
     await _conectar_whatsapp(tenant_id)
+    from release_de_prueba import montar_release_en
+
+    await montar_release_en(tenant_id, "instagram")  # el Centro de pruebas prueba por una conexión real (ADR-0191)
     await _producto(tenant_id, activo=False)  # sin variante a la venta: no cuenta
     await _producto(tenant_id)
     turno = await app_client.post("/api/v1/admin/playground/message", json={"text": "hola"}, headers=headers)
@@ -414,6 +417,9 @@ async def test_el_checklist_de_un_negocio_no_ve_datos_de_otro(app_client) -> Non
     b, email_b = await _negocio(packs=["pack_commerce"])
     await _describir(b)
     await _conectar_whatsapp(b)
+    from release_de_prueba import montar_release_en
+
+    await montar_release_en(b, "instagram")
     await _producto(b)
     headers_b = await api_headers(app_client, b, email=email_b, password=CLAVE)
     assert (await app_client.post("/api/v1/admin/playground/message", json={"text": "hola"}, headers=headers_b)).status_code == 200

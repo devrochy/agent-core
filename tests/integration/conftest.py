@@ -126,6 +126,53 @@ def _conversacion_con_su_conexion():
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _entrada_sin_conexion_va_a_la_de_pruebas():
+    """Una entrada que no trae una conexión conocida del negocio (p. ej. el número de la plataforma en
+    los tests) se atiende por la conexión con release de ese canal (ADR-0191): así la conversación nace
+    y se vuelve a encontrar por la misma conexión, como en producción, donde toda entrada trae la suya."""
+    from sqlalchemy import select, text
+
+    from core.db.models import ChannelConnection
+    from core.orchestrator import consumer
+
+    real = consumer._conexion_validada
+
+    async def _con_respaldo(session, tenant_id, fields):  # type: ignore[no-untyped-def]
+        conexion = await real(session, tenant_id, fields)
+        if conexion is not None or fields.get("provider") == "twilio":
+            return conexion
+        externo = fields.get("connection_external_id")
+        if externo:
+            propia = (
+                await session.execute(
+                    select(ChannelConnection.id).where(
+                        ChannelConnection.tenant_id == tenant_id,
+                        ChannelConnection.external_id == externo,
+                        ChannelConnection.deleted_at.is_(None),
+                    )
+                )
+            ).first()
+            if propia is not None:
+                return None  # la resuelve el camino de siempre del consumer
+        canal = fields.get("channel") or "whatsapp"
+        fila = (
+            await session.execute(
+                text(
+                    "select id from channel_connections where tenant_id = :t and channel = :c "
+                    "and active_release_id is not null and deleted_at is null "
+                    "order by is_primary desc, created_at limit 1"
+                ),
+                {"t": tenant_id, "c": canal},
+            )
+        ).first()
+        return await session.get(ChannelConnection, fila[0]) if fila is not None else None
+
+    consumer._conexion_validada = _con_respaldo  # type: ignore[assignment]
+    yield
+    consumer._conexion_validada = real  # type: ignore[assignment]
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _alta_sin_agent_os():
     """Casi todos los tests de integración modelan negocios «de antes»: legacy y sin agentes. El alta de
     hoy crea el General y el Coordinador y el negocio nace en v3 (migración 0126, ADR-0191); aquí se
