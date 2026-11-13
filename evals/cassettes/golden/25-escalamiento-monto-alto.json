@@ -530,21 +530,15 @@
       },
       "respuestas": [
         {
-          "content": "",
+          "content": "¡Hola! Gracias por escribir 😊\n\nPara armarte eso bien necesito primero ver qué productos tenemos disponibles y sus precios reales. ¿Me decís tu nombre y qué productos o categorías te interesan? Así reviso el catálogo y te armo la cotización.\n\nOjo con un detalle: si el total supera cierto monto, el pedido tiene que pasar por aprobación de un asesor. Pero arranquemos viendo qué querés llevar.",
           "model": "deepseek-flash",
-          "stop_reason": "tool_use",
-          "tool_calls": [
-            {
-              "arguments": {},
-              "id": "call_00_3tWkCzb1exdgbz6pKRO80569",
-              "name": "consultar_inventario"
-            }
-          ],
+          "stop_reason": "end_turn",
+          "tool_calls": [],
           "usage": {
             "cache_read_tokens": 7296,
             "cache_write_tokens": 0,
             "input_tokens": 7498,
-            "output_tokens": 24
+            "output_tokens": 105
           }
         }
       ],
