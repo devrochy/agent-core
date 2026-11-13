@@ -112,9 +112,11 @@ async def _entrar_web(tid: uuid.UUID, key: str, visitante: str) -> uuid.UUID:
 # ---------------------------------------------------------------- pausar y reanudar
 async def test_pausado_desde_la_consola_no_responde_y_al_reanudar_vuelve(app_client, monkeypatch) -> None:
     from _api_helpers import capturar_avisos
+    from release_de_prueba import release_inicial
 
     tid = await _negocio()
     cid, key, h = await _widget(app_client, tid)
+    await release_inicial(tid)  # el chat web con su release (ADR-0191)
     _inmediato(monkeypatch)
     capturar_avisos(monkeypatch)
     visitante = uniq("vis")

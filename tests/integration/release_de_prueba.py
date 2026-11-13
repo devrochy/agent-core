@@ -107,10 +107,13 @@ async def release_inicial(tenant_id: uuid.UUID, modules: Any = None, **_: Any) -
     from sqlalchemy import text
 
     from core.db.session import get_session
+    from core.gateway.connection_types import sync_connection_types
     from core.plugin_manager import plugin_manager
     from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
+    # El catálogo de tipos (p. ej. `whatsapp_waweb`) lo espeja el arranque de la app; los tests no arrancan.
+    await sync_connection_types()
     modulos = list(modules) if modules is not None else (plugin_manager.list_modules() or plugin_manager.scan())
     async with tenant_scope(tenant_id):
         async with get_session() as session:
