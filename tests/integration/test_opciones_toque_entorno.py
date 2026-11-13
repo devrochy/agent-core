@@ -154,14 +154,17 @@ async def tocar_real(envio: Envio, payload: str, conversation: Any, customer: An
 
 @pytest.fixture(scope="module")
 async def legacy() -> AsyncIterator[tuple[uuid.UUID, str]]:
-    from release_de_prueba import montar_release
+    from release_de_prueba import montar_release_en
 
     from core.alta_negocio import onboard_tenant
     from core.tenants import deactivate_tenant, purge_tenant
 
     slug = f"opte-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"Opciones {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
-    await montar_release(tid)  # todo turno corre sobre la release de su conexión (ADR-0191)
+    # Todo turno corre sobre la release de su conexión (ADR-0191): una por canal que usan los journeys
+    # de este módulo y de los que importan esta fixture (menú de texto, envío).
+    for canal in ("whatsapp", "qr", "web", "messenger", "instagram"):
+        await montar_release_en(tid, canal)
     yield tid, slug
     await deactivate_tenant(str(tid))
     await purge_tenant(str(tid), f"ELIMINAR {slug}")

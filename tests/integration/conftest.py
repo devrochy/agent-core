@@ -160,9 +160,9 @@ def _entrada_sin_conexion_va_a_la_de_pruebas():
                 text(
                     "select id from channel_connections where tenant_id = :t and channel = :c "
                     "and active_release_id is not null and deleted_at is null "
-                    "order by is_primary desc, created_at limit 1"
+                    "order by (provider = :p) desc, is_primary desc, created_at limit 1"
                 ),
-                {"t": tenant_id, "c": canal},
+                {"t": tenant_id, "c": canal, "p": fields.get("provider") or ""},
             )
         ).first()
         return await session.get(ChannelConnection, fila[0]) if fila is not None else None
