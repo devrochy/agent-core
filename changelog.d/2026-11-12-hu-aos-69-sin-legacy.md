@@ -9,3 +9,6 @@
 - Sin vuelta a legacy: se retiran `agent-core db migrar-a-v3 --volver` y `--apagar-procedimientos`; el rollback es la release anterior de v3 o el respaldo.
 - Sin el 403 `aos_runtime_legacy` en agentes, instancias por conexión, releases, habilidades por conexión y A2A.
 - Antes de desplegar: confirmar que ningún negocio vivo sigue en `legacy` (`select slug from tenants where aos_runtime = 'legacy' and deleted_at is null`).
+
+### Tercera tanda
+- Release 1 al alta de la conexión (ADR-0191 §2): cuando una conexión conversacional nueva o revivida recibe sus instancias base, la misma transacción deja `connection.release_1` en el outbox y el handler del core construye y promueve su release 1 después del commit (idempotente; un error reintenta con el backoff del outbox).

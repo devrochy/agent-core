@@ -468,6 +468,18 @@ async def _inicializar_al_alta(
             coordinador=base.coordinador,
             general=base.general,
         )
+    # Todo turno corre sobre una release (ADR-0191): la conexión pide su release 1 por el outbox,
+    # que la construye después del commit de esta transacción.
+    from core.events.outbox import emit_domain
+    from core.shared.events import ON_CONNECTION_RELEASE_1
+
+    await emit_domain(
+        session,
+        tenant_id=tenant_id,
+        topic=ON_CONNECTION_RELEASE_1,
+        dedupe_key=f"release_1:{conexion}",
+        payload={"connection_id": str(conexion)},
+    )
 
 
 # ------------------------------------------------------------------ escrituras de la API

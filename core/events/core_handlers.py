@@ -24,6 +24,7 @@ from core.shared.events import (
     ON_APPOINTMENT_CONFIRMED,
     ON_APPOINTMENT_NO_SHOW,
     ON_APPOINTMENT_REMINDER,
+    ON_CONNECTION_RELEASE_1,
     ON_NOTIFICATION_CREATED,
     ON_PLATFORM_PERIOD_PAID,
     ON_PLATFORM_RENEWAL_DUE,
@@ -214,6 +215,22 @@ async def on_appointment_no_show(**payload: Any) -> None:
     await on_appointment_notice(ON_APPOINTMENT_NO_SHOW, payload)
 
 
+async def on_connection_release_1(connection_id: str | None = None, **_: Any) -> None:
+    """Release 1 de una conexión nueva (ADR-0191). Idempotente: `backfill_releases` solo construye
+    las conexiones del negocio sin ninguna release. Un error sube para que el outbox reintente."""
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        raise RuntimeError("connection.release_1 fuera del tenant_scope de su negocio")
+    from core.releases.release_uno import backfill_releases
+
+    reporte = await backfill_releases(dry_run=False, tenant_id=uuid.UUID(str(tenant_id)))
+    if reporte.fallo:
+        problema = reporte.errores[0]
+        raise RuntimeError(f"release 1 pendiente ({problema.connection_id}): {problema.mensaje[:200]}")
+    log.info("release_1_de_conexion", tenant_id=str(tenant_id), connection_id=connection_id,
+             conexiones=dict(reporte.conexiones))
+
+
 _HANDLERS = (
     (ON_SUBSCRIPTION_CHARGE_CREATED, on_subscription_charge_created),
     (ON_SUBSCRIPTION_CHARGE_REMINDER, on_subscription_charge_reminder),
@@ -236,6 +253,8 @@ _HANDLERS = (
     (ON_SEGMENT_SEND_BATCH, on_segment_send_batch),
     # ADR-0167: el push del centro de notificaciones (idempotente por `push_sent_at`).
     (ON_NOTIFICATION_CREATED, on_notification_created),
+    # ADR-0191: la release 1 de cada conexión conversacional nueva.
+    (ON_CONNECTION_RELEASE_1, on_connection_release_1),
 )
 
 
