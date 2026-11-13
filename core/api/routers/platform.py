@@ -512,7 +512,8 @@ async def simular_agent_os(
     payload: AgentOSObjetivo,
     principal: Annotated[Principal, Depends(get_principal)],
 ) -> AgentOSResultado:
-    """Dry-run del cambio: avisos y los pasos que aplicaría. No escribe nada. 422 `agent_os_orden` si el objetivo viola el orden."""
+    """Dry-run del cambio: avisos y los pasos que aplicaría. No escribe nada. 422 `agent_os_orden`
+    si el modo de enrutamiento no es válido."""
     return await _agent_os(tenant_id, payload, principal, aplicar=False)
 
 
@@ -522,8 +523,8 @@ async def put_agent_os(
     payload: AgentOSObjetivo,
     principal: Annotated[Principal, Depends(get_principal)],
 ) -> AgentOSResultado:
-    """Lleva el negocio al estado pedido (HU-AOS-15, orden de ADR-0112 y ADR-0138). Escribe con `aos_fijar_banderas` (auditada). 422 `agent_os_orden` (combinación fuera de
-    orden), 409 `agent_os_bloqueado` (precondiciones; `details` trae bloqueos y avisos) o
+    """Lleva el negocio al estado pedido (HU-AOS-15, orden de ADR-0112 y ADR-0138). Escribe con
+    `aos_fijar_banderas` (auditada). 422 `agent_os_orden` (modo de enrutamiento no válido) o 409
     `agent_os_en_curso` (otro cambio en curso)."""
     return await _agent_os(tenant_id, payload, principal, aplicar=True)
 

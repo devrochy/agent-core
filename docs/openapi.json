@@ -14685,7 +14685,7 @@
           "admin · plataforma"
         ],
         "summary": "Put Agent Os",
-        "description": "Lleva el negocio al estado pedido (HU-AOS-15, orden de ADR-0112 y ADR-0138). Escribe con `aos_fijar_banderas` (auditada). 422 `agent_os_orden` (combinación fuera de\norden), 409 `agent_os_bloqueado` (precondiciones; `details` trae bloqueos y avisos) o\n`agent_os_en_curso` (otro cambio en curso).",
+        "description": "Lleva el negocio al estado pedido (HU-AOS-15, orden de ADR-0112 y ADR-0138). Escribe con\n`aos_fijar_banderas` (auditada). 422 `agent_os_orden` (modo de enrutamiento no válido) o 409\n`agent_os_en_curso` (otro cambio en curso).",
         "operationId": "put_agent_os_api_v1_admin_platform_tenants__tenant_id__agent_os_put",
         "parameters": [
           {
@@ -14772,7 +14772,7 @@
           "admin · plataforma"
         ],
         "summary": "Simular Agent Os",
-        "description": "Dry-run del cambio: avisos y los pasos que aplicaría. No escribe nada. 422 `agent_os_orden` si el objetivo viola el orden.",
+        "description": "Dry-run del cambio: avisos y los pasos que aplicaría. No escribe nada. 422 `agent_os_orden`\nsi el modo de enrutamiento no es válido.",
         "operationId": "simular_agent_os_api_v1_admin_platform_tenants__tenant_id__agent_os_simular_post",
         "parameters": [
           {
