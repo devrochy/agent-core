@@ -9,10 +9,8 @@ stack real, sin LLM ni red:
 - **Orden de banderas:** procedimientos o enrutamiento sin v3 → 422 `agent_os_orden`; un UPDATE
   directo de las banderas con el rol de la aplicación lo rechaza el trigger de 0097, y la función
   con admin no se deja llamar bajo el `tenant_scope` de un negocio.
-- **Simular no escribe:** con backfills pendientes responde `por_preparar` con los pasos, y el
-  negocio sigue igual (ni agentes, ni releases, ni banderas).
-- **Aplicar:** legacy → v3 corre los backfills del negocio y `migrar-a-v3`; después procedimientos
-  y ruteo; y volver a legacy se rechaza desde el panel (solo por CLI). Cada cambio deja su fila `agent_os.banderas` en
+- **Aplicar:** el negocio nace en v3 (ADR-0191); procedimientos y ruteo se encienden; volver a
+  legacy se rechaza. Cada cambio deja su fila `agent_os.banderas` en
   `audit_log` con el actor (quién) y la fecha (cuándo); sin cambios no audita.
 - **Bloqueos:** sin `AOS_CONNECTION_ROUTING` → 409 `agent_os_bloqueado` con los bloqueos y nada
   escrito.
@@ -126,7 +124,7 @@ async def test_quien_no_es_master_recibe_403(app_client, negocios, monkeypatch) 
         async with get_session() as session:
             await fijar_banderas(session, a, BanderasAOS(runtime="v3"), admin_id=tester_id)
     assert rechazo.value.codigo == "permiso"
-    assert await _banderas(a) == ("legacy", False, "off")
+    assert await _banderas(a) == ("v3", False, "off")  # nace en v3 (ADR-0191)
     master = await api_headers(app_client, a)
     assert (await app_client.get(_url(uuid.uuid4()), headers=master)).status_code == 404
 
@@ -142,7 +140,7 @@ async def test_combinaciones_fuera_de_orden_se_rechazan(app_client, negocios) ->
     assert (await app_client.put(_url(a), headers=master, json=_objetivo(routing="on"))).status_code == 422
     # El rol de la aplicación ya no escribe las banderas directo (trigger de 0097).
     with pytest.raises(DBAPIError, match="aos_fijar_banderas"):
-        await _sql(None, "update tenants set aos_runtime = 'v3' where id = :t", t=a)
+        await _sql(None, "update tenants set aos_procedures = true where id = :t", t=a)
     # Con admin, la función no acepta la llamada bajo el tenant_scope de un negocio.
     from core.db.session import get_session
     from core.kernel.banderas import BanderasAOS, BanderasRechazadas, fijar_banderas
@@ -154,7 +152,7 @@ async def test_combinaciones_fuera_de_orden_se_rechazan(app_client, negocios) ->
             async with get_session() as session:
                 await fijar_banderas(session, a, BanderasAOS(runtime="v3"), admin_id=master_id)
     assert rechazo.value.codigo == "permiso"
-    assert await _banderas(a) == ("legacy", False, "off")
+    assert await _banderas(a) == ("v3", False, "off")
     assert await _auditoria(a) == []
 
 
@@ -163,21 +161,8 @@ async def test_simular_aplicar_y_no_volver_con_auditoria_y_sin_tocar_al_otro(app
     master = await api_headers(app_client, a)
     b_antes = (await _banderas(b), await _contar(b, "agents"), await _contar(b, "connection_releases"))
 
-    # Simular: faltan los backfills; se reportan como pasos y nada se escribe.
-    r = await app_client.post(_url(a, simular=True), headers=master, json=_objetivo("v3"))
-    assert r.status_code == 200, r.text
-    sim = r.json()
-    assert sim["accion"] == "por_preparar" and not sim["bloqueos"], sim
-    assert sim["pasos"][0] == "runtime_v3" and any("backfill-agentes" in p for p in sim["pasos"]), sim["pasos"]
-    assert await _banderas(a) == ("legacy", False, "off")
-    assert await _contar(a, "agents") == 0 and await _contar(a, "connection_releases") == 0
-
-    # Aplicar: backfills del negocio + migrar-a-v3 + la bandera, auditado.
-    r = await app_client.put(_url(a), headers=master, json=_objetivo("v3"))
-    assert r.status_code == 200, r.text
-    assert r.json()["accion"] == "aplicado" and r.json()["despues"] == _objetivo("v3"), r.json()
+    # Nace en v3 (migración 0126, ADR-0191): ya no hay paso legacy → v3 desde el panel.
     assert await _banderas(a) == ("v3", False, "off")
-    assert await _contar(a, "agents") > 0 and await _contar(a, "connection_releases") > 0
     # Repetir el mismo estado: sin cambios, sin auditar.
     r = await app_client.put(_url(a), headers=master, json=_objetivo("v3"))
     assert r.json()["accion"] == "sin_cambios"
@@ -200,10 +185,8 @@ async def test_simular_aplicar_y_no_volver_con_auditoria_y_sin_tocar_al_otro(app
 
     # Auditoría: quién y qué, una fila por cambio real, en el negocio operado.
     filas = await _auditoria(a)
-    assert [f[0] for f in filas] == ["admin:admin@local"] * 2
-    assert [(f[2]["runtime"], f[2]["procedures"], f[2]["routing"]) for f in filas] == [
-        ("v3", False, "off"), ("v3", True, "shadow"),
-    ]
+    assert [f[0] for f in filas] == ["admin:admin@local"]
+    assert [(f[2]["runtime"], f[2]["procedures"], f[2]["routing"]) for f in filas] == [("v3", True, "shadow")]
     estado = (await app_client.get(_url(a), headers=master)).json()
     assert estado["ultimo_cambio"]["actor"] == "admin:admin@local" and estado["ultimo_cambio"]["fecha"]
     assert (estado["runtime"], estado["procedures"], estado["routing"]) == ("v3", True, "shadow")
