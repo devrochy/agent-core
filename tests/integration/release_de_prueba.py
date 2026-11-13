@@ -103,6 +103,18 @@ async def republicar(
     return anteriores
 
 
+async def _catalogos_del_arranque(modulos: list[Any]) -> None:
+    """Lo que espeja el arranque de la app y los tests no corren: el catálogo de tipos de conexión
+    (p. ej. `whatsapp_waweb`) y `pack_versions` (sin él, el build falla `habilidad_no_disponible`).
+    Con xdist cada worker puede llegar aquí sin que otro archivo lo haya hecho antes."""
+    from core.gateway.connection_types import sync_connection_types
+    from core.releases.packs import sync_packs
+
+    await sync_connection_types()
+    reporte = await sync_packs(modulos)
+    assert not reporte.fallo, reporte.errores
+
+
 async def release_inicial(tenant_id: uuid.UUID, modules: Any = None, **_: Any) -> Any:
     """La release 1 de las conexiones conversacionales del negocio, con agentes nativos (Coordinador +
     especialista «atencion», ADR-0192) en las que todavía no tienen quién atienda. Reemplaza en los
@@ -110,14 +122,12 @@ async def release_inicial(tenant_id: uuid.UUID, modules: Any = None, **_: Any) -
     from sqlalchemy import text
 
     from core.db.session import get_session
-    from core.gateway.connection_types import sync_connection_types
     from core.plugin_manager import plugin_manager
     from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
-    # El catálogo de tipos (p. ej. `whatsapp_waweb`) lo espeja el arranque de la app; los tests no arrancan.
-    await sync_connection_types()
     modulos = list(modules) if modules is not None else (plugin_manager.list_modules() or plugin_manager.scan())
+    await _catalogos_del_arranque(modulos)
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             sin_agente = [
@@ -239,13 +249,12 @@ async def montar_release_en(tenant_id: uuid.UUID, canal: str = "whatsapp") -> uu
     from sqlalchemy import text
 
     from core.db.session import get_session
-    from core.gateway.connection_types import sync_connection_types
     from core.plugin_manager import plugin_manager
     from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
     canal_conexion, proveedor, tipo = _TIPO_POR_CANAL[canal]
-    await sync_connection_types()
+    await _catalogos_del_arranque(plugin_manager.list_modules() or plugin_manager.scan())
     conexion = uuid.uuid4()
     async with tenant_scope(tenant_id):
         async with get_session() as session:

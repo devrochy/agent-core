@@ -282,8 +282,8 @@ async def test_premium_permite_cinco_agentes_y_el_sexto_da_409(app_client) -> No
     )
     async with tenant_scope(tid):
         async with get_session() as session:
-            await instancias.asegurar_instancias_base(session, tid, cid2)
-        nueva = await instancias.agregar_instancia(tid, cid2, uuid.UUID(agentes[0]))
+            await instancias.asegurar_instancias_base(session, tid, cid2)  # hereda el por defecto (esp0)
+        nueva = await instancias.agregar_instancia(tid, cid2, uuid.UUID(agentes[1]))
     assert nueva is not None
     assert await _agentes(tid) == 5
 
