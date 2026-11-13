@@ -11,10 +11,8 @@
    negocio, idempotente, y publica la conversión actual si su hash cambió) y congela esa
    versión, no "la última". Así la release 1 sale del v2 activo aunque se haya editado en el
    panel legacy después del backfill o el binario cambie la conversión (adenda de HU-AOS-13 en
-   ADR-0113: "refrescar la versión es decisión del build"). Con `v3` se refresca solo el
-   General y solo si su última versión la produjo el lector tolerante (`legacy_agent_spec_id`
-   no nulo): así un General que todavía no declara los procedimientos publicados (HU-AOS-16)
-   los declara en su siguiente build, y uno que el dueño ya editó no se pisa.
+   ADR-0113: "refrescar la versión es decisión del build"). Con `v3` no se refresca nada desde el
+   v2: Configuración ya no edita agentes (ADR-0191 §4) y cada agente congela su última versión.
 2. **Habilidades.** Las efectivas en el scope de la conexión (ADR-0118 §2, HU-AOS-16): si la
    conexión tiene instalaciones propias vivas (`pack_installations`, scope `connection`),
    SOLO esas, sin merge; si no, las habilitadas del negocio (`enabled_business_packs` del v2
@@ -121,38 +119,14 @@ async def _conexion_conversacional(tenant_id: uuid.UUID, connection_id: uuid.UUI
 
 
 # ------------------------------------------------------------------ 1. agentes
-async def _general_sigue_siendo_del_lector(tenant_id: uuid.UUID) -> bool:
-    """¿La última versión del General la produjo el lector tolerante? (`legacy_agent_spec_id`
-    no nulo.) Si el dueño publicó una versión propia, no se refresca."""
-    from core.agents.claves import KEY_GENERAL
-    from core.agents.instancias import agentes_base
-
-    async with get_session() as session:
-        aid = (await agentes_base(session, tenant_id)).get(KEY_GENERAL)
-        if aid is None:
-            return False
-        fila = (
-            await session.execute(
-                text(
-                    "SELECT legacy_agent_spec_id FROM agent_versions WHERE tenant_id = :t AND agent_id = :a "
-                    "ORDER BY version DESC LIMIT 1"
-                ),
-                {"t": tenant_id, "a": aid},
-            )
-        ).first()
-    return fila is not None and fila[0] is not None
-
 
 async def refrescar_desde_v2(
-    tenant_id: uuid.UUID, modules: list[Any], *, solo_general: bool = False
+    tenant_id: uuid.UUID, modules: list[Any]
 ) -> dict[uuid.UUID, uuid.UUID]:
     """`{agent_id: version_id}` del Coordinador y del General que corresponden al AgentSpec v2
     activo con el binario de hoy (ver el docstring del módulo). Publica una versión nueva solo si
     la conversión cambió; nunca escribe en `agent_specs` salvo la siembra del default que hace
-    el backfill (la misma que haría el loop en su primer turno).
-
-    `solo_general` (negocios v3, HU-AOS-16): no corre el backfill y publica solo el General; el
-    Coordinador queda en su última versión."""
+    el backfill (la misma que haría el loop en su primer turno)."""
     from core.agents import versiones
     from core.agents.backfill_agentes import backfill_agentes
     from core.agents.claves import KEY_COORDINADOR, KEY_GENERAL
@@ -164,13 +138,10 @@ async def refrescar_desde_v2(
     )
     from core.kernel.procedures import catalogo_de_acciones
 
-    if not solo_general:
-        reporte = await backfill_agentes(dry_run=False, tenant_id=tenant_id, modules=modules)
-        problemas = [p.mensaje for p in (*reporte.bloqueados, *reporte.errores)]
-        if problemas:
-            raise ErrorDelBuild(
-                "backfill_pendiente", "El negocio no pasa el backfill de agentes.", problemas[:5]
-            )
+    reporte = await backfill_agentes(dry_run=False, tenant_id=tenant_id, modules=modules)
+    problemas = [p.mensaje for p in (*reporte.bloqueados, *reporte.errores)]
+    if problemas:
+        raise ErrorDelBuild("backfill_pendiente", "El negocio no pasa el backfill de agentes.", problemas[:5])
     leido = await leer_spec_activo(tenant_id)
     if leido is None:
         raise ErrorDelBuild("sin_spec", "El negocio no tiene AgentSpec activo.")
@@ -185,8 +156,6 @@ async def refrescar_desde_v2(
         KEY_COORDINADOR: conversion.kernel.model_dump(mode="json", by_alias=True),
         KEY_GENERAL: conversion.general.model_dump(mode="json", by_alias=True),
     }
-    if solo_general:
-        contenidos.pop(KEY_COORDINADOR)
     del conversion
     async with get_session() as session:
         ids = await agentes_base(session, tenant_id)
@@ -637,12 +606,9 @@ async def armar_manifiesto(
         if refrescar is None:
             async with _sesion() as session:
                 legacy = (await banderas_del_negocio(session, tenant_id)).runtime == "legacy"
-            if legacy:
-                fijadas = await refrescar_desde_v2(tenant_id, modulos)
-            elif await _general_sigue_siendo_del_lector(tenant_id):
-                fijadas = await refrescar_desde_v2(tenant_id, modulos, solo_general=True)
-            else:
-                fijadas = {}
+            # En v3 Configuración ya no edita agentes (ADR-0191 §4): el General no se refresca desde
+            # el AgentSpec v2; solo un negocio legacy lo hace, hasta retirar ese camino.
+            fijadas = await refrescar_desde_v2(tenant_id, modulos) if legacy else {}
         else:
             fijadas = await refrescar_desde_v2(tenant_id, modulos) if refrescar else {}
     instancias = await _componentes(tenant_id, connection_id, fijadas, catalogo)
