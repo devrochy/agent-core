@@ -453,7 +453,7 @@ async def _inicializar_al_alta(
     session: Any, tenant_id: uuid.UUID, conexion: uuid.UUID, instancias_de: uuid.UUID | None
 ) -> None:
     agentes = await agentes_base(session, tenant_id)
-    if KEY_COORDINADOR not in agentes or KEY_GENERAL not in agentes:
+    if KEY_COORDINADOR not in agentes:
         return
     clonadas = 0
     if instancias_de is not None and instancias_de != conexion:
@@ -468,8 +468,8 @@ async def _inicializar_al_alta(
             coordinador=base.coordinador,
             general=base.general,
         )
-    # Todo turno corre sobre una release (ADR-0191): la conexión pide su release 1 por el outbox,
-    # que la construye después del commit de esta transacción.
+    # Todo turno corre sobre una release (ADR-0191): la conexión pide por el outbox, después del commit,
+    # su primer especialista (el del preset, ADR-0192 §1) y su release 1.
     from core.events.outbox import emit_domain
     from core.shared.events import ON_CONNECTION_RELEASE_1
 

@@ -1,8 +1,9 @@
-"""HU-AOS-53 · El General y el Coordinador nacen con el negocio (SPEC-39).
+"""ADR-0192 (HU-AOS-68) · El Coordinador nace con el negocio, sin General.
 
-Contra el stack real, sin LLM ni red: el alta deja los dos agentes reservados con su versión, el
-negocio sigue en `aos_runtime = legacy` (no cambia cómo atiende) y el recorte del General queda
-encendido solo en un negocio NUEVO. Repetir el alta no duplica nada ni pisa la bandera del master.
+Contra el stack real, sin LLM ni red: el alta deja solo el Coordinador con su versión y el negocio en
+v3; un negocio sin conexión no tiene especialista (D-35). Con la primera conexión conversacional el
+outbox (`connection.release_1`) crea el especialista del preset y la release 1. Repetir el alta no
+duplica nada.
 """
 
 from __future__ import annotations
@@ -48,19 +49,17 @@ async def _agentes(tid: uuid.UUID) -> dict[str, str]:
     return {k: kind for k, kind in filas}
 
 
-async def test_el_alta_crea_general_y_coordinador_con_su_version() -> None:
+async def test_el_alta_crea_solo_el_coordinador_con_su_version() -> None:
     from core.alta_negocio import onboard_tenant
 
-    slug = uniq("hu53")
-    tid, pasos = await onboard_tenant(name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
+    slug = uniq("hu68")
+    tid, pasos = await onboard_tenant(name=f"HU68 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
 
-    assert await _agentes(tid) == {"coordinador": "core", "general": "specialist"}
-    versiones = await _sql(
-        tid, "select a.key from agent_versions v join agents a on a.id = v.agent_id order by a.key"
-    )
-    assert [k for (k,) in versiones] == ["coordinador", "general"]
-    assert "agentes General y Coordinador listos" in pasos
-    assert "recorte del General encendido" in pasos
+    assert await _agentes(tid) == {"coordinador": "core"}
+    versiones = await _sql(tid, "select a.key, v.contract from agent_versions v join agents a on a.id = v.agent_id")
+    assert versiones == [("coordinador", "kernelspec/1")]
+    assert "Coordinador listo" in pasos
+    assert not any("General" in p for p in pasos)
 
 
 async def test_sin_agentes_base_el_alta_no_crea_agentes_ni_runtime() -> None:
@@ -73,42 +72,18 @@ async def test_sin_agentes_base_el_alta_no_crea_agentes_ni_runtime() -> None:
     )
 
     assert await _agentes(tid) == {}
-    assert not any("General" in p or "runtime v3" in p for p in pasos)
+    assert not any("Coordinador" in p or "runtime v3" in p for p in pasos)
 
 
-async def test_el_negocio_nuevo_enciende_el_recorte_y_sigue_en_legacy() -> None:
+async def test_repetir_el_alta_no_duplica_el_coordinador() -> None:
     from core.alta_negocio import onboard_tenant
 
-    slug = uniq("hu53")
-    tid, _ = await onboard_tenant(name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
+    slug = uniq("hu68")
+    tid, _ = await onboard_tenant(name=f"HU68 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
+    await onboard_tenant(name=f"HU68 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False, tenant_id=tid)
 
-    ajustes = (await _sql(tid, "select settings->'agent_os'->>'recortar_general', settings->'agent_os'->>'runtime' "
-                               "from tenants where id = :t", t=tid))[0]
-    assert ajustes[0] == "true"
-    # No se migra el runtime en el alta (P-34): el negocio atiende como antes.
-    assert ajustes[1] in (None, "legacy")
-
-
-async def test_repetir_el_alta_no_duplica_ni_pisa_la_bandera_del_master() -> None:
-    from core.alta_negocio import onboard_tenant
-
-    slug = uniq("hu53")
-    tid, _ = await onboard_tenant(name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
-    await _sql(
-        tid,
-        "update tenants set settings = jsonb_set(settings, '{agent_os,recortar_general}', 'false'::jsonb) "
-        "where id = :t",
-        t=tid,
-    )
-
-    _, pasos = await onboard_tenant(
-        name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False, tenant_id=tid
-    )
-
-    assert await _agentes(tid) == {"coordinador": "core", "general": "specialist"}
-    assert "recorte del General encendido" not in pasos
-    bandera = (await _sql(tid, "select settings->'agent_os'->>'recortar_general' from tenants where id = :t", t=tid))[0][0]
-    assert bandera == "false"
+    assert await _agentes(tid) == {"coordinador": "core"}
+    assert await _sql(tid, "select count(*) from agent_versions") == [(1,)]
 
 
 # ------------------------------------------------------------------ runtime del negocio nuevo (P-34)
@@ -116,34 +91,48 @@ async def _runtime(tid: uuid.UUID) -> str:
     return (await _sql(tid, "select aos_runtime from tenants where id = :t", t=tid))[0][0]
 
 
-async def test_el_negocio_nuevo_nace_en_v3_y_queda_auditado(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_el_negocio_nuevo_nace_en_v3() -> None:
     from core.alta_negocio import onboard_tenant
 
-    slug = uniq("hu53")
-    tid, pasos = await onboard_tenant(name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
+    slug = uniq("hu68")
+    tid, pasos = await onboard_tenant(name=f"HU68 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
 
     assert await _runtime(tid) == "v3"  # nace así (migración 0126), sin paso de migración en el alta
     assert not any(p.startswith("runtime v3") for p in pasos)
-    # El recorte lo escribe el escritor auditado, no un UPDATE suelto.
-    auditoria = await _sql(tid, "select actor from audit_log where action = 'agent_os_recorte_general'")
-    assert [a for (a,) in auditoria] == ["alta"]
 
 
-async def test_fijar_bandera_audita_solo_si_cambia() -> None:
-    from core.agents import coordinacion
+async def test_la_primera_conexion_trae_el_especialista_del_preset_y_su_release() -> None:
+    """D-35: sin conexión no hay especialista; con la primera, el handler del outbox aplica los agentes
+    del preset (el primero queda por defecto) y construye la release 1."""
     from core.alta_negocio import onboard_tenant
+    from core.db.session import get_session
+    from core.events.core_handlers import on_connection_release_1
+    from core.gateway import chat_web_conexion
     from core.shared.tenant import tenant_scope
 
-    slug = uniq("hu53")
-    tid, _ = await onboard_tenant(name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
+    slug = uniq("hu68")
+    tid, _ = await onboard_tenant(
+        name=f"HU68 {slug}", slug=slug, preset="comercio", plan="premium", sembrar_ejemplos=False
+    )
+    assert await _agentes(tid) == {"coordinador": "core"}
+
     async with tenant_scope(tid):
-        assert await coordinacion.estado_de_bandera(tid) is True
-        assert await coordinacion.fijar_bandera(tid, True, actor="cli") is False  # ya estaba
-        assert await coordinacion.fijar_bandera(tid, False, actor="cli:test") is True
-        assert await coordinacion.estado_de_bandera(tid) is False
-    filas = await _sql(tid, "select actor from audit_log where action = 'agent_os_recorte_general' order by created_at")
-    assert [a for (a,) in filas] == ["alta", "cli:test"]
-    # No pisa el resto de settings.agent_os.
-    assert (await _sql(tid, "select settings->>'language' from tenants where id = :t", t=tid))[0][0] == "es"
+        async with get_session() as session:
+            await chat_web_conexion.guardar_widget(session, tid, enabled=False, allowed_origins=[])
+            conexion = (await chat_web_conexion.conexion_del_negocio(session, tid)).id
+    assert await _sql(tid, "select count(*) from domain_events where topic = 'connection.release_1'") == [(1,)]
+
+    async with tenant_scope(tid):
+        await on_connection_release_1(connection_id=str(conexion))
+    instancias = await _sql(
+        tid,
+        "select a.key, i.role, i.is_default from agent_instances i join agents a on a.id = i.agent_id "
+        "where i.connection_id = :c and i.deleted_at is null order by i.role, a.key",
+        c=conexion,
+    )
+    assert instancias[0] == ("coordinador", "core", False)
+    especialistas = [fila for fila in instancias if fila[1] == "specialist"]
+    assert especialistas and "general" not in {k for k, _r, _d in especialistas}
+    assert sum(1 for _k, _r, d in especialistas if d) == 1
+    activa = await _sql(tid, "select active_release_id is not null from channel_connections where id = :c", c=conexion)
+    assert activa == [(True,)]

@@ -94,11 +94,19 @@ async def _negocio(tenant_id: uuid.UUID, reporte: ReporteReleases, modulos: list
     if reporte.dry_run:
         reporte.conexiones["por_construir"] += len(pendientes)
         return
-    try:
-        fijadas = await refrescar_desde_v2(tenant_id, modulos)
-    except (ErrorDelBuild, DBAPIError) as exc:
-        reporte.errores.append(Problema(tenant_id, None, _mensaje(exc)[:500]))
-        return
+    from core.kernel.banderas import banderas_del_negocio
+
+    async with get_session() as session:
+        legacy = (await banderas_del_negocio(session, tenant_id)).runtime == "legacy"
+    # Un negocio v3 congela las versiones nativas de sus agentes (ADR-0191); solo uno legacy
+    # convierte su AgentSpec v2 con el lector tolerante, hasta retirar ese camino.
+    fijadas: dict[uuid.UUID, uuid.UUID] = {}
+    if legacy:
+        try:
+            fijadas = await refrescar_desde_v2(tenant_id, modulos)
+        except (ErrorDelBuild, DBAPIError) as exc:
+            reporte.errores.append(Problema(tenant_id, None, _mensaje(exc)[:500]))
+            return
     for cid in pendientes:
         try:
             resultado = await construir(
@@ -110,7 +118,15 @@ async def _negocio(tenant_id: uuid.UUID, reporte: ReporteReleases, modulos: list
                 notas="Release 1 (backfill HU-AOS-14).",
             )
             await promover(tenant_id, cid, resultado.release_id, actor=ACTOR, motivo="release_1")
-        except (ErrorDelBuild, DBAPIError, LookupError, RuntimeError) as exc:
+        except ErrorDelBuild as exc:
+            if exc.codigo != "sin_especialista":
+                reporte.errores.append(Problema(tenant_id, cid, _mensaje(exc)[:500]))
+                log.warning("backfill_releases_error", tenant_id=str(tenant_id), connection_id=str(cid),
+                            error=_mensaje(exc)[:300])
+            else:  # nadie atiende todavía (ADR-0192 §2): no es un error, llega con su especialista
+                reporte.conexiones["sin_especialista"] += 1
+            continue
+        except (DBAPIError, LookupError, RuntimeError) as exc:
             reporte.errores.append(Problema(tenant_id, cid, _mensaje(exc)[:500]))
             log.warning(
                 "backfill_releases_error",

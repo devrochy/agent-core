@@ -15,3 +15,9 @@
 - Sin release no hay turno (ADR-0191 §1): un negocio v3 sin release activa ya no responde con el AgentSpec v2, tampoco en la conexión interna del Centro de pruebas. El playground, sin conexión elegida, prueba un negocio v3 por su conexión conversacional con release activa (la principal primero).
 - Configuración deja de editar agentes (decisión del dueño del 2026-11-13, ADR-0191 §4): en un negocio v3 el build ya no refresca el General desde el AgentSpec v2. Identidad, Voz y Cerebro quedan como datos del negocio para el contenido inicial de un agente nuevo; cada agente se edita en su ficha.
 - Hacia el retiro del General (ADR-0192): el build falla `sin_especialista` si la conexión no tiene un especialista habilitado por defecto; el primer especialista habilitado que se agrega a una conexión sin agente por defecto queda por defecto; la release 1 se construye para toda conexión sin release activa (también la que solo tiene candidatas).
+
+### Retiro del General, primera parte (HU-AOS-68, ADR-0192)
+- El alta crea solo el Coordinador (`core/agents/base.py`: `KernelSpec` por defecto con la voz y el presupuesto del negocio, sin lector tolerante), antes de aplicar el preset. Sin General ni bandera de recorte.
+- El primer especialista nace con la primera conexión conversacional (D-35): el handler de `connection.release_1` aplica los agentes del preset del negocio y construye la release 1; sin especialista posible no reintenta.
+- Los especialistas del preset y del editor parten de la configuración del negocio (`contenido_base`) y nacen con los bindings de todas sus tools propias (su pack y las esenciales del core).
+- La release 1 de un negocio v3 congela las versiones nativas de sus agentes, sin refrescar desde el AgentSpec v2.

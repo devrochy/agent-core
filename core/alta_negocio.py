@@ -104,38 +104,41 @@ async def motivo_para_rechazar_alta_de_tester(slug: str, admin_email: str | None
 
 
 async def _agentes_base_al_alta(tenant_id: uuid.UUID, *, nuevo: bool) -> list[str]:
-    """El Coordinador y el General nacen con el negocio (HU-AOS-53, SPEC-39).
+    """El Coordinador nace con el negocio (ADR-0192 §1), antes del preset: sin General. Sus
+    instancias en las conexiones conversacionales que ya existan; cada una pide su release 1 y, con
+    ella, el primer especialista del preset (con la primera conexión, D-35). Frontera deliberada: un
+    fallo se registra y el alta sigue. `nuevo` queda por compatibilidad de firma (los tests la parchean)."""
+    del nuevo
+    from sqlalchemy import text
 
-    Reusa el backfill B2 (`backfill_agentes`, idempotente): crea los dos agentes reservados con su
-    versión, derivados del AgentSpec v2 que acaba de dejar el alta, y las instancias de las conexiones
-    que ya existan (las posteriores las crea `instancias_de_conexion_nueva`). El negocio ya nace en
-    `aos_runtime = 'v3'` (migración 0126, ADR-0191).
-    En un negocio NUEVO deja encendido el recorte del General (`agent_os.recortar_general`), de modo
-    que cada especialista que cree el asistente le quite al General lo suyo; un negocio que ya existía
-    conserva su bandera (la enciende el master). Frontera deliberada: un fallo se registra y el alta
-    sigue, el backfill lo repara."""
-    pasos: list[str] = []
+    from core.agents.base import asegurar_coordinador
+    from core.agents.instancias import instancias_de_conexion_nueva
+    from core.db.session import get_session
+
     try:
-        from core.agents.backfill_agentes import backfill_agentes
-
-        reporte = await backfill_agentes(dry_run=False, tenant_id=tenant_id)
-        if reporte.errores or reporte.bloqueados:
-            problema = (reporte.errores or reporte.bloqueados)[0].mensaje
-            log.warning("alta_agentes_base_pendiente", tenant_id=str(tenant_id), motivo=problema)
-            pasos.append("agentes base pendientes (los crea el backfill)")
-        else:
-            pasos.append("agentes General y Coordinador listos")
+        async with tenant_scope(tenant_id):
+            await asegurar_coordinador(tenant_id)
+            async with get_session() as session:
+                conexiones = [
+                    fila[0]
+                    for fila in (
+                        await session.execute(
+                            text(
+                                "select cc.id from channel_connections cc join connection_types ct on ct.id = cc.type_id "
+                                "where cc.tenant_id = :t and cc.deleted_at is null and ct.produces_conversations "
+                                "order by cc.created_at"
+                            ),
+                            {"t": tenant_id},
+                        )
+                    ).all()
+                ]
+                for conexion in conexiones:
+                    await instancias_de_conexion_nueva(session, tenant_id, conexion)
+                await session.commit()
     except Exception:  # frontera deliberada: el alta no depende del Agent OS
         log.warning("alta_agentes_base_fallo", tenant_id=str(tenant_id), exc_info=True)
-        pasos.append("agentes base pendientes (los crea el backfill)")
-        return pasos
-    if nuevo:
-        from core.agents.coordinacion import fijar_bandera
-
-        async with tenant_scope(tenant_id):
-            await fijar_bandera(tenant_id, True, actor="alta")
-        pasos.append("recorte del General encendido")
-    return pasos
+        return ["Coordinador pendiente (reintentar el alta)"]
+    return ["Coordinador listo"]
 
 
 async def onboard_tenant(
@@ -340,6 +343,10 @@ async def onboard_tenant(
                 continue
         steps.append(f"pack {pack} configurado y activo")
 
+    # El Coordinador antes del preset (ADR-0192 §1): los agentes del preset lo necesitan.
+    if agentes_base:
+        steps.extend(await _agentes_base_al_alta(tenant_id, nuevo=negocio_nuevo))
+
     if preset:
         from core.presets.apply import apply_preset
 
@@ -354,9 +361,6 @@ async def onboard_tenant(
             steps.extend(seed_tenant_flow(slug, list(packs)))
         except Exception:
             log.warning("tenant_flow_seed_failed", slug=slug, exc_info=True)
-
-    if agentes_base:
-        steps.extend(await _agentes_base_al_alta(tenant_id, nuevo=negocio_nuevo))
 
     onboarding.ensure_tenant_docs(slug, name, business_description)
     await onboarding.ensure_brand_voice(tenant_id, slug)

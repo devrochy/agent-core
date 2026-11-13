@@ -126,7 +126,9 @@ def test_derivar_contenido_acota_al_fin_del_agente() -> None:
     )
     assert avisos == []
     assert contenido["procedures"] == [{"id": "pack_calendar.agendar_cita", "version": "^1.0", "overrides": None}]
-    assert [b["tool"] for b in contenido["tools"]] == ["check_availability", "escalate_to_human"]
+    # Las propias que la base no traía (aquí `crear_lead`, opcional acotada de comercio) también llevan
+    # binding (ADR-0192 §1): sin General que las herede, HU-ARCH-34 las negaría.
+    assert [b["tool"] for b in contenido["tools"]] == ["check_availability", "escalate_to_human", "crear_lead"]
     assert [g["name"] for g in contenido["guardrails"]] == ["g2"]  # el required_tool de ventas no sigue
     assert [p["name"] for p in contenido["playbooks"]] == ["citas", "propio_del_negocio"]
     assert contenido["declarativeTools"] == []

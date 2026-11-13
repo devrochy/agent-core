@@ -216,14 +216,19 @@ async def on_appointment_no_show(**payload: Any) -> None:
 
 
 async def on_connection_release_1(connection_id: str | None = None, **_: Any) -> None:
-    """Release 1 de una conexión nueva (ADR-0191). Idempotente: `backfill_releases` solo construye
-    las conexiones del negocio sin ninguna release. Un error sube para que el outbox reintente."""
+    """Conexión nueva (ADR-0191, ADR-0192 §1): si nadie atiende, aplica los agentes del preset del
+    negocio (el primer especialista nace con la primera conexión) y construye la release 1 de las
+    conexiones sin release activa. Idempotente; sin especialista posible no reintenta (lo registra).
+    Un error del build sube para que el outbox reintente."""
     tenant_id = get_current_tenant_id()
     if tenant_id is None:
         raise RuntimeError("connection.release_1 fuera del tenant_scope de su negocio")
+    from core.presets.agentes import backfill_presets_v2
     from core.releases.release_uno import backfill_releases
 
-    reporte = await backfill_releases(dry_run=False, tenant_id=uuid.UUID(str(tenant_id)))
+    tid = uuid.UUID(str(tenant_id))
+    await backfill_presets_v2(tenant_ids=[tid], aplicar=True)
+    reporte = await backfill_releases(dry_run=False, tenant_id=tid)
     if reporte.fallo:
         problema = reporte.errores[0]
         raise RuntimeError(f"release 1 pendiente ({problema.connection_id}): {problema.mensaje[:200]}")

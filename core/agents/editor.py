@@ -208,40 +208,19 @@ async def habilitados_del_negocio(tenant_id: uuid.UUID) -> set[str]:
     return set(enabled_business_packs(leido[1])) if leido is not None else set()
 
 
-async def _base_del_general(tenant_id: uuid.UUID) -> dict[str, Any]:
-    """La última versión del General (modelo, persona, memoria...) o los defaults del contrato.
-
-    Si el General fue recortado (HU-AOS-52, `coordinacion.recortar_general`), sus `tools` y `playbooks`
-    ya no traen lo del pack que pasó a un especialista; se recuperan de sus versiones anteriores (la más
-    reciente que los tuvo) para que otra plantilla siga derivando con la configuración que el dueño dio."""
-    from core.agents.claves import KEY_GENERAL
+async def _base_del_negocio(tenant_id: uuid.UUID) -> dict[str, Any]:
+    """Base de un agente nuevo desde la configuración del negocio (ADR-0192 §4: sin General;
+    ADR-0191 §4: Configuración siembra el contenido inicial, no edita agentes existentes)."""
+    from core.agents.base import contenido_base
+    from core.agents.spec import leer_spec_activo
     from core.agents.versiones import contenido_inicial
+    from core.presets.agentes import _playbooks_de_packs
 
-    async with get_session() as session:
-        filas = (
-            await session.execute(
-                text(
-                    "SELECT v.content FROM agent_versions v JOIN agents a ON a.id = v.agent_id "
-                    "AND a.tenant_id = v.tenant_id WHERE v.tenant_id = :t AND a.key = :k "
-                    "AND a.deleted_at IS NULL ORDER BY v.version DESC LIMIT 20"
-                ),
-                {"t": tenant_id, "k": KEY_GENERAL},
-            )
-        ).all()
-    versiones_v3 = [dict(f[0]) for f in filas if isinstance(f[0], dict) and f[0].get("contract") == "agentspec/3"]
-    if not versiones_v3:
+    leido = await leer_spec_activo(tenant_id)
+    if leido is None:
         return contenido_inicial("specialist")
-    base = versiones_v3[0]
-    for campo, clave in (("tools", "tool"), ("playbooks", "name")):
-        vistos = {x.get(clave) for x in base.get(campo) or [] if isinstance(x, dict)}
-        recuperados = [
-            x
-            for antes in versiones_v3[1:]
-            for x in antes.get(campo) or []
-            if isinstance(x, dict) and x.get(clave) not in vistos and not vistos.add(x.get(clave))
-        ]
-        if recuperados:
-            base[campo] = [*(base.get(campo) or []), *recuperados]
+    base = contenido_base(leido[1], playbooks_de_packs=_playbooks_de_packs())
+    del leido
     return base
 
 
@@ -343,7 +322,7 @@ async def crear_desde_plantilla(
     try:
         contenido, avisos = derivar_contenido(
             plantilla,
-            await _base_del_general(tenant_id),
+            await _base_del_negocio(tenant_id),
             catalogo=catalogo,
             habilitados=habilitados,
             publicados=publicados,
