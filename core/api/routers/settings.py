@@ -57,7 +57,6 @@ from core.db.models import AppSettings, AuditLog
 from core.db.session import get_session
 from core.gateway import avisos_opciones
 from core.gateway.message_splitter import CAPS
-from core.kernel.banderas import banderas_del_negocio
 from core.kernel.fuera_de_horario import texto_por_defecto
 from core.kernel.horario_de_servicio import modo_del_horario
 from core.llm.difficulty_router import (
@@ -453,7 +452,6 @@ async def get_catalog_api(
         es_master=actua_como_master(principal.admin),
         guardrails_disponibles=_available_guardrails(spec),
         guardrails_info={g.name: (g.etiqueta, g.explicacion) for g in mcp_host.get_guardrails()},
-        aos_runtime=await _aos_runtime(principal.tenant_id),
     )
 
 
@@ -554,28 +552,22 @@ class AsistenteAplicar(AsistenteRespuestas):
     huella: str
 
 
-async def _aos_runtime(tenant_id) -> str:
-    async with get_session() as session:
-        return (await banderas_del_negocio(session, tenant_id)).runtime
-
-
 def _actuales_del_registro(app_settings: AppSettings | None, spec) -> dict[str, Any]:
     """Los valores de hoy con las claves del registro (las de `IdentitySettings` son las mismas)."""
     identidad = _identity_out(app_settings, spec, _available_guardrails(spec))
     return {k: v for k, v in identidad.model_dump().items() if k in POR_CLAVE}
 
 
-async def _proponer(seccion: str, respuestas: dict[str, Any], tenant_id) -> tuple[Propuesta, Any, str]:
+async def _proponer(seccion: str, respuestas: dict[str, Any], tenant_id) -> tuple[Propuesta, Any]:
     spec = await load_active_spec()
     app_settings = await _load_app_settings(tenant_id)
-    runtime = await _aos_runtime(tenant_id)
     try:
-        propuesta = resolver(seccion, respuestas, _actuales_del_registro(app_settings, spec), aos_runtime=runtime)
+        propuesta = resolver(seccion, respuestas, _actuales_del_registro(app_settings, spec))
     except RespuestasInvalidas as exc:
         raise ApiError(422, "validation_error", "Revisa las respuestas marcadas.", fields=exc.por_pregunta) from None
     except ValueError as exc:
         raise ApiError(404, "not_found", str(exc)) from None
-    return propuesta, spec, runtime
+    return propuesta, spec
 
 
 def _escribir_opcion(app_settings: AppSettings, persona: dict[str, Any], clave: str, valor: Any) -> None:
@@ -610,7 +602,7 @@ async def asistente_vista_previa(
 ) -> Propuesta:
     """Qué cambiaría el asistente con esas respuestas (valor actual → propuesto), sin escribir nada."""
     _exigir_negocio(principal)
-    propuesta, _, _ = await _proponer(seccion, payload.respuestas, principal.tenant_id)
+    propuesta, _ = await _proponer(seccion, payload.respuestas, principal.tenant_id)
     return propuesta
 
 
@@ -628,7 +620,7 @@ async def asistente_aplicar(
     # agente (habilidades, cerebro…) confirma una versión en medio, no se pisa en silencio.
     activo = await leer_spec_activo(principal.tenant_id)
     base_id = activo[0] if activo else None
-    propuesta, spec, _ = await _proponer(seccion, payload.respuestas, principal.tenant_id)
+    propuesta, spec = await _proponer(seccion, payload.respuestas, principal.tenant_id)
     if propuesta.huella != payload.huella:
         raise ApiError(409, "conflict", "La configuración cambió mientras decidías: revisa los cambios de nuevo.")
     if not propuesta.cambios:

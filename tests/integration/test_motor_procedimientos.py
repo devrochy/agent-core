@@ -11,7 +11,7 @@ Gherkin de la HU:
   (y no toca otro negocio ni otro pedido).
 - **Datos sin LLM:** botón de lista (con candidatos), imagen; un botón tras un episodio vencido no
   resucita la tarea.
-- **Modo sombra:** con `aos_runtime = v3` y `aos_procedures` apagada, el prompt, las acciones y la
+- **Modo sombra:** con `aos_procedures` apagada, el prompt, las acciones y la
   respuesta son idénticos y quedan las diferencias en `audit_log`.
 
 Modelo guionado (sin LLM real). Los procedimientos son de un pack de prueba registrado en el
@@ -94,12 +94,12 @@ async def _owner() -> AsyncIterator[Any]:
         await engine.dispose()
 
 
-async def _banderas(tid: uuid.UUID, runtime: str, procedimientos: bool) -> None:
+async def _banderas(tid: uuid.UUID, procedimientos: bool) -> None:
     async with _owner() as conn:
         await conn.execute(text("update tenants set aos_procedures = false where id = :t"), {"t": tid})
         await conn.execute(
-            text("update tenants set aos_runtime = :r, aos_procedures = :p where id = :t"),
-            {"t": tid, "r": runtime, "p": procedimientos},
+            text("update tenants set aos_procedures = :p where id = :t"),
+            {"t": tid, "p": procedimientos},
         )
 
 
@@ -330,14 +330,14 @@ def _resultado_de_tool(guion: _Guion, llamada: int) -> str:
 
 async def test_accion_fuera_de_etapa_no_se_ofrece_y_se_deniega(negocios: dict[str, uuid.UUID], monkeypatch) -> None:  # type: ignore[no-untyped-def]
     a = negocios["a"]
-    await _banderas(a, "v3", True)
+    await _banderas(a, True)
     try:
         conv = await _conversacion(a, "quiero comprar")
         task = await _tarea(conv)
         guion = _Guion([("crear_pedido_m", {}), "Primero necesito tu correo."])
         resultado = await _turno(conv, guion, monkeypatch, "quiero comprar")
     finally:
-        await _banderas(a, "legacy", False)
+        await _banderas(a, False)
     assert "crear_pedido_m" not in guion.tools[0] and "ver_opciones_m" in guion.tools[0]
     assert "no corresponde a la etapa actual (datos)" in _resultado_de_tool(guion, 1)
     assert "crear_pedido_m" not in LLAMADAS  # nunca se ejecutó
@@ -355,7 +355,7 @@ async def test_accion_fuera_de_etapa_no_se_ofrece_y_se_deniega(negocios: dict[st
 
 async def test_resolver_rechaza_el_plan_inexistente_y_no_guarda(negocios: dict[str, uuid.UUID]) -> None:
     a = negocios["a"]
-    await _banderas(a, "v3", True)
+    await _banderas(a, True)
     try:
         conv = await _conversacion(a, "el premium, mi correo es Ana@Correo.co")
         task = await _tarea(conv)
@@ -369,7 +369,7 @@ async def test_resolver_rechaza_el_plan_inexistente_y_no_guarda(negocios: dict[s
         r3 = await _comando(conv, motor, "actualizar_tarea", {"slots": {"plan": "premium", "correo": "Ana@Correo.co"}})
         assert r3.ok
     finally:
-        await _banderas(a, "legacy", False)
+        await _banderas(a, False)
     p = await _proyeccion(conv, task)
     assert p.slots["plan"]["value"] == "var-premium"  # el valor normalizado del resolver
     assert p.slots["correo"]["value"] == "ana@correo.co"
@@ -395,7 +395,7 @@ async def test_lo_ambiguo_no_confirma_y_el_si_escrito_solo_contesta_la_peticion_
     """Un dato acepta un asentimiento ("dale", adenda 2026-10-12 de ADR-0113), pero una pregunta
     no lo confirma, ni un sí del mismo turno de la petición."""
     a = negocios["a"]
-    await _banderas(a, "v3", True)
+    await _banderas(a, True)
     try:
         conv = await _conversacion(a, "mi correo es a@b.co", datetime.now(UTC) - timedelta(minutes=5))
         task = await _tarea(conv, plan=("var-basico", "llm", False))
@@ -420,7 +420,7 @@ async def test_lo_ambiguo_no_confirma_y_el_si_escrito_solo_contesta_la_peticion_
         # Un sí explícito que contesta la petición del turno anterior sí confirma.
         r = await _comando(conv, await _motor(conv, "Sí, confirmo"), "confirmar_tarea", {})
     finally:
-        await _banderas(a, "legacy", False)
+        await _banderas(a, False)
     assert r.ok, r.errores
     p = await _proyeccion(conv, task)
     assert p.slots["correo"]["confirmed"] is True and p.pending_confirmation is None
@@ -430,7 +430,7 @@ async def test_el_boton_firmado_confirma_sin_llm_y_uno_falso_no(negocios: dict[s
     from core.kernel.procedures.motor import PREFIJO_CONFIRMAR
 
     a = negocios["a"]
-    await _banderas(a, "v3", True)
+    await _banderas(a, True)
     try:
         conv = await _conversacion(a, "a@b.co")
         task = await _tarea(conv, plan=("var-basico", "llm", False))
@@ -443,7 +443,7 @@ async def test_el_boton_firmado_confirma_sin_llm_y_uno_falso_no(negocios: dict[s
         assert "confirmed" not in await _tipos(conv, task)
         await _entrada(conv, {"interactive_id": bueno})
     finally:
-        await _banderas(a, "legacy", False)
+        await _banderas(a, False)
     p = await _proyeccion(conv, task)
     assert p.slots["correo"]["confirmed"] is True and p.pending_confirmation is None
     assert p.stage == "datos"  # el consumer no transiciona: avanza el turno siguiente
@@ -451,7 +451,7 @@ async def test_el_boton_firmado_confirma_sin_llm_y_uno_falso_no(negocios: dict[s
 
 async def test_confirmacion_de_accion_atada_a_sus_argumentos_y_avance(negocios: dict[str, uuid.UUID], monkeypatch) -> None:  # type: ignore[no-untyped-def]
     a = negocios["a"]
-    await _banderas(a, "v3", True)
+    await _banderas(a, True)
     try:
         conv = await _conversacion(a)
         task = await _tarea(conv, "confirmar")
@@ -464,7 +464,7 @@ async def test_confirmacion_de_accion_atada_a_sus_argumentos_y_avance(negocios: 
         guion = _Guion([("aceptar_m", {"cotizacion": "B"}), ("aceptar_m", {"cotizacion": "A"}), ("crear_pedido_m", {}), "Listo."])
         await _turno(conv, guion, monkeypatch)
     finally:
-        await _banderas(a, "legacy", False)
+        await _banderas(a, False)
     assert "confirmation_required" in _resultado_de_tool(guion, 1)
     assert LLAMADAS == ["aceptar_m", "crear_pedido_m"]
     assert "crear_pedido_m" not in guion.tools[0] and "crear_pedido_m" in guion.tools[2]  # acciones de la etapa nueva
@@ -480,7 +480,7 @@ async def test_cierre_por_evento_del_outbox_solo_del_pedido_de_la_tarea(negocios
     a, b = negocios["a"], negocios["b"]
     tareas: dict[str, tuple[Any, uuid.UUID]] = {}
     for nombre, tid, ref in (("a", a, "REF-77"), ("otro_pedido", a, "REF-78"), ("b", b, "REF-77")):
-        await _banderas(tid, "v3", True)
+        await _banderas(tid, True)
         conv = await _conversacion(tid)
         tareas[nombre] = (conv, await _tarea(conv, "pagar", reference=(ref, "action:crear_pedido_m", False)))
     conv_cliente = await _conversacion(a)
@@ -495,8 +495,8 @@ async def test_cierre_por_evento_del_outbox_solo_del_pedido_de_la_tarea(negocios
             ), {"t": a})).scalar_one()
         assert await entregar_evento(evento, a, datetime.now(UTC))
     finally:
-        await _banderas(a, "legacy", False)
-        await _banderas(b, "legacy", False)
+        await _banderas(a, False)
+        await _banderas(b, False)
     conv, task = tareas["a"]
     p = await _proyeccion(conv, task)
     assert p.status == "completed" and p.completed_at is not None
@@ -509,7 +509,7 @@ async def test_cierre_por_evento_del_outbox_solo_del_pedido_de_la_tarea(negocios
 
 async def test_datos_sin_llm_boton_de_lista_e_imagen(negocios: dict[str, uuid.UUID], monkeypatch) -> None:  # type: ignore[no-untyped-def]
     a = negocios["a"]
-    await _banderas(a, "v3", True)
+    await _banderas(a, True)
     try:
         conv = await _conversacion(a)
         task = await _tarea(conv)
@@ -521,7 +521,7 @@ async def test_datos_sin_llm_boton_de_lista_e_imagen(negocios: dict[str, uuid.UU
         await _entrada(conv, {"interactive_id": "opcion:b",
                                      "media": json.dumps([{"type": "image/jpeg", "id": "wamid-1", "url": ""}])})
     finally:
-        await _banderas(a, "legacy", False)
+        await _banderas(a, False)
     p = await _proyeccion(conv, task)
     assert p.slots["opcion"]["value"] == "b" and p.slots["opcion"]["source"] == "interactive:opcion:"
     assert p.slots["foto"]["value"] == {"media_id": "wamid-1", "mime": "image/jpeg"}
@@ -542,7 +542,7 @@ async def test_boton_tras_un_episodio_vencido_no_resucita_la_tarea(negocios: dic
             await contexto_del_motor(conv.id, customer_id=conv.customer_id, channel="whatsapp", enabled={"core", PACK},
                                      disabled=set(), herramientas_base=[], candidatas=[], texto_cliente="hola")
 
-    await _banderas(a, "v3", True)
+    await _banderas(a, True)
     try:
         conv = await _conversacion(a, "hola", t1)
         await turno(conv)  # episodio 1
@@ -555,29 +555,21 @@ async def test_boton_tras_un_episodio_vencido_no_resucita_la_tarea(negocios: dic
         await _mensaje(conv, "inbound", "Opción B", datetime.now(UTC))
         await _entrada(conv, {"interactive_id": "opcion:b"})  # episodio 3 empieza con un botón
     finally:
-        await _banderas(a, "legacy", False)
+        await _banderas(a, False)
     p = await _proyeccion(conv, task)
     assert p.status == "cancelled" and p.status_reason == "episode_expired" and "opcion" not in p.slots
 
 
 async def test_modo_sombra_no_cambia_nada_y_registra_diferencias(negocios: dict[str, uuid.UUID], monkeypatch) -> None:  # type: ignore[no-untyped-def]
     b = negocios["b"]
-    vistos: dict[str, _Guion] = {}
-    for runtime in ("legacy", "v3"):
-        await _banderas(b, runtime, False)
-        conv = await _conversacion(b, "quiero comprar")
-        guion = _Guion([("ver_opciones_m", {"correo": "no-es-correo"}), ("crear_pedido_m", {}), "Hecho."])
-        r = await _turno(conv, guion, monkeypatch, "quiero comprar")
-        assert r is not None and r.text == "Hecho."
-        vistos[runtime] = guion
-        if runtime == "v3":
-            sombra_conv = conv
-    await _banderas(b, "legacy", False)
-    legacy, sombra = vistos["legacy"], vistos["v3"]
-    assert legacy.tools == sombra.tools  # mismas acciones en cada vuelta
-    assert [blq[:-1] for blq in legacy.system] == [blq[:-1] for blq in sombra.system]
+    await _banderas(b, False)
+    sombra_conv = await _conversacion(b, "quiero comprar")
+    sombra = _Guion([("ver_opciones_m", {"correo": "no-es-correo"}), ("crear_pedido_m", {}), "Hecho."])
+    antes = LLAMADAS.count("crear_pedido_m")
+    r = await _turno(sombra_conv, sombra, monkeypatch, "quiero comprar")
+    assert r is not None and r.text == "Hecho."
     assert all("Estado de la conversación" not in blq[-1] for blq in sombra.system)  # sin tarjeta
-    assert LLAMADAS.count("crear_pedido_m") == 2  # en sombra la acción corre igual
+    assert LLAMADAS.count("crear_pedido_m") == antes + 1  # en sombra la acción corre igual
     async with _scope(b) as s:
         filas = (await s.execute(text(
             "select input from audit_log where conversation_id = :c and actor = 'core:motor_sombra'"

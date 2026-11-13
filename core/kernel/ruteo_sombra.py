@@ -427,8 +427,7 @@ async def reporte_de_pila(tenant_id: uuid.UUID, dias: int = 7) -> ReportePila:
 
 async def escribir_modo(tenant_id: uuid.UUID, modo: str, database_url: str | None = None) -> None:
     """Fija `tenants.aos_routing` con el rol dueño y `aos_fijar_banderas` (migración 0097; el
-    panel del master usa la misma función con su `admin_id`). Exige `aos_runtime = 'v3'` para
-    encenderla (la función y el CHECK de 0094 también)."""
+    panel del master usa la misma función con su `admin_id`)."""
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from core.config import get_settings
@@ -444,18 +443,16 @@ async def escribir_modo(tenant_id: uuid.UUID, modo: str, database_url: str | Non
         async with engine.begin() as conn:
             fila = (
                 await conn.execute(
-                    text("SELECT aos_runtime, aos_procedures FROM tenants WHERE id = :t AND deleted_at IS NULL FOR UPDATE"),
+                    text("SELECT aos_procedures FROM tenants WHERE id = :t AND deleted_at IS NULL FOR UPDATE"),
                     {"t": tenant_id},
                 )
             ).first()
             if fila is None:
                 raise LookupError("negocio no encontrado")
-            if modo != "off" and fila[0] != "v3":
-                raise ValueError("el enrutamiento exige aos_runtime = 'v3' (el negocio nace en v3, ADR-0191)")
             await fijar_banderas(
                 conn,
                 tenant_id,
-                BanderasAOS(runtime=str(fila[0]), procedimientos=bool(fila[1]), ruteo=modo),
+                BanderasAOS(procedimientos=bool(fila[0]), ruteo=modo),
                 actor="system:ruteo",
             )
     finally:

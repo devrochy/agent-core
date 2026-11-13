@@ -605,7 +605,7 @@ async def start_canary(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> None:
     """Prueba la versión con una parte de las conversaciones nuevas (HU-AOS-32). Mismas reglas que
-    publicar: dueño o master, gate aprobado si está cerrado, `aos_runtime = v3` (409 `requiere_v3`).
+    publicar: dueño o master y gate aprobado si está cerrado.
     Si la plataforma la apagó (`CANARY_DISPONIBLE`), responde 409 `canary_no_disponible`."""
     from core.releases import canary
 

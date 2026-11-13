@@ -49,10 +49,10 @@ async def test_el_catalogo_trae_el_guion_del_asistente(app_client) -> None:
     r = await app_client.get(f"{BASE}/catalog", headers={"Cookie": cookie})
     assert r.status_code == 200, r.text
     secciones = {g["seccion"]: [q["id"] for q in g["preguntas"]] for g in r.json()["asistente"]}
-    # Negocio nuevo = v3 (ADR-0191): la voz sale de la release, así que solo queda lo que no es persona.
+    # La voz sale de la release (ADR-0191), así que solo queda lo que no es persona.
     assert secciones["voz"] == ["largo"]
     assert "horario" in secciones["atencion"]
-    assert r.json()["aos_runtime"] == "v3"
+    assert "aos_runtime" not in r.json()
 
 
 async def test_vista_previa_no_escribe_y_aplicar_guarda_ambos_almacenes(app_client) -> None:

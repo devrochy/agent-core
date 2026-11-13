@@ -9,7 +9,7 @@ Lo usa `core/api/routers/plantillas_opciones.py`; el router solo traduce HTTP. A
   retira: un botón viejo ejecuta SU versión mientras no venza (ADR-0172 §3).
 - **Contexto del lint = el del negocio.** Las fichas de las tools salen del AgentSpec activo del negocio SIN escribir
   (`leer_spec_activo`: no siembra el default) y con las mismas piezas que el resolver del toque
-  (`lint.fichas_de_tools`, `lint.motivos_de_rechazo`). Límite: con `aos_runtime = v3` los bindings reales son los de
+  (`lint.fichas_de_tools`, `lint.motivos_de_rechazo`). Límite: los bindings reales son los de
   la release del agente en foco, que aquí no hay; el resolver vuelve a lintar al tocar (ADR-0172 adenda del PR 6).
 - **Catálogo de acciones.** Solo las tools que `motivos_de_rechazo` deja elegibles (marca `apta_para_opcion`, pack
   activo, binding EXPLÍCITO y habilitado, no gobernada por un procedimiento). Una tool de otro negocio no existe aquí:

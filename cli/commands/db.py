@@ -157,8 +157,7 @@ def backfill_releases(
 ) -> None:
     """Agent OS (HU-AOS-14): la release 1 de cada conexión conversacional que no tiene ninguna,
     construida desde el AgentSpec v2 activo (refresca el Coordinador y el General con el backfill
-    de agentes) y los artefactos del disco, y promovida. Idempotente. Exige `sync-packs` antes.
-    No cambia la conducta: con `aos_runtime = legacy` el runtime ignora la release."""
+    de agentes) y los artefactos del disco, y promovida. Idempotente. Exige `sync-packs` antes."""
     import asyncio
 
     from cli.tenant_ref import resolve_tenant
@@ -418,8 +417,8 @@ def ruteo(
     ),
 ) -> None:
     """Agent OS (HU-AOS-17): fija `tenants.aos_routing` del negocio. `shadow` decide y registra la
-    ruta en `core_decisions.shadow_route` sin cambiar quién atiende; `active` enruta. Exige
-    `aos_runtime = 'v3'`. Runbook: una semana en `shadow` y `reporte-ruteo` antes de `active`."""
+    ruta en `core_decisions.shadow_route` sin cambiar quién atiende; `active` enruta.
+    Runbook: una semana en `shadow` y `reporte-ruteo` antes de `active`."""
     import asyncio
 
     from cli.tenant_ref import resolve_tenant
@@ -556,7 +555,7 @@ def reporte_ruteo(
         return f"no medible ({meta})" if ok is None else ("CUMPLE" if ok else "NO CUMPLE") + f" ({meta})"
 
     console.print(
-        f"Negocio {tenant}: aos_runtime = {banderas.runtime} · aos_procedures = "
+        f"Negocio {tenant}: aos_procedures = "
         f"{'on' if banderas.procedimientos else 'off'} · aos_routing = {banderas.ruteo}"
     )
     if fuente != "trafico":
@@ -602,7 +601,7 @@ def reporte_ruteo(
 @app.command("presets-v2")
 def presets_v2(
     tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
-    todos: bool = typer.Option(False, "--todos", help="Todos los negocios vivos con aos_runtime = v3."),
+    todos: bool = typer.Option(False, "--todos", help="Todos los negocios vivos."),
     preset: str | None = typer.Option(
         None, "--preset", help="Preset a usar en vez del registrado en el negocio (solo con --tenant)."
     ),
@@ -612,8 +611,7 @@ def presets_v2(
     especialistas del preset (Ventas, Agenda, Cobranza, Suscripciones) que falten, con su
     instancia en cada conexión (nunca por defecto), agrega las reglas del Coordinador y construye
     la release candidata de cada conexión que cambió, SIN activarla. Idempotente: no duplica
-    agentes, no pisa lo que el dueño cambió y no devuelve instancias quitadas. Solo actúa con
-    `AOS_CONNECTION_ROUTING` encendida y `aos_runtime = 'v3'`. Dry-run por defecto."""
+    agentes, no pisa lo que el dueño cambió y no devuelve instancias quitadas. Dry-run por defecto."""
     import asyncio
 
     from rich.table import Table

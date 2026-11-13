@@ -50,7 +50,7 @@ CATALOGO = {
 }
 
 
-async def _banderas(tid: uuid.UUID, runtime: str, procedimientos: bool) -> None:
+async def _banderas(tid: uuid.UUID, procedimientos: bool) -> None:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from core.config import get_settings
@@ -61,8 +61,8 @@ async def _banderas(tid: uuid.UUID, runtime: str, procedimientos: bool) -> None:
         async with engine.begin() as conn:
             await conn.execute(text("update tenants set aos_procedures = false where id = :t"), {"t": tid})
             await conn.execute(
-                text("update tenants set aos_runtime = :r, aos_procedures = :p where id = :t"),
-                {"t": tid, "r": runtime, "p": procedimientos},
+                text("update tenants set aos_procedures = :p where id = :t"),
+                {"t": tid, "p": procedimientos},
             )
     finally:
         await engine.dispose()
@@ -89,7 +89,7 @@ async def _negocio(slug: str, pagos: Any) -> uuid.UUID:
     async with tenant_scope(tid):
         await plugin_manager.save_config("pack_commerce", {"checkout_fields": CHECKOUT})
     await journeys.encender_runtime_v3(tid)  # todo turno corre sobre la release de su conexión (ADR-0191)
-    await _banderas(tid, "v3", True)
+    await _banderas(tid, True)
     return tid
 
 
@@ -196,15 +196,15 @@ def _valor(tarea: Any, dato: str) -> Any:
 
 
 async def test_en_sombra_nada_cambia_y_el_tope_escala_como_siempre(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Con `aos_runtime = v3` y el motor apagado (sombra): sin tarjeta, sin comandos y el tope de
+    """Con el motor apagado (sombra): sin tarjeta, sin comandos y el tope de
     vueltas sigue escalando como siempre (la salida del kernel es solo del motor activo)."""
     _a, b, pagos = negocios
-    await _banderas(b, "v3", False)
+    await _banderas(b, False)
     try:
         ctx = await _cliente(b, pagos)
         resultado, guion = await _turno(ctx, monkeypatch, "Quiero el premium", [], por_defecto=("consultar_inventario", {}))
     finally:
-        await _banderas(b, "v3", True)
+        await _banderas(b, True)
     assert resultado.escalated
     assert len(guion.tools) == 10 and len(set(map(tuple, guion.tools))) == 1
     assert all("Estado de la conversación" not in s for s in guion.system)

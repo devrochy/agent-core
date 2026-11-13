@@ -5,8 +5,8 @@ loop deja aquí qué instancia, versión, conexión, conversación y turno crear
 registro (`agent_record_origins`). El pack decide si el resultado es un registro nuevo
 (`RegistroCreado.es_nuevo`); el core solo descarta antes lo que trae `error` u `ok: false`.
 
-- **Detrás del runtime v3:** sin release del turno (`aos_runtime = 'legacy'`) no se escribe nada,
-  igual que el ledger no atribuye agente. Con el runtime v3 apagado el turno no cambia.
+- **Detrás de la release:** sin release del turno no se escribe nada, igual que el ledger no
+  atribuye agente.
 - **Best-effort:** un fallo nunca interrumpe la respuesta al cliente; se loguea sin ids ni datos.
 - **El primero que lo crea gana:** `ON CONFLICT DO NOTHING` sobre `(tenant_id, pack_id, kind,
   record_ref)`.

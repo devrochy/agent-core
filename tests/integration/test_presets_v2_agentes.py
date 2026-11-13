@@ -3,13 +3,12 @@
 Negocio con `pack_commerce`, `pack_calendar` y `pack_subscriptions` (preset `suscripciones`), una
 conexión conversacional, su release 1 (General por defecto) y `AOS_CONNECTION_ROUTING` encendida:
 
-- **Instalar:** con `aos_runtime = 'v3'` crea Ventas, Agenda y Suscripciones (versión 1 derivada
+- **Instalar:** crea Ventas, Agenda y Suscripciones (versión 1 derivada
   del General, con SUS procedimientos), una instancia de cada uno en la conexión (no por
   defecto), las reglas del Coordinador en una versión nueva y una release candidata que NO se
   activa.
 - **Idempotencia:** reaplicar no crea agentes, versiones, instancias, reglas ni releases; una
   versión que publicó el dueño no se pisa y una instancia que quitó no vuelve.
-- **Banderas apagadas:** con `legacy` (o la global apagada) no escribe nada.
 - **Presets v1:** un manifiesto sin `agentes` deja al negocio solo con el General.
 - **Dry-run** no escribe. **Aislamiento:** lo de un negocio no aparece en otro.
 """
@@ -51,19 +50,6 @@ async def _sql(tid: uuid.UUID | None, sql: str, **params: Any) -> list[Any]:
             return list(resultado.all()) if getattr(resultado, "returns_rows", False) else []
 
 
-async def _runtime(tid: uuid.UUID, runtime: str) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("update tenants set aos_runtime = :r where id = :t"), {"t": tid, "r": runtime})
-    finally:
-        await engine.dispose()
-
 
 @pytest.fixture(scope="module", autouse=True)
 async def _proceso() -> None:
@@ -82,9 +68,8 @@ def _ruteo(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 
-async def _negocio(runtime: str = "v3", *, otra_conexion: bool = False) -> tuple[uuid.UUID, uuid.UUID]:
-    """Negocio con su conexión (y otra, si se pide), release 1 (General por defecto) y el runtime
-    pedido. Devuelve (negocio, primera conexión)."""
+async def _negocio(*, otra_conexion: bool = False) -> tuple[uuid.UUID, uuid.UUID]:
+    """Negocio con su conexión (y otra, si se pide) y release 1. Devuelve (negocio, primera conexión)."""
     from release_de_prueba import release_inicial
 
     from core.alta_negocio import onboard_tenant
@@ -107,7 +92,6 @@ async def _negocio(runtime: str = "v3", *, otra_conexion: bool = False) -> tuple
         )
     reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
-    await _runtime(tid, runtime)
     return tid, cid
 
 
@@ -286,15 +270,6 @@ async def test_regla_que_el_dueno_ya_tiene_no_se_toca() -> None:
     assert reglas["preset_ventas_palabras"]["agent"] == "ventas"
 
 
-async def test_con_banderas_apagadas_no_escribe(monkeypatch: pytest.MonkeyPatch) -> None:
-
-    tid, _cid = await _negocio(runtime="legacy")
-    antes = await _foto(tid)
-    assert (await _aplicar(tid)).omitido == "banderas_apagadas"
-
-    assert await _foto(tid) == antes
-
-
 async def test_preset_v1_sigue_con_el_general() -> None:
     from core.presets import PresetManifest
     from core.presets.agentes import aplicar_agentes
@@ -368,16 +343,6 @@ async def test_apply_preset_en_negocio_v3_instala_los_agentes() -> None:
     preset = await _sql(tid, "select settings -> 'preset' -> 'agentes' from tenants where id = :t", t=tid)
     assert preset[0][0] is not None
     assert str(cid) in resultado.agentes["releases"]
-
-
-async def test_apply_preset_en_negocio_legacy_no_crea_agentes() -> None:
-    from core.presets.apply import apply_preset
-
-    tid, _cid = await _negocio(runtime="legacy")
-    antes = await _foto(tid)
-    resultado = await apply_preset(tid, "comercio", sembrar_ejemplos=False)
-    assert resultado.agentes is None
-    assert (await _foto(tid))["versiones"] == antes["versiones"]
 
 
 async def test_agente_borrado_o_key_ajena_no_se_toca() -> None:

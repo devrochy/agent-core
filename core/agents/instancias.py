@@ -28,9 +28,8 @@ cambió (el agente por defecto) no vuelve solo en un religar ni en el build de r
   se cambia eligiendo otro.
 - `listar_instancias(tid, connection_id)`: lectura para la API.
 
-Todo corre dentro del `tenant_scope` del negocio (RLS) y además filtra por `tenant_id`. Con
-`tenants.aos_runtime = 'legacy'` nada en runtime lee estas filas (ADR-0112): no cambia la
-conducta. Con v3, qué de una instancia congela la release (ADR-0117 §2) lo decide HU-AOS-14:
+Todo corre dentro del `tenant_scope` del negocio (RLS) y además filtra por `tenant_id`. Qué
+de una instancia congela la release (ADR-0117 §2) lo decide HU-AOS-14:
 la API lo documenta como "aplica con la próxima release".
 """
 
@@ -416,8 +415,7 @@ async def instancias_al_alta(
 
     Corre en la transacción del alta (`numero_para_conexion`, los cinco caminos de ADR-0122
     §6), dentro de un SAVEPOINT: un error se registra (`instancias_alta_fallo`) y el alta sigue.
-    Con `aos_runtime = legacy` las instancias no hacen nada y el backfill las repara; un bug
-    del Agent OS no debe tumbar las altas de WhatsApp. No hace nada si:
+    Un bug del Agent OS no debe tumbar las altas de WhatsApp. No hace nada si:
     - el número no tiene conexión canónica ligada a `cuenta` (choque con una manual);
     - el negocio todavía no tiene su Coordinador;
     - la conexión ya tiene Coordinador (religar o revivir el número no recrea nada).

@@ -1,8 +1,7 @@
 """Bandera por negocio de las opciones directas (SPEC-40, ADR-0172 §5): APAGADA por defecto.
 
 Vive en `tenants.settings["opciones_directas"] = {"habilitada": bool}`: clave propia, NO dentro de
-`settings.agent_os`, porque el registro de opciones de configuración exige que toda bandera de ese grupo
-dependa de `aos_runtime = v3` y el resolver de las opciones no depende de v3 ni de los procedimientos.
+`settings.agent_os`, porque el resolver de las opciones no depende de los procedimientos.
 
 Solo la cambia el master: `fijar` es el ÚNICO escritor y lo llama la ruta de plataforma master-only
 (`/admin/platform/tenants/{id}/opciones-directas`, como `banderas_pila.fijar` con `/colaboracion`); ningún router

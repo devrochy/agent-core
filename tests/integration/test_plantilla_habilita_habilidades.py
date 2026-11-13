@@ -41,19 +41,6 @@ async def _sql(tid: uuid.UUID | None, sql: str, **params: Any) -> list[Any]:
             return list(resultado.all()) if getattr(resultado, "returns_rows", False) else []
 
 
-async def _runtime_v3(tid: uuid.UUID) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("update tenants set aos_runtime = 'v3' where id = :t"), {"t": tid})
-    finally:
-        await engine.dispose()
-
 
 @pytest.fixture(scope="module", autouse=True)
 async def _proceso() -> None:
@@ -78,7 +65,6 @@ async def _negocio_sin_packs() -> uuid.UUID:
 
     slug = f"habil-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"HABIL {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
-    await _runtime_v3(tid)
     return tid
 
 

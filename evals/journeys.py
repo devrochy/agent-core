@@ -333,11 +333,10 @@ def _exigir_base_local(*urls: str | None, que: str) -> None:
 
 async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     """Runtime por releases (HU-AOS-15) para el negocio de la corrida: una conexión
-    conversacional, su release 1 (`backfill_releases`) y `aos_runtime = 'v3'` (no toca
-    `aos_procedures`: lo decide el set o `--runtime`). Devuelve la conexión: `nuevo_cliente` liga a
+    conversacional y su release 1 (`backfill_releases`). No toca `aos_procedures`: lo decide el set
+    o `--runtime`. Devuelve la conexión: `nuevo_cliente` liga a
     ella las conversaciones de la corrida. Toda corrida la monta (ADR-0191)."""
     from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     from core.config import get_settings
     from core.db.session import get_session
@@ -348,7 +347,7 @@ async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
 
     settings = get_settings()
     url = settings.migrations_database_url or settings.database_url
-    _exigir_base_local(url, settings.database_url, que="El runtime v3 de los journeys")
+    _exigir_base_local(url, settings.database_url, que="La release de los journeys")
     conexion = uuid.uuid4()
     async with tenant_scope(tenant_id):
         async with get_session() as session:
@@ -367,12 +366,6 @@ async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     reporte = await backfill_releases(dry_run=False, tenant_id=tenant_id, modules=modulos)
     if reporte.fallo:
         raise SystemExit(f"No se pudo construir la release 1 del negocio de la corrida: {reporte.errores}")
-    engine = create_async_engine(url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("update tenants set aos_runtime = 'v3' where id = :t"), {"t": tenant_id})
-    finally:
-        await engine.dispose()
     _CONEXION_V3[tenant_id] = conexion
     return conexion
 
@@ -446,8 +439,8 @@ _CONEXION_V3: dict[uuid.UUID, uuid.UUID] = {}
 
 
 async def encender_motor_de_procedimientos(tenant_id: uuid.UUID) -> None:
-    """Motor de procedimientos (HU-AOS-07) para el negocio de la corrida: `aos_runtime = v3` y
-    `aos_procedures`, como lo haría el master. Lo pide un set con `"motor_de_procedimientos": true`
+    """Motor de procedimientos (HU-AOS-07) para el negocio de la corrida: `aos_procedures`, como lo
+    haría el master. Lo pide un set con `"motor_de_procedimientos": true`
     en su `negocio.json`; el negocio es de la corrida, nunca uno real. Las banderas solo las
     escribe el rol dueño (el mismo que migra)."""
     from sqlalchemy import text
@@ -462,7 +455,7 @@ async def encender_motor_de_procedimientos(tenant_id: uuid.UUID) -> None:
     try:
         async with engine.begin() as conn:
             await conn.execute(
-                text("update tenants set aos_runtime = 'v3', aos_procedures = true where id = :t"), {"t": tenant_id}
+                text("update tenants set aos_procedures = true where id = :t"), {"t": tenant_id}
             )
     finally:
         await engine.dispose()
@@ -609,12 +602,12 @@ async def runtime_efectivo(tenant_id: uuid.UUID) -> dict[str, Any]:
         async with get_session() as session:
             fila = (
                 await session.execute(
-                    text("select aos_runtime, aos_procedures from tenants where id = :t"), {"t": tenant_id}
+                    text("select aos_procedures from tenants where id = :t"), {"t": tenant_id}
                 )
             ).first()
     if fila is None:
-        return {"aos_runtime": None, "aos_procedures": None}
-    return {"aos_runtime": fila[0], "aos_procedures": bool(fila[1])}
+        return {"aos_procedures": None}
+    return {"aos_procedures": bool(fila[0])}
 
 
 def pidio_relevo(herramientas: list[dict[str, Any]]) -> bool:
@@ -1215,7 +1208,7 @@ async def _correr_set(args: argparse.Namespace, set_id: str, rutas: list[Path], 
     efectivo = await runtime_efectivo(tenant_id)
     print(
         f"Corriendo {len(rutas)} journeys del set {set_id} con k={k} (negocio {tenant_id}, "
-        f"aos_runtime={efectivo['aos_runtime']}, aos_procedures={efectivo['aos_procedures']})...\n"
+        f"aos_procedures={efectivo['aos_procedures']})...\n"
     )
 
     import grabaciones

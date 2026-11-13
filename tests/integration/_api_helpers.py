@@ -67,7 +67,7 @@ def stub_meta_pair_ok(monkeypatch) -> None:
 
 
 async def banderas_como_dueno(tenant_id: uuid.UUID, **columnas: object) -> None:
-    """Fija banderas del Agent OS (`aos_runtime`, `aos_procedures`, `aos_routing`) con el rol
+    """Fija banderas del Agent OS (`aos_procedures`, `aos_routing`) con el rol
     dueño: desde 0097 un UPDATE de `app_runtime` sobre ellas lo rechaza el trigger
     `tenants_aos_banderas_guard` (el escritor real es `aos_fijar_banderas`)."""
     from sqlalchemy import text
@@ -75,7 +75,7 @@ async def banderas_como_dueno(tenant_id: uuid.UUID, **columnas: object) -> None:
 
     from core.config import get_settings
 
-    permitidas = {"aos_runtime", "aos_procedures", "aos_routing"}
+    permitidas = {"aos_procedures", "aos_routing"}
     assert columnas and set(columnas) <= permitidas, columnas
     settings = get_settings()
     engine = create_async_engine(settings.migrations_database_url or settings.database_url)

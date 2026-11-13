@@ -1,7 +1,7 @@
 """Canary de una conexión: probar una versión con una parte de las conversaciones nuevas (HU-AOS-32,
 adenda de ADR-0117 que enmienda §5).
 
-- **Iniciar** (como publicar: gate aprobado si está cerrado, `aos_runtime = v3`, un canary por
+- **Iniciar** (como publicar: gate aprobado si está cerrado, un canary por
   conexión): fija `canary_release_id` / `canary_percent` y deja `canary_started` con
   `{percent, base_release_id, umbrales, gate, gate_tocados, gate_motivo}`. El reparto sticky lo hace
   `core.kernel.release_del_turno` al empezar cada episodio.
@@ -62,17 +62,6 @@ def _porcentaje(percent: int) -> int:
     return int(percent)
 
 
-async def _exigir_v3(session: Any, tenant_id: uuid.UUID) -> None:
-    runtime = (
-        # FOR SHARE: no se cruza con un cambio de banderas en paralelo (`aos_fijar_banderas`).
-        await session.execute(text("SELECT aos_runtime FROM tenants WHERE id = :t FOR SHARE"), {"t": tenant_id})
-    ).scalar_one_or_none()
-    if runtime != "v3":
-        raise ConflictoDeRelease(
-            "requiere_v3", "La prueba con una parte de los clientes exige el Agent OS (aos_runtime = v3)."
-        )
-
-
 async def _sin_canary(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID) -> tuple[Any, Any]:
     activa, canary = await _bloquear(session, tenant_id, connection_id)
     if canary is None:
@@ -99,7 +88,6 @@ async def iniciar(
     percent = _porcentaje(percent)
     forzado = bool(forzado_por_master and forzado_por_master.strip())
     async with get_session() as session:
-        await _exigir_v3(session, tenant_id)
         activa, canary = await _bloquear(session, tenant_id, connection_id)
         await _release(session, tenant_id, connection_id, release_id)
         if activa is None:

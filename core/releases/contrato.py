@@ -8,9 +8,9 @@ manual, en seco por defecto, que solo aplica si TODAS las precondiciones se cump
 
 Precondiciones (global: el contract lo es; cualquiera que falle bloquea y se informa con su motivo):
 1. `AOS_CONNECTION_ROUTING` encendida en este entorno.
-2. Ningún negocio vivo en `aos_runtime = 'legacy'`: `core_decisions` exige release y conexión. Los
-   negocios dados de baja (borrado lógico) no cuentan aquí, pero sus conversaciones sí entran en las
-   revisiones 3 y en la deduplicación: el índice único y el NOT NULL las alcanzan.
+2. (Retirada con `tenants.aos_runtime`, HU-AOS-69: todo negocio corre en el Agent OS.) Los
+   negocios dados de baja (borrado lógico) también entran en la revisión 3 y en la deduplicación:
+   el índice único y el NOT NULL alcanzan sus conversaciones.
 3. Ninguna conversación sin `connection_id` (incluye cerradas y borradas; las cubre
    `backfill-conexiones`): el NOT NULL las exigiría todas.
 4. Cada conexión conversacional viva tiene release activa y **2 releases estables sin rollback**:
@@ -92,23 +92,23 @@ class ReporteContrato:
 
 
 # ------------------------------------------------------------------ precondiciones
-async def _negocios(tenant_ids: Sequence[uuid.UUID] | None = None) -> list[tuple[uuid.UUID, str, str, bool]]:
-    """`(id, slug, aos_runtime, vivo)` de TODOS los negocios, también los dados de baja (borrado
+async def _negocios(tenant_ids: Sequence[uuid.UUID] | None = None) -> list[tuple[uuid.UUID, str, bool]]:
+    """`(id, slug, vivo)` de TODOS los negocios, también los dados de baja (borrado
     lógico): sus conversaciones siguen en la tabla y el índice único y el NOT NULL las alcanzan."""
     async with get_session() as session:
         if tenant_ids is None:
             filas = await session.execute(
-                text("SELECT id, slug, aos_runtime, deleted_at IS NULL FROM tenants ORDER BY slug")
+                text("SELECT id, slug, deleted_at IS NULL FROM tenants ORDER BY slug")
             )
         else:
             filas = await session.execute(
                 text(
-                    "SELECT id, slug, aos_runtime, deleted_at IS NULL FROM tenants "
+                    "SELECT id, slug, deleted_at IS NULL FROM tenants "
                     "WHERE id = ANY(cast(:ids AS uuid[])) ORDER BY slug"
                 ),
                 {"ids": list(tenant_ids)},
             )
-        return [(f[0], str(f[1]), str(f[2]), bool(f[3])) for f in filas.all()]
+        return [(f[0], str(f[1]), bool(f[2])) for f in filas.all()]
 
 
 async def _sin_conexion(tenant_id: uuid.UUID) -> int:
@@ -401,9 +401,7 @@ async def contraer(
     negocios = await _negocios(tenant_ids)
     reporte.negocios = len(negocios)
     pares: dict[uuid.UUID, list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]] = {}
-    for tenant_id, slug, runtime, vivo in negocios:
-        if vivo and runtime != "v3":
-            reporte.bloqueos.append(f"{slug}: sigue en aos_runtime = {runtime} (se vuelve a sembrar: no hay paso legacy → v3, ADR-0191)")
+    for tenant_id, slug, vivo in negocios:
         async with tenant_scope(tenant_id):
             huerfanas = await _sin_conexion(tenant_id)
             if huerfanas:

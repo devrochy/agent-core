@@ -6,8 +6,8 @@ formato y el *resolver* de la habilidad), lo que compromete espera una confirmac
 la tarea se cierra con un evento de dominio del outbox.
 
 Cuándo actúa:
-- **Activo** con `tenants.aos_procedures` (exige `aos_runtime = 'v3'`, CHECK de 0070).
-- **Sombra** con `aos_runtime = 'v3'` y `aos_procedures` apagada: el turno sigue con el flujo de
+- **Activo** con `tenants.aos_procedures`.
+- **Sombra** con `aos_procedures` apagada: el turno sigue con el flujo de
   siempre y el motor solo calcula y registra diferencias (`sombra.py`), sin cambiar nada de lo que
   ve el modelo ni la respuesta.
 - Apagado en cualquier otro caso: `contexto_del_motor` devuelve None tras la misma lectura de
@@ -2586,7 +2586,7 @@ async def contexto_del_motor(
     async with get_session() as session:
         banderas = await banderas_del_negocio(session, tenant_id)
         if banderas.procedimientos:
-            # Un solo episodio por turno: con release (aos_runtime = v3) manda su `idleMinutes`.
+            # Un solo episodio por turno: con release manda su `idleMinutes`.
             await abrir_episodio(
                 session,
                 tenant_id=tenant_id,
@@ -2617,7 +2617,7 @@ async def contexto_del_motor(
             abiertas_propias=_propias(filas), colaboracion=banderas.colaboracion,
             sin_gobierno=_sin_gobierno(filas, foco), **comunes,
         )
-    if banderas.runtime == "v3" and registro.hay_procedimientos():
+    if registro.hay_procedimientos():
         procs = registro.disponibles(enabled, disabled)
         if procs:
             return ContextoMotor(modo="sombra", procedimientos=procs, **comunes)
@@ -2659,7 +2659,7 @@ async def _entrada_sin_llm(conversation: Any, interactivo: str, media: list[Any]
     tenant_id, conversation_id = conversation.tenant_id, conversation.id
     async with get_session() as s:
         banderas = await banderas_del_negocio(s, tenant_id)
-    if interactivo and banderas.ruteo != "off" and banderas.runtime == "v3":
+    if interactivo and banderas.ruteo != "off":
         # El payload del botón para las reglas del router (HU-AOS-17): solo con el ruteo encendido.
         from core.kernel.router import guardar_payload
 

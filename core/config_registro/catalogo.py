@@ -7,7 +7,7 @@ import json
 
 from pydantic import BaseModel
 
-from core.config_registro.asistente import Guion, guiones_para
+from core.config_registro.asistente import Guion, guiones_visibles
 from core.config_registro.modelo import Opcion, ValorPosible
 from core.config_registro.opciones import OPCIONES, POR_CLAVE
 
@@ -18,14 +18,11 @@ class Catalogo(BaseModel):
     opciones: list[Opcion]
     # Preguntas por sección que dejan un ajuste predeterminado (ADR del asistente de configuración).
     asistente: list[Guion] = []
-    # Runtime del negocio (`legacy` | `v3`): con `v3` la voz, el nombre y la descripción se aplican al publicar
-    # una versión del agente, y el panel lo avisa junto a esos campos (HU-CFG-09).
-    aos_runtime: str = "legacy"
 
 
-def _huella(opciones: list[Opcion], asistente: list[Guion], aos_runtime: str) -> str:
+def _huella(opciones: list[Opcion], asistente: list[Guion]) -> str:
     cuerpo = json.dumps(
-        [o.model_dump(mode="json") for o in opciones] + [g.model_dump(mode="json") for g in asistente] + [aos_runtime],
+        [o.model_dump(mode="json") for o in opciones] + [g.model_dump(mode="json") for g in asistente],
         sort_keys=True,
         ensure_ascii=False,
     )
@@ -56,14 +53,13 @@ def catalogo_para(
     es_master: bool,
     guardrails_disponibles: list[str],
     guardrails_info: dict[str, tuple[str, str]] | None = None,
-    aos_runtime: str = "legacy",
 ) -> Catalogo:
     """Las opciones que puede ver el usuario, con los `valores` que dependen del negocio ya puestos.
 
     - Las del master (`editable_por="master"`) solo se incluyen si `es_master`.
     - `disabled_guardrails` lista los guardrails de los packs habilitados del negocio más los
       interruptores del verificador (`_available_guardrails` en el router de configuración).
-    - El guion del asistente omite las preguntas de voz si el negocio usa el runtime `v3`.
+    - El guion del asistente omite las preguntas de voz: la voz sale de la versión publicada del agente.
     """
     info = {**INFO_VERIFICADOR, **{k: v for k, v in (guardrails_info or {}).items() if v[0] or v[1]}}
     visibles: list[Opcion] = []
@@ -81,10 +77,8 @@ def catalogo_para(
             )
         # Copia propia: lo que sale al cliente nunca comparte listas con el registro global.
         visibles.append(opcion if opcion.valores_calculados else opcion.model_copy(deep=True))
-    guiones = guiones_para(aos_runtime)
-    return Catalogo(
-        version=_huella(visibles, guiones, aos_runtime), opciones=visibles, asistente=guiones, aos_runtime=aos_runtime
-    )
+    guiones = guiones_visibles()
+    return Catalogo(version=_huella(visibles, guiones), opciones=visibles, asistente=guiones)
 
 
 def opcion(clave: str) -> Opcion:

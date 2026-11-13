@@ -1,9 +1,9 @@
-"""Banderas del Agent OS por negocio (ADR-0112): `tenants.aos_runtime`, `tenants.aos_procedures` y
-`tenants.aos_routing` (HU-AOS-17, ADR-0138), más las de la colaboración con pila de tareas en
-`tenants.settings.agent_os` (HU-AOS-20, adenda de ADR-0116).
+"""Banderas del Agent OS por negocio (ADR-0112): `tenants.aos_procedures` y `tenants.aos_routing`
+(HU-AOS-17, ADR-0138), más las de la colaboración con pila de tareas en `tenants.settings.agent_os`
+(HU-AOS-20, adenda de ADR-0116). El runtime ya no es bandera: todo negocio corre en el Agent OS
+(ADR-0191, HU-AOS-69).
 
-Las guarda la base (migración 0070, con el CHECK de orden `aos_procedures ⇒ aos_runtime = 'v3'`)
-y solo las edita el master. Se leen en cada turno, así un cambio surte efecto sin redeploy.
+Las guarda la base y solo las edita el master. Se leen en cada turno, así un cambio surte efecto sin redeploy.
 Un solo lector para todo el kernel: no se consultan `tenants` sueltas en cada módulo.
 """
 
@@ -43,7 +43,6 @@ class Colaboracion:
 
 @dataclass(frozen=True)
 class BanderasAOS:
-    runtime: str = "legacy"   # legacy | v3
     procedimientos: bool = False
     # Enrutamiento entre especialistas (HU-AOS-17, migración 0094, ADR-0138): off | shadow | active.
     ruteo: str = "off"
@@ -57,26 +56,25 @@ async def banderas_del_negocio(session: AsyncSession, tenant_id: uuid.UUID) -> B
     """Banderas del negocio; apagadas si el negocio no existe (fail-closed hacia lo de siempre)."""
     fila = (
         await session.execute(
-            text("SELECT aos_runtime, aos_procedures, aos_routing, settings->'agent_os' FROM tenants WHERE id = :t"),
+            text("SELECT aos_procedures, aos_routing, settings->'agent_os' FROM tenants WHERE id = :t"),
             {"t": tenant_id},
         )
     ).first()
     if fila is None:
         return APAGADAS
     return BanderasAOS(
-        runtime=fila[0],
-        procedimientos=bool(fila[1]),
-        ruteo=str(fila[2] or "off"),
-        colaboracion=Colaboracion.desde(fila[3]),
+        procedimientos=bool(fila[0]),
+        ruteo=str(fila[1] or "off"),
+        colaboracion=Colaboracion.desde(fila[2]),
     )
 
 
-async def negocios_v3(session: AsyncSession) -> list[uuid.UUID]:
-    """Negocios vivos y no suspendidos con `aos_runtime = 'v3'` (job del canary, HU-AOS-32). `tenants`
+async def negocios_activos(session: AsyncSession) -> list[uuid.UUID]:
+    """Negocios vivos y no suspendidos (job del canary, HU-AOS-32; reporte de bindings). `tenants`
     es tabla de sistema, sin RLS: cada negocio se recorre después bajo su `tenant_scope`."""
     filas = await session.execute(
         text(
-            "SELECT id FROM tenants WHERE aos_runtime = 'v3' AND deleted_at IS NULL "
+            "SELECT id FROM tenants WHERE deleted_at IS NULL "
             "AND status IS DISTINCT FROM 'suspended' ORDER BY id"
         )
     )
@@ -108,7 +106,7 @@ class BanderasRechazadas(Exception):
 
 
 _SQLSTATE = {
-    "23514": ("orden", "combinación de banderas fuera de orden (procedimientos y enrutamiento exigen v3)"),
+    "23514": ("orden", "combinación de banderas fuera de orden"),
     "42501": ("permiso", "solo el admin master cambia las banderas del Agent OS"),
     "P0002": ("no_existe", "negocio no encontrado"),
     "22023": ("invalido", "valores de banderas inválidos"),
@@ -123,11 +121,11 @@ async def fijar_banderas(
     admin_id: uuid.UUID | None = None,
     actor: str | None = None,
 ) -> bool:
-    """El único escritor de las tres banderas: `aos_fijar_banderas` (migración 0097, SECURITY
-    DEFINER), que valida el orden y deja la fila de `audit_log` en la misma transacción. Con
-    `admin_id` la base exige que sea master (la API, con `app_runtime`); sin él, la sesión debe ser
-    del rol dueño (CLI y «Preparar mis datos»). Devuelve si cambió algo. `AOS_CONNECTION_ROUTING`
-    (entorno) la valida quien llama."""
+    """El único escritor de las banderas: `aos_fijar_banderas` (migración 0097, SECURITY DEFINER),
+    que las valida y deja la fila de `audit_log` en la misma transacción. Con `admin_id` la base
+    exige que sea master (la API, con `app_runtime`); sin él, la sesión debe ser del rol dueño (CLI
+    y «Preparar mis datos»). Devuelve si cambió algo. El runtime va fijo en `'v3'`, el único que
+    acepta la función desde 0126 (ADR-0191)."""
     from sqlalchemy.exc import DBAPIError
 
     try:
@@ -136,7 +134,7 @@ async def fijar_banderas(
                 text("SELECT aos_fijar_banderas(:t, :r, :p, :ru, :a, :actor)"),
                 {
                     "t": tenant_id,
-                    "r": banderas.runtime,
+                    "r": "v3",
                     "p": banderas.procedimientos,
                     "ru": banderas.ruteo,
                     "a": admin_id,

@@ -269,7 +269,6 @@ async def test_en_vuelo_solo_para_whatsapp(monkeypatch) -> None:  # type: ignore
 async def test_el_turno_de_prueba_sin_release_en_un_negocio_v3_falla_cerrado(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Desde ADR-0191 la conexión interna del Centro de pruebas no tiene excepción: un negocio v3 sin
     ninguna conexión con release queda marcado sin release y el loop no responde (no vuelve al v2)."""
-    from _api_helpers import banderas_como_dueno
 
     from core.kernel import release_del_turno
     from core.shared import release_vigente
@@ -277,7 +276,6 @@ async def test_el_turno_de_prueba_sin_release_en_un_negocio_v3_falla_cerrado(mon
 
     tid = await _negocio()
     conversacion = await _conversacion_de_prueba(tid)
-    await banderas_como_dueno(tid, aos_runtime="v3")
     token = release_vigente.abrir()
     try:
         async with tenant_scope(tid):

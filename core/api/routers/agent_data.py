@@ -1,6 +1,6 @@
 """Mi agente y su data (HU-AOS-47, ADR-0140), solo lectura.
 
-- `GET /api/v1/admin/agents/overview` — runtime del negocio, agentes (sin el Coordinador) con sus
+- `GET /api/v1/admin/agents/overview` — agentes (sin el Coordinador) con sus
   conexiones y actividad de 30 días, lo no atribuido aparte (`sin_atribuir`) y la cuota del plan
   (`cuota_agentes`) para avisar antes de crear otro agente.
 - `GET /api/v1/admin/agents/{ref}/conversations` — conversaciones que atendió (conexión y versión
@@ -32,7 +32,7 @@ from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.admin.permissions import effective_access
 from core.agents import data_por_agente as svc
@@ -86,7 +86,13 @@ class AgentCreationQuota(BaseModel):
 
 
 class AgentsOverview(BaseModel):
-    runtime: str
+    # Deprecado (HU-AOS-69): siempre "v3". Lo sigue leyendo el JS de la APK instalada anterior a
+    # apk#250 (`puedeCrearAgentes`); sale cuando no queden binarios con ese fingerprint.
+    runtime: Literal["v3"] = Field(
+        default="v3",
+        deprecated=True,
+        description="Deprecado: siempre `v3` (ADR-0191). Solo para la APK instalada; no lo leas.",
+    )
     items: list[AgentOverviewItem]
     sin_atribuir: Activity
     # Sin plan, sin la métrica o si el billing no respondió: null (no se bloquea la vista).

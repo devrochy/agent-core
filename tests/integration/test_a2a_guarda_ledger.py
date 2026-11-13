@@ -21,7 +21,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _api_helpers import api_headers, uniq
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
@@ -83,8 +83,6 @@ async def _negocio(*, v3: bool = True) -> dict[str, Any]:
     )
     reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
-    if v3:
-        await banderas_como_dueno(tid, aos_runtime="v3")
     catalogo = catalogo_de_acciones(_modules())
     agentes: dict[str, uuid.UUID] = {}
     async with tenant_scope(tid):

@@ -25,7 +25,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import ColumnElement, and_, false, func, literal, or_, select, text
+from sqlalchemy import ColumnElement, and_, false, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import array_agg
 
 from core.agents.instancias import especialista_por_defecto
@@ -159,14 +159,11 @@ async def resolver(tenant_id: uuid.UUID, ref: str) -> Alcance:
 
 # ------------------------------------------------------------------ lista
 async def resumen(tenant_id: uuid.UUID, *, ahora: datetime | None = None) -> dict[str, Any]:
-    """Runtime, agentes (sin el Coordinador) con sus conexiones y actividad de 30 días, y lo no
+    """Agentes (sin el Coordinador) con sus conexiones y actividad de 30 días, y lo no
     atribuido aparte."""
     _exigir_scope(tenant_id)
     desde = (ahora or datetime.now(UTC)) - VENTANA_POR_DEFECTO
     async with get_session() as session:
-        runtime = (
-            await session.execute(text("select aos_runtime from tenants where id = :t"), {"t": tenant_id})
-        ).scalar_one_or_none() or "v3"
         agentes = (
             await session.execute(
                 select(AgentRecord)
@@ -248,7 +245,7 @@ async def resumen(tenant_id: uuid.UUID, *, ahora: datetime | None = None) -> dic
                 **_sumar(filas + ([sin_atribuir] if absorbe and sin_atribuir else [])),
             }
         )
-    return {"runtime": runtime, "items": items, "sin_atribuir": _sumar([sin_atribuir] if sin_atribuir else [])}
+    return {"items": items, "sin_atribuir": _sumar([sin_atribuir] if sin_atribuir else [])}
 
 
 def _a_float(valor: object) -> float | None:

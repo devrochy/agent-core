@@ -72,16 +72,15 @@ async def _get_or_create_customer(session, tenant_id: uuid.UUID) -> Customer:
 
 async def conexion_real_para_probar(session: Any, tenant_id: uuid.UUID) -> uuid.UUID | None:
     """La conexión conversacional del negocio con release activa para el Centro de pruebas: la
-    principal primero, luego la más antigua. None en un negocio legacy o sin ninguna."""
+    principal primero, luego la más antigua. None si no hay ninguna."""
     from sqlalchemy import text
 
     fila = (
         await session.execute(
             text(
                 "select c.id from channel_connections c join connection_types t on t.id = c.type_id "
-                "join tenants n on n.id = c.tenant_id "
                 "where c.tenant_id = :t and c.deleted_at is null and c.active_release_id is not null "
-                "and t.produces_conversations and c.type_id <> 'playground' and n.aos_runtime = 'v3' "
+                "and t.produces_conversations and c.type_id <> 'playground' "
                 "order by c.is_primary desc, c.created_at limit 1"
             ),
             {"t": tenant_id},
