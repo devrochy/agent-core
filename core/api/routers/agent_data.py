@@ -1,6 +1,6 @@
 """Mi agente y su data (HU-AOS-47, ADR-0140), solo lectura.
 
-- `GET /api/v1/admin/agents/overview` — runtime del negocio, agentes (sin el Coordinador) con sus
+- `GET /api/v1/admin/agents/overview` — agentes (sin el Coordinador) con sus
   conexiones y actividad de 30 días, lo no atribuido aparte (`sin_atribuir`) y la cuota del plan
   (`cuota_agentes`) para avisar antes de crear otro agente.
 - `GET /api/v1/admin/agents/{ref}/conversations` — conversaciones que atendió (conexión y versión
@@ -86,7 +86,6 @@ class AgentCreationQuota(BaseModel):
 
 
 class AgentsOverview(BaseModel):
-    runtime: str
     items: list[AgentOverviewItem]
     sin_atribuir: Activity
     # Sin plan, sin la métrica o si el billing no respondió: null (no se bloquea la vista).

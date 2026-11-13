@@ -6,14 +6,11 @@ stack real, sin LLM ni red:
 - **Permisos:** solo el master (decisión del dueño, 2026-10-20). Un dueño de negocio y el tester,
   aunque `QA_TESTERS_ENABLED` esté encendida, reciben 403 en las tres rutas, y la función rechaza
   el `admin_id` del tester; el negocio no existente, 404.
-- **Orden de banderas:** procedimientos o enrutamiento sin v3 → 422 `agent_os_orden`; un UPDATE
-  directo de las banderas con el rol de la aplicación lo rechaza el trigger de 0097, y la función
+- **Valores:** un modo de enrutamiento desconocido → 422; un UPDATE directo de las banderas con el rol de la aplicación lo rechaza el trigger de 0097, y la función
   con admin no se deja llamar bajo el `tenant_scope` de un negocio.
-- **Aplicar:** el negocio nace en v3 (ADR-0191); procedimientos y ruteo se encienden; volver a
-  legacy se rechaza. Cada cambio deja su fila `agent_os.banderas` en
+- **Aplicar:** procedimientos y ruteo se encienden; el runtime ya no es bandera (ADR-0191) y un
+  `runtime` que mande un panel viejo se ignora. Cada cambio deja su fila `agent_os.banderas` en
   `audit_log` con el actor (quién) y la fecha (cuándo); sin cambios no audita.
-- **Bloqueos:** sin `AOS_CONNECTION_ROUTING` → 409 `agent_os_bloqueado` con los bloqueos y nada
-  escrito.
 - **Aislamiento:** el otro negocio no cambia (banderas, agentes, auditoría).
 """
 
@@ -44,13 +41,13 @@ def _url(tid: uuid.UUID, simular: bool = False) -> str:
     return f"/api/v1/admin/platform/tenants/{tid}/agent-os" + ("/simular" if simular else "")
 
 
-def _objetivo(runtime: str = "legacy", procedures: bool = False, routing: str = "off", **extra: Any) -> dict[str, Any]:
-    return {"runtime": runtime, "procedures": procedures, "routing": routing, **extra}
+def _objetivo(procedures: bool = False, routing: str = "off", **extra: Any) -> dict[str, Any]:
+    return {"procedures": procedures, "routing": routing, **extra}
 
 
-async def _banderas(tid: uuid.UUID) -> tuple[str, bool, str]:
-    ((r, p, ru),) = await _sql(None, "select aos_runtime, aos_procedures, aos_routing from tenants where id = :t", t=tid)
-    return str(r), bool(p), str(ru)
+async def _banderas(tid: uuid.UUID) -> tuple[bool, str]:
+    ((p, ru),) = await _sql(None, "select aos_procedures, aos_routing from tenants where id = :t", t=tid)
+    return bool(p), str(ru)
 
 
 async def _contar(tid: uuid.UUID, tabla: str) -> int:
@@ -117,26 +114,21 @@ async def test_quien_no_es_master_recibe_403(app_client, negocios, monkeypatch) 
     tester = await api_headers(app_client, a, email=tester_email, password=PASSWORD)
     for h in (dueno, tester):
         assert (await app_client.get(_url(a), headers=h)).status_code == 403
-        assert (await app_client.post(_url(a, simular=True), headers=h, json=_objetivo("v3"))).status_code == 403
-        assert (await app_client.put(_url(a), headers=h, json=_objetivo("v3"))).status_code == 403
+        assert (await app_client.post(_url(a, simular=True), headers=h, json=_objetivo())).status_code == 403
+        assert (await app_client.put(_url(a), headers=h, json=_objetivo())).status_code == 403
     # La base tampoco acepta al tester como admin.
     with pytest.raises(BanderasRechazadas) as rechazo:
         async with get_session() as session:
-            await fijar_banderas(session, a, BanderasAOS(runtime="v3"), admin_id=tester_id)
+            await fijar_banderas(session, a, BanderasAOS(), admin_id=tester_id)
     assert rechazo.value.codigo == "permiso"
-    assert await _banderas(a) == ("v3", False, "off")  # nace en v3 (ADR-0191)
+    assert await _banderas(a) == (False, "off")
     master = await api_headers(app_client, a)
     assert (await app_client.get(_url(uuid.uuid4()), headers=master)).status_code == 404
 
 
-async def test_combinaciones_fuera_de_orden_se_rechazan(app_client, negocios) -> None:  # type: ignore[no-untyped-def]
+async def test_valores_invalidos_y_escrituras_directas_se_rechazan(app_client, negocios) -> None:  # type: ignore[no-untyped-def]
     a, _b = negocios
     master = await api_headers(app_client, a)
-    for objetivo in (_objetivo(procedures=True), _objetivo(routing="shadow"), _objetivo(routing="active")):
-        r = await app_client.put(_url(a), headers=master, json=objetivo)
-        assert (r.status_code, r.json()["error"]["code"]) == (422, "agent_os_orden"), r.text
-        r = await app_client.post(_url(a, simular=True), headers=master, json=objetivo)
-        assert r.status_code == 422, r.text
     assert (await app_client.put(_url(a), headers=master, json=_objetivo(routing="on"))).status_code == 422
     # El rol de la aplicación ya no escribe las banderas directo (trigger de 0097).
     with pytest.raises(DBAPIError, match="aos_fijar_banderas"):
@@ -150,46 +142,39 @@ async def test_combinaciones_fuera_de_orden_se_rechazan(app_client, negocios) ->
     with pytest.raises(BanderasRechazadas) as rechazo:
         async with tenant_scope(a):
             async with get_session() as session:
-                await fijar_banderas(session, a, BanderasAOS(runtime="v3"), admin_id=master_id)
+                await fijar_banderas(session, a, BanderasAOS(), admin_id=master_id)
     assert rechazo.value.codigo == "permiso"
-    assert await _banderas(a) == ("v3", False, "off")
+    assert await _banderas(a) == (False, "off")
     assert await _auditoria(a) == []
 
 
-async def test_simular_aplicar_y_no_volver_con_auditoria_y_sin_tocar_al_otro(app_client, negocios) -> None:  # type: ignore[no-untyped-def]
+async def test_simular_aplicar_con_auditoria_y_sin_tocar_al_otro(app_client, negocios) -> None:  # type: ignore[no-untyped-def]
     a, b = negocios
     master = await api_headers(app_client, a)
     b_antes = (await _banderas(b), await _contar(b, "agents"), await _contar(b, "connection_releases"))
 
-    # Nace en v3 (migración 0126, ADR-0191): ya no hay paso legacy → v3 desde el panel.
-    assert await _banderas(a) == ("v3", False, "off")
-    # Repetir el mismo estado: sin cambios, sin auditar.
-    r = await app_client.put(_url(a), headers=master, json=_objetivo("v3"))
+    assert await _banderas(a) == (False, "off")
+    # Repetir el mismo estado: sin cambios, sin auditar. Un `runtime` de un panel viejo se ignora.
+    r = await app_client.put(_url(a), headers=master, json=_objetivo(runtime="legacy"))
     assert r.json()["accion"] == "sin_cambios"
 
     # Procedimientos + ruteo en shadow en un solo cambio: avisos del runbook.
-    objetivo = _objetivo("v3", procedures=True, routing="shadow")
+    objetivo = _objetivo(procedures=True, routing="shadow")
     sim = (await app_client.post(_url(a, simular=True), headers=master, json=objetivo)).json()
     assert sim["accion"] == "listo" and sim["pasos"] == ["procedimientos_on", "ruteo_shadow"], sim
     assert any("pass^4" in x for x in sim["avisos"]), sim["avisos"]
     r = await app_client.put(_url(a), headers=master, json=objetivo)
     assert r.status_code == 200 and r.json()["accion"] == "aplicado", r.text
-    assert await _banderas(a) == ("v3", True, "shadow")
-
-    # No se vuelve a legacy: 422, sin escribir ni auditar (el rollback es la release anterior, ADR-0191).
-    for llamada, url in ((app_client.put, _url(a)), (app_client.post, _url(a, simular=True))):
-        r = await llamada(url, headers=master, json=_objetivo())
-        assert (r.status_code, r.json()["error"]["code"]) == (422, "agent_os_orden"), r.text
-        assert "release anterior" in r.json()["error"]["message"], r.text
-    assert await _banderas(a) == ("v3", True, "shadow")
+    assert await _banderas(a) == (True, "shadow")
 
     # Auditoría: quién y qué, una fila por cambio real, en el negocio operado.
     filas = await _auditoria(a)
     assert [f[0] for f in filas] == ["admin:admin@local"]
-    assert [(f[2]["runtime"], f[2]["procedures"], f[2]["routing"]) for f in filas] == [("v3", True, "shadow")]
+    assert [(f[2]["procedures"], f[2]["routing"]) for f in filas] == [(True, "shadow")]
     estado = (await app_client.get(_url(a), headers=master)).json()
     assert estado["ultimo_cambio"]["actor"] == "admin:admin@local" and estado["ultimo_cambio"]["fecha"]
-    assert (estado["runtime"], estado["procedures"], estado["routing"]) == ("v3", True, "shadow")
+    assert (estado["procedures"], estado["routing"]) == (True, "shadow")
+    assert "runtime" not in estado and "aos_connection_routing" not in estado
 
     # El otro negocio, intacto.
     assert (await _banderas(b), await _contar(b, "agents"), await _contar(b, "connection_releases")) == b_antes

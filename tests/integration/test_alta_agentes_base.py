@@ -86,18 +86,14 @@ async def test_repetir_el_alta_no_duplica_el_coordinador() -> None:
     assert await _sql(tid, "select count(*) from agent_versions") == [(1,)]
 
 
-# ------------------------------------------------------------------ runtime del negocio nuevo (P-34)
-async def _runtime(tid: uuid.UUID) -> str:
-    return (await _sql(tid, "select aos_runtime from tenants where id = :t", t=tid))[0][0]
-
-
-async def test_el_negocio_nuevo_nace_en_v3() -> None:
+# ------------------------------------------------------------------ alta del negocio nuevo (P-34)
+async def test_el_alta_no_tiene_paso_de_runtime() -> None:
     from core.alta_negocio import onboard_tenant
 
     slug = uniq("hu68")
     tid, pasos = await onboard_tenant(name=f"HU68 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
 
-    assert await _runtime(tid) == "v3"  # nace así (migración 0126), sin paso de migración en el alta
+    assert tid is not None
     assert not any(p.startswith("runtime v3") for p in pasos)
 
 

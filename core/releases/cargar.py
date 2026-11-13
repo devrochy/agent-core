@@ -49,8 +49,8 @@ MAX_BYTES = 64 * 1024 * 1024
 
 
 class ErrorDeRelease(RuntimeError):
-    """La release no se puede ejecutar (p. ej. sin especialista en foco). Fail-closed con
-    `aos_runtime = 'v3'`: sube por el camino de error del turno."""
+    """La release no se puede ejecutar (p. ej. sin especialista en foco). Fail-closed:
+    sube por el camino de error del turno."""
 
 
 def elegir_foco(

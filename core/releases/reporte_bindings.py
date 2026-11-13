@@ -129,7 +129,7 @@ async def reporte_de_bindings(
     """Revisa las releases activa y canary de los negocios v3 (todos, o solo `tenant_ids`). Un negocio que
     falla no frena a los demás y queda en `errores`."""
     from core.db.session import get_session
-    from core.kernel.banderas import negocios_v3
+    from core.kernel.banderas import negocios_activos
     from core.kernel.procedures.catalogo import catalogo_de_acciones
     from core.releases.cargar import cargar_release
     from core.shared.tenant import tenant_scope
@@ -138,7 +138,7 @@ async def reporte_de_bindings(
     catalogo = catalogo_de_acciones(modules)
     siempre = _acciones_siempre_ofrecidas(catalogo)
     async with get_session() as session:
-        negocios = await negocios_v3(session)
+        negocios = await negocios_activos(session)
     if tenant_ids is not None:
         pedidos = set(tenant_ids)
         negocios = [t for t in negocios if t in pedidos]

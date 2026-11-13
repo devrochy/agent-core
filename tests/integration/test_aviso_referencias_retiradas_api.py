@@ -24,7 +24,6 @@ from typing import Any
 
 import pytest
 from _api_helpers import api_headers, uniq
-from sqlalchemy import text
 from test_referencias_retiradas import (  # los helpers del incidente de #676
     ACCION,
     VIEJO,
@@ -95,19 +94,6 @@ async def _conteos(tid: uuid.UUID) -> tuple[Any, ...]:
     )
     return tuple(fila)
 
-
-async def _runtime_v3(tid: uuid.UUID) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("update tenants set aos_runtime = 'v3' where id = :t"), {"t": tid})
-    finally:
-        await engine.dispose()
 
 
 async def _borrador_con_lo_retirado(tid: uuid.UUID, aid: uuid.UUID) -> None:
@@ -330,7 +316,6 @@ async def test_el_editor_tampoco_publica_lo_retirado_aunque_sea_un_procedimiento
     from core.shared.tenant import tenant_scope
 
     a, _, cid, _, _ = await _negocio_del_incidente()
-    await _runtime_v3(a)
     master = await api_headers(app_client, a)
     async with tenant_scope(a):
         agente = await versiones.crear_agente(a, key="ventas59", kind="specialist", name="Ventas 59", description="", actor=None)

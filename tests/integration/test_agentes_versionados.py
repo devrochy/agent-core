@@ -6,7 +6,7 @@ Gherkin:
 - «Concurrencia»: guardar con un `lock_version` viejo devuelve 409.
 - «Validación al guardar»: un AgentSpec o KernelSpec inválido se rechaza con los errores del
   contrato (el mismo validador del CLI y de CI).
-Más: keys reservadas, escrituras solo para el master (o `aos_runtime = 'v3'`) y aislamiento
+Más: keys reservadas, escrituras del dueño y aislamiento
 entre negocios. Sin LLM ni red.
 """
 
@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _api_helpers import api_headers, uniq
 from sqlalchemy import text
 
 pytestmark = [
@@ -66,7 +66,7 @@ def spec_en_su_enfoque(key: str) -> dict[str, Any]:
     return spec
 
 
-async def _negocio(aos_runtime: str = "legacy") -> uuid.UUID:
+async def _negocio() -> uuid.UUID:
     from core.db.session import get_session
 
     tid = uuid.uuid4()
@@ -75,9 +75,6 @@ async def _negocio(aos_runtime: str = "legacy") -> uuid.UUID:
             text("insert into tenants (id, name, slug) values (:id, :n, :s)"),
             {"id": tid, "n": "AOS-12 API", "s": uniq("aos12-api")},
         )
-    if aos_runtime == "v3":
-        # `v3` exige AOS_CONNECTION_ROUTING (ADR-0112); el CHECK de BD solo mira el orden.
-        await banderas_como_dueno(tid, aos_runtime="v3")
     return tid
 
 
@@ -206,7 +203,7 @@ async def test_kernelspec_del_coordinador_y_keys_reservadas(app_client) -> None:
 
 async def test_el_dueno_escribe_agentes_sin_403_por_runtime(app_client) -> None:
     """Sin el camino legacy (ADR-0191) no hay 403 `aos_runtime_legacy`."""
-    v3 = await _negocio("v3")
+    v3 = await _negocio()
     h3 = await api_headers(app_client, v3, email=await _dueno(v3), password=PASSWORD)
     r = await app_client.post(
         "/api/v1/admin/agents", headers=h3, json={"key": "comercial", "kind": "specialist", "name": "Ventas"}

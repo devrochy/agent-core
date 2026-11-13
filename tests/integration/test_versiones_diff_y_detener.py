@@ -14,7 +14,7 @@ import os
 import uuid
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno
+from _api_helpers import api_headers
 from test_enrutamiento_especialistas import (
     CITA,
     PLAN,
@@ -137,7 +137,6 @@ async def test_el_diff_no_compara_con_otra_conexion(app_client) -> None:
 
 async def test_detener_una_candidata(app_client) -> None:
     tid, cid, ag = await _equipo()
-    await banderas_como_dueno(tid, aos_runtime="v3")
     ((activa,),) = await _sql(tid, "select active_release_id from channel_connections where id = :c", c=cid)
     await _republicar_agenda(tid, ag["agenda"])
     rid = await _candidata(tid, cid)

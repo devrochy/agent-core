@@ -1356,7 +1356,7 @@ class UsageLedger(Base):
     # Turno y traza (HU-AOS-10): default del turno vigente, NULL fuera de un turno.
     turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=turn_id_de_fila)
     trace_id: Mapped[str | None] = mapped_column(Text, default=trace_id_de_fila)
-    # Release y agente del turno (migración 0070, HU-AOS-15): NULL con `aos_runtime = legacy`.
+    # Release y agente del turno (migración 0070, HU-AOS-15): NULL si el turno corrió sin release.
     connection_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     agent_instance_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     agent_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

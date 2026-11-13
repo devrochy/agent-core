@@ -105,11 +105,9 @@ async def _mensaje(tid: uuid.UUID, conv: uuid.UUID, direccion: str, cuando: date
 async def _banderas(tid: uuid.UUID, encendidas: bool) -> None:
     async with _owner() as conn:
         if encendidas:
-            await conn.execute(text("update tenants set aos_runtime = 'v3', aos_procedures = true where id = :t"), {"t": tid})
+            await conn.execute(text("update tenants set aos_procedures = true where id = :t"), {"t": tid})
         else:
-            await conn.execute(
-                text("update tenants set aos_procedures = false, aos_runtime = 'legacy' where id = :t"), {"t": tid}
-            )
+            await conn.execute(text("update tenants set aos_procedures = false where id = :t"), {"t": tid})
 
 
 async def _iniciar(tid: uuid.UUID, conv: uuid.UUID, now: datetime | None = None, **kw: Any) -> uuid.UUID:

@@ -321,7 +321,7 @@ async def _actividad(
 async def _escalados(
     session: Any, tenant_id: uuid.UUID, p: PeriodoResumen, agente_de: dict[uuid.UUID, uuid.UUID]
 ) -> dict[Any, dict[str, float]]:
-    """Turnos escalados por agente y ventana (solo runtime v3: es lo que escribe `turn_outcomes`)."""
+    """Turnos escalados por agente y ventana (lo que escribe `turn_outcomes`)."""
     _exigir_scope(tenant_id)
     filas = (
         await session.execute(
@@ -571,11 +571,6 @@ async def resumen(
     ]
 
     async with get_session() as session:
-        runtime = (
-            await session.execute(
-                text("select aos_runtime from tenants where id = :t"), {"t": tenant_id}
-            )
-        ).scalar_one_or_none() or "v3"
         por_defecto = await especialista_por_defecto(session, tenant_id)
         general = await _general(session, tenant_id, p, acceso, str(por_defecto) if por_defecto else None)
         agentes: list[AgentRecord] = []
@@ -641,7 +636,6 @@ async def resumen(
             "previo_hasta": p.previo_hasta,
             "dias": p.dias,
         },
-        "runtime": runtime,
         "general": {
             "kpis": [_kpi_a_dict(k, p.dias) for k in general],
             # Todo el negocio: cada clave de `puntos` (agentes, Coordinador y lo no atribuido).

@@ -89,13 +89,13 @@ def _manifiesto() -> Any:
 
 
 # ------------------------------------------------------------------ pasos
-async def _negocio_del_tester(tenant_id: uuid.UUID, slug: str) -> str:
-    """El negocio vivo con ese id Y ese slug `qa-`. Devuelve su `aos_runtime`."""
+async def _negocio_del_tester(tenant_id: uuid.UUID, slug: str) -> None:
+    """El negocio vivo con ese id Y ese slug `qa-` (si no, `FalloAgentOS`)."""
     async with get_session() as session:
         fila = (
             await session.execute(
                 text(
-                    "SELECT aos_runtime FROM tenants WHERE id = :t AND slug = :s AND slug LIKE 'qa-%' "
+                    "SELECT 1 FROM tenants WHERE id = :t AND slug = :s AND slug LIKE 'qa-%' "
                     "AND deleted_at IS NULL"
                 ),
                 {"t": tenant_id, "s": slug},
@@ -103,7 +103,6 @@ async def _negocio_del_tester(tenant_id: uuid.UUID, slug: str) -> str:
         ).first()
     if fila is None:
         raise FalloAgentOS("el negocio no es el negocio de prueba del tester")
-    return str(fila[0])
 
 
 async def _chat_web(tenant_id: uuid.UUID) -> None:
@@ -193,7 +192,7 @@ async def _banderas(tenant_id: uuid.UUID, slug: str) -> None:
                 await conn.execute(
                     text(
                         "SELECT 1 FROM tenants WHERE id = :t AND slug = :s AND slug LIKE 'qa-%' "
-                        "AND deleted_at IS NULL AND aos_runtime = 'v3' FOR UPDATE"
+                        "AND deleted_at IS NULL FOR UPDATE"
                     ),
                     {"t": tenant_id, "s": slug},
                 )
@@ -202,7 +201,7 @@ async def _banderas(tenant_id: uuid.UUID, slug: str) -> None:
                 raise FalloAgentOS("no se pudieron encender los procedimientos y el enrutamiento")
             try:
                 await fijar_banderas(
-                    conn, tenant_id, BanderasAOS(runtime="v3", procedimientos=True, ruteo="active"), actor=ACTOR
+                    conn, tenant_id, BanderasAOS(procedimientos=True, ruteo="active"), actor=ACTOR
                 )
             except BanderasRechazadas as exc:
                 raise FalloAgentOS(f"no se pudieron encender los procedimientos y el enrutamiento: {exc}") from None
@@ -257,7 +256,7 @@ async def resumen(tenant_id: uuid.UUID, motivo: str | None) -> dict[str, Any]:
     async with get_session() as session:
         fila = (
             await session.execute(
-                text("SELECT aos_runtime, aos_procedures, aos_routing FROM tenants WHERE id = :t AND deleted_at IS NULL"),
+                text("SELECT aos_procedures, aos_routing FROM tenants WHERE id = :t AND deleted_at IS NULL"),
                 {"t": tenant_id},
             )
         ).first()
@@ -291,7 +290,7 @@ async def resumen(tenant_id: uuid.UUID, motivo: str | None) -> dict[str, Any]:
                     ]
     listo = (
         fila is not None
-        and (fila[0], bool(fila[1]), fila[2]) == ("v3", True, "active")
+        and (bool(fila[0]), fila[1]) == (True, "active")
         and chat is not None
         and chat["activo"]
     )

@@ -245,7 +245,7 @@ async def _write_usage_ledger(
     """Una fila append-only por turno. Best-effort: nunca interrumpe la respuesta."""
     try:
         anotar_uso(usage.input_tokens, usage.output_tokens, usage.cost_usd)  # turn_outcomes (HU-AOS-10)
-        # Release y agente del turno (HU-AOS-15): NULL con `aos_runtime = legacy`.
+        # Release y agente del turno (HU-AOS-15): NULL si el turno corrió sin release.
         release = release_vigente.vigente()
         agente = release.foco if release is not None else None
         fila = dict(
@@ -297,7 +297,7 @@ async def _write_usage_ledger(
             span.end()
 
 
-@con_release  # ranura de la release del turno (HU-AOS-14); vacía con aos_runtime = legacy
+@con_release  # ranura de la release del turno (HU-AOS-14)
 @en_turno(anota_resultado=True)  # decisión y resultado del turno (HU-AOS-10)
 async def process_conversation(conversation_id: uuid.UUID, latest_message: str) -> TurnResult | None:
     settings = get_settings()
@@ -321,8 +321,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
 
     # ---------------- 0. AgentSpec del tenant (Sprint 2, ADR-0014)
     spec = await load_active_spec()
-    # Release del turno, sticky por episodio (ADR-0117 §4): no hace nada con aos_runtime = legacy.
-    # Con v3 (HU-AOS-15) el turno ejecuta la versión congelada del especialista en foco y el
+    # Release del turno, sticky por episodio (ADR-0117 §4). El turno (HU-AOS-15) ejecuta la versión congelada del especialista en foco y el
     # KernelSpec de la release, en la forma v2 que lee este loop; sin release, el mismo v2.
     await fijar_release_del_turno(conversation, texto=latest_message)  # texto: router de HU-AOS-17
     if release_vigente.sin_release():
@@ -331,7 +330,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         log.warning("turno_sin_release", conversation_id=str(conversation.id))
         return None
     # Lo compilado del agente en foco, una vez por versión (HU-AOS-35, adenda de ADR-0117): la
-    # vista v2, el flujo de la release y los bloques fijos del prompt. None sin release (legacy) o
+    # vista v2, el flujo de la release y los bloques fijos del prompt. None sin release o
     # si no se pudo compilar de forma determinista: el turno se arma como siempre.
     compilado = await _compilado_del_turno()
     spec = compilado.spec() if compilado is not None else spec_del_turno(spec)
@@ -434,7 +433,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         else ""
     )
     # Motor de procedimientos (HU-AOS-05): None salvo con `aos_procedures` (activo) o con
-    # `aos_runtime = v3` y procedimientos registrados (sombra, no cambia nada de lo que ve el modelo).
+    # procedimientos registrados (sombra, no cambia nada de lo que ve el modelo).
     # Activo trae la tarjeta de estado (ADR-0114) y, con tarea en foco, las acciones de su etapa.
     motor = await contexto_del_motor(
         conversation_id, customer_id=customer.id, channel=conversation.channel, enabled=enabled,
@@ -476,7 +475,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # Zona del negocio para la fecha y hora actual del prompt (ADR-0091).
         timezone=(getattr(app_settings, "timezone", None) if app_settings else None) or DEFAULT_TIMEZONE,
     )
-    # Con release (aos_runtime = v3), los campos de AppSettings congelados en ella (ADR-0117 §2).
+    # Con release, los campos de AppSettings congelados en ella (ADR-0117 §2).
     prompt_ctx = con_valores_de_release(prompt_ctx)
     if no_disponible:
         prompt_ctx = dataclasses.replace(prompt_ctx, no_disponible=no_disponible)

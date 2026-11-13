@@ -2,7 +2,7 @@
 
 Prueba el punto más frágil del ADR-0172: fuera de un turno no hay release ni spec. El entorno del toque los
 resuelve como un turno (`load_active_spec` → `fijar_release_del_turno` → `spec_del_turno` bajo la ranura de la
-release) y la tool corre con sus bindings reales, en negocio_opciones y con `aos_runtime = 'v3'`. También el camino
+release) y la tool corre con sus bindings reales, en negocio_opciones. También el camino
 completo del consumer: bandera apagada = comportamiento de siempre; encendida = toque → respuesta fija con el LLM
 invocado cero veces.
 
@@ -279,20 +279,6 @@ async def test_binding_con_requires_confirmation_confirma_con_optc_y_ejecuta_sin
 
 
 # ---------------------------------------------------------------- v3: la release y los bindings por agente
-async def _banderas(tid: uuid.UUID, runtime: str) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("update tenants set aos_runtime = :r where id = :t"), {"r": runtime, "t": tid})
-    finally:
-        await engine.dispose()
-
-
 @pytest.fixture(scope="module")
 async def v3() -> AsyncIterator[tuple[tuple[uuid.UUID, uuid.UUID], tuple[uuid.UUID, uuid.UUID]]]:
     """Dos negocios en v3 con su release 1: el A con el binding de la tool habilitado en el General, el B con él deshabilitado.
@@ -334,7 +320,6 @@ async def v3() -> AsyncIterator[tuple[tuple[uuid.UUID, uuid.UUID], tuple[uuid.UU
         )
         reporte = await release_inicial(tid, plugin_manager.scan())
         assert not reporte.fallo, reporte.errores
-        await _banderas(tid, "v3")
         salida.append((tid, cid))
     registro.undo()
     yield salida[0], salida[1]

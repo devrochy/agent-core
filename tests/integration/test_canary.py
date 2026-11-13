@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno
+from _api_helpers import api_headers
 from test_releases_por_conexion import (
     _activa,
     _asignar,
@@ -41,7 +41,6 @@ async def _con_candidata() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
     """Negocio v3 con la release 1 activa y una candidata. (tid, conexión, activa, candidata)."""
     tid, _slug, cid = await _negocio()
     await _release_uno(tid)
-    await banderas_como_dueno(tid, aos_runtime="v3")
     uno = await _activa(tid, cid)
     assert uno is not None
     await _cambiar_nombre(tid, "Dos")

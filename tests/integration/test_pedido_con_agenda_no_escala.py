@@ -131,4 +131,4 @@ async def test_disponibilidad_con_dato_de_agenda_sigue_bloqueando_y_deja_el_moti
 
 async def test_el_reporte_lee_el_runtime_efectivo(negocio) -> None:  # type: ignore[no-untyped-def]
     tid, _pagos = negocio
-    assert await journeys.runtime_efectivo(tid) == {"aos_runtime": "v3", "aos_procedures": False}  # nace en v3 (0126)
+    assert await journeys.runtime_efectivo(tid) == {"aos_procedures": False}

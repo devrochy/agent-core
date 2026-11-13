@@ -72,7 +72,7 @@ async def probar(tenant_id: uuid.UUID, connection_id: uuid.UUID, frase: str) -> 
             raise SinReleaseActiva(str(connection_id))
         banderas = await banderas_del_negocio(session, tenant_id)
     routing = release.ruteo()
-    bandera = banderas.ruteo if banderas.runtime == "v3" else "off"
+    bandera = banderas.ruteo
     entrada = router.Entrada(texto=frase[: router.MAX_TEXTO], channel=str(fila[1] or ""))
     ruta = router.decidir(release, routing, entrada, release.foco(None))
     procedimientos = release.procedimientos()

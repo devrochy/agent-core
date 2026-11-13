@@ -6302,7 +6302,7 @@
           "admin · releases"
         ],
         "summary": "Start Canary",
-        "description": "Prueba la versión con una parte de las conversaciones nuevas (HU-AOS-32). Mismas reglas que\npublicar: dueño o master, gate aprobado si está cerrado, `aos_runtime = v3` (409 `requiere_v3`).\nSi la plataforma la apagó (`CANARY_DISPONIBLE`), responde 409 `canary_no_disponible`.",
+        "description": "Prueba la versión con una parte de las conversaciones nuevas (HU-AOS-32). Mismas reglas que\npublicar: dueño o master y gate aprobado si está cerrado.\nSi la plataforma la apagó (`CANARY_DISPONIBLE`), responde 409 `canary_no_disponible`.",
         "operationId": "start_canary_api_v1_admin_connections__connection_id__releases__release_id__canary_post",
         "parameters": [
           {
@@ -14610,7 +14610,7 @@
           "admin · plataforma"
         ],
         "summary": "Get Agent Os",
-        "description": "Banderas del Agent OS del negocio, la global del entorno y el último cambio (quién y cuándo).",
+        "description": "Banderas del Agent OS del negocio y el último cambio (quién y cuándo).",
         "operationId": "get_agent_os_api_v1_admin_platform_tenants__tenant_id__agent_os_get",
         "parameters": [
           {
@@ -14685,7 +14685,7 @@
           "admin · plataforma"
         ],
         "summary": "Put Agent Os",
-        "description": "Lleva el negocio al estado pedido (HU-AOS-15, orden de ADR-0112): al pasar a v3 corre los\nbackfills del negocio y `migrar-a-v3` (con `construir` si se pide); al volver a legacy apaga\ntodo. Escribe con `aos_fijar_banderas` (auditada). 422 `agent_os_orden` (combinación fuera de\norden), 409 `agent_os_bloqueado` (precondiciones; `details` trae bloqueos y avisos) o\n`agent_os_en_curso` (otro cambio en curso).",
+        "description": "Lleva el negocio al estado pedido (HU-AOS-15, orden de ADR-0112 y ADR-0138). Escribe con `aos_fijar_banderas` (auditada). 422 `agent_os_orden` (combinación fuera de\norden), 409 `agent_os_bloqueado` (precondiciones; `details` trae bloqueos y avisos) o\n`agent_os_en_curso` (otro cambio en curso).",
         "operationId": "put_agent_os_api_v1_admin_platform_tenants__tenant_id__agent_os_put",
         "parameters": [
           {
@@ -14772,7 +14772,7 @@
           "admin · plataforma"
         ],
         "summary": "Simular Agent Os",
-        "description": "Dry-run del cambio: bloqueos, avisos y los pasos que aplicaría. No escribe nada (ni\nbackfills, ni releases, ni banderas). 422 `agent_os_orden` si el objetivo viola el orden.",
+        "description": "Dry-run del cambio: avisos y los pasos que aplicaría. No escribe nada. 422 `agent_os_orden` si el objetivo viola el orden.",
         "operationId": "simular_agent_os_api_v1_admin_platform_tenants__tenant_id__agent_os_simular_post",
         "parameters": [
           {
@@ -46112,11 +46112,6 @@
             "type": "array",
             "title": "Asistente",
             "default": []
-          },
-          "aos_runtime": {
-            "type": "string",
-            "title": "Aos Runtime",
-            "default": "legacy"
           }
         },
         "type": "object",
@@ -58236,10 +58231,6 @@
           "periodo": {
             "$ref": "#/components/schemas/PeriodoOut"
           },
-          "runtime": {
-            "type": "string",
-            "title": "Runtime"
-          },
           "general": {
             "$ref": "#/components/schemas/BloqueGeneral"
           },
@@ -58254,7 +58245,6 @@
         "type": "object",
         "required": [
           "periodo",
-          "runtime",
           "general",
           "agentes"
         ],
@@ -62845,14 +62835,6 @@
       },
       "AgentOSBanderas": {
         "properties": {
-          "runtime": {
-            "type": "string",
-            "enum": [
-              "legacy",
-              "v3"
-            ],
-            "title": "Runtime"
-          },
           "procedures": {
             "type": "boolean",
             "title": "Procedures"
@@ -62869,12 +62851,11 @@
         },
         "type": "object",
         "required": [
-          "runtime",
           "procedures",
           "routing"
         ],
         "title": "AgentOSBanderas",
-        "description": "Estado de las banderas del Agent OS de un negocio (ADR-0112, ADR-0138)."
+        "description": "Estado de las banderas del Agent OS de un negocio (ADR-0112, ADR-0138). El runtime ya no es\nbandera: todo negocio corre en el Agent OS (ADR-0191)."
       },
       "AgentOSCambio": {
         "properties": {
@@ -62897,14 +62878,6 @@
       },
       "AgentOSEstado": {
         "properties": {
-          "runtime": {
-            "type": "string",
-            "enum": [
-              "legacy",
-              "v3"
-            ],
-            "title": "Runtime"
-          },
           "procedures": {
             "type": "boolean",
             "title": "Procedures"
@@ -62917,10 +62890,6 @@
               "active"
             ],
             "title": "Routing"
-          },
-          "aos_connection_routing": {
-            "type": "boolean",
-            "title": "Aos Connection Routing"
           },
           "ultimo_cambio": {
             "anyOf": [
@@ -62935,23 +62904,13 @@
         },
         "type": "object",
         "required": [
-          "runtime",
           "procedures",
-          "routing",
-          "aos_connection_routing"
+          "routing"
         ],
         "title": "AgentOSEstado"
       },
       "AgentOSObjetivo": {
         "properties": {
-          "runtime": {
-            "type": "string",
-            "enum": [
-              "legacy",
-              "v3"
-            ],
-            "title": "Runtime"
-          },
           "procedures": {
             "type": "boolean",
             "title": "Procedures"
@@ -62964,16 +62923,10 @@
               "active"
             ],
             "title": "Routing"
-          },
-          "construir": {
-            "type": "boolean",
-            "title": "Construir",
-            "default": false
           }
         },
         "type": "object",
         "required": [
-          "runtime",
           "procedures",
           "routing"
         ],
@@ -62990,10 +62943,6 @@
           },
           "despues": {
             "$ref": "#/components/schemas/AgentOSBanderas"
-          },
-          "aos_connection_routing": {
-            "type": "boolean",
-            "title": "Aos Connection Routing"
           },
           "pasos": {
             "items": {
@@ -63022,7 +62971,6 @@
           "accion",
           "antes",
           "despues",
-          "aos_connection_routing",
           "pasos",
           "bloqueos",
           "avisos"
@@ -65976,10 +65924,6 @@
       },
       "AgentsOverview": {
         "properties": {
-          "runtime": {
-            "type": "string",
-            "title": "Runtime"
-          },
           "items": {
             "items": {
               "$ref": "#/components/schemas/AgentOverviewItem"
@@ -66004,7 +65948,6 @@
         },
         "type": "object",
         "required": [
-          "runtime",
           "items",
           "sin_atribuir"
         ],
@@ -66495,14 +66438,6 @@
             "type": "boolean",
             "title": "Has More"
           },
-          "runtime": {
-            "type": "string",
-            "enum": [
-              "legacy",
-              "v3"
-            ],
-            "title": "Runtime"
-          },
           "routing": {
             "type": "string",
             "enum": [
@@ -66545,7 +66480,6 @@
           "page",
           "page_size",
           "has_more",
-          "runtime",
           "routing",
           "consistency",
           "can_edit",

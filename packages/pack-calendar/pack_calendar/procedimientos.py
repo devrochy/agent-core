@@ -141,7 +141,7 @@ async def horario_ofrecido(valor: Any, ctx: ToolContext, datos: dict[str, Any]) 
 
 def registrar(host: Any, plugin_id: str) -> None:
     """Publica el procedimiento y sus resolvers (lo llama `on_activate`). Sin banderas encendidas
-    nadie los usa: el motor solo actúa con `tenants.aos_procedures` (o en sombra con `aos_runtime = v3`)."""
+    nadie los usa: el motor solo actúa con `tenants.aos_procedures` (o en sombra sin ella)."""
     from core.kernel.procedures import de_pack
 
     host.register_resolver(f"{plugin_id}.tipo_de_cita", validar=tipo_de_cita)

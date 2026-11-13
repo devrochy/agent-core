@@ -12,7 +12,7 @@ import uuid
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _api_helpers import api_headers, uniq
 from sqlalchemy import text
 
 pytestmark = [
@@ -128,7 +128,6 @@ async def test_exenciones_internas_y_qa_solo_en_negocio_de_prueba() -> None:
 
 async def test_la_api_no_acepta_los_motivos_de_las_exenciones(app_client) -> None:
     tid, cid = await _negocio()
-    await banderas_como_dueno(tid, aos_runtime="v3")
     dos = await _candidata(tid, cid, "Desde la API")
     master = await api_headers(app_client, tid)
     base = f"/api/v1/admin/connections/{cid}/releases/{dos}/promote"

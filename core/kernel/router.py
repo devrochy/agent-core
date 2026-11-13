@@ -1,6 +1,6 @@
 """Router del Coordinador: qué especialista atiende el turno (HU-AOS-17, ADR-0138; D-AOS-8).
 
-Solo con `tenants.aos_routing` distinto de `off` (exige `aos_runtime = 'v3'`); lo llama
+Solo con `tenants.aos_routing` distinto de `off`; lo llama
 `release_del_turno.asignar` con la conversación bloqueada. Sin LLM y sin embeddings. En orden:
 
 1. **Tarea en foco** (`conversation_tasks` activa en la posición 0): atiende su dueño

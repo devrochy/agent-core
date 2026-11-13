@@ -544,19 +544,11 @@ async def _negocio_del_tester(admin: Admin) -> Contexto:
     )
 
 
-async def _exigir_agent_os(tenant_id: uuid.UUID) -> None:
+async def _exigir_agent_os() -> None:
     from core.config import get_settings
 
     if not get_settings().kernel_ledger_enabled:
         raise FalloEscenario("El ledger del kernel está apagado en este entorno (KERNEL_LEDGER_ENABLED).")
-    async with get_session() as session:
-        runtime = (
-            await session.execute(text("SELECT aos_runtime FROM tenants WHERE id = :t"), {"t": tenant_id})
-        ).scalar_one()
-    if runtime != "v3":
-        raise FalloEscenario(
-            "Tu negocio de prueba no tiene el Agent OS listo: vuelve a pulsar «Preparar mis datos»."
-        )
 
 
 async def _ultimos(admin_id: uuid.UUID) -> dict[str, dict[str, Any]]:
@@ -634,7 +626,7 @@ async def crear(admin: Admin, slug: str) -> dict[str, Any]:
         try:
             async with tenant_scope(ctx.tenant_id):
                 if escenario.agent_os:
-                    await _exigir_agent_os(ctx.tenant_id)
+                    await _exigir_agent_os()
                 resultado = await escenario.crear(ctx)
         except FalloEscenario as exc:
             raise QaError("conflicto", str(exc)) from exc

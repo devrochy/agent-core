@@ -79,9 +79,8 @@ async def conexion_real_para_probar(session: Any, tenant_id: uuid.UUID) -> uuid.
         await session.execute(
             text(
                 "select c.id from channel_connections c join connection_types t on t.id = c.type_id "
-                "join tenants n on n.id = c.tenant_id "
                 "where c.tenant_id = :t and c.deleted_at is null and c.active_release_id is not null "
-                "and t.produces_conversations and c.type_id <> 'playground' and n.aos_runtime = 'v3' "
+                "and t.produces_conversations and c.type_id <> 'playground' "
                 "order by c.is_primary desc, c.created_at limit 1"
             ),
             {"t": tenant_id},

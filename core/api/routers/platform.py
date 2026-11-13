@@ -400,9 +400,9 @@ async def run_platform_meta_app(
 
 # ------------------------------------------------- Agent OS por negocio (HU-AOS-15)
 class AgentOSBanderas(BaseModel):
-    """Estado de las banderas del Agent OS de un negocio (ADR-0112, ADR-0138)."""
+    """Estado de las banderas del Agent OS de un negocio (ADR-0112, ADR-0138). El runtime ya no es
+    bandera: todo negocio corre en el Agent OS (ADR-0191)."""
 
-    runtime: Literal["legacy", "v3"]
     procedures: bool
     routing: Literal["off", "shadow", "active"]
 
@@ -413,15 +413,11 @@ class AgentOSCambio(BaseModel):
 
 
 class AgentOSEstado(AgentOSBanderas):
-    # `AOS_CONNECTION_ROUTING` del entorno: v3 la exige (se cambia con un despliegue).
-    aos_connection_routing: bool
     ultimo_cambio: AgentOSCambio | None = None
 
 
 class AgentOSObjetivo(AgentOSBanderas):
-    # Construir y promover una release nueva si la activa está desactualizada: cambia la release
-    # activa del negocio, por eso es opt-in explícito del master.
-    construir: bool = False
+    pass
 
 
 class AgentOSResultado(BaseModel):
@@ -429,7 +425,6 @@ class AgentOSResultado(BaseModel):
     accion: str
     antes: AgentOSBanderas
     despues: AgentOSBanderas
-    aos_connection_routing: bool
     pasos: list[str]
     bloqueos: list[str]
     avisos: list[str]
@@ -443,7 +438,7 @@ def _require_master_agent_os(principal: Principal) -> None:
 
 
 def _banderas_out(b: Any) -> AgentOSBanderas:
-    return AgentOSBanderas(runtime=b.runtime, procedures=b.procedimientos, routing=b.ruteo)
+    return AgentOSBanderas(procedures=b.procedimientos, routing=b.ruteo)
 
 
 def _resultado_out(r: Any) -> AgentOSResultado:
@@ -451,7 +446,6 @@ def _resultado_out(r: Any) -> AgentOSResultado:
         accion=r.accion,
         antes=_banderas_out(r.antes),
         despues=_banderas_out(r.despues),
-        aos_connection_routing=r.aos_connection_routing,
         pasos=r.pasos,
         bloqueos=r.bloqueos,
         avisos=r.avisos,
@@ -463,7 +457,7 @@ async def get_agent_os(
     tenant_id: uuid.UUID,
     principal: Annotated[Principal, Depends(get_principal)],
 ) -> AgentOSEstado:
-    """Banderas del Agent OS del negocio, la global del entorno y el último cambio (quién y cuándo)."""
+    """Banderas del Agent OS del negocio y el último cambio (quién y cuándo)."""
     _require_master_agent_os(principal)
     from core.admin import agent_os
 
@@ -473,7 +467,6 @@ async def get_agent_os(
     cambio = await agent_os.ultimo_cambio(tenant_id)
     return AgentOSEstado(
         **_banderas_out(banderas).model_dump(),
-        aos_connection_routing=True,
         ultimo_cambio=AgentOSCambio(actor=cambio["actor"], fecha=cambio["fecha"]) if cambio else None,
     )
 
@@ -483,18 +476,17 @@ async def _agent_os(tenant_id: uuid.UUID, payload: AgentOSObjetivo, principal: P
     from core.admin import agent_os
     from core.kernel.banderas import BanderasAOS
 
-    objetivo = BanderasAOS(runtime=payload.runtime, procedimientos=payload.procedures, ruteo=payload.routing)
+    objetivo = BanderasAOS(procedimientos=payload.procedures, ruteo=payload.routing)
     try:
         if aplicar:
             resultado = await agent_os.aplicar(
                 tenant_id,
                 objetivo,
-                construir=payload.construir,
                 admin_id=principal.admin.id,
                 actor=f"admin:{principal.admin.email}",
             )
         else:
-            resultado = await agent_os.simular(tenant_id, objetivo, construir=payload.construir, admin_id=principal.admin.id)
+            resultado = await agent_os.simular(tenant_id, objetivo, admin_id=principal.admin.id)
     except agent_os.ObjetivoInvalido as exc:
         raise ApiError(422, "agent_os_orden", str(exc)) from None
     except agent_os.NegocioNoEncontrado:
@@ -520,8 +512,7 @@ async def simular_agent_os(
     payload: AgentOSObjetivo,
     principal: Annotated[Principal, Depends(get_principal)],
 ) -> AgentOSResultado:
-    """Dry-run del cambio: bloqueos, avisos y los pasos que aplicaría. No escribe nada (ni
-    backfills, ni releases, ni banderas). 422 `agent_os_orden` si el objetivo viola el orden."""
+    """Dry-run del cambio: avisos y los pasos que aplicaría. No escribe nada. 422 `agent_os_orden` si el objetivo viola el orden."""
     return await _agent_os(tenant_id, payload, principal, aplicar=False)
 
 
@@ -531,9 +522,7 @@ async def put_agent_os(
     payload: AgentOSObjetivo,
     principal: Annotated[Principal, Depends(get_principal)],
 ) -> AgentOSResultado:
-    """Lleva el negocio al estado pedido (HU-AOS-15, orden de ADR-0112): al pasar a v3 corre los
-    backfills del negocio y `migrar-a-v3` (con `construir` si se pide); al volver a legacy apaga
-    todo. Escribe con `aos_fijar_banderas` (auditada). 422 `agent_os_orden` (combinación fuera de
+    """Lleva el negocio al estado pedido (HU-AOS-15, orden de ADR-0112 y ADR-0138). Escribe con `aos_fijar_banderas` (auditada). 422 `agent_os_orden` (combinación fuera de
     orden), 409 `agent_os_bloqueado` (precondiciones; `details` trae bloqueos y avisos) o
     `agent_os_en_curso` (otro cambio en curso)."""
     return await _agent_os(tenant_id, payload, principal, aplicar=True)

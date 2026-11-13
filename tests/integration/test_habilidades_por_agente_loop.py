@@ -1,6 +1,6 @@
 """HU-AOS-16 (parte 1) · procedimientos por agente con el loop real y un modelo guionado (sin LLM).
 
-Negocio `aos_runtime = v3` con el motor de procedimientos (`aos_procedures`), `pack_commerce` y
+Negocio con el motor de procedimientos (`aos_procedures`), `pack_commerce` y
 `pack_calendar`, y `AOS_CONNECTION_ROUTING` encendida (la ranura de la release solo se llena así):
 
 - **El especialista por defecto ve lo mismo que sin release** (B3 del arquitecto): con la release del especialista por
@@ -58,7 +58,7 @@ async def _sql(tid: uuid.UUID | None, sql: str, **params: Any) -> list[Any]:
             return list(resultado.all()) if getattr(resultado, "returns_rows", False) else []
 
 
-async def _banderas(tid: uuid.UUID, runtime: str, procedimientos: bool) -> None:
+async def _banderas(tid: uuid.UUID, procedimientos: bool) -> None:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from core.config import get_settings
@@ -69,8 +69,8 @@ async def _banderas(tid: uuid.UUID, runtime: str, procedimientos: bool) -> None:
         async with engine.begin() as conn:
             await conn.execute(text("update tenants set aos_procedures = false where id = :t"), {"t": tid})
             await conn.execute(
-                text("update tenants set aos_runtime = :r, aos_procedures = :p where id = :t"),
-                {"t": tid, "r": runtime, "p": procedimientos},
+                text("update tenants set aos_procedures = :p where id = :t"),
+                {"t": tid, "p": procedimientos},
             )
     finally:
         await engine.dispose()
@@ -117,7 +117,7 @@ async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:
     )
     reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
-    await _banderas(tid, "v3", True)
+    await _banderas(tid, True)
     return tid, cid
 
 

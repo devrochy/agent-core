@@ -83,7 +83,8 @@ async def test_consola_muestra_coordinador_agentes_release_salud_y_consumo(app_c
     r = await app_client.get(CONSOLA, headers=h)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert (body["runtime"], body["routing"], body["can_edit"]) == ("v3", "off", True)  # nace en v3 (ADR-0191)
+    assert (body["routing"], body["can_edit"]) == ("off", True)
+    assert "runtime" not in body  # todo negocio corre en el Agent OS (ADR-0191)
     assert [a["key"] for a in body["unassigned_agents"]] == ["cobranza"]
     assert body["unassigned_agents"][0]["id"] == huerfano
     filas = {f["id"]: f for f in body["items"]}

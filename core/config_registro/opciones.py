@@ -16,7 +16,6 @@ from annotated_types import Ge, Le
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
-from core.admin.agent_os import RUNTIMES
 from core.admin.envios_segmento import PALABRAS_DE_BAJA_POR_DEFECTO
 from core.agents.spec import DEFAULT_SPEC
 from core.config import DEBOUNCE_DELAY_MS, Settings
@@ -772,8 +771,6 @@ COORDINADOR: list[Opcion] = [
 ]  # fmt: skip
 
 # ------------------------------------------------------------------ banderas del Agent OS
-_OPCION_RUNTIME = "aos_runtime"
-_RUNTIME = {"legacy": ("Clásico", "el asistente de siempre"), "v3": ("Agent OS", "Coordinador y agentes versionados")}
 _RUTEO = {
     "off": ("Apagado", "atiende siempre el agente de la conexión"),
     "shadow": ("Sombra", "calcula y registra, sin aplicar"),
@@ -790,20 +787,6 @@ _VERIFICAR = {
 }
 AGENT_OS: list[Opcion] = [
     Opcion(
-        clave="aos_runtime",
-        grupo="agent_os",
-        tipo="elegir_una",
-        etiqueta="Motor de conversación",
-        explicacion=(
-            "Con «Agent OS» el negocio usa el Coordinador y los agentes versionados; con «Clásico», el asistente "
-            "de siempre. El Agent OS además exige AOS_CONNECTION_ROUTING en el entorno del despliegue."
-        ),
-        valores=[ValorPosible(valor=v, etiqueta=_RUNTIME.get(v, (v, ""))[0], nota=_RUNTIME.get(v, (v, ""))[1]) for v in RUNTIMES],
-        por_defecto=APAGADAS.runtime,
-        editable_por="master",
-        almacen="tenants:aos_runtime",
-    ),
-    Opcion(
         clave="aos_procedures",
         grupo="agent_os",
         tipo="booleano",
@@ -813,9 +796,6 @@ AGENT_OS: list[Opcion] = [
             "dejar que el modelo las cierre solo. Antes de encenderlos, mide el pass^4 del negocio."
         ),
         por_defecto=APAGADAS.procedimientos,
-        depende_de=Dependencia(
-            clave=_OPCION_RUNTIME, condicion="igual", valor="v3", motivo="Los procedimientos exigen el Agent OS."
-        ),
         editable_por="master",
         almacen="tenants:aos_procedures",
     ),
@@ -830,9 +810,6 @@ AGENT_OS: list[Opcion] = [
         ),
         valores=[ValorPosible(valor=v, etiqueta=_RUTEO.get(v, (v, ""))[0], nota=_RUTEO.get(v, (v, ""))[1]) for v in MODOS_RUTEO],
         por_defecto=APAGADAS.ruteo,
-        depende_de=Dependencia(
-            clave=_OPCION_RUNTIME, condicion="igual", valor="v3", motivo="El enrutamiento exige el Agent OS."
-        ),
         editable_por="master",
         almacen="tenants:aos_routing",
     ),
@@ -848,9 +825,6 @@ AGENT_OS: list[Opcion] = [
         ),
         valores=[ValorPosible(valor=v, etiqueta=_PILA.get(v, (v, ""))[0], nota=_PILA.get(v, (v, ""))[1]) for v in MODOS_PILA],
         por_defecto=Colaboracion().pila,
-        depende_de=Dependencia(
-            clave=_OPCION_RUNTIME, condicion="igual", valor="v3", motivo="La pila de tareas exige el Agent OS."
-        ),
         editable_por="master",
         almacen="tenants:settings.agent_os.pila",
     ),
@@ -865,9 +839,6 @@ AGENT_OS: list[Opcion] = [
         ),
         valores=[ValorPosible(valor=v, etiqueta=_VERIFICAR.get(v, (v, ""))[0], nota=_VERIFICAR.get(v, (v, ""))[1]) for v in MODOS_VERIFICACION],
         por_defecto=Colaboracion().verificar_horarios,
-        depende_de=Dependencia(
-            clave=_OPCION_RUNTIME, condicion="igual", valor="v3", motivo="El verificador de horarios exige el Agent OS."
-        ),
         editable_por="master",
         almacen="tenants:settings.agent_os.verificar_horarios",
     ),
@@ -882,9 +853,6 @@ AGENT_OS: list[Opcion] = [
         ),
         valores=[ValorPosible(valor=v, etiqueta=_VERIFICAR.get(v, (v, ""))[0], nota=_VERIFICAR.get(v, (v, ""))[1]) for v in MODOS_VERIFICACION],
         por_defecto=Colaboracion().verificar_preguntas,
-        depende_de=Dependencia(
-            clave=_OPCION_RUNTIME, condicion="igual", valor="v3", motivo="El verificador de preguntas exige el Agent OS."
-        ),
         editable_por="master",
         almacen="tenants:settings.agent_os.verificar_preguntas",
     ),
