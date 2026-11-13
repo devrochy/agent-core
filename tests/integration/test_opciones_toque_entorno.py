@@ -108,6 +108,19 @@ async def _binding(tid: uuid.UUID, *, enabled: bool = True, confirmar: bool = Fa
         async with get_session() as s:
             fila = (await s.execute(select(AgentSpecRecord).where(AgentSpecRecord.tenant_id == tid, AgentSpecRecord.is_active.is_(True)))).scalar_one()
             fila.spec = datos
+    # En v3 el binding vive en la versión del agente de la release (ADR-0191): se concede ahí.
+    from release_de_prueba import conceder_herramientas
+
+    from core.mcp.host import mcp_host
+
+    herramienta = mcp_host._tools.get(TOOL)
+    if herramienta is not None:
+        await conceder_herramientas(
+            tid,
+            [{"tool": TOOL, "enabled": enabled, "scopes": [], "requiresConfirmation": confirmar}],
+            extra=[herramienta],
+            quitar=ninguno,
+        )
 
 
 async def _objetos(tid: uuid.UUID, conv: uuid.UUID, cliente: uuid.UUID) -> tuple[Any, Any]:
@@ -141,11 +154,14 @@ async def tocar_real(envio: Envio, payload: str, conversation: Any, customer: An
 
 @pytest.fixture(scope="module")
 async def legacy() -> AsyncIterator[tuple[uuid.UUID, str]]:
+    from release_de_prueba import montar_release
+
     from core.alta_negocio import onboard_tenant
     from core.tenants import deactivate_tenant, purge_tenant
 
     slug = f"opte-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"Opciones {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
+    await montar_release(tid)  # todo turno corre sobre la release de su conexión (ADR-0191)
     yield tid, slug
     await deactivate_tenant(str(tid))
     await purge_tenant(str(tid), f"ELIMINAR {slug}")

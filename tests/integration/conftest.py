@@ -99,8 +99,8 @@ class FakeOutbound:
 @pytest.fixture(scope="session", autouse=True)
 def _conversacion_con_su_conexion():
     """Todo turno corre sobre la release de su conexión (ADR-0191): una conversación que un test crea
-    a mano sin `connection_id` toma la conexión conversacional del negocio con release activa (la
-    principal primero), como la del consumer. Un test que necesita una sin conexión la anula después."""
+    a mano sin `connection_id` toma la conexión conversacional del negocio con release activa del mismo
+    canal (la principal primero). Un test que necesita una sin conexión la anula después."""
     from sqlalchemy import event, text
 
     from core.db.models import Conversation
@@ -112,9 +112,10 @@ def _conversacion_con_su_conexion():
             text(
                 "select c.id from channel_connections c join connection_types t on t.id = c.type_id "
                 "where c.tenant_id = :t and c.deleted_at is null and c.active_release_id is not null "
-                "and t.produces_conversations order by c.is_primary desc, c.created_at limit 1"
+                "and t.produces_conversations and c.channel = :canal "
+                "order by c.is_primary desc, c.created_at limit 1"
             ),
-            {"t": conversacion.tenant_id},
+            {"t": conversacion.tenant_id, "canal": conversacion.channel or ""},
         ).first()
         if fila is not None:
             conversacion.connection_id = fila[0]
