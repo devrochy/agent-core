@@ -28,6 +28,12 @@ Detalle:
    recibe el agente que tenga la habilidad Captar leads (ADR-0190 §2, instalación por agente), de cualquier tipo:
    Ventas, Agenda, Cobranza o Suscripciones. El origen sale del canal de la conversación, no de un argumento del
    modelo. Commerce deja de declararlas.
+   **Lead en cada conversación** (❓3 de HU-AOS-70, decisión del dueño del 2026-11-13): al empezar una conversación
+   con un agente que tiene Captar leads, el core asegura el lead del cliente (lo busca y, si no existe, lo crea),
+   idempotente por `(tenant_id, customer_id)` con índice único parcial; como el evento de conversación nueva no se
+   repite en una conversación ya abierta (ADR-0022), también se asegura en el primer turno si falta. Reemplaza el
+   `auto_create_lead` de commerce. El agente confirma y actualiza los datos a medida que el cliente los da; esa
+   instrucción vive en el playbook de Captar leads (invariante 3), y solo se guarda lo que dijo el cliente.
 3. **Lógica del embudo.** La etapa confiable (validación en el servidor e historia con actor), la próxima acción, los
    recordatorios y el resumen diario, el motivo de pérdida y el valor estimado pasan al core sin cambiar de conducta.
    Los crons `follow_up_leads` y `recordar_seguimientos` pasan al catálogo del core. `follow_up_quotes` sigue en
