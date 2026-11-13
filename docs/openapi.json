@@ -45208,6 +45208,14 @@
             "type": "array",
             "title": "Serie",
             "description": "Serie diaria cero-rellena de todo el negocio (todos los agentes, el Coordinador y lo no atribuido); vacía sin la sección `agents`."
+          },
+          "modulos_sin_agente": {
+            "items": {
+              "$ref": "#/components/schemas/ModuloOut"
+            },
+            "type": "array",
+            "title": "Modulos Sin Agente",
+            "description": "Módulos activos del negocio que ningún agente cubre (ADR-0192: ya no cuelgan del General)."
           }
         },
         "type": "object",
@@ -63254,7 +63262,7 @@
           "ref": {
             "type": "string",
             "title": "Ref",
-            "description": "Id del agente o el literal `general`, como en `/admin/agents/{ref}`."
+            "description": "Id del agente, como en `/admin/agents/{ref}`."
           },
           "key": {
             "type": "string",

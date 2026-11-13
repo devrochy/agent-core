@@ -2,7 +2,8 @@
 
 - **Contenido:** KPIs del negocio y de cada agente (7 d contra los 7 d previos, con delta) y, bajo
   el agente, los módulos que gestiona; cada KPI con un destino semántico. Lo no atribuido es del
-  General; los módulos que ningún agente cubre cuelgan del General.
+  especialista por defecto; los módulos que ningún agente cubre van en `general.modulos_sin_agente`
+  (ADR-0192).
 - **Permisos (ADR-0136):** un KPI sin la sección que lo respalda se omite, no sale en cero.
 - **Aislamiento:** un negocio no ve la actividad de otro.
 - **Fallo aislado:** un módulo que lanza no tumba el resto.
@@ -188,10 +189,12 @@ async def test_kpis_del_negocio_de_cada_agente_y_de_su_modulo(app_client) -> Non
     assert agenda["id"] == "pack_calendar"
     assert _kpis(agenda)["citas_proximas"]["valor"] == 1
 
-    # El especialista por defecto absorbe lo no atribuido y los módulos sin agente (ADR-0192).
+    # El especialista por defecto absorbe lo no atribuido; los módulos sin agente van en el bloque del
+    # negocio (ADR-0192).
     defecto = _agente_por_key(datos, "atencion")
     assert defecto["ref"] == str(e["atencion"]) and _kpis(defecto)["turnos"]["valor"] == 1
-    assert {m["id"] for m in defecto["modulos"]} == {"pack_cobranza", "pack_subscriptions"}
+    assert defecto["modulos"] == []
+    assert {m["id"] for m in datos["general"]["modulos_sin_agente"]} == {"pack_cobranza", "pack_subscriptions"}
     assert all(a["key"] != "general" for a in datos["agentes"])  # sin agente virtual
 
 

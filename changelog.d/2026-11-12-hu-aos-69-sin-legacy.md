@@ -30,5 +30,5 @@
 - La exención de gate `migrar_a_v3` sale (no queda quien la use); `migrar_a_v3` sigue como motivo en el historial de eventos.
 
 ### Quinta tanda: la API sin el General (HU-AOS-68, ADR-0192 §5–6)
-- «Mi agente y su data» y el Resumen por agente ya no tienen un General virtual: el `ref` es siempre el id del agente (el literal `general` es 404) y lo no atribuido, con los módulos que ningún agente cubre, va al especialista por defecto del negocio (`incluye_sin_atribuir` lo marca). Un negocio sin especialistas solo tiene el bloque del negocio. Los schemas no cambian.
+- «Mi agente y su data» y el Resumen por agente ya no tienen un General virtual: el `ref` es siempre el id del agente (el literal `general` es 404) y lo no atribuido va al especialista por defecto del negocio (`incluye_sin_atribuir` lo marca). Los módulos que ningún agente cubre salen en el campo nuevo `general.modulos_sin_agente` del Resumen (aditivo). Un negocio sin especialistas solo tiene el bloque del negocio.
 - `general` deja de ser clave reservada: solo `coordinador` lo es. Sale `general_updated` de la respuesta de publicar del editor.

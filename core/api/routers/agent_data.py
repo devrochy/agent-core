@@ -11,8 +11,8 @@
 - `GET /api/v1/admin/agents/{ref}/usage` — turnos, tokens y costo del período, por conexión y por
   día, y la consistencia pass^k vigente del negocio con su tendencia.
 
-`ref` es el id del agente o el literal `general` (el General absorbe lo no atribuido; ver
-`core.agents.data_por_agente`). Filtros comunes: `connection_id`, `desde`, `hasta` (por defecto
+`ref` es el id del agente (ADR-0192: ya no hay General virtual; lo no atribuido lo absorbe el
+especialista por defecto, ver `core.agents.data_por_agente`). Filtros comunes: `connection_id`, `desde`, `hasta` (por defecto
 30 días, máximo 366).
 
 Permisos (ADR-0136): sección `agents`. El costo en USD (`cost_usd`) solo sale con `costs`, como en la
@@ -45,7 +45,7 @@ from core.shared.logger import get_logger
 router = APIRouter(prefix="/admin/agents", tags=["admin · agentes"])
 log = get_logger(__name__)
 
-_REF_RE = re.compile(r"general|[0-9a-fA-F-]{36}")
+_REF_RE = re.compile(r"[0-9a-fA-F-]{36}")
 _KIND_PATTERN = r"^[a-z0-9_]{1,40}$"
 
 
@@ -235,7 +235,7 @@ async def _packs_visibles(principal: Principal) -> frozenset[str]:
 
 
 def _ref(ref: str) -> str:
-    """El id de un agente o `general`; cualquier otra cosa es «no encontrado», igual que un id
+    """El id de un agente; cualquier otra cosa es «no encontrado», igual que un id
     ajeno (sin 422 que distinga formatos)."""
     if not _REF_RE.fullmatch(ref):
         raise ApiError.not_found("Agente no encontrado.")

@@ -13,8 +13,8 @@ Atribución (igual que «Mi agente y su data», para que la cifra del Resumen co
 detalle al que enlaza): turnos, conversaciones y costo salen de `usage_ledger.agent_instance_id`, y
 **el especialista por defecto del negocio absorbe lo no atribuido** (ADR-0192: ya no hay General).
 Los escalados por agente salen de `turn_outcomes`. El módulo de un agente es el del pack cuya
-`agent_key` es la clave de su plantilla; los módulos que ningún agente cubre cuelgan del especialista
-por defecto. Un negocio sin especialistas todavía solo tiene el bloque del negocio.
+`agent_key` es la clave de su plantilla; los módulos que ningún agente cubre van en el bloque del
+negocio (`general.modulos_sin_agente`). Un negocio sin especialistas solo tiene ese bloque.
 
 El Coordinador (`kind=core`) no sale como agente: sus turnos cuentan en el bloque del negocio y no en
 ninguna tarjeta, así que la suma por agente puede quedar por debajo del total.
@@ -601,7 +601,7 @@ async def resumen(
     huerfanos = [x for x in providers if x.agent_key not in claves]
     salida: list[dict[str, Any]] = []
     for ref, key, nombre, tipo, agente_id in filas:
-        absorbe = agente_id == por_defecto  # lo no atribuido y los módulos sin agente (ADR-0192)
+        absorbe = agente_id == por_defecto  # lo no atribuido (ADR-0192)
         vacio = {
             v: {"turnos": 0.0, "conversaciones": 0.0, "costo": 0.0} for v in ("actual", "previo")
         }
@@ -616,7 +616,7 @@ async def resumen(
             extra_e = escalados.get(None, sin_escalar)
             esc = {v: esc[v] + extra_e[v] for v in esc}
             n_tareas += tareas.get(None, 0.0)
-        propios = [x for x in providers if x.agent_key == key] + (huerfanos if absorbe else [])
+        propios = [x for x in providers if x.agent_key == key]
         claves_serie: list[uuid.UUID | None] = [agente_id]
         if absorbe:
             claves_serie.append(None)
@@ -646,6 +646,7 @@ async def resumen(
             "kpis": [_kpi_a_dict(k, p.dias) for k in general],
             # Todo el negocio: cada clave de `puntos` (agentes, Coordinador y lo no atribuido).
             "serie": _serie_de(puntos, list(puntos), dias_serie, acceso.costos),
+            "modulos_sin_agente": [await _modulo(x, tenant_id, p) for x in huerfanos] if acceso.agentes else [],
         },
         "agentes": salida,
     }
