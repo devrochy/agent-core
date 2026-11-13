@@ -37,7 +37,7 @@ from test_opciones_toque_entorno import (  # noqa: F401  (fixtures y ayudas del 
     _LlmProhibido,
     _salientes,
     herramienta,
-    legacy,
+    negocio_opciones,
 )
 
 pytestmark = [
@@ -766,12 +766,12 @@ async def test_la_tool_solo_se_ofrece_con_la_bandera_y_envia_a_la_conversacion_d
 
 
 # ---------------------------------------------------------------- journey: envío → toque → respuesta, LLM en cero
-async def test_journey_envio_toque_resuelto_respuesta_fija_con_el_llm_en_cero(legacy, herramienta, cola, monkeypatch) -> None:  # type: ignore[no-untyped-def]  # noqa: F811
+async def test_journey_envio_toque_resuelto_respuesta_fija_con_el_llm_en_cero(negocio_opciones, herramienta, cola, monkeypatch) -> None:  # type: ignore[no-untyped-def]  # noqa: F811
     from core.kernel.opciones import payload
     from core.orchestrator import consumer
     from core.shared.tenant import tenant_scope
 
-    tid, _ = legacy
+    tid, _ = negocio_opciones
     await _binding(tid)
     await _bandera(tid, True)
     _inmediato(monkeypatch)

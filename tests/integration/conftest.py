@@ -174,11 +174,9 @@ def _entrada_sin_conexion_va_a_la_de_pruebas():
 
 @pytest.fixture(scope="session", autouse=True)
 def _alta_sin_agent_os():
-    """Casi todos los tests de integración modelan negocios «de antes»: legacy y sin agentes. El alta de
-    hoy crea el General y el Coordinador y el negocio nace en v3 (migración 0126, ADR-0191); aquí se
-    apagan los agentes y se deja el negocio en `legacy` (escritura del rol dueño, que el guardia de 0097
-    permite) mientras exista ese camino. Solo `test_alta_agentes_base` y los que activan
-    `_alta_agent_os.ACTIVO` ven el alta real."""
+    """El alta de hoy crea el Coordinador y el negocio nace en v3 (migración 0126, ADR-0191/0192); aquí
+    se apaga para que cada test monte su conexión con release (`release_de_prueba`). Solo
+    `test_alta_agentes_base` y los que activan `_alta_agent_os.ACTIVO` ven el alta real."""
     import _alta_agent_os
 
     import core.alta_negocio as alta
@@ -193,25 +191,6 @@ def _alta_sin_agent_os():
     alta._agentes_base_al_alta = _agentes  # type: ignore[assignment]
     yield
     alta._agentes_base_al_alta = real  # type: ignore[assignment]
-
-
-async def _como_negocio_de_antes(tenant_id: uuid.UUID) -> None:
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(
-                text("update tenants set aos_runtime = 'legacy' where id = :t and aos_runtime = 'v3' "
-                     "and not aos_procedures and aos_routing = 'off'"),
-                {"t": tenant_id},
-            )
-    finally:
-        await engine.dispose()
 
 
 @pytest.fixture(scope="module")

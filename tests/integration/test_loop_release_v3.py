@@ -64,23 +64,6 @@ def _modules() -> list[Any]:
     return plugin_manager.scan()
 
 
-async def _banderas(tid: uuid.UUID, runtime: str, procedimientos: bool = False) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(
-                text("update tenants set aos_runtime = :r, aos_procedures = :p where id = :t"),
-                {"t": tid, "r": runtime, "p": procedimientos},
-            )
-    finally:
-        await engine.dispose()
-
-
 async def _sql(tid: uuid.UUID | None, sql: str, **params: Any) -> list[Any]:
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -286,7 +269,6 @@ async def _construir_y_promover(tid: uuid.UUID, cid: uuid.UUID) -> uuid.UUID:
 
 async def test_rollback_completo_cambia_modelo_tools_guardrails_y_memoria(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     a, cid, _b, pagos = negocios
-    await _banderas(a, "v3")
     [(uno,)] = await _sql(a, "select active_release_id from channel_connections where id = :c", c=cid)
     [(contenido,)] = await _sql(a, "select content from agent_versions where tenant_id = :t and id = ("
                                    "select agent_version_id from release_components where release_id = :r and agent_instance_id = ("
@@ -366,7 +348,6 @@ async def test_el_dueno_sobrevive_en_el_episodio_y_se_suelta_al_empezar_otro(neg
     from core.shared.tenant import tenant_scope
 
     a, cid, _b, pagos = negocios
-    await _banderas(a, "v3")
     [(contenido,)] = await _sql(
         a,
         "select v.content from agent_versions v join agents ag on ag.tenant_id = v.tenant_id and ag.id = v.agent_id "
