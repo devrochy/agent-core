@@ -322,9 +322,6 @@ async def test_fk_compuestas_rechazan_referencias_de_otro_negocio() -> None:
 
 # ------------------------------------------------------------------ API
 async def test_api_del_grafo_y_de_las_llamadas(app_client) -> None:
-    from core.admin.auth import hash_password
-    from core.db.models import Admin, TenantUser
-    from core.db.session import get_session
 
     n = await _negocio()
     master = await api_headers(app_client, n["tid"])
@@ -346,20 +343,6 @@ async def test_api_del_grafo_y_de_las_llamadas(app_client) -> None:
     assert r.status_code == 200 and r.json()["version"]["version"] == 1 and len(r.json()["links"]) == 2
     r = await app_client.get(f"/api/v1/admin/a2a/calls?connection_id={n['cid']}", headers=master)
     assert r.status_code == 200 and r.json() == []
-
-    # En legacy, quien no es master no publica.
-    legacy = await _negocio(v3=False)
-    email = f"{uniq('dueno')}@example.test"
-    async with get_session() as session:
-        admin = Admin(email=email, password_hash=hash_password(PASSWORD), role="colaborador")
-        session.add(admin)
-        await session.flush()
-        session.add(TenantUser(tenant_id=legacy["tid"], admin_id=admin.id, role="owner"))
-    dueno = await api_headers(app_client, legacy["tid"], email=email, password=PASSWORD)
-    r = await app_client.put(
-        "/api/v1/admin/a2a/graph", headers=dueno, json={"links": [_enlace(legacy["ventas"], legacy["agenda"])]}
-    )
-    assert r.status_code == 403 and r.json()["error"]["code"] == "aos_runtime_legacy", r.text
 
 
 async def test_las_llamadas_se_agrupan_por_call_id_y_no_cruzan_negocios(app_client) -> None:

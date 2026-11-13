@@ -84,15 +84,6 @@ def contenido_inicial(kind: str) -> dict[str, Any]:
     return AgentSpecV3.model_validate({"model": modelo}).model_dump(mode="json", by_alias=True)
 
 
-async def escritura_habilitada(tenant_id: uuid.UUID) -> bool:
-    """Con el runtime en `legacy` (ADR-0112) un agente no hace nada: hasta HU-AOS-13/14 solo
-    el master escribe agentes, salvo en los negocios con `aos_runtime = 'v3'`."""
-    async with get_session() as session:
-        valor = (
-            await session.execute(text("select aos_runtime from tenants where id = :t"), {"t": tenant_id})
-        ).scalar_one_or_none()
-    return valor == "v3"
-
 
 async def _validar(tenant_id: uuid.UUID, contenido: Any, contrato: Contrato, catalogo: Catalogo) -> dict[str, Any]:
     """Valida forma, linter y secretos. Devuelve el contenido normalizado."""
@@ -449,7 +440,6 @@ __all__ = [
     "contenido_inicial",
     "content_hash",
     "crear_agente",
-    "escritura_habilitada",
     "guardar_borrador",
     "listar_agentes",
     "listar_versiones",

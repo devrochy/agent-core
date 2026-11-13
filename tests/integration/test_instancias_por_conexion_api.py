@@ -255,16 +255,12 @@ async def test_api_no_cruza_negocios(app_client) -> None:
     ]
 
 
-async def test_con_runtime_legacy_solo_el_master_escribe_instancias(app_client) -> None:
+async def test_el_dueno_escribe_instancias_sin_403_por_runtime(app_client) -> None:
+    """Sin el camino legacy (ADR-0191) no hay 403 `aos_runtime_legacy`: el dueño escribe aunque el
+    negocio de prueba haya quedado en `legacy`."""
     tid, _c, _p, cid = await _con_agentes()
     ventas = await _especialista(app_client, await api_headers(app_client, tid), "ventas")
     h = await api_headers(app_client, tid, email=await _dueno(tid), password=PASSWORD)
-    assert _codigo(await app_client.post(_agents(cid), headers=h, json={"agent_id": ventas})) == (
-        403, "aos_runtime_legacy",
-    )
-    assert (await app_client.get(_agents(cid), headers=h)).status_code == 200
-
-    await banderas_como_dueno(tid, aos_runtime="v3")
     r = await app_client.post(_agents(cid), headers=h, json={"agent_id": ventas})
     assert r.status_code == 201, r.text
 

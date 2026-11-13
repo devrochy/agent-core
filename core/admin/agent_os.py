@@ -9,8 +9,8 @@ operación, sin duplicar su lógica:
   apagar, el inverso (ADR-0112, ADR-0138).
 - Pasar de legacy a v3 es `migrar_a_v3` con los backfills del negocio (idempotentes y neutros en
   legacy) y, solo si el master lo pide, `construir` (construye y promueve una release nueva: cambia
-  la release activa). Desde el panel ya no se vuelve a legacy (`ObjetivoInvalido`, 422): el
-  rollback de emergencia es solo por CLI, `agent-core db migrar-a-v3 --volver`. Sus precondiciones
+  la release activa). No se vuelve a legacy (`ObjetivoInvalido`, 422; ADR-0191): el rollback es la
+  release anterior de v3 o el respaldo. Sus precondiciones
   fail-closed son los bloqueos (409).
 - La escritura es una sola llamada a `aos_fijar_banderas` (migración 0097) con el `admin_id` del
   master: la base exige que sea master, valida el orden y deja la fila de `audit_log` en la misma
@@ -51,7 +51,7 @@ log = get_logger(__name__)
 RUNTIMES = ("legacy", "v3")
 MENSAJE_SIN_LEGACY = (
     "El Agent OS es el único motor de conversación: desde el panel ya no se vuelve a «legacy». "
-    "El rollback de emergencia es por consola: `agent-core db migrar-a-v3 --volver --tenant <slug>`."
+    "El rollback es la release anterior de v3 o el respaldo de la base (ADR-0191)."
 )
 AVISO_PASS_K = (
     "Antes de encender los procedimientos, mide el pass^4 del negocio (HU-ARCH-28) y anótalo en la "

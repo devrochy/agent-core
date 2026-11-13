@@ -437,16 +437,17 @@ async def test_la_ruta_de_un_negocio_no_cruza_a_otro(_ruteo: None, monkeypatch: 
     del conv_a
 
 
-async def test_el_ruteo_exige_v3_y_volver_a_legacy_lo_apaga(_ruteo: None) -> None:
+async def test_el_escritor_de_banderas_ya_no_acepta_legacy(_ruteo: None) -> None:
+    """Sin vuelta a legacy (ADR-0191, migración 0126): el escritor único lo rechaza y no cambia nada."""
+    from core.kernel.banderas import BanderasRechazadas
     from core.releases.migracion_v3 import _escribir_bandera
 
     tid, _cid = await _negocio()
     await _modo(tid, "shadow")
-    await _escribir_bandera(None, tid, runtime="legacy", procedimientos=False)
+    with pytest.raises(BanderasRechazadas):
+        await _escribir_bandera(None, tid, runtime="legacy", procedimientos=False)
     ((runtime, ruteo),) = await _sql(None, "select aos_runtime, aos_routing from tenants where id = :t", t=tid)
-    assert (runtime, ruteo) == ("legacy", "off")
-    with pytest.raises(ValueError):
-        await _modo(tid, "active")
+    assert (runtime, ruteo) == ("v3", "shadow")
 
 
 # ---------------------------------------------------------------- punta a punta con los presets v2 (HU-AOS-46)

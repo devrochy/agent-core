@@ -704,11 +704,11 @@ async def test_banderas_por_negocio_respetan_el_orden(dos_negocios: dict[str, An
                     text("select aos_runtime, aos_procedures from tenants where id = :t"), {"t": a}
                 )
             ).one()
-            assert tuple(fila) == ("legacy", False), "todo negocio nace en legacy"
+            assert tuple(fila) == ("v3", False), "todo negocio nace en v3 (migración 0126)"
         with pytest.raises(IntegrityError, match="ck_tenants_aos_order"):
             async with conn.begin():
                 await conn.execute(
-                    text("update tenants set aos_procedures = true where id = :t"), {"t": a}
+                    text("update tenants set aos_runtime = 'legacy', aos_procedures = true where id = :t"), {"t": a}
                 )
 
 

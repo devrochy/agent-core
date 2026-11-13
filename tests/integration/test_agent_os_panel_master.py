@@ -191,11 +191,11 @@ async def test_simular_aplicar_y_no_volver_con_auditoria_y_sin_tocar_al_otro(app
     assert r.status_code == 200 and r.json()["accion"] == "aplicado", r.text
     assert await _banderas(a) == ("v3", True, "shadow")
 
-    # Desde el panel ya no se vuelve a legacy: 422, sin escribir ni auditar (el rollback es por CLI).
+    # No se vuelve a legacy: 422, sin escribir ni auditar (el rollback es la release anterior, ADR-0191).
     for llamada, url in ((app_client.put, _url(a)), (app_client.post, _url(a, simular=True))):
         r = await llamada(url, headers=master, json=_objetivo())
         assert (r.status_code, r.json()["error"]["code"]) == (422, "agent_os_orden"), r.text
-        assert "migrar-a-v3 --volver" in r.json()["error"]["message"], r.text
+        assert "release anterior" in r.json()["error"]["message"], r.text
     assert await _banderas(a) == ("v3", True, "shadow")
 
     # Auditoría: quién y qué, una fila por cambio real, en el negocio operado.

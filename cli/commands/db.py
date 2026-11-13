@@ -230,22 +230,17 @@ def migrar_a_v3(
     tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
     todos: bool = typer.Option(False, "--todos", help="Todos los negocios vivos."),
     dry_run: bool = typer.Option(False, "--dry-run", help="No escribe: reporta precondiciones, bloqueos y avisos."),
-    volver: bool = typer.Option(False, "--volver", help="Devuelve el negocio a `aos_runtime = legacy`."),
     construir: bool = typer.Option(
         False, "--construir", help="Si la release activa está desactualizada, construye y promueve una nueva."
-    ),
-    apagar_procedimientos: bool = typer.Option(
-        False, "--apagar-procedimientos", help="Con --volver: apaga también `aos_procedures` si estaba encendida."
     ),
     database_url: str | None = typer.Option(
         None, "--database-url", help="Para escribir las banderas; por defecto MIGRATIONS_DATABASE_URL (el rol dueño)."
     ),
 ) -> None:
     """Agent OS (HU-AOS-15): enciende `tenants.aos_runtime = 'v3'` (nunca `aos_procedures`) en un
-    negocio listo: backfills de conexiones, agentes y releases hechos, `AOS_CONNECTION_ROUTING`
-    encendida y la release activa de cada conexión al día y ejecutable. Un negocio que no cumple
+    negocio listo: backfills de conexiones, agentes y releases hechos y la release activa de cada conexión al día y ejecutable. Un negocio que no cumple
     queda bloqueado con el motivo. Corre primero con `--dry-run`. Precondición de producto
-    (runbook del PR): el pass^4 del negocio medido antes; si después de migrar empeora, `--volver`."""
+    (runbook del PR): el pass^4 del negocio medido antes. Ya no hay vuelta a legacy (ADR-0191)."""
     import asyncio
 
     from rich.table import Table
@@ -265,15 +260,13 @@ def migrar_a_v3(
         return await correr(
             tenant_ids=ids,
             dry_run=dry_run,
-            volver=volver,
             construir=construir,
-            apagar_procedimientos=apagar_procedimientos,
             modules=plugin_manager.scan(),
             database_url=database_url,
         )
 
     reporte = asyncio.run(_run())
-    titulo = "Migración a v3" if not volver else "Vuelta a legacy"
+    titulo = "Migración a v3"
     tabla = Table(title=titulo + (" (dry-run: no se escribió nada)" if dry_run else ""))
     for columna in ("Negocio", "Antes", "Acción", "Conexiones"):
         tabla.add_column(columna)

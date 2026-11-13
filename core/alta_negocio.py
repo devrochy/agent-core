@@ -108,8 +108,8 @@ async def _agentes_base_al_alta(tenant_id: uuid.UUID, *, nuevo: bool) -> list[st
 
     Reusa el backfill B2 (`backfill_agentes`, idempotente): crea los dos agentes reservados con su
     versión, derivados del AgentSpec v2 que acaba de dejar el alta, y las instancias de las conexiones
-    que ya existan (las posteriores las crea `instancias_de_conexion_nueva`). No cambia `aos_runtime`:
-    el negocio sigue en `legacy` hasta que se migre (P-34), así que no cambia cómo atiende.
+    que ya existan (las posteriores las crea `instancias_de_conexion_nueva`). El negocio ya nace en
+    `aos_runtime = 'v3'` (migración 0126, ADR-0191).
     En un negocio NUEVO deja encendido el recorte del General (`agent_os.recortar_general`), de modo
     que cada especialista que cree el asistente le quite al General lo suyo; un negocio que ya existía
     conserva su bandera (la enciende el master). Frontera deliberada: un fallo se registra y el alta
@@ -136,32 +136,6 @@ async def _agentes_base_al_alta(tenant_id: uuid.UUID, *, nuevo: bool) -> list[st
             await fijar_bandera(tenant_id, True, actor="alta")
         pasos.append("recorte del General encendido")
     return pasos
-
-
-async def _runtime_al_alta(tenant_id: uuid.UUID) -> str:
-    """Un negocio NUEVO nace en `aos_runtime = 'v3'` (HU-AOS-53, P-34) para que su dueño pueda crear
-    agentes con el asistente (en `legacy` solo escribe el master, 403 `aos_runtime_legacy`).
-
-    Usa el escritor de siempre, `migrar_a_v3` (rol dueño, orden de banderas y auditoría; el mismo
-    camino de «Preparar mis datos»), sin construir ni promover releases: la release de cada
-    conexión llega con ella, y mientras no la tenga el turno sigue por el motor de siempre. Ante
-    cualquier bloqueo, el negocio queda en `legacy`
-    y se registra: el alta no depende del Agent OS y el master puede migrarlo después."""
-    try:
-        from core.releases.migracion_v3 import migrar_a_v3
-
-        reporte = await migrar_a_v3(
-            tenant_ids=[tenant_id], dry_run=False, construir=False, modules=plugin_manager.list_modules()
-        )
-        negocio = reporte.negocios[0] if reporte.negocios else None
-        if negocio is not None and negocio.accion in ("encendido", "ya_estaba"):
-            return "runtime v3 encendido"
-        motivo = "; ".join(negocio.bloqueos)[:300] if negocio else "negocio no encontrado"
-    except Exception as exc:  # frontera deliberada: el alta no depende del Agent OS
-        log.warning("alta_runtime_fallo", tenant_id=str(tenant_id), error=type(exc).__name__, exc_info=True)
-        motivo = type(exc).__name__
-    log.warning("alta_runtime_pendiente", tenant_id=str(tenant_id), motivo=motivo)
-    return f"runtime v3 pendiente ({motivo}): el negocio queda en legacy; migrarlo con `agent-core db migrar-a-v3`"
 
 
 async def onboard_tenant(
@@ -191,7 +165,7 @@ async def onboard_tenant(
     cross-tenant del webhook). `preset`: id de `core/presets/` (ADR-0110), se aplica
     después de los `packs` sueltos; `plan` asigna el plan de la suscripción inicial
     (sin él queda free y un preset de plan mayor falla). `agentes_base=False` no crea el General ni el
-    Coordinador ni fija el runtime: lo usan los journeys, que montan su propio runtime (legacy o v3).
+    Coordinador: lo usan los journeys, que montan su propia release.
     Devuelve (tenant_id, pasos).
     """
     _validate_slug(slug)
@@ -383,8 +357,6 @@ async def onboard_tenant(
 
     if agentes_base:
         steps.extend(await _agentes_base_al_alta(tenant_id, nuevo=negocio_nuevo))
-        if negocio_nuevo:
-            steps.append(await _runtime_al_alta(tenant_id))
 
     onboarding.ensure_tenant_docs(slug, name, business_description)
     await onboarding.ensure_brand_voice(tenant_id, slug)

@@ -13,8 +13,7 @@
   `sin_release_activa` si la conexión no tiene release activa (404 si no es del negocio).
 
 Permisos: la sección `settings`, como los agentes. Publicar no llega a clientes reales hasta que se
-promueve una release (que pide propietario o master); mientras el negocio esté en `legacy`, las
-escrituras quedan para el master (403 `aos_runtime_legacy`).
+promueve una release (que pide propietario o master).
 """
 
 from __future__ import annotations
@@ -28,9 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
-from core.admin.roles import actua_como_master
 from core.agents import grafo_a2a as svc
-from core.agents.versiones import escritura_habilitada
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.db.session import get_session
@@ -153,12 +150,6 @@ async def put_graph(
     payload: GraphIn, principal: Annotated[Principal, Depends(require("settings", write=True))]
 ) -> GraphOut:
     tid = _tenant(principal)
-    if not actua_como_master(principal.admin) and not await escritura_habilitada(tid):
-        raise ApiError(
-            403,
-            "aos_runtime_legacy",
-            "Los permisos entre agentes se activan con el Agent OS de este negocio: por ahora solo los edita el administrador.",
-        )
     try:
         version, creada = await svc.publicar(tid, payload.links, created_by=principal.admin.id)
     except ValidationError as exc:

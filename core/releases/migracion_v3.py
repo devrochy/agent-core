@@ -1,13 +1,12 @@
 """Migración de un negocio al runtime por releases (HU-AOS-15, ADR-0112 y adenda de ADR-0117).
 
-`agent-core db migrar-a-v3 --tenant <slug> | --todos [--dry-run] [--volver] [--construir]`
-enciende `tenants.aos_runtime = 'v3'` (nunca `aos_procedures`) solo si el negocio está listo, y
-lo devuelve a `legacy` con `--volver`. Fail-closed: cualquier precondición que falle bloquea
+`agent-core db migrar-a-v3 --tenant <slug> | --todos [--dry-run] [--construir]`
+enciende `tenants.aos_runtime = 'v3'` (nunca `aos_procedures`) solo si el negocio está listo. Ya no
+hay vuelta a `legacy` (ADR-0191): el rollback es la release anterior de v3 o el respaldo. Fail-closed: cualquier precondición que falle bloquea
 SOLO a ese negocio, con el motivo y el comando que lo arregla.
 
 Precondiciones por negocio (bajo su `tenant_scope`):
-1. `AOS_CONNECTION_ROUTING` encendida (orden de banderas de ADR-0112; no aplica a `--volver`).
-2. El backfill de conexiones (HU-AOS-11) sin trabajo pendiente.
+1. El backfill de conexiones (HU-AOS-11) sin trabajo pendiente.
 3. El backfill de agentes (HU-AOS-13) sin trabajo pendiente ni errores.
 4. Toda conexión conversacional viva con release activa (`backfill-releases`).
 5. La release activa de cada conexión carga, tiene Coordinador y especialista en foco, sus
@@ -22,9 +21,6 @@ Precondiciones por negocio (bajo su `tenant_scope`):
 Avisos (no bloquean): conversaciones abiertas sin conexión (seguirán en legacy hasta que el
 consumer las adopte, ADR-0115 §6) y `aos_procedures` ya encendida.
 
-`--volver`: `aos_runtime = 'legacy'`. Si `aos_procedures` está encendida se rechaza salvo
-`--apagar-procedimientos` (orden inverso de ADR-0112, CHECK `ck_tenants_aos_order`), y se
-reportan las tareas gobernadas abiertas, que dejan de gobernarse.
 
 Las banderas se escriben solo con `aos_fijar_banderas` (migración 0097, `core.kernel.banderas.
 fijar_banderas`): desde el CLI con el rol dueño (`MIGRATIONS_DATABASE_URL`, como `sync-packs`),
@@ -77,7 +73,6 @@ class ResultadoNegocio:
 @dataclass
 class ReporteMigracion:
     dry_run: bool
-    volver: bool
     negocios: list[ResultadoNegocio] = field(default_factory=list)
 
     @property
@@ -459,46 +454,17 @@ async def _encender(
     negocio.accion = "encendido"
 
 
-async def _apagar(negocio: ResultadoNegocio, *, dry_run: bool, apagar_procedimientos: bool, escribir: Escritor) -> None:
-    tid = negocio.tenant_id
-    if negocio.runtime_antes == "legacy":
-        negocio.accion = "ya_legacy"
-        return
-    if negocio.procedimientos and not apagar_procedimientos:
-        negocio.bloqueos.append("aos_procedures está encendida: apágala primero (o `--apagar-procedimientos`)")
-        return
-    async with tenant_scope(tid):
-        abiertas = await _tareas_gobernadas_abiertas(tid)
-    if abiertas:
-        negocio.avisos.append(f"{abiertas} tarea(s) abierta(s) del motor dejan de gobernarse al volver a legacy")
-    if dry_run:
-        negocio.accion = "listo"
-        return
-    # HU-AOS-32: en legacy el runtime ignora las releases y un canary nunca juntaría muestra. Se
-    # detienen (`reemplazado`) antes de escribir la bandera, en otra transacción (no atómico).
-    from core.releases import canary
-
-    async with tenant_scope(tid):
-        detenidos = await canary.detener_todos(tid, actor="system:migrar_a_v3")
-    if detenidos:
-        negocio.avisos.append(f"{detenidos} versión(es) en prueba detenida(s) al volver a legacy")
-    await escribir(tid, "legacy", False if negocio.procedimientos else None)
-    negocio.accion = "apagado"
-
-
 async def migrar_a_v3(
     *,
     tenant_ids: Iterable[uuid.UUID] | None,
     dry_run: bool,
-    volver: bool = False,
     construir: bool = False,
-    apagar_procedimientos: bool = False,
     modules: Iterable[Any] | None = None,
     database_url: str | None = None,
     backfills: bool = False,
     escritor: Escritor | None = None,
 ) -> ReporteMigracion:
-    """Enciende (o apaga, con `volver`) `aos_runtime = 'v3'` en los negocios dados (todos con
+    """Enciende `aos_runtime = 'v3'` en los negocios dados (todos con
     `tenant_ids=None`). Ver el docstring del módulo. `backfills` (solo con un negocio) corre
     antes los backfills del negocio; en dry-run, lo que ellos arreglan sale en `pasos`, no en
     `bloqueos`. `escritor` reemplaza la escritura con el rol dueño (la API del master)."""
@@ -515,24 +481,21 @@ async def migrar_a_v3(
 
     escribir = escritor or _dueno
     modulos = list(modules if modules is not None else plugin_manager.list_modules())
-    reporte = ReporteMigracion(dry_run=dry_run, volver=volver)
+    reporte = ReporteMigracion(dry_run=dry_run)
     for tid, slug, runtime, procedimientos in await _negocios(tenant_ids):
         negocio = ResultadoNegocio(tid, slug, runtime, procedimientos)
         reporte.negocios.append(negocio)
         try:
-            if volver:
-                await _apagar(negocio, dry_run=dry_run, apagar_procedimientos=apagar_procedimientos, escribir=escribir)
-            else:
-                await _encender(
-                    negocio, dry_run=dry_run, construir=construir, backfills=backfills, modulos=modulos, escribir=escribir
-                )
+            await _encender(
+                negocio, dry_run=dry_run, construir=construir, backfills=backfills, modulos=modulos, escribir=escribir
+            )
         except (DBAPIError, LookupError, RuntimeError, ValueError, PermissionError, BanderasRechazadas) as exc:
             negocio.accion = "bloqueado"
             negocio.bloqueos.append(_mensaje(exc))
             log.warning("migrar_a_v3_error", tenant_id=str(tid), error=_mensaje(exc)[:300])
         if negocio.bloqueos:
             negocio.accion = "bloqueado"
-        log.info("migrar_a_v3", tenant_id=str(tid), accion=negocio.accion, dry_run=dry_run, volver=volver)
+        log.info("migrar_a_v3", tenant_id=str(tid), accion=negocio.accion, dry_run=dry_run)
     return reporte
 
 

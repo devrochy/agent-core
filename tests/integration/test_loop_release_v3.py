@@ -13,7 +13,7 @@ Contra el stack real, con el loop real y un modelo guionado (sin LLM ni red):
   rollback vuelve todo.
 - **Dos negocios a la vez** (uno legacy, uno v3): nada se cruza.
 - **`migrar-a-v3`:** precondiciones, dry-run, encendido, release desactualizada, `--construir` y
-  `--volver`.
+  (sin `--volver` desde ADR-0191).
 """
 
 from __future__ import annotations
@@ -119,6 +119,8 @@ async def _negocio(slug: str, pagos: Any) -> tuple[uuid.UUID, uuid.UUID]:
         id=cid, t=tid, ext=f"ig-{cid.hex[:8]}",
     )
     journeys._CONEXION_V3[tid] = cid  # las conversaciones de la corrida nacen en la conexión
+    # Nace en v3 (migración 0126); aquí modela un negocio de antes, en legacy y sin backfills.
+    await _banderas(tid, "legacy")
     return tid, cid
 
 
@@ -456,14 +458,9 @@ async def test_migrar_a_v3_precondiciones_encendido_y_vuelta(negocios) -> None: 
     assert (runtime, procs) == ("v3", False)
     assert (await correr(dry_run=True)).accion == "ya_estaba"
 
-    # Vuelta: con el motor encendido se rechaza salvo --apagar-procedimientos.
-    await _banderas(b, "v3", procedimientos=True)
-    n = await correr(dry_run=False, volver=True)
-    assert n.accion == "bloqueado" and "aos_procedures" in n.bloqueos[0]
-    n = await correr(dry_run=False, volver=True, apagar_procedimientos=True)
-    assert n.accion == "apagado"
-    [(runtime, procs)] = await _sql(None, "select aos_runtime, aos_procedures from tenants where id = :t", t=b)
-    assert (runtime, procs) == ("legacy", False)
+    # Ya no hay `--volver` (ADR-0191): el negocio vuelve a `legacy` solo con el rol dueño, para
+    # probar el resto del encendido como un negocio de antes.
+    await _banderas(b, "legacy")
 
     # El v2 editado después de la release 1: desactualizada; con --construir se reconstruye y enciende.
     async with tenant_scope(b):

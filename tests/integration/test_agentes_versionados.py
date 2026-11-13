@@ -202,15 +202,8 @@ async def test_kernelspec_del_coordinador_y_keys_reservadas(app_client) -> None:
     assert r.status_code == 200, r.text
 
 
-async def test_con_runtime_legacy_solo_el_master_escribe(app_client) -> None:
-    tid = await _negocio("legacy")
-    h = await api_headers(app_client, tid, email=await _dueno(tid), password=PASSWORD)
-    r = await app_client.post(
-        "/api/v1/admin/agents", headers=h, json={"key": "comercial", "kind": "specialist", "name": "Ventas"}
-    )
-    assert r.status_code == 403 and r.json()["error"]["code"] == "aos_runtime_legacy"
-    assert (await app_client.get("/api/v1/admin/agents", headers=h)).status_code == 200
-
+async def test_el_dueno_escribe_agentes_sin_403_por_runtime(app_client) -> None:
+    """Sin el camino legacy (ADR-0191) no hay 403 `aos_runtime_legacy`."""
     v3 = await _negocio("v3")
     h3 = await api_headers(app_client, v3, email=await _dueno(v3), password=PASSWORD)
     r = await app_client.post(

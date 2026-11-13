@@ -116,7 +116,7 @@ async def _runtime(tid: uuid.UUID) -> str:
     return (await _sql(tid, "select aos_runtime from tenants where id = :t", t=tid))[0][0]
 
 
-async def test_con_el_ruteo_encendido_el_negocio_nuevo_nace_en_v3_y_queda_auditado(
+async def test_el_negocio_nuevo_nace_en_v3_y_queda_auditado(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from core.alta_negocio import onboard_tenant
@@ -124,8 +124,8 @@ async def test_con_el_ruteo_encendido_el_negocio_nuevo_nace_en_v3_y_queda_audita
     slug = uniq("hu53")
     tid, pasos = await onboard_tenant(name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
 
-    assert await _runtime(tid) == "v3"
-    assert "runtime v3 encendido" in pasos
+    assert await _runtime(tid) == "v3"  # nace así (migración 0126), sin paso de migración en el alta
+    assert not any(p.startswith("runtime v3") for p in pasos)
     # El recorte lo escribe el escritor auditado, no un UPDATE suelto.
     auditoria = await _sql(tid, "select actor from audit_log where action = 'agent_os_recorte_general'")
     assert [a for (a,) in auditoria] == ["alta"]
