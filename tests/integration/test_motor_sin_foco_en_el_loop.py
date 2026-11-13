@@ -93,6 +93,7 @@ async def _alta(pagos: Any, prefijo: str, encendidas: bool) -> tuple[uuid.UUID, 
     )
     async with tenant_scope(tid):
         await plugin_manager.save_config("pack_commerce", {"checkout_fields": CHECKOUT})
+    await journeys.encender_runtime_v3(tid)  # todo turno corre sobre la release de su conexión (ADR-0191)
     await _banderas(tid, encendidas)
     return tid, slug
 
@@ -110,6 +111,7 @@ async def _alta_agenda(pagos: Any) -> tuple[uuid.UUID, str]:
             "source": "interno", "timezone": "America/Bogota", "slot_minutes": 60, "buffer_minutes": 0,
             "event_duration_minutes": 60,
         })
+    await journeys.encender_runtime_v3(tid)
     await _banderas(tid, True)
     return tid, slug
 

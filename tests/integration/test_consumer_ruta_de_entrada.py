@@ -54,7 +54,9 @@ async def _entrada(tid: uuid.UUID, cliente: str, por: str):
     return conversacion
 
 
-async def test_de_whatsapp_web_a_meta_responde_por_meta() -> None:
+async def test_de_whatsapp_web_a_meta_es_otra_conversacion_por_meta() -> None:
+    """Desde ADR-0191 la conversación es por (conexión, cliente): la entrada por Meta abre la suya y
+    responde por Meta; la de WhatsApp Web no se toca (nunca queda con dos rutas)."""
     tid, meta_cid, _waba, phone_id = await _negocio_con_byok()
     waweb_id, waweb_ext = await _waweb(tid)
     cliente = uniq("wa-ruta")
@@ -63,31 +65,33 @@ async def test_de_whatsapp_web_a_meta_responde_por_meta() -> None:
     assert (primera.connection_id, primera.meta_connection_id) == (waweb_id, None)
 
     segunda = await _entrada(tid, cliente, phone_id)
-    assert segunda.id == primera.id  # misma conversación abierta
-    # Solo la ruta de esta entrada: sin el connection_id de WhatsApp Web, el sender usa Meta.
-    assert (segunda.connection_id, segunda.meta_connection_id) == (None, meta_cid)
+    assert segunda.id != primera.id
+    assert segunda.connection_id not in (None, waweb_id) and segunda.meta_connection_id == meta_cid
+    assert (await _entrada(tid, cliente, waweb_ext)).id == primera.id  # la de WhatsApp Web sigue siendo la suya
 
 
-async def test_de_meta_a_whatsapp_web_responde_por_whatsapp_web() -> None:
+async def test_de_meta_a_whatsapp_web_es_otra_conversacion_por_whatsapp_web() -> None:
     tid, meta_cid, _waba, phone_id = await _negocio_con_byok()
     waweb_id, waweb_ext = await _waweb(tid)
     cliente = uniq("wa-ruta")
 
     primera = await _entrada(tid, cliente, phone_id)
-    assert (primera.connection_id, primera.meta_connection_id) == (None, meta_cid)
+    assert primera.meta_connection_id == meta_cid and primera.connection_id is not None
 
     segunda = await _entrada(tid, cliente, waweb_ext)
-    assert segunda.id == primera.id
+    assert segunda.id != primera.id
     assert (segunda.connection_id, segunda.meta_connection_id) == (waweb_id, None)
 
 
-async def test_entrada_sin_ruta_conocida_conserva_la_anterior() -> None:
-    """Sin conexión identificable (p. ej. el número de la plataforma por `.env`) no se borra
-    la ruta que ya tenía la conversación: se mantiene el comportamiento anterior."""
+async def test_entrada_sin_ruta_conocida_no_reescribe_la_de_una_conexion() -> None:
+    """Sin conexión identificable (p. ej. el número de la plataforma por la configuración) no se
+    toca la conversación de una conexión: su ruta sigue igual."""
     tid, meta_cid, _waba, phone_id = await _negocio_con_byok()
     cliente = uniq("wa-ruta")
 
     primera = await _entrada(tid, cliente, phone_id)
     segunda = await _entrada(tid, cliente, "numero-desconocido")
-    assert segunda.id == primera.id
-    assert (segunda.connection_id, segunda.meta_connection_id) == (None, meta_cid)
+    assert segunda.id != primera.id
+    otra_vez = await _entrada(tid, cliente, phone_id)
+    assert otra_vez.id == primera.id
+    assert (otra_vez.connection_id, otra_vez.meta_connection_id) == (primera.connection_id, meta_cid)
