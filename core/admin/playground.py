@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import or_, select
 
@@ -69,18 +70,43 @@ async def _get_or_create_customer(session, tenant_id: uuid.UUID) -> Customer:
     return customer
 
 
+async def conexion_real_para_probar(session: Any, tenant_id: uuid.UUID) -> uuid.UUID | None:
+    """La conexión conversacional del negocio con release activa para el Centro de pruebas: la
+    principal primero, luego la más antigua. None en un negocio legacy o sin ninguna."""
+    from sqlalchemy import text
+
+    fila = (
+        await session.execute(
+            text(
+                "select c.id from channel_connections c join connection_types t on t.id = c.type_id "
+                "join tenants n on n.id = c.tenant_id "
+                "where c.tenant_id = :t and c.deleted_at is null and c.active_release_id is not null "
+                "and t.produces_conversations and c.type_id <> 'playground' and n.aos_runtime = 'v3' "
+                "order by c.is_primary desc, c.created_at limit 1"
+            ),
+            {"t": tenant_id},
+        )
+    ).first()
+    return fila[0] if fila else None
+
+
 async def get_or_create_test_conversation(
     tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None
 ) -> Conversation:
     """Conversación de prueba "viva" del tenant (una sola a la vez por conexión).
 
-    Sin `connection_id` va por la conexión interna del playground (sin release: el camino de
-    siempre). Con `connection_id` (HU-AOS-57) se ata a esa conexión del negocio y el turno corre por
-    su release activa, es decir, por el agente publicado ahí; sigue siendo del canal `test`."""
+    Sin `connection_id`, un negocio v3 prueba por su conexión real con release activa
+    (`conexion_real_para_probar`, ADR-0191); si no tiene ninguna, por la interna del playground.
+    Con `connection_id` (HU-AOS-57) se ata a esa conexión del negocio y el turno corre por su
+    release activa, es decir, por el agente publicado ahí; sigue siendo del canal `test`."""
     async with get_session() as session:
         customer = await _get_or_create_customer(session, tenant_id)
         # El contract del Agent OS vuelve `connection_id` obligatorio: la conversación de prueba
         # también va por una conexión (la interna del negocio, o la elegida si es válida).
+        if connection_id is None:
+            # Un negocio v3 prueba por su conexión real con release (ADR-0191): la interna no tiene
+            # release y su turno fallaría cerrado. Sin ninguna, queda la interna (y el turno no responde).
+            connection_id = await conexion_real_para_probar(session, tenant_id)
         if connection_id is not None:
             conexion_id = await validar_conexion_para_probar(session, tenant_id, connection_id)
         else:

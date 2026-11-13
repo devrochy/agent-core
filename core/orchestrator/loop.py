@@ -325,6 +325,11 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # Con v3 (HU-AOS-15) el turno ejecuta la versión congelada del especialista en foco y el
     # KernelSpec de la release, en la forma v2 que lee este loop; sin release, el mismo v2.
     await fijar_release_del_turno(conversation, texto=latest_message)  # texto: router de HU-AOS-17
+    if release_vigente.sin_release():
+        # v3 sin release activa: falla cerrado, sin respuesta (ADR-0191). Ya se registró
+        # `release_missing`; la release 1 llega al alta de la conexión.
+        log.warning("turno_sin_release", conversation_id=str(conversation.id))
+        return None
     # Lo compilado del agente en foco, una vez por versión (HU-AOS-35, adenda de ADR-0117): la
     # vista v2, el flujo de la release y los bloques fijos del prompt. None sin release (legacy) o
     # si no se pudo compilar de forma determinista: el turno se arma como siempre.
