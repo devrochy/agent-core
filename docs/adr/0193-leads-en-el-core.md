@@ -1,6 +1,6 @@
 # ADR-0193 — Los leads viven en el core y Captar leads no depende de comercio
 
-- **Estado:** propuesto
+- **Estado:** aceptado (2026-11-13, por decisión del dueño. Documento mergeado en agent-core#756; D-70 y HU-AOS-70/71 en solvershub-docs#226. Sin código todavía: lo implementa HU-AOS-70).
 - **Fecha:** 2026-11-13
 - **Contexto:** [D-70](https://github.com/devrochy/solvershub-docs/blob/main/02-vision-y-decisiones/decisiones.md#d-70--los-leads-viven-en-el-core-y-captar-leads-no-depende-de-comercio) y [HU-AOS-70](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-44-habilidades-por-agente/hu/HU-AOS-70-leads-sin-comercio.md), con [HU-AOS-71](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-44-habilidades-por-agente/hu/HU-AOS-71-solvershub-sin-comercio.md) para `solvershub` ([SPEC-44](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-44-habilidades-por-agente/spec.md), REQ-AOS-24).
 - **Enmienda:** [ADR-0190](0190-habilidades-por-agente.md) (decisión 1, «Captar leads», y la alternativa `pack_leads` rechazada porque el modelo vivía en commerce), [ADR-0022](0022-leads-como-vista-computada-de-customer.md) (dónde vive el enriquecimiento del lead) y [ADR-0057](0057-rutas-publicas-e-identidad-de-pack.md) (el intake de leads deja de ser una ruta pública de pack). [ADR-0055](0055-intake-publico-leads-landing.md) ya estaba reemplazado por ADR-0057; queda como registro.
