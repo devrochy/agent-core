@@ -2,7 +2,7 @@
 
 - **Estado:** propuesto
 - **Fecha:** 2026-11-13
-- **Contexto:** [D-70](https://github.com/devrochy/solvershub-docs/blob/main/02-vision-y-decisiones/decisiones.md#d-70--los-leads-viven-en-el-core-y-captar-leads-no-depende-de-comercio) y [HU-AOS-70](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-44-habilidades-por-agente/hu/HU-AOS-70-leads-sin-comercio.md) ([SPEC-44](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-44-habilidades-por-agente/spec.md), REQ-AOS-24).
+- **Contexto:** [D-70](https://github.com/devrochy/solvershub-docs/blob/main/02-vision-y-decisiones/decisiones.md#d-70--los-leads-viven-en-el-core-y-captar-leads-no-depende-de-comercio) y [HU-AOS-70](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-44-habilidades-por-agente/hu/HU-AOS-70-leads-sin-comercio.md), con [HU-AOS-71](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-44-habilidades-por-agente/hu/HU-AOS-71-solvershub-sin-comercio.md) para `solvershub` ([SPEC-44](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-44-habilidades-por-agente/spec.md), REQ-AOS-24).
 - **Enmienda:** [ADR-0190](0190-habilidades-por-agente.md) (decisión 1, «Captar leads», y la alternativa `pack_leads` rechazada porque el modelo vivía en commerce), [ADR-0022](0022-leads-como-vista-computada-de-customer.md) (dónde vive el enriquecimiento del lead) y [ADR-0057](0057-rutas-publicas-e-identidad-de-pack.md) (el intake de leads deja de ser una ruta pública de pack). [ADR-0055](0055-intake-publico-leads-landing.md) ya estaba reemplazado por ADR-0057; queda como registro.
 - **Usa:** invariantes 1 (multi-tenant con RLS), 5 (un pack no importa de otro), 7 (lo de fuera es dato) y 8 (sin borrado físico); `core/admin/lead_registry.py`.
 
@@ -76,8 +76,8 @@ Detalle:
 - El origen del lead nace como columna (absorbe la parte de datos de HU-CRM-26).
 
 **Negativas / lo que aceptamos pagar:**
-- Refactor grande: se mueve lo construido en HU-CRM-18 a HU-CRM-23 y los crons de seguimiento; la HU se parte en
-  plataforma y `solvershub` (❓8 de HU-AOS-70).
+- Refactor grande: se mueve lo construido en HU-CRM-18 a HU-CRM-23 y los crons de seguimiento; por eso el trabajo se
+  partió en HU-AOS-70 (plataforma) y HU-AOS-71 (`solvershub` sin comercio), decisión del dueño del 2026-11-13.
 - Durante la transición conviven las tablas de commerce (sin escrituras) y las del core, y la ruta vieja como alias.
 - Cambia la versión de commerce y su hash: hay que reconstruir las releases.
 - Orden de despliegue estricto por entorno: intake nuevo con alias → regla del túnel de test → copia de los leads →
