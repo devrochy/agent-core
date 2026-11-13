@@ -284,19 +284,18 @@ async def preparar_negocio(
 
 
 def modo_de_runtime(negocio: dict[str, Any], runtime: str | None) -> tuple[bool | None, bool]:
-    """(motor, releases) de la corrida según `--runtime`.
+    """(motor, releases) de la corrida según `--runtime`. Todo turno corre sobre la release v3 de su
+    conexión (ADR-0191): la corrida siempre monta una conexión con su release 1.
 
-    - Sin `--runtime`: lo de siempre (`motor_de_procedimientos` del set, sin releases).
-    - Set con motor: `legacy` es la línea base de un agente, sin el motor; `v3` enciende el
-      motor (`aos_runtime = v3` y `aos_procedures`, HU-AOS-07). Así se mide pass^k con y sin
-      procedimientos sobre el mismo set (ADR-0112). No monta conexión ni release: el motor no
-      las necesita.
-    - Set sin motor: `v3` monta la release 1 por conexión (HU-AOS-15); `legacy`, nada."""
+    - Sin `--runtime`: el motor lo decide el set (`motor_de_procedimientos`).
+    - `sin-motor`: la línea base de un agente, v3 sin procedimientos (antes `legacy`).
+    - `v3`: con el motor si el set lo trae (`aos_procedures`, HU-AOS-07). Así se mide pass^k con y
+      sin procedimientos sobre el mismo set (ADR-0112)."""
     if runtime is None:
-        return None, False
-    if negocio.get("motor_de_procedimientos"):
-        return runtime == "v3", False
-    return False, runtime == "v3"
+        return None, True
+    if runtime == "sin-motor":
+        return False, True
+    return bool(negocio.get("motor_de_procedimientos")), True
 
 
 def separar_los_que_requieren_motor(
@@ -306,8 +305,8 @@ def separar_los_que_requieren_motor(
     procedimiento cuyas acciones el core solo ofrece con el motor encendido (`solo_con_motor_activo`:
     `contratar_plan` y `cambiar_plan`, SPEC-43 / HU-AOS-08): sin él no hay camino a cumplirlo, así
     que medirlo como línea base daría 0 % por diseño y no diría nada del modelo. Solo aplica a
-    `--runtime legacy` sobre un set con motor; con `v3` o sin `--runtime` corren todos."""
-    if runtime != "legacy" or not negocio.get("motor_de_procedimientos"):
+    `--runtime sin-motor` sobre un set con motor; con `v3` o sin `--runtime` corren todos."""
+    if runtime != "sin-motor" or not negocio.get("motor_de_procedimientos"):
         return rutas, []
     a_correr: list[Path] = []
     omitidos: list[str] = []
@@ -334,10 +333,9 @@ def _exigir_base_local(*urls: str | None, que: str) -> None:
 
 async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     """Runtime por releases (HU-AOS-15) para el negocio de la corrida: una conexión
-    conversacional, su release 1 (`backfill_releases`, desde el AgentSpec v2) y
-    `aos_runtime = 'v3'` sin `aos_procedures`. Exige `AOS_CONNECTION_ROUTING=true` en el entorno.
-    Devuelve la conexión: `nuevo_cliente` liga a ella las conversaciones de la corrida. Sirve para
-    medir pass^k legacy vs v3 con el mismo set (`--runtime v3`)."""
+    conversacional, su release 1 (`backfill_releases`) y `aos_runtime = 'v3'` (no toca
+    `aos_procedures`: lo decide el set o `--runtime`). Devuelve la conexión: `nuevo_cliente` liga a
+    ella las conversaciones de la corrida. Toda corrida la monta (ADR-0191)."""
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -437,7 +435,7 @@ async def nuevo_cliente(tenant_id: uuid.UUID, nombre: str) -> tuple[uuid.UUID, u
             await session.flush()
             conversacion = Conversation(
                 tenant_id=tenant_id, customer_id=cliente.id, channel=TEST_CHANNEL, status="open", state={"is_test": True},
-                # Con `--runtime v3` la conversación es de la conexión con release (HU-AOS-15).
+                # La conversación es de la conexión de la corrida, con su release (HU-AOS-15, ADR-0191).
                 connection_id=_CONEXION_V3.get(tenant_id),
             )
             session.add(conversacion)
@@ -1079,12 +1077,11 @@ async def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--detalle", action="store_true", help="Imprimir la conversación de cada intento")
     parser.add_argument(
         "--runtime",
-        choices=("legacy", "v3"),
+        choices=("sin-motor", "v3"),
         default=None,
-        help="Sin la opción, como siempre. En un set sin motor: legacy o v3 (el negocio de la corrida corre su "
-        "release 1, HU-AOS-15; exige AOS_CONNECTION_ROUTING=true). En un set con motor de procedimientos: "
-        "legacy es la línea base de un agente (sin el motor) y v3 enciende el motor (ADR-0112). Sirve para "
-        "comparar pass^k entre runtimes.",
+        help="Sin la opción, el motor lo decide el set. Toda corrida corre sobre la release 1 de una conexión "
+        "(ADR-0191). En un set con motor de procedimientos: sin-motor es la línea base de un agente y v3 "
+        "enciende el motor (ADR-0112). Sirve para comparar pass^k con y sin procedimientos.",
     )
     sys.path.insert(0, str(EVALS_DIR))
     import grabaciones
