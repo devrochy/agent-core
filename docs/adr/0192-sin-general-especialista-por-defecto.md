@@ -26,8 +26,8 @@ Detalle:
 4. **Derivación de especialistas.** El contenido inicial de un agente nuevo (desde plantilla o preset)
    sale de `settings` del negocio, los valores de la plantilla y, si existe, el primer agente del mismo
    tipo; ya no de `_base_del_general`.
-5. **Configuración.** Identidad, Voz y Cerebro publican una versión del Coordinador o del especialista
-   que corresponda (ADR-0191 §4).
+5. **Configuración.** Ya no edita agentes (ADR-0191 §4, decisión del dueño del 2026-11-13): sus datos
+   alimentan solo el contenido inicial de un agente nuevo, y cada agente se edita en su ficha.
 6. **Claves.** `general` deja de ser una clave reservada; solo `coordinador` lo es. El panel habilita
    módulos por el tipo del agente publicado, no por su `key`.
 7. **Datos.** Sin migración: test y producción se resiembran (D-68, ADR-0190 §10). El histórico de

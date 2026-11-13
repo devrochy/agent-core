@@ -26,8 +26,10 @@ Detalle:
    conversacional del negocio (la por defecto, o la elegida, como en HU-AOS-57) y usa su release. La
    conexión interna `playground` sale del turno; si el negocio no tiene ninguna conexión con release,
    el panel lo dice y no responde.
-4. **Configuración escribe en v3.** Identidad, Voz y Cerebro publican una versión v3 del agente que
-   corresponda (Coordinador o especialista) en vez de depender de `refrescar_desde_v2`.
+4. **Configuración deja de editar agentes** (decisión del dueño, 2026-11-13). Identidad, Voz y Cerebro
+   quedan como datos del negocio (nombre, descripción, persona base en `agent_specs`) y solo alimentan
+   el contenido inicial de un agente nuevo; la conducta de cada agente se edita en su ficha. Así se
+   puede borrar `refrescar_desde_v2` sin que Configuración deje de hacer algo en silencio.
 5. **Se borran:** las ramas `aos_runtime = 'legacy'` del loop, consumer y kernel; `core/agents/tolerante.py`
    (sus constantes y utilidades vigentes se mueven a un módulo propio); `refrescar_desde_v2` y su uso en
    `build.py` y `release_uno.py`; el `403 aos_runtime_legacy`; el `Literal["legacy","v3"]` de la API;
