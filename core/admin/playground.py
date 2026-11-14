@@ -231,7 +231,7 @@ async def run_test_turn(tenant_id: uuid.UUID, text: str, connection_id: uuid.UUI
         text=result.text,
         image_url=result.image_url,
         escalated=result.escalated,
-        simulado=result.simulado,
+        simulado=getattr(result, "simulado", False),
     )
 
 

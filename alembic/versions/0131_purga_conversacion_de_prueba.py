@@ -150,6 +150,21 @@ $$
 
 def upgrade() -> None:
     op.execute(_FUNCION)
+    # Las conversaciones de prueba creadas antes del marcador `panel` también se excluyen de
+    # métricas y se purgan al cerrar: el cliente sintético del panel las identifica.
+    op.execute(
+        """
+        UPDATE conversations c
+        SET state = coalesce(c.state, '{}'::jsonb) || '{"panel": true}'::jsonb
+        FROM customers cu
+        WHERE c.tenant_id = cu.tenant_id
+          AND c.customer_id = cu.id
+          AND c.channel = 'test'
+          AND cu.channel = 'test'
+          AND cu.external_id = 'panel-playground'
+          AND coalesce(c.state->>'panel', 'false') <> 'true'
+        """
+    )
     op.execute(
         """
         DO $do$

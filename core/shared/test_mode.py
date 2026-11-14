@@ -62,12 +62,13 @@ def reset_simulado() -> None:
 
 
 def conversaciones_de_prueba(tenant_id: uuid.UUID):  # type: ignore[no-untyped-def]
-    """Subconsulta con los ids de las conversaciones `test` del negocio."""
+    """Subconsulta con los ids de las conversaciones de la prueba del panel (no evals)."""
     from core.db.models import Conversation
 
     return select(Conversation.id).where(
         Conversation.tenant_id == tenant_id,
         Conversation.channel == TEST_CHANNEL,
+        Conversation.state["panel"].astext == "true",
     )
 
 
@@ -81,5 +82,8 @@ def no_es_prueba(tenant_id: uuid.UUID, columna: Any):  # type: ignore[no-untyped
 
 def sql_no_es_prueba(columna: str, tenant_param: str = "t") -> str:
     """Condición SQL para consultas raw. Espera el parámetro de tenant `:t` por defecto."""
-    sub = f"(select id from conversations where tenant_id = :{tenant_param} and channel = 'test')"
+    sub = (
+        f"(select id from conversations where tenant_id = :{tenant_param} "
+        "and channel = 'test' and state->>'panel' = 'true')"
+    )
     return f"({columna} is null or {columna} not in {sub})"

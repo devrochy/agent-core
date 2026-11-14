@@ -358,7 +358,7 @@ async def ejecutar_tool(
         if en_prueba and tool.simular is not None:
             resultado = await tool.simular(arguments, context)
             simulado = True
-        elif en_prueba and (tool.side_effects or not tool.solo_lectura) and not tool.permite_en_prueba:
+        elif en_prueba and tool.side_effects and not tool.permite_en_prueba:
             resultado = {
                 "error": "herramienta_sin_simulador",
                 "simulado": True,
