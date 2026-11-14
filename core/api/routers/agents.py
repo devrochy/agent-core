@@ -80,6 +80,7 @@ class AgentSummary(BaseModel):
 
 class AgentDraft(BaseModel):
     content: dict[str, Any]
+    flow: dict[str, Any] | None = None
     lock_version: int
     base_version_id: uuid.UUID | None
     updated_at: datetime
@@ -91,6 +92,7 @@ class AgentVersionSummary(BaseModel):
     label: str
     contract: str
     content_hash: str
+    flow_hash: str | None = None
     notes: str
     legacy: bool
     created_at: datetime
@@ -105,6 +107,7 @@ class ResolvedProcedure(BaseModel):
 
 class AgentVersionDetail(AgentVersionSummary):
     content: dict[str, Any]
+    flow: dict[str, Any] | None = None
     procedures: list[ResolvedProcedure] = []
 
 
@@ -226,6 +229,7 @@ def _version(v: Any) -> AgentVersionSummary:
         label=v.label,
         contract=v.contract,
         content_hash=v.content_hash,
+        flow_hash=v.flow_hash,
         notes=v.notes,
         legacy=v.legacy_agent_spec_id is not None,
         created_at=v.created_at,
@@ -234,7 +238,11 @@ def _version(v: Any) -> AgentVersionSummary:
 
 def _draft(d: Any) -> AgentDraft:
     return AgentDraft(
-        content=d.content, lock_version=d.lock_version, base_version_id=d.base_version_id, updated_at=d.updated_at
+        content=d.content,
+        flow=d.flow,
+        lock_version=d.lock_version,
+        base_version_id=d.base_version_id,
+        updated_at=d.updated_at,
     )
 
 
@@ -538,7 +546,9 @@ async def get_version(
         v = await svc.obtener_version(_tenant(principal), agent_id, version_id)
     except svc.AgenteNoEncontrado:
         raise ApiError.not_found("Versión no encontrada.") from None
-    return AgentVersionDetail(**_version(v).model_dump(), content=v.content, procedures=await _resueltos(v))
+    return AgentVersionDetail(
+        **_version(v).model_dump(), content=v.content, flow=v.flow, procedures=await _resueltos(v)
+    )
 
 
 async def _resueltos(v: Any) -> list[ResolvedProcedure]:
