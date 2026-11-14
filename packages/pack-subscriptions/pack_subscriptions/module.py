@@ -87,8 +87,7 @@ class SubscriptionsModule(BaseModule):
 
         fuentes_de_alta.register(PLUGIN_ID, DatosDeAltaDeLaInscripcion())
         host.subscribe("payment.confirmed", self._on_payment_confirmed)
-        # HU-AOS-08: procedimiento `cambiar_plan` y su resolver (solo los usa el motor, detrás de
-        # `tenants.aos_procedures`).
+        # HU-AOS-08: procedimiento `cambiar_plan` y su resolver (solo los usa el motor).
         from pack_subscriptions.procedimientos import registrar
 
         registrar(host, PLUGIN_ID)
@@ -138,6 +137,12 @@ class SubscriptionsModule(BaseModule):
         from pack_subscriptions.datos_de_prueba import retirar
 
         return await retirar(tenant_id, registros)
+
+    async def describir_registros(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> list[Any]:
+        """Lo sembrado en palabras, para «Lo cargado» del asistente (HU-QA-16)."""
+        from pack_subscriptions.datos_de_prueba import describir
+
+        return await describir(tenant_id, registros)
 
     def admin_api_routes(self) -> list[Any]:
         """API admin de suscripciones (ADR-0079), montada en `/api/v1`."""

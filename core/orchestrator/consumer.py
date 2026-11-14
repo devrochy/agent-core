@@ -51,7 +51,6 @@ from core.orchestrator.retencion_streams import recortar_dlq, recortar_inbound
 from core.orchestrator.ruta_de_conversacion import (
     actualizar_ruta,
     buscar_conversacion_abierta,
-    ruteo_por_conexion,
 )
 from core.orchestrator.turn_gate import TurnQueueTimeout, run_turn
 from core.shared.events import ON_CONVERSATION_STARTED, ON_MESSAGE_RECEIVED, event_bus
@@ -543,7 +542,7 @@ async def _handle_inbound_scoped(fields: dict[str, str], *, opciones_habilitada:
         return
 
     # ---------------- datos sin LLM (HU-AOS-05): botón, fila de lista o contenido que llena un
-    # dato de la tarea en foco. Solo con `aos_procedures`; sin botón ni media no consulta nada.
+    # dato de la tarea en foco. Sin botón ni media no consulta nada.
     await entrada_sin_llm(conversation, fields)
 
     # ---------------- velocidad de respuesta
@@ -705,7 +704,7 @@ async def _resolve_conversation(
             )
         ).scalars().first()
         meta_connection_id = meta_phone.connection_id if meta_phone else None
-        if connection is None and meta_phone is not None and channel == "whatsapp" and ruteo_por_conexion():
+        if connection is None and meta_phone is not None and channel == "whatsapp":
             # Un número de la cuenta sin su fila canónica (se conectó fuera de los caminos de alta
             # que la crean): se asegura aquí, con el mismo candado por número, para que la
             # conversación nazca con conexión (el contract la exige, ADR-0115 adenda 2026-10-24).
@@ -721,8 +720,8 @@ async def _resolve_conversation(
             text("select pg_advisory_xact_lock(hashtext(:k))"),
             {"k": f"conversation:{tenant_id}:{customer.id}"},
         )
-        # Conversación por (conexión, cliente) detrás de `AOS_CONNECTION_ROUTING` (ADR-0115).
-        por_conexion = ruteo_por_conexion()
+        # Conversación por (conexión, cliente) (ADR-0115); el ruteo por conexión es siempre (ADR-0191).
+        por_conexion = True
         conversation = await buscar_conversacion_abierta(
             session, tenant_id, customer.id, connection, por_conexion=por_conexion
         )

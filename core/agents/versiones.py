@@ -28,9 +28,9 @@ from agentcore_contracts import AgentSpecV3
 from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
+from core.agents.claves import KEYS_RESERVADAS
 from core.agents.contrato_v3 import Contrato, revisar_spec, validar_spec
 from core.agents.credenciales import referencias_de_tool
-from core.agents.tolerante import KEYS_RESERVADAS
 from core.db.models import AgentDraftRecord, AgentRecord, AgentVersionRecord
 from core.db.session import get_session
 from core.kernel.procedures import Catalogo, Issue
@@ -83,15 +83,6 @@ def contenido_inicial(kind: str) -> dict[str, Any]:
     modelo = {"primary": DEFAULT_SPEC["model"]["primary"]}
     return AgentSpecV3.model_validate({"model": modelo}).model_dump(mode="json", by_alias=True)
 
-
-async def escritura_habilitada(tenant_id: uuid.UUID) -> bool:
-    """Con el runtime en `legacy` (ADR-0112) un agente no hace nada: hasta HU-AOS-13/14 solo
-    el master escribe agentes, salvo en los negocios con `aos_runtime = 'v3'`."""
-    async with get_session() as session:
-        valor = (
-            await session.execute(text("select aos_runtime from tenants where id = :t"), {"t": tenant_id})
-        ).scalar_one_or_none()
-    return valor == "v3"
 
 
 async def _validar(tenant_id: uuid.UUID, contenido: Any, contrato: Contrato, catalogo: Catalogo) -> dict[str, Any]:
@@ -449,7 +440,6 @@ __all__ = [
     "contenido_inicial",
     "content_hash",
     "crear_agente",
-    "escritura_habilitada",
     "guardar_borrador",
     "listar_agentes",
     "listar_versiones",

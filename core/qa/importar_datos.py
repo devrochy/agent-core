@@ -1,6 +1,7 @@
 """Importar datos existentes por agente desde un CSV (HU-QA-12, ADR-0180).
 
-Solo en test (`QA_TESTERS_ENABLED`; la API responde 404 sin la bandera). Por agente:
+Solo en test (`QA_TESTERS_ENABLED`; la API responde 404 sin la bandera), salvo las plantillas que se
+declaran `en_produccion` (ADR-0194 §2: hoy, `productos`). Por agente:
 
 1. La plantilla sale de la forma de datos del agente (la misma de «Generar datos de prueba»):
    ventas → `productos`, agenda → `tipos_de_cita`, cobranza → `clientes_y_prestamos`,
@@ -14,6 +15,9 @@ Solo en test (`QA_TESTERS_ENABLED`; la API responde 404 sin la bandera). Por age
 4. Cada importación es un lote de `test_data_records` con `origen = 'importacion'`. «Generar datos
    de prueba» y su borrado no lo tocan; `borrar` retira solo lo importado.
 5. Una fila de `audit_log` por importación y por borrado (sin el contenido del archivo).
+6. Precarga (ADR-0194 §2): el mapeo de columnas (`core.qa.mapeo_columnas`) devuelve las filas
+   normalizadas; el cliente las edita y las reenvía en JSON (`previsualizar_filas`, `importar_filas`),
+   que pasan por la misma validación que el archivo. Sigue sin haber estado en el servidor.
 """
 
 from __future__ import annotations
@@ -121,6 +125,8 @@ def _info_plantilla(p: PlantillaDeImportacion) -> dict[str, Any]:
         ],
         "tope_filas": TOPE_FILAS,
         "tope_bytes": TOPE_BYTES,
+        "en_produccion": p.en_produccion,
+        "importa_fotos": p.importa_fotos,
     }
 
 
@@ -198,7 +204,16 @@ def _decodificar(contenido: bytes) -> str:
         return contenido.decode("cp1252", errors="replace")  # «CSV (delimitado por comas)» de Excel
 
 
-def leer_archivo(contenido: bytes, plantilla: PlantillaDeImportacion) -> Archivo:
+@dataclass
+class Tabla:
+    """El CSV crudo: cabeceras tal como vienen y cada registro con su número de fila en el archivo."""
+
+    cabeceras: list[str]
+    registros: list[tuple[int, list[str]]]
+
+
+def leer_tabla(contenido: bytes) -> Tabla:
+    """Decodifica, detecta el separador y lee las filas con datos, con los topes de ADR-0180 §2."""
     if len(contenido) > TOPE_BYTES:
         raise ErrorDatosDePrueba(
             413, "archivo_muy_grande", f"El archivo pesa más de {TOPE_BYTES // 1_000_000} MB. Divídelo en partes."
@@ -210,19 +225,16 @@ def leer_archivo(contenido: bytes, plantilla: PlantillaDeImportacion) -> Archivo
     separador = max((";", ",", "\t"), key=primera.count)
     lector = csv.reader(io.StringIO(texto), delimiter=separador)
     try:
-        cabeceras = [normalizar_cabecera(c) for c in next(lector)]
+        cabeceras = [c.strip() for c in next(lector)]
     except (StopIteration, csv.Error) as exc:
         raise ErrorDatosDePrueba(422, "archivo_vacio", "El archivo está vacío.") from exc
-    conocidas = set(plantilla.nombres)
-    ignoradas = [c for c in cabeceras if c and c not in conocidas]
-    faltantes = [n for n in plantilla.obligatorias if n not in cabeceras]
-    filas: list[tuple[int, dict[str, str]]] = []
+    registros: list[tuple[int, list[str]]] = []
     try:
         for numero, registro in enumerate(lector, start=2):
             if not any(celda.strip() for celda in registro):
                 continue
-            filas.append((numero, {c: v.strip() for c, v in zip(cabeceras, registro, strict=False) if c in conocidas}))
-            if len(filas) > TOPE_FILAS:
+            registros.append((numero, [celda.strip() for celda in registro]))
+            if len(registros) > TOPE_FILAS:
                 raise ErrorDatosDePrueba(
                     422,
                     "demasiadas_filas",
@@ -230,9 +242,43 @@ def leer_archivo(contenido: bytes, plantilla: PlantillaDeImportacion) -> Archivo
                 )
     except csv.Error as exc:
         raise ErrorDatosDePrueba(422, "archivo_invalido", "No se pudo leer el archivo como CSV.") from exc
+    return Tabla(cabeceras=cabeceras, registros=registros)
+
+
+def leer_archivo(contenido: bytes, plantilla: PlantillaDeImportacion) -> Archivo:
+    tabla = leer_tabla(contenido)
+    cabeceras = [normalizar_cabecera(c) for c in tabla.cabeceras]
+    conocidas = set(plantilla.nombres)
+    ignoradas = [c for c in cabeceras if c and c not in conocidas]
+    faltantes = [n for n in plantilla.obligatorias if n not in cabeceras]
+    filas = [
+        (numero, {c: v for c, v in zip(cabeceras, registro, strict=False) if c in conocidas})
+        for numero, registro in tabla.registros
+    ]
     if not filas and not faltantes:
         raise ErrorDatosDePrueba(422, "archivo_vacio", "El archivo no tiene filas con datos.")
     return Archivo(filas=filas, ignoradas=ignoradas, faltantes=faltantes)
+
+
+def archivo_de_filas(filas: list[tuple[int, dict[str, str | None]]], plantilla: PlantillaDeImportacion) -> Archivo:
+    """Las filas de la precarga que reenvía el cliente (ADR-0194 §2), como si fueran el archivo: mismas
+    columnas de la plantilla, mismas validaciones. Lo que no es columna de la plantilla se ignora."""
+    if not filas:
+        raise ErrorDatosDePrueba(422, "archivo_vacio", "No hay filas para importar.")
+    if len(filas) > TOPE_FILAS:
+        raise ErrorDatosDePrueba(
+            422, "demasiadas_filas", f"Son más de {TOPE_FILAS} filas. Impórtalas en partes más pequeñas."
+        )
+    # La columna de la foto no es de la plantilla descargable, pero la precarga sí la trae.
+    conocidas = set(plantilla.nombres) | ({plantilla.columna_foto} if plantilla.columna_foto else set())
+    presentes = {c for _, valores in filas for c in valores}
+    return Archivo(
+        filas=[
+            (numero, {c: (v or "").strip() for c, v in valores.items() if c in conocidas}) for numero, valores in filas
+        ],
+        ignoradas=sorted(presentes - conocidas),
+        faltantes=[n for n in plantilla.obligatorias if n not in presentes],
+    )
 
 
 # ------------------------------------------------------------------ validación por fila
@@ -327,10 +373,9 @@ class Evaluacion:
         return sum(1 for f in self.filas if f.errores)
 
 
-async def _evaluar(tenant_id: uuid.UUID, d: Destino, contenido: bytes, *, simular: bool) -> Evaluacion:
-    """Lee y valida el archivo y le pide al pack lo que haría (o hace) con las filas válidas. Los errores
+async def _evaluar(tenant_id: uuid.UUID, d: Destino, archivo: Archivo, *, simular: bool) -> Evaluacion:
+    """Valida el archivo y le pide al pack lo que haría (o hace) con las filas válidas. Los errores
     que el pack encuentra (p. ej. un SKU de un producto eliminado) se suman a los de cada fila."""
-    archivo = leer_archivo(contenido, d.plantilla)
     filas = validar(archivo, d.plantilla)
     validas = [f for f in filas if f.datos is not None]
     resultado = ResultadoDeImportacion()
@@ -370,7 +415,15 @@ def _reporte(e: Evaluacion) -> dict[str, Any]:
 async def previsualizar(tenant_id: uuid.UUID, agent_id: uuid.UUID, contenido: bytes) -> dict[str, Any]:
     """Vista previa: errores por fila y cuántas filas se crearían o ya existen. No escribe nada."""
     d = await _destino_o_error(tenant_id, agent_id)
-    return _reporte(await _evaluar(tenant_id, d, contenido, simular=True))
+    return _reporte(await _evaluar(tenant_id, d, leer_archivo(contenido, d.plantilla), simular=True))
+
+
+async def previsualizar_filas(
+    tenant_id: uuid.UUID, agent_id: uuid.UUID, filas: list[tuple[int, dict[str, str | None]]]
+) -> dict[str, Any]:
+    """Vista previa de la precarga editada en el cliente (ADR-0194 §2). No escribe nada."""
+    d = await _destino_o_error(tenant_id, agent_id)
+    return _reporte(await _evaluar(tenant_id, d, archivo_de_filas(filas, d.plantilla), simular=True))
 
 
 # ------------------------------------------------------------------ importar y borrar
@@ -388,9 +441,40 @@ async def importar(
     actor: str,
 ) -> dict[str, Any]:
     d = await _destino_o_error(tenant_id, agent_id)
+    return await _importar(
+        tenant_id, agent_id, d, leer_archivo(contenido, d.plantilla), solo_validas=solo_validas, actor=actor,
+        fuente="archivo",
+    )
 
+
+async def importar_filas(
+    tenant_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    filas: list[tuple[int, dict[str, str | None]]],
+    *,
+    solo_validas: bool,
+    actor: str,
+) -> dict[str, Any]:
+    """Importa la precarga que el cliente editó: se vuelve a validar contra el esquema del pack."""
+    d = await _destino_o_error(tenant_id, agent_id)
+    return await _importar(
+        tenant_id, agent_id, d, archivo_de_filas(filas, d.plantilla), solo_validas=solo_validas, actor=actor,
+        fuente="precarga",
+    )
+
+
+async def _importar(
+    tenant_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    d: Destino,
+    archivo: Archivo,
+    *,
+    solo_validas: bool,
+    actor: str,
+    fuente: str,
+) -> dict[str, Any]:
     async def trabajo() -> dict[str, Any]:
-        previa = await _evaluar(tenant_id, d, contenido, simular=True)
+        previa = await _evaluar(tenant_id, d, archivo, simular=True)
         reporte = _reporte(previa)
         if previa.archivo.faltantes:
             raise ErrorDatosDePrueba(
@@ -404,7 +488,7 @@ async def importar(
                 "archivo_con_errores",
                 "El archivo tiene filas con errores. Corrígelas o importa solo las válidas.",
             )
-        hecha = await _evaluar(tenant_id, d, contenido, simular=False)
+        hecha = await _evaluar(tenant_id, d, archivo, simular=False)
         lote_id = uuid.uuid4()
         ahora = utcnow()
         creados = hecha.creados
@@ -439,6 +523,7 @@ async def importar(
             actor,
             {
                 "accion": "importar",
+                "fuente": fuente,
                 "agent_id": str(agent_id),
                 "plantilla": d.plantilla.id,
                 "lote_id": str(lote_id),
@@ -490,4 +575,13 @@ async def borrar(tenant_id: uuid.UUID, agent_id: uuid.UUID, *, actor: str) -> di
     )
 
 
-__all__ = ["ErrorDatosDePrueba", "borrar", "estado", "importar", "plantilla_del_agente", "previsualizar"]
+__all__ = [
+    "ErrorDatosDePrueba",
+    "borrar",
+    "estado",
+    "importar",
+    "importar_filas",
+    "plantilla_del_agente",
+    "previsualizar",
+    "previsualizar_filas",
+]

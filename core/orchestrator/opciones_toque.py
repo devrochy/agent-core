@@ -6,9 +6,8 @@ envío de mensajes por la cola normal.
 
 **Entorno fuera del loop** (el punto frágil del ADR): un turno resuelve el spec y la release con
 `load_active_spec` → `fijar_release_del_turno` → `spec_del_turno`, bajo `con_release`. El toque lo repite igual
-para que la tool corra con los MISMOS bindings que tendría en un turno del agente en foco (con
-`aos_runtime = v3`, los bindings son los de la versión congelada de ese agente; con legacy, los del
-AgentSpec). Es la misma asignación sticky por episodio que haría el siguiente mensaje del cliente: abre el
+para que la tool corra con los MISMOS bindings que tendría en un turno del agente en foco (los
+de la versión congelada de ese agente). Es la misma asignación sticky por episodio que haría el siguiente mensaje del cliente: abre el
 episodio y puede fijar la release y el dueño de la conversación, pero no cambia nada que el próximo turno no
 fuera a cambiar igual. NO corre el router (`enrutar=False`): un toque no es un mensaje, y el router consumiría
 (GETDEL) el payload de botón de procedimiento que espera el turno diferido y reescribiría el dueño con un texto

@@ -128,8 +128,7 @@ class CobranzaModule(BaseModule):
         from pack_cobranza.pagos import _on_payment_confirmed
 
         host.subscribe(ON_PAYMENT_CONFIRMED, _on_payment_confirmed)
-        # HU-AOS-08: procedimiento `promesa_de_pago` y su resolver (solo los usa el motor, detrás
-        # de `tenants.aos_procedures`).
+        # HU-AOS-08: procedimiento `promesa_de_pago` y su resolver (solo los usa el motor).
         from pack_cobranza.procedimientos import registrar
 
         registrar(host, self.id)
@@ -299,6 +298,12 @@ class CobranzaModule(BaseModule):
         from pack_cobranza.datos_de_prueba import retirar
 
         return await retirar(tenant_id, registros)
+
+    async def describir_registros(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> list[Any]:
+        """Lo sembrado o importado en palabras, para «Lo cargado» del asistente (HU-QA-16)."""
+        from pack_cobranza.datos_de_prueba import describir
+
+        return await describir(tenant_id, registros)
 
     def plantillas_de_importacion(self) -> list[PlantillaDeImportacion]:
         """Importar clientes y préstamos desde un CSV, sin teléfono (HU-QA-12, ADR-0180)."""

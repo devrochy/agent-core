@@ -19,7 +19,6 @@ from typing import Any
 
 from sqlalchemy import text
 
-from core.config import get_settings
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
 
@@ -34,7 +33,7 @@ class SinReleaseActiva(LookupError):
 
 @dataclass(frozen=True)
 class Prueba:
-    modo: str  # off | shadow | active: si el router decide hoy en esta conexión
+    modo: str  # shadow | active: si el router decide hoy en esta conexión
     source: str  # rule | trigger | default
     agent_key: str
     agent_id: uuid.UUID
@@ -49,7 +48,6 @@ class Prueba:
 
 async def probar(tenant_id: uuid.UUID, connection_id: uuid.UUID, frase: str) -> Prueba:
     from core.kernel import router
-    from core.kernel.banderas import banderas_del_negocio
     from core.releases.cargar import cargar_release
 
     if get_current_tenant_id() != tenant_id:
@@ -71,9 +69,7 @@ async def probar(tenant_id: uuid.UUID, connection_id: uuid.UUID, frase: str) -> 
         release = await cargar_release(session, tenant_id, fila[0])
         if release is None:
             raise SinReleaseActiva(str(connection_id))
-        banderas = await banderas_del_negocio(session, tenant_id)
     routing = release.ruteo()
-    bandera = banderas.ruteo if get_settings().aos_connection_routing and banderas.runtime == "v3" else "off"
     entrada = router.Entrada(texto=frase[: router.MAX_TEXTO], channel=str(fila[1] or ""))
     ruta = router.decidir(release, routing, entrada, release.foco(None))
     procedimientos = release.procedimientos()
@@ -83,7 +79,7 @@ async def probar(tenant_id: uuid.UUID, connection_id: uuid.UUID, frase: str) -> 
         r.id for r in routing.rules if r.when.customerFact or r.when.flowStage or r.when.withinHours
     )
     return Prueba(
-        modo=router.modo_efectivo(bandera, routing),
+        modo=router.modo_efectivo(routing),
         source=ruta.source,
         agent_key=ruta.agente.key,
         agent_id=ruta.agente.agent_id,

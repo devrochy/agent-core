@@ -30,7 +30,6 @@ from typing import Any
 from sqlalchemy import column, select, table, update
 from sqlalchemy.orm.attributes import set_committed_value
 
-from core.config import get_settings
 from core.db.models import ChannelConnection, Conversation
 from core.gateway.connection_types import WEBCHAT
 from core.shared.logger import get_logger
@@ -51,11 +50,6 @@ _conversaciones = table(
     column("active_agent_instance_id"),
     column("owner_since"),
 )
-
-
-def ruteo_por_conexion() -> bool:
-    """`AOS_CONNECTION_ROUTING` (global, ADR-0112): apagada por defecto."""
-    return get_settings().aos_connection_routing
 
 
 def _abiertas(tenant_id: uuid.UUID, customer_id: uuid.UUID) -> Any:

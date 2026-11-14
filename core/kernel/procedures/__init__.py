@@ -1,7 +1,6 @@
 """Procedimientos (`procedure/1`, ADR-0113): catálogo de acciones, validador, linter y
 afirmaciones compiladas (HU-AOS-03). El motor que los ejecuta está en `motor.py` (reglas puras),
-`ejecucion.py` (con estado), `registro.py` y `sombra.py` (HU-AOS-05); solo actúa con
-`tenants.aos_procedures` (o en sombra con `aos_runtime = 'v3'`)."""
+`ejecucion.py` (con estado) y `registro.py` (HU-AOS-05); actúa en todo negocio (ADR-0191)."""
 
 from core.kernel.procedures.afirmaciones import compilar_afirmaciones
 from core.kernel.procedures.catalogo import ActionInfo, Catalogo, catalogo_de_acciones

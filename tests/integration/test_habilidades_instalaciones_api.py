@@ -19,7 +19,7 @@ import uuid
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _api_helpers import api_headers, uniq
 from sqlalchemy import text
 
 pytestmark = [
@@ -77,13 +77,14 @@ async def _conexion(tid: uuid.UUID, tipo: str = "instagram_meta") -> uuid.UUID:
 
 async def _negocio(packs: list[str]) -> tuple[uuid.UUID, uuid.UUID]:
     """Negocio con `packs` habilitados, una conexión conversacional y su release 1."""
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
-    from core.releases.release_uno import backfill_releases
 
     slug = uniq("aos16api")
     tid, _ = await onboard_tenant(name=f"AOS16 {slug}", slug=slug, packs=packs, sembrar_ejemplos=False, plan="premium")
     cid = await _conexion(tid)
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     return tid, cid
 
@@ -170,11 +171,9 @@ async def test_api_instalaciones_por_conexion(app_client) -> None:
     assert (await app_client.get(f"{BASE}?connection_id={cid}", headers=master_otro)).json() == []
     assert (await app_client.delete(f"{BASE}/{instalada['id']}", headers=master_otro)).status_code == 404
 
-    # El dueño no escribe mientras el negocio esté en legacy; sí lee.
+    # El dueño lee y escribe: sin 403 por runtime (ADR-0191).
     dueno = await api_headers(app_client, tid, email=await _dueno(tid), password=PASSWORD)
     assert [i["id"] for i in (await app_client.get(BASE, headers=dueno)).json()] == [instalada["id"]]
-    assert (await app_client.delete(f"{BASE}/{instalada['id']}", headers=dueno)).status_code == 403
-    await banderas_como_dueno(tid, aos_runtime="v3")
     assert (await app_client.delete(f"{BASE}/{instalada['id']}", headers=dueno)).status_code == 204
     assert (await app_client.delete(f"{BASE}/{instalada['id']}", headers=dueno)).status_code == 404
     assert (await app_client.get(BASE, headers=dueno)).json() == []
@@ -194,20 +193,19 @@ async def test_el_build_congela_solo_las_de_la_conexion_y_falla_cerrado(app_clie
     from core.shared.tenant import tenant_scope
 
     tid, cid = await _negocio(["pack_commerce", "pack_calendar"])
-    await banderas_como_dueno(tid, aos_runtime="v3")
     master = await api_headers(app_client, tid)
     ((uno,),) = await _sql(tid, "select active_release_id from channel_connections where id = :c", c=cid)
     assert await _skills(tid, uno) == ["pack_calendar", "pack_commerce"]  # sin instalaciones: las del negocio
 
     r = await app_client.post(BASE, headers=master, json={"pack_id": "pack_calendar", "connection_id": str(cid)})
     assert r.status_code == 201
-    # El General declara `tomar_pedido`, que no está en el scope de la conexión: fail-closed.
+    # El especialista por defecto («atencion») declara `tomar_pedido`, que no está en el scope de la conexión: fail-closed.
     with pytest.raises(ErrorDelBuild) as error:
         await _construir(tid, cid)
     assert error.value.codigo == "procedimiento_sin_resolver"
     assert any(PLAN in d for d in error.value.detalle)
 
-    # Con un especialista de Agenda por defecto y sin el General, la release congela solo calendar.
+    # Con un especialista de Agenda por defecto y sin «atencion», la release congela solo calendar.
     agente, version = await _agenda(tid)
     async with tenant_scope(tid):
         await instancias.agregar_instancia(tid, cid, agente, is_default=True)
@@ -230,14 +228,14 @@ async def test_el_build_congela_solo_las_de_la_conexion_y_falla_cerrado(app_clie
         contenido["procedures"] = [{"id": CITA, "version": "^1.0"}]
         await versiones.guardar_borrador(tid, agente, contenido, borrador.lock_version, catalogo=catalogo)
         await versiones.publicar(tid, agente, catalogo=catalogo)
-    ((general,),) = await _sql(
+    ((por_defecto,),) = await _sql(
         tid,
         "select ai.id from agent_instances ai join agents a on a.id = ai.agent_id "
-        "where ai.connection_id = :c and a.key = 'general' and ai.deleted_at is null",
+        "where ai.connection_id = :c and a.key = 'atencion' and ai.deleted_at is null",
         c=cid,
     )
     async with tenant_scope(tid):
-        await instancias.quitar_instancia(tid, cid, general)
+        await instancias.quitar_instancia(tid, cid, por_defecto)
     build = await _construir(tid, cid)
     assert await _skills(tid, build.release_id) == ["pack_calendar"]  # reemplazo entero, sin merge
     ((manifest,),) = await _sql(tid, "select manifest from connection_releases where id = :r", r=build.release_id)

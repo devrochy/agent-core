@@ -39,9 +39,8 @@ INVENTADA = "Te agendo el jueves a las 7 de la noche."
 
 @pytest.fixture
 def _ruteo(monkeypatch: Any) -> None:
-    from core.config import get_settings
+    pass
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
 
 
 class _GuionConMensajes(_Guion):
@@ -93,7 +92,7 @@ def _seccion(clave: str) -> str:
 
 
 async def test_horario_inventado_en_active_se_corrige(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, _inst = await _con_dos_especialistas("active")
+    tid, cid, _inst = await _con_dos_especialistas()
     await _verificar(tid, verificar_horarios="active")
     conv = await _conversacion(tid, cid)
     g = await _turno(tid, conv, monkeypatch, [INVENTADA, "¿Qué día te sirve para la demo?"], texto="hola")
@@ -104,7 +103,7 @@ async def test_horario_inventado_en_active_se_corrige(_ruteo: None, monkeypatch:
 
 
 async def test_horario_en_shadow_solo_cuenta(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, _inst = await _con_dos_especialistas("active")
+    tid, cid, _inst = await _con_dos_especialistas()
     conv = await _conversacion(tid, cid)
     g = await _turno(tid, conv, monkeypatch, [INVENTADA], texto="hola")
     assert len(g.ultimos) == 1
@@ -113,7 +112,7 @@ async def test_horario_en_shadow_solo_cuenta(_ruteo: None, monkeypatch: Any) -> 
 
 
 async def test_dos_preguntas_en_active_se_corrigen(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, _inst = await _con_dos_especialistas("active")
+    tid, cid, _inst = await _con_dos_especialistas()
     await _verificar(tid, verificar_preguntas="active")
     conv = await _conversacion(tid, cid)
     g = await _turno(
@@ -125,7 +124,7 @@ async def test_dos_preguntas_en_active_se_corrigen(_ruteo: None, monkeypatch: An
 
 
 async def test_el_master_enciende_la_verificacion(app_client) -> None:
-    tid, _cid, _inst = await _con_dos_especialistas("off")
+    tid, _cid, _inst = await _con_dos_especialistas()
     master = await api_headers(app_client, tid)
     url = f"/api/v1/admin/platform/tenants/{tid}/colaboracion"
     r = await app_client.put(url, headers=master, json={"verificar_horarios": "active", "verificar_preguntas": "active"})

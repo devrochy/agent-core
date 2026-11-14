@@ -7,7 +7,7 @@ enrutamiento de HU-AOS-17:
   `core_decisions.shadow_route.pila` lo que abriría (plan en foco, demo en pausa) y no crea tareas.
 - **Digresión con foco:** con la tarea de Ventas en foco, «… y también una demo» anota la demo en
   pausa y el turno sigue con Ventas.
-- **Apagada** (por defecto) o **ruteo apagado:** no hay clave `pila`.
+- **Apagada** (por defecto): no hay clave `pila`.
 - **Bandera del master:** `PUT .../colaboracion` cambia solo `settings.agent_os`, se audita, rechaza lo
   que todavía no está disponible (409) y un dueño no la toca (403).
 """
@@ -44,9 +44,8 @@ DOS = "quiero el plan premium y una demo el jueves"
 
 @pytest.fixture
 def _ruteo(monkeypatch: Any) -> None:
-    from core.config import get_settings
+    pass
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
 
 
 async def _pila(tid: uuid.UUID, modo: str) -> None:
@@ -58,7 +57,7 @@ async def _pila(tid: uuid.UUID, modo: str) -> None:
 
 
 async def test_sombra_con_ruteo_activo_anota_la_pila_sin_crear_tareas(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, _inst = await _con_dos_especialistas("active")
+    tid, cid, _inst = await _con_dos_especialistas()
     await _pila(tid, "shadow")
     conv = await _conversacion(tid, cid)
     await _turno(tid, conv, monkeypatch, ["¿Qué plan te interesa?"], texto=DOS)
@@ -68,7 +67,7 @@ async def test_sombra_con_ruteo_activo_anota_la_pila_sin_crear_tareas(_ruteo: No
 
 
 async def test_digresion_con_foco_anota_la_pausa(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, inst = await _con_dos_especialistas("active")
+    tid, cid, inst = await _con_dos_especialistas()
     await _pila(tid, "shadow")
     conv = await _conversacion(tid, cid)
     await _turno(tid, conv, monkeypatch, [("iniciar_procedimiento", {"procedure_id": PLAN}), "¿Qué plan?"], texto="quiero el plan premium")
@@ -78,10 +77,9 @@ async def test_digresion_con_foco_anota_la_pausa(_ruteo: None, monkeypatch: Any)
     assert d["shadow_route"] == {"pila": {"abre": [], "pausa": [CITA], "sobrantes": []}}
 
 
-@pytest.mark.parametrize(("pila", "ruteo"), [("off", "active"), ("shadow", "off")])
-async def test_sin_pila_o_sin_ruteo_no_hay_clave(_ruteo: None, monkeypatch: Any, pila: str, ruteo: str) -> None:
-    tid, cid, _inst = await _con_dos_especialistas(ruteo)
-    await _pila(tid, pila)
+async def test_sin_pila_no_hay_clave(_ruteo: None, monkeypatch: Any) -> None:
+    tid, cid, _inst = await _con_dos_especialistas()
+    await _pila(tid, "off")
     conv = await _conversacion(tid, cid)
     await _turno(tid, conv, monkeypatch, ["¿Qué plan te interesa?"], texto=DOS)
     d = await _decision(tid, conv)
@@ -93,7 +91,7 @@ async def test_la_bandera_la_cambia_solo_el_master(app_client) -> None:
     from core.db.models import Admin, TenantUser
     from core.db.session import get_session
 
-    tid, _cid, _inst = await _con_dos_especialistas("off")
+    tid, _cid, _inst = await _con_dos_especialistas()
     await _sql(tid, "update tenants set settings = coalesce(settings,'{}'::jsonb) || '{\"evals\": {\"gate\": \"cerrado\"}}' where id = :t", t=tid)
     master = await api_headers(app_client, tid)
     url = f"/api/v1/admin/platform/tenants/{tid}/colaboracion"
@@ -125,8 +123,8 @@ async def test_aislamiento_entre_negocios(_ruteo: None, monkeypatch: Any) -> Non
     from core.kernel.ruteo_sombra import reporte_de_pila
     from core.shared.tenant import tenant_scope
 
-    a, cid_a, _ = await _con_dos_especialistas("active")
-    b, cid_b, _ = await _con_dos_especialistas("active")
+    a, cid_a, _ = await _con_dos_especialistas()
+    b, cid_b, _ = await _con_dos_especialistas()
     await _pila(a, "shadow")
     await _pila(b, "shadow")
     conv_b = await _conversacion(b, cid_b)

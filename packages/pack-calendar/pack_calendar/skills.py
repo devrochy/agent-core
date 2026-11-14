@@ -32,6 +32,7 @@ from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from pack_calendar import agendas, google_api
+from pack_calendar import sandbox as sandbox_prueba
 from pack_calendar.agendas import Agenda
 from pack_calendar.config import CalendarConfig
 from pack_calendar.datos import sobre_faltan_datos
@@ -570,6 +571,8 @@ class CalendarSkill(BaseSkill):
                     "required": ["title", "start_datetime"],
                 },
                 handler=self.create_event,
+                side_effects=True,
+                simular=sandbox_prueba.simular_create_event,
                 # HU-AOS-47: procedencia de la cita (id local o el del evento de Google).
                 crea_registro=RegistroCreado(
                     kind="cita", id_key="event_id", es_nuevo=lambda r: r.get("status") == "created"
@@ -606,6 +609,7 @@ class CalendarSkill(BaseSkill):
                     "required": ["date"],
                 },
                 handler=self.check_availability,
+                solo_lectura=True,
                 connection_predicate=self._connections_ok,
             ),
             MCPTool(
@@ -640,6 +644,7 @@ class CalendarSkill(BaseSkill):
                     "required": [],
                 },
                 handler=self.find_next_available,
+                solo_lectura=True,
                 connection_predicate=self._connections_ok,
             ),
             MCPTool(
@@ -678,6 +683,8 @@ class CalendarSkill(BaseSkill):
                     "required": ["start_datetime"],
                 },
                 handler=self.update_event,
+                side_effects=True,
+                simular=sandbox_prueba.simular_update_event,
                 connection_predicate=self._connections_ok,
             ),
             MCPTool(
@@ -703,6 +710,8 @@ class CalendarSkill(BaseSkill):
                     "required": [],
                 },
                 handler=self.list_appointments,
+                solo_lectura=True,
+                simular=sandbox_prueba.simular_list_appointments,
                 connection_predicate=self._connections_ok,
                 # SPEC-40 (ADR-0172 §5, adenda del PR 10a): la acción de un botón sin LLM («Ver mis citas»).
                 # Solo LEE las citas del cliente de la conversación; sin argumentos obligatorios ni efectos. Ningún
@@ -742,6 +751,8 @@ class CalendarSkill(BaseSkill):
                     "required": [],
                 },
                 handler=self.cancel_event,
+                side_effects=True,
+                simular=sandbox_prueba.simular_cancel_event,
                 sensible=True,
                 connection_predicate=self._connections_ok,
             ),
@@ -756,8 +767,8 @@ class CalendarSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.list_calendars,
-                connection_predicate=self._predicado_multi,
                 solo_lectura=True,
+                connection_predicate=self._predicado_multi,
             ),
             MCPTool(
                 name="list_appointment_types",
@@ -768,6 +779,7 @@ class CalendarSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.list_appointment_types,
+                solo_lectura=True,
                 connection_predicate=self._connections_ok,
             ),
         ]

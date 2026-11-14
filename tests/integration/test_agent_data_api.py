@@ -7,7 +7,7 @@
 - **Permisos (ADR-0136):** colaborador sin `agents` → 403; sin `conversations` → 403 en
   conversaciones y clientes y tareas sin `conversation_id`; sin el pack → sus registros no salen.
 - **Aislamiento:** el agente de otro negocio es 404 sin eco del id.
-- **Legacy:** un negocio sin agentes ve al General (virtual) con lo no atribuido.
+- **Sin General (ADR-0192):** no hay agente virtual; el `ref` es siempre el id del agente.
 - `/overview` no lo captura `/{agent_id}` del router de `agents` (orden de los routers).
 
 Sin LLM: los turnos se siembran en `usage_ledger` como los escribe el loop.
@@ -22,8 +22,8 @@ from typing import Any
 
 import pytest
 from _api_helpers import api_headers, uniq
+from _ayudas_sql import _sql
 from test_agentes_versionados import PASSWORD
-from test_backfill_agentes import _sql
 from test_byok_produccion import _negocio
 
 pytestmark = [
@@ -210,7 +210,7 @@ async def test_vista_por_agente_sin_mezclar(app_client) -> None:
     assert por_key["ventas"]["turns"] == 2 and por_key["agenda"]["turns"] == 1
     assert por_key["ventas"]["published"] is True
     assert [c["label"] for c in por_key["ventas"]["connections"]] == ["Chat web"]
-    assert por_key["general"]["virtual"] is True  # sin backfill: el General ve lo no atribuido
+    assert "general" not in por_key and not any(i["virtual"] for i in r.json()["items"])
 
     r = await app_client.get(f"{_BASE}/{e['ventas']}/conversations", headers=h)
     assert r.status_code == 200, r.text
@@ -331,20 +331,15 @@ async def test_aislamiento_entre_negocios(app_client) -> None:
         r = await app_client.get(f"{_BASE}/{a['ventas']}/{sufijo}", headers=hb)
         assert r.status_code == 404, (sufijo, r.text)
         assert str(a["ventas"]) not in r.text
-    # Un ref que no es id ni `general` también es «no encontrado».
-    assert (await app_client.get(f"{_BASE}/ventas/usage", headers=hb)).status_code == 404
+    # Un ref que no es un id (tampoco el viejo `general`) es «no encontrado».
+    for ref in ("ventas", "general"):
+        assert (await app_client.get(f"{_BASE}/{ref}/usage", headers=hb)).status_code == 404
     # Y el overview de B no ve nada de A, tampoco lo no atribuido.
     huerfana = await _conversacion(a["tid"], None, "Sin atribuir de A")
     await _turno(a["tid"], huerfana, None, None)
     overview = (await app_client.get(f"{_BASE}/overview", headers=hb)).json()
     assert all(i["key"] != "ventas" for i in overview["items"])
     assert overview["sin_atribuir"]["turns"] == 0
-    for sufijo in ("conversations", "tasks", "customers"):
-        r = await app_client.get(f"{_BASE}/general/{sufijo}", headers=hb)
-        assert r.status_code == 200 and r.json()["total"] == 0, (sufijo, r.text)
-    # La conexión de A como filtro desde B no trae nada.
-    r = await app_client.get(f"{_BASE}/general/usage", headers=hb, params={"connection_id": str(a["cid"])})
-    assert r.json()["total"]["turns"] == 0
     # RLS WITH CHECK: bajo el scope de B no se escribe procedencia de A.
     with pytest.raises(Exception, match=r"(?i)row-level security|violates"):
         await _sql(
@@ -353,23 +348,6 @@ async def test_aislamiento_entre_negocios(app_client) -> None:
             "values (:t, 'pack_commerce', 'pedido', 'x', 'crear_pedido')",
             t=a["tid"],
         )
-
-
-async def test_negocio_legacy_ve_al_general_con_lo_que_haya(app_client) -> None:
-    tid = await _negocio()
-    conv = await _conversacion(tid, None, "Cliente Legacy")
-    await _turno(tid, conv, None, None)
-    await _tarea(tid, conv, None, cerrada=False)
-    h = await api_headers(app_client, tid)
-    overview = (await app_client.get(f"{_BASE}/overview", headers=h)).json()
-    assert overview["runtime"] == "legacy"
-    (general,) = overview["items"]
-    assert (general["ref"], general["virtual"], general["turns"]) == ("general", True, 1)
-    r = await app_client.get(f"{_BASE}/general/conversations", headers=h)
-    assert r.status_code == 200 and r.json()["items"][0]["customer_name"] == "Cliente Legacy"
-    assert (await app_client.get(f"{_BASE}/general/tasks", headers=h)).json()["total"] == 1
-    assert (await app_client.get(f"{_BASE}/general/records", headers=h)).json()["total"] == 0
-    assert (await app_client.get(f"{_BASE}/general/usage", headers=h)).json()["incluye_sin_atribuir"] is True
 
 
 async def test_el_loop_guarda_la_procedencia_al_ejecutar_la_tool() -> None:

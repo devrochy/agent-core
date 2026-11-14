@@ -229,7 +229,7 @@ def test_los_mensajes_nuevos_del_motor_cargan() -> None:
 # ---------------------------------------------------------------- el hook al empezar el turno
 
 
-async def test_al_empezar_turno_en_sombra_o_sin_nada_pendiente_no_toca_la_base(monkeypatch: Any) -> None:
+async def test_al_empezar_turno_sin_nada_pendiente_no_toca_la_base(monkeypatch: Any) -> None:
     from core.kernel.procedures import ejecucion
 
     def _prohibido(*_: Any, **__: Any) -> Any:
@@ -240,12 +240,11 @@ async def test_al_empezar_turno_en_sombra_o_sin_nada_pendiente_no_toca_la_base(m
         "tenant_id": uuid.uuid4(), "conversation_id": uuid.uuid4(), "customer_id": uuid.uuid4(),
         "channel": "whatsapp", "procedimientos": {}, "herramientas_base": [], "candidatas": [],
     }
-    await ejecucion.ContextoMotor(modo="sombra", **comunes).al_empezar_turno()
-    await ejecucion.ContextoMotor(modo="activo", **comunes).al_empezar_turno()  # sin foco
+    await ejecucion.ContextoMotor(**comunes).al_empezar_turno()  # sin foco
     foco = ejecucion._Foco(
         fila=None,  # type: ignore[arg-type]
         tarea=_tarea("datos", variant_id="v"),
         proc=PLAN,
         stage=_etapa("datos"),
     )
-    await ejecucion.ContextoMotor(modo="activo", foco=foco, **comunes).al_empezar_turno()  # nada que pedir
+    await ejecucion.ContextoMotor(foco=foco, **comunes).al_empezar_turno()  # nada que pedir

@@ -233,13 +233,20 @@ class WaWebConnector:
                 self._qr_cycles.discard(ctx.tenant_id)
                 sock = self.socket_factory()
                 self._sockets[ctx.tenant_id] = sock
+
+                async def _on_status(
+                    backend_status: str,
+                    detail: str | None = None,
+                    jid: str | None = None,
+                    _sock: WaWebSocket = sock,
+                ) -> None:
+                    await self._on_status(ctx, backend_status, detail, jid, _sock)
+
                 await asyncio.wait_for(
                     sock.connect(
                         session_dir=work_dir,
                         on_qr=lambda qr: self._on_qr(ctx, qr),
-                        on_status=lambda st, detail=None, jid=None: self._on_status(
-                            ctx, st, detail, jid
-                        ),
+                        on_status=_on_status,
                         on_message=lambda ev: self._on_message(ctx, ev),
                     ),
                     timeout=self.connect_timeout_s,
@@ -280,6 +287,7 @@ class WaWebConnector:
         inicio = self.now()
         ultimo_chequeo = inicio
         sin_conexion_desde: float | None = None
+        identidad_vista: tuple[object, ...] | None = None
         while not sock.closed.is_set() and ctx.tenant_id not in self._stop:
             processed = await self.drainer(
                 ctx.tenant_id,
@@ -333,6 +341,33 @@ class WaWebConnector:
                             await handoff.set_ready(str(ctx.tenant_id))
                         except Exception:
                             log.exception("waweb_set_ready_failed", tenant_id=str(ctx.tenant_id))
+                        # El evento `Device` (nombre de perfil) puede llegar
+                        # después de `ConnectedEv` sin disparar handler. Se lee
+                        # el cache del socket y se guarda solo si cambió.
+                        try:
+                            identidad = await sock.identity()
+                        except Exception:
+                            log.warning("waweb_identity_refresh_failed", tenant_id=str(ctx.tenant_id))
+                            identidad = None
+                        if identidad is not None:
+                            clave = (
+                                identidad.jid,
+                                identidad.phone,
+                                identidad.push_name,
+                                identidad.business_name,
+                                identidad.platform,
+                            )
+                            if any(clave) and clave != identidad_vista:
+                                identidad_vista = clave
+                                await self.registry.set_identity(
+                                    ctx.tenant_id,
+                                    connection_id=ctx.connection_id,
+                                    jid=identidad.jid,
+                                    phone=identidad.phone,
+                                    push_name=identidad.push_name,
+                                    business_name=identidad.business_name,
+                                    platform=identidad.platform,
+                                )
                 if ctx.tenant_id not in self._connected:
                     ultimo = max(self._qr_at.get(ctx.tenant_id, 0.0), inicio)
                     ya_emitio_qr = ctx.tenant_id in self._qr_cycles
@@ -531,7 +566,12 @@ class WaWebConnector:
             )
 
     async def _on_status(
-        self, ctx: SessionContext, backend_status: str, detail: str | None = None, jid: str | None = None
+        self,
+        ctx: SessionContext,
+        backend_status: str,
+        detail: str | None = None,
+        jid: str | None = None,
+        sock: WaWebSocket | None = None,
     ) -> None:
         self._progress_at[ctx.tenant_id] = self.now()
         mapped = _STATUS_MAP.get(backend_status, status.ERROR)
@@ -544,9 +584,29 @@ class WaWebConnector:
             self._pairing_trips.pop(ctx.tenant_id, None)
         else:
             self._connected.discard(ctx.tenant_id)
+
+        identidad = None
+        if mapped == status.CONNECTED and sock is not None:
+            try:
+                identidad = await sock.identity()
+            except Exception:
+                log.warning("waweb_identity_failed", tenant_id=str(ctx.tenant_id))
+            if identidad is not None and identidad.jid and not jid:
+                jid = identidad.jid
+
         await self.registry.set_status(
             ctx.tenant_id, mapped, connection_id=ctx.connection_id, detail=detail, jid=jid
         )
+        if mapped == status.CONNECTED and identidad is not None:
+            await self.registry.set_identity(
+                ctx.tenant_id,
+                connection_id=ctx.connection_id,
+                jid=identidad.jid,
+                phone=identidad.phone,
+                push_name=identidad.push_name,
+                business_name=identidad.business_name,
+                platform=identidad.platform,
+            )
         if mapped != status.CONNECTED:
             await handoff.clear_ready(str(ctx.tenant_id))
         if backend_status == "banned":

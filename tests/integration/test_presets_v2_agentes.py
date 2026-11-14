@@ -3,13 +3,12 @@
 Negocio con `pack_commerce`, `pack_calendar` y `pack_subscriptions` (preset `suscripciones`), una
 conexión conversacional, su release 1 (General por defecto) y `AOS_CONNECTION_ROUTING` encendida:
 
-- **Instalar:** con `aos_runtime = 'v3'` crea Ventas, Agenda y Suscripciones (versión 1 derivada
+- **Instalar:** crea Ventas, Agenda y Suscripciones (versión 1 derivada
   del General, con SUS procedimientos), una instancia de cada uno en la conexión (no por
   defecto), las reglas del Coordinador en una versión nueva y una release candidata que NO se
   activa.
 - **Idempotencia:** reaplicar no crea agentes, versiones, instancias, reglas ni releases; una
   versión que publicó el dueño no se pisa y una instancia que quitó no vuelve.
-- **Banderas apagadas:** con `legacy` (o la global apagada) no escribe nada.
 - **Presets v1:** un manifiesto sin `agentes` deja al negocio solo con el General.
 - **Dry-run** no escribe. **Aislamiento:** lo de un negocio no aparece en otro.
 """
@@ -51,19 +50,6 @@ async def _sql(tid: uuid.UUID | None, sql: str, **params: Any) -> list[Any]:
             return list(resultado.all()) if getattr(resultado, "returns_rows", False) else []
 
 
-async def _runtime(tid: uuid.UUID, runtime: str) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("update tenants set aos_runtime = :r where id = :t"), {"t": tid, "r": runtime})
-    finally:
-        await engine.dispose()
-
 
 @pytest.fixture(scope="module", autouse=True)
 async def _proceso() -> None:
@@ -78,16 +64,15 @@ async def _proceso() -> None:
 
 @pytest.fixture(autouse=True)
 def _ruteo(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.config import get_settings
-
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
+    pass
 
 
-async def _negocio(runtime: str = "v3", *, otra_conexion: bool = False) -> tuple[uuid.UUID, uuid.UUID]:
-    """Negocio con su conexión (y otra, si se pide), release 1 (General por defecto) y el runtime
-    pedido. Devuelve (negocio, primera conexión)."""
+
+async def _negocio(*, otra_conexion: bool = False) -> tuple[uuid.UUID, uuid.UUID]:
+    """Negocio con su conexión (y otra, si se pide) y release 1. Devuelve (negocio, primera conexión)."""
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
-    from core.releases.release_uno import backfill_releases
 
     slug = f"aos46-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"AOS46 {slug}", slug=slug, packs=PACKS, sembrar_ejemplos=False, plan="premium")
@@ -105,9 +90,8 @@ async def _negocio(runtime: str = "v3", *, otra_conexion: bool = False) -> tuple
             "values (:id, :t, 'instagram', 'meta', :ext, 'instagram_meta', now() + interval '1 second')",
             id=uuid.uuid4(), t=tid, ext=f"ig-{uuid.uuid4().hex[:10]}",
         )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
-    await _runtime(tid, runtime)
     return tid, cid
 
 
@@ -164,26 +148,26 @@ async def test_instala_agentes_reglas_y_release_candidata_sin_activarla() -> Non
         "ventas": "creado", "agenda": "creado", "suscripciones": "creado",
     }
     foto = await _foto(tid)
-    assert foto["versiones"] == {"coordinador": 2, "general": 1, "ventas": 1, "agenda": 1, "suscripciones": 1}
+    assert foto["versiones"] == {"coordinador": 2, "atencion": 1, "ventas": 1, "agenda": 1, "suscripciones": 1}
     por_defecto = {k for k, d, viva in foto["instancias"] if d and viva}
-    assert por_defecto == {"general"}  # el General sigue atendiendo hasta HU-AOS-17
+    assert por_defecto == {"atencion"}  # el especialista por defecto no cambia (ADR-0192)
     assert {k for k, _d, viva in foto["instancias"] if viva} == {
-        "coordinador", "general", "ventas", "agenda", "suscripciones",
+        "coordinador", "atencion", "ventas", "agenda", "suscripciones",
     }
 
-    # Cada especialista declara solo lo suyo y hereda el modelo y la memoria del General.
-    general = await _contenido(tid, "general")
+    # Cada especialista declara solo lo suyo; modelo y memoria salen de la configuración del negocio.
+    base = await _contenido(tid, "atencion")
     ventas = await _contenido(tid, "ventas")
     agenda = await _contenido(tid, "agenda")
     assert {p["id"] for p in ventas["procedures"]} == {"pack_commerce.tomar_pedido"}
     assert {p["id"] for p in agenda["procedures"]} == {"pack_calendar.agendar_cita"}
     assert all(p["version"].startswith("^") for p in ventas["procedures"])
-    assert ventas["model"] == general["model"] and ventas["memory"] == general["memory"]
+    assert ventas["model"] == base["model"] and ventas["memory"] == base["memory"]
     assert ventas["declarativeTools"] == []
     tools_agenda = {b["tool"] for b in agenda["tools"]}
     assert "check_availability" in tools_agenda and "crear_pedido" not in tools_agenda
 
-    # Reglas del Coordinador: agregadas, con `defaultAgent` intacto.
+    # Reglas del Coordinador: agregadas, con `defaultAgent` intacto (el del contrato, inerte: manda `is_default`, ADR-0192).
     kernel = await _contenido(tid, "coordinador")
     assert kernel["routing"]["defaultAgent"] == "general"
     assert {(r["id"], r["agent"]) for r in kernel["routing"]["rules"]} == {
@@ -200,13 +184,13 @@ async def test_instala_agentes_reglas_y_release_candidata_sin_activarla() -> Non
         "select c.manifest -> 'components' from connection_releases c where c.connection_id = :c and c.number = 2",
         c=cid,
     )
-    assert {c["agent_key"] for c in componentes[0][0]} == {"coordinador", "general", "ventas", "agenda", "suscripciones"}
+    assert {c["agent_key"] for c in componentes[0][0]} == {"coordinador", "atencion", "ventas", "agenda", "suscripciones"}
     # ADR-0190: cada especialista del preset nace con sus habilidades instaladas y la release las congela.
     por_key = {c["agent_key"]: c for c in componentes[0][0]}
     assert "pack_commerce" in por_key["ventas"]["skills"]
     # Agenda lleva Comercio solo por Captar leads (`crear_lead`): sus bindings no traen `crear_pedido` (arriba).
     assert por_key["agenda"]["skills"] == ["pack_calendar", "pack_commerce"]
-    assert "skills" not in por_key["general"]  # el General sigue heredando las del negocio
+    assert "skills" not in por_key["atencion"]  # sin instalaciones propias: hereda las del negocio
     activa = await _sql(tid, "select active_release_id from channel_connections where id = :c", c=cid)
     assert activa == activa_antes
 
@@ -273,7 +257,7 @@ async def test_regla_que_el_dueno_ya_tiene_no_se_toca() -> None:
     coordinador = (await _sql(tid, "select id from agents where tenant_id = :t and key = 'coordinador'", t=tid))[0][0]
     kernel = await _contenido(tid, "coordinador")
     kernel["routing"]["rules"] = [
-        {"id": "preset_agenda_palabras", "when": {"keywordAny": ["turno"]}, "agent": "general"}
+        {"id": "preset_agenda_palabras", "when": {"keywordAny": ["turno"]}, "agent": "atencion"}
     ]
     async with tenant_scope(tid):
         await versiones.publicar(tid, coordinador, catalogo=catalogo_de_acciones(_modules()), contenido=kernel)
@@ -281,22 +265,9 @@ async def test_regla_que_el_dueno_ya_tiene_no_se_toca() -> None:
     reporte = await _aplicar(tid)
     assert "preset_agenda_palabras" not in reporte.reglas_nuevas
     reglas = {r["id"]: r for r in (await _contenido(tid, "coordinador"))["routing"]["rules"]}
-    assert reglas["preset_agenda_palabras"]["agent"] == "general"
+    assert reglas["preset_agenda_palabras"]["agent"] == "atencion"
     assert reglas["preset_agenda_palabras"]["when"]["keywordAny"] == ["turno"]
     assert reglas["preset_ventas_palabras"]["agent"] == "ventas"
-
-
-async def test_con_banderas_apagadas_no_escribe(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.config import get_settings
-
-    tid, _cid = await _negocio(runtime="legacy")
-    antes = await _foto(tid)
-    assert (await _aplicar(tid)).omitido == "banderas_apagadas"
-
-    await _runtime(tid, "v3")
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", False)
-    assert (await _aplicar(tid)).omitido == "banderas_apagadas"
-    assert await _foto(tid) == antes
 
 
 async def test_preset_v1_sigue_con_el_general() -> None:
@@ -372,16 +343,6 @@ async def test_apply_preset_en_negocio_v3_instala_los_agentes() -> None:
     preset = await _sql(tid, "select settings -> 'preset' -> 'agentes' from tenants where id = :t", t=tid)
     assert preset[0][0] is not None
     assert str(cid) in resultado.agentes["releases"]
-
-
-async def test_apply_preset_en_negocio_legacy_no_crea_agentes() -> None:
-    from core.presets.apply import apply_preset
-
-    tid, _cid = await _negocio(runtime="legacy")
-    antes = await _foto(tid)
-    resultado = await apply_preset(tid, "comercio", sembrar_ejemplos=False)
-    assert resultado.agentes is None
-    assert (await _foto(tid))["versiones"] == antes["versiones"]
 
 
 async def test_agente_borrado_o_key_ajena_no_se_toca() -> None:

@@ -2,8 +2,7 @@
 
 Los procedimientos son datos del pack (`procedures/*.json`, invariante 3): `tomar_pedido`
 (pedido con entrega). Contratar un plan es del pack de Suscripciones (SPEC-43). Solo los ejecuta el
-motor de procedimientos del core (`tenants.aos_procedures`); con la bandera apagada nada de esto
-corre.
+motor de procedimientos del core.
 
 - **Resolvers** (reciben solo `ToolContext`, sin efectos): convierten lo que dice el cliente en un
   dato válido del servidor o devuelven un error de negocio que el modelo corrige.

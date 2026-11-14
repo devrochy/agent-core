@@ -7,7 +7,7 @@
 - **Borrar lo importado** retira solo lo importado; reimportar después crea de nuevo (el SKU se libera);
   «Generar datos de prueba» y su borrado no tocan lo importado.
 - **Permisos y aislamiento:** la sección del pack en escritura; un agente de otro negocio es 404 sin eco
-  y no escribe nada; sin `QA_TESTERS_ENABLED` todo es 404.
+  y no escribe nada; sin `QA_TESTERS_ENABLED` solo responde la plantilla `productos` (ADR-0194), el resto 404.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from datetime import date, timedelta
 
 import pytest
 from _api_helpers import api_headers
-from test_backfill_agentes import _sql
+from _ayudas_sql import _sql
 from test_fiabilidad_api import PASSWORD, _colaborador
 from test_qa_datos_generados import (
     CATALOGO,
@@ -332,12 +332,18 @@ async def test_aislamiento_entre_negocios_y_bandera(app_client, monkeypatch, qa_
     assert (await _sql(mio, "select count(*) from pack_commerce_products where tenant_id = :t and deleted_at is null", t=mio))[0][0] == 0
     assert (await _sql(suyo, "select count(*) from pack_commerce_products where tenant_id = :t and deleted_at is null", t=suyo))[0][0] == 2
 
+    # Fuera de test (ADR-0194 §2): solo la plantilla `productos` se declara en producción; las demás,
+    # como la de agenda, siguen respondiendo 404. El agente de otro negocio sigue siendo 404.
+    mio_agenda = await _agente(mio, "agenda", ["pack_calendar.agendar_cita"])
     monkeypatch.setattr(get_settings(), "qa_testers_enabled", False)
-    assert (await app_client.get(f"{_BASE}/{mio_ventas}/importar-datos", headers=h)).status_code == 404
-    assert (await app_client.get(f"{_BASE}/{mio_ventas}/importar-datos/plantilla.csv", headers=h)).status_code == 404
-    assert (await _subir(app_client, h, mio_ventas, "/validar", PRODUCTOS)).status_code == 404
-    assert (await _subir(app_client, h, mio_ventas, "", PRODUCTOS)).status_code == 404
-    assert (await app_client.delete(f"{_BASE}/{mio_ventas}/importar-datos", headers=h)).status_code == 404
+    estado = await app_client.get(f"{_BASE}/{mio_ventas}/importar-datos", headers=h)
+    assert estado.status_code == 200 and estado.json()["plantilla"]["en_produccion"] is True
+    assert (await _subir(app_client, h, mio_ventas, "/validar", PRODUCTOS)).status_code == 200
+    assert (await _subir(app_client, h, suyo_ventas, "/validar", PRODUCTOS)).status_code == 404
+    assert (await app_client.get(f"{_BASE}/{mio_agenda}/importar-datos", headers=h)).status_code == 404
+    assert (await app_client.get(f"{_BASE}/{mio_agenda}/importar-datos/plantilla.csv", headers=h)).status_code == 404
+    assert (await _subir(app_client, h, mio_agenda, "/validar", "nombre,duracion\r\nCorte,30\r\n")).status_code == 404
+    assert (await app_client.delete(f"{_BASE}/{mio_agenda}/importar-datos", headers=h)).status_code == 404
 
 
 async def test_agente_sin_plantilla(app_client, qa_on) -> None:  # noqa: F811

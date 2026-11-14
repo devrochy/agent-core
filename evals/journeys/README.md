@@ -34,10 +34,6 @@ el runner guarda en `messages` cada mensaje del cliente y cada respuesta. La cor
   - `catalogo` de commerce, que reemplaza los ejemplos del preset;
   - `config` por pack (sin secretos reales);
   - `pagos_simulados.monto_minimo`, el mínimo de la pasarela real;
-  - `motor_de_procedimientos: true`: enciende el motor de procedimientos (`aos_runtime = v3` y
-    `aos_procedures`, HU-AOS-07) en el negocio de la corrida (set `procedimientos`). Con `--runtime`
-    explícito manda la opción: `legacy` corre el mismo set **sin** el motor (línea base de un
-    agente) y `v3` lo enciende, para comparar pass^k con y sin procedimientos (ADR-0112);
   - `documentos_legales`: versiones de prueba de `terminos`, `privacidad` y `dpa`
     (`[{"tipo", "version", "url"}]`), publicadas como desde Plataforma (`legal.publicar`). En un
     vendedor, con los tres el pedido de un plan pide aceptarlos antes de crearse (ADR-0125).
@@ -111,20 +107,19 @@ Con `--k N` cada journey corre N veces, con un cliente nuevo y otra semilla por 
 Cada `verifica` deja sus aserciones con esperado y real en `eval_results.state_assertions`, y el
 paso `simulado` deja su traza en `eval_results.simulator`. Un journey con cliente simulado se
 valida por el **estado final** en la base, no por el texto exacto de las respuestas. Si termina en «relevo», el motivo (`guardrail=…` o
-`verificador=…`) va en el detalle del intento. Con `--reporte`, `runtime` trae lo pedido y las banderas
-efectivas del negocio de la corrida.
+`verificador=…`) va en el detalle del intento.
 
 `evals/runner.py` (golden) también acepta `--k`, `--umbral` y `--reporte`.
 
 ## pass^k de los procedimientos (a demanda)
 
 El workflow `evals-procedimientos.yml` (Actions → Run workflow, con OK del dueño: gasta LLM) corre el
-set `procedimientos` con `--runtime legacy` (sin motor) y/o `--runtime v3` (con motor), con `k`
-intentos y un `patron` opcional, y sube `procedimientos-legacy.json` y `procedimientos-v3.json`. El
-umbral es 0: mide, no es un gate. Nunca corre en PR ni en push.
+set `procedimientos` con `k` intentos y un `patron` opcional, y sube `procedimientos.json`. El motor
+de procedimientos corre en todo negocio (ADR-0191, HU-AOS-69): ya no hay corrida sin él. El umbral
+es 0: mide, no es un gate. Nunca corre en PR ni en push.
 
 ```bash
-gh workflow run evals-procedimientos.yml --ref develop -f k=4 -f runtime=ambos
+gh workflow run evals-procedimientos.yml --ref develop -f k=4
 ```
 
 ## Umbral

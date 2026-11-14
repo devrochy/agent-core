@@ -32,7 +32,7 @@ from core.db.models import (
 )
 from core.db.session import get_session
 from core.shared.tenant import tenant_scope
-from core.shared.test_mode import TEST_CHANNEL
+from core.shared.test_mode import TEST_CHANNEL, no_es_prueba
 
 MetricScope = Literal["period", "lifetime"]
 
@@ -240,11 +240,9 @@ async def _count_metric_in_session(session, tenant_id: uuid.UUID, key: str, peri
 async def _count_agents(session, tenant_id: uuid.UUID) -> int:
     """Agentes publicados (D-35, ADR-0142, enmienda 2026-10-27): especialistas activos con al
     menos una instancia viva en una conexión viva. Se cuentan agentes, no filas de
-    `agent_instances` (un agente en WhatsApp y en el chat web es uno). El General (`key = general`)
-    viene incorporado en todo negocio y no cuenta; tampoco el Coordinador (`kind = core`), y el
-    back-office (HU-AOS-37) es otra dimensión."""
-    from core.agents.tolerante import KEY_GENERAL
-
+    `agent_instances` (un agente en WhatsApp y en el chat web es uno). El especialista por defecto
+    cuenta como cualquiera (ADR-0192 §7: sin General que no cuente); el Coordinador (`kind = core`)
+    no, y el back-office (HU-AOS-37) es otra dimensión."""
     instanciado = (
         select(AgentInstanceRecord.id)
         .join(
@@ -263,7 +261,6 @@ async def _count_agents(session, tenant_id: uuid.UUID) -> int:
     query = select(func.count(AgentRecord.id)).where(
         AgentRecord.tenant_id == tenant_id,
         AgentRecord.kind == "specialist",
-        AgentRecord.key != KEY_GENERAL,
         AgentRecord.status == "active",
         AgentRecord.deleted_at.is_(None),
         instanciado,
@@ -346,6 +343,7 @@ async def _count_media(session, tenant_id: uuid.UUID, prefix: str, period_start:
         Message.direction == "inbound",
         Message.media_type.like(prefix),
         Message.deleted_at.is_(None),
+        no_es_prueba(tenant_id, Message.conversation_id),
     )
     if period_start is not None:
         query = query.where(Message.created_at >= period_start)

@@ -83,6 +83,7 @@ async def seed_catalog(
                         name=producto["name"],
                         description=producto.get("description", ""),
                         image_url=producto.get("image_url", ""),
+                        image_key=producto.get("image_key"),
                         category_id=cat,
                         has_variants=has_variants,
                     )

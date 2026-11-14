@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _api_helpers import api_headers, uniq
 from test_gate_corredor import (  # noqa: F401
     _guion,
     _negocio_y_candidata,
@@ -87,7 +87,6 @@ async def test_cerrado_pide_medir_la_tarea_aprueba_y_la_promocion_pasa(entorno_d
     from core.tasks.gate_tasks import evaluar
 
     tid, cid, _activa, candidata = await _negocio_y_candidata("Cerrado")
-    await banderas_como_dueno(tid, aos_runtime="v3")
     await _cerrar(tid)
     h = await api_headers(app_client, tid)
     url = f"/api/v1/admin/connections/{cid}/releases/{candidata}"
@@ -145,7 +144,6 @@ async def test_sin_escenarios_pasa_anotado_sin_medir(entorno_de_eval: Path) -> N
 
 async def test_evaluar_encola_o_responde_sin_medir(entorno_de_eval: Path, cola: _Cola, app_client) -> None:
     tid, cid, activa, candidata = await _negocio_y_candidata("Evaluar")
-    await banderas_como_dueno(tid, aos_runtime="v3")
     h = await api_headers(app_client, tid)
     url = f"/api/v1/admin/connections/{cid}/releases"
     r = await app_client.post(f"{url}/{candidata}/evaluate", headers=h)

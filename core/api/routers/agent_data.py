@@ -1,6 +1,6 @@
 """Mi agente y su data (HU-AOS-47, ADR-0140), solo lectura.
 
-- `GET /api/v1/admin/agents/overview` — runtime del negocio, agentes (sin el Coordinador) con sus
+- `GET /api/v1/admin/agents/overview` — agentes (sin el Coordinador) con sus
   conexiones y actividad de 30 días, lo no atribuido aparte (`sin_atribuir`) y la cuota del plan
   (`cuota_agentes`) para avisar antes de crear otro agente.
 - `GET /api/v1/admin/agents/{ref}/conversations` — conversaciones que atendió (conexión y versión
@@ -11,8 +11,8 @@
 - `GET /api/v1/admin/agents/{ref}/usage` — turnos, tokens y costo del período, por conexión y por
   día, y la consistencia pass^k vigente del negocio con su tendencia.
 
-`ref` es el id del agente o el literal `general` (el General absorbe lo no atribuido; ver
-`core.agents.data_por_agente`). Filtros comunes: `connection_id`, `desde`, `hasta` (por defecto
+`ref` es el id del agente (ADR-0192: ya no hay General virtual; lo no atribuido lo absorbe el
+especialista por defecto, ver `core.agents.data_por_agente`). Filtros comunes: `connection_id`, `desde`, `hasta` (por defecto
 30 días, máximo 366).
 
 Permisos (ADR-0136): sección `agents`. El costo en USD (`cost_usd`) solo sale con `costs`, como en la
@@ -32,7 +32,7 @@ from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.admin.permissions import effective_access
 from core.agents import data_por_agente as svc
@@ -45,7 +45,7 @@ from core.shared.logger import get_logger
 router = APIRouter(prefix="/admin/agents", tags=["admin · agentes"])
 log = get_logger(__name__)
 
-_REF_RE = re.compile(r"general|[0-9a-fA-F-]{36}")
+_REF_RE = re.compile(r"[0-9a-fA-F-]{36}")
 _KIND_PATTERN = r"^[a-z0-9_]{1,40}$"
 
 
@@ -86,7 +86,13 @@ class AgentCreationQuota(BaseModel):
 
 
 class AgentsOverview(BaseModel):
-    runtime: str
+    # Deprecado (HU-AOS-69): siempre "v3". Lo sigue leyendo el JS de la APK instalada anterior a
+    # apk#250 (`puedeCrearAgentes`); sale cuando no queden binarios con ese fingerprint.
+    runtime: Literal["v3"] = Field(
+        default="v3",
+        deprecated=True,
+        description="Deprecado: siempre `v3` (ADR-0191). Solo para la APK instalada; no lo leas.",
+    )
     items: list[AgentOverviewItem]
     sin_atribuir: Activity
     # Sin plan, sin la métrica o si el billing no respondió: null (no se bloquea la vista).
@@ -235,7 +241,7 @@ async def _packs_visibles(principal: Principal) -> frozenset[str]:
 
 
 def _ref(ref: str) -> str:
-    """El id de un agente o `general`; cualquier otra cosa es «no encontrado», igual que un id
+    """El id de un agente; cualquier otra cosa es «no encontrado», igual que un id
     ajeno (sin 422 que distinga formatos)."""
     if not _REF_RE.fullmatch(ref):
         raise ApiError.not_found("Agente no encontrado.")

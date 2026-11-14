@@ -11,9 +11,10 @@ Cada KPI trae el valor del período (7 d) y el de los 7 d previos para el delta;
 
 Atribución (igual que «Mi agente y su data», para que la cifra del Resumen coincida con la del
 detalle al que enlaza): turnos, conversaciones y costo salen de `usage_ledger.agent_instance_id`, y
-**el General absorbe lo no atribuido**. Los escalados por agente salen de `turn_outcomes` y solo
-existen con runtime v3. El módulo de un agente es el del pack cuya `agent_key` es la clave de su
-plantilla; los módulos que ningún agente cubre cuelgan del General.
+**el especialista por defecto del negocio absorbe lo no atribuido** (ADR-0192: ya no hay General).
+Los escalados por agente salen de `turn_outcomes`. El módulo de un agente es el del pack cuya
+`agent_key` es la clave de su plantilla; los módulos que ningún agente cubre van en el bloque del
+negocio (`general.modulos_sin_agente`). Un negocio sin especialistas solo tiene ese bloque.
 
 El Coordinador (`kind=core`) no sale como agente: sus turnos cuentan en el bloque del negocio y no en
 ninguna tarjeta, así que la suma por agente puede quedar por debajo del total.
@@ -42,8 +43,8 @@ from core.admin.resumen_registry import (
     ResumenProvider,
     resumen_registry,
 )
+from core.agents.instancias import especialista_por_defecto
 from core.agents.spec import enabled_packs, load_active_spec
-from core.agents.tolerante import KEY_GENERAL
 from core.billing.tipos_de_uso import NO_ES_ACTIVIDAD
 from core.db.models import (
     AgentInstanceRecord,
@@ -57,13 +58,12 @@ from core.db.models import (
 from core.db.session import get_session
 from core.metricas import fiabilidad
 from core.shared.tenant import get_current_tenant_id
-from core.shared.test_mode import TEST_CHANNEL
+from core.shared.test_mode import TEST_CHANNEL, no_es_prueba, sql_no_es_prueba
 
 log = logging.getLogger(__name__)
 
 DIAS_VALIDOS = (7, 15, 30)
 ESTADOS_ABIERTOS = ("active", "suspended")
-REF_GENERAL = KEY_GENERAL
 
 
 @dataclass(frozen=True)
@@ -148,6 +148,7 @@ async def _costo(session: Any, tenant_id: uuid.UUID, desde: datetime, hasta: dat
                     UsageLedger.created_at >= desde,
                     UsageLedger.created_at < hasta,
                     UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
+                    no_es_prueba(tenant_id, UsageLedger.conversation_id),
                 )
             )
         ).scalar()
@@ -156,7 +157,7 @@ async def _costo(session: Any, tenant_id: uuid.UUID, desde: datetime, hasta: dat
 
 
 async def _general(
-    session: Any, tenant_id: uuid.UUID, p: PeriodoResumen, acceso: Acceso
+    session: Any, tenant_id: uuid.UUID, p: PeriodoResumen, acceso: Acceso, ref_por_defecto: str | None
 ) -> list[Kpi]:
     kpis: list[Kpi] = []
     if acceso.conversaciones:
@@ -206,10 +207,10 @@ async def _general(
                 previo=_pct(previo_op.tasa_escalamiento),
                 polaridad="up-bad",
                 hint=None if ahora_op.tasa_escalamiento is not None else "Sin datos suficientes",
-                destino=Destino("agente", {"ref": REF_GENERAL, "pestana": "consumo"}),
+                destino=_consumo(ref_por_defecto),
             )
         )
-        kpis.append(await _consistencia(session, tenant_id))
+        kpis.append(await _consistencia(session, tenant_id, ref_por_defecto))
     if acceso.costos:
         kpis.append(
             Kpi(
@@ -226,7 +227,12 @@ async def _general(
     return kpis
 
 
-async def _consistencia(session: Any, tenant_id: uuid.UUID) -> Kpi:
+def _consumo(ref: str | None) -> Destino:
+    """El consumo del especialista por defecto; sin él, el de costos del negocio."""
+    return Destino("agente", {"ref": ref, "pestana": "consumo"}) if ref else Destino("costos")
+
+
+async def _consistencia(session: Any, tenant_id: uuid.UUID, ref_por_defecto: str | None) -> Kpi:
     """Procedimientos dentro del umbral pass^k sobre los medidos, en todas las conexiones."""
     medidos = ok = 0
     for conexion in await fiabilidad.consistencia(session, tenant_id):
@@ -240,7 +246,7 @@ async def _consistencia(session: Any, tenant_id: uuid.UUID) -> Kpi:
         ok / medidos * 100 if medidos else None,
         unidad="pct",
         hint="Procedimientos dentro del umbral" if medidos else "Sin mediciones todavía",
-        destino=Destino("agente", {"ref": REF_GENERAL, "pestana": "consumo"}),
+        destino=_consumo(ref_por_defecto),
     )
 
 
@@ -293,6 +299,7 @@ async def _actividad(
                 UsageLedger.created_at >= p.previo_desde,
                 UsageLedger.created_at < p.hasta,
                 UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
+                no_es_prueba(tenant_id, UsageLedger.conversation_id),
             )
             .group_by(UsageLedger.agent_instance_id, ventana)
         )
@@ -316,7 +323,7 @@ async def _actividad(
 async def _escalados(
     session: Any, tenant_id: uuid.UUID, p: PeriodoResumen, agente_de: dict[uuid.UUID, uuid.UUID]
 ) -> dict[Any, dict[str, float]]:
-    """Turnos escalados por agente y ventana (solo runtime v3: es lo que escribe `turn_outcomes`)."""
+    """Turnos escalados por agente y ventana (lo que escribe `turn_outcomes`)."""
     _exigir_scope(tenant_id)
     filas = (
         await session.execute(
@@ -327,7 +334,8 @@ async def _escalados(
                 "  ON o.tenant_id = d.tenant_id AND o.turn_id = d.id "
                 "WHERE d.tenant_id = :t AND d.created_at >= :desde AND d.created_at < :hasta "
                 "  AND d.outcome IN ('routed', 'escalated') "
-                "  AND (d.outcome = 'escalated' OR o.status = 'escalated') GROUP BY 1, 2"
+                "  AND (d.outcome = 'escalated' OR o.status = 'escalated') "
+                f"  AND {sql_no_es_prueba('d.conversation_id')} GROUP BY 1, 2"
             ),
             {"t": tenant_id, "corte": p.desde, "desde": p.previo_desde, "hasta": p.hasta},
         )
@@ -348,6 +356,7 @@ async def _tareas_abiertas(
             .where(
                 ConversationTask.tenant_id == tenant_id,
                 ConversationTask.status.in_(ESTADOS_ABIERTOS),
+                no_es_prueba(tenant_id, ConversationTask.conversation_id),
             )
             .group_by(ConversationTask.owner_instance_id)
         )
@@ -405,6 +414,7 @@ async def _serie_diaria(
                 UsageLedger.created_at >= desde,
                 UsageLedger.created_at < p.hasta,
                 UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
+                no_es_prueba(tenant_id, UsageLedger.conversation_id),
             )
             .group_by(UsageLedger.agent_instance_id, dia)
         )
@@ -566,12 +576,8 @@ async def resumen(
     ]
 
     async with get_session() as session:
-        runtime = (
-            await session.execute(
-                text("select aos_runtime from tenants where id = :t"), {"t": tenant_id}
-            )
-        ).scalar_one_or_none() or "legacy"
-        general = await _general(session, tenant_id, p, acceso)
+        por_defecto = await especialista_por_defecto(session, tenant_id)
+        general = await _general(session, tenant_id, p, acceso, str(por_defecto) if por_defecto else None)
         agentes: list[AgentRecord] = []
         actividad: dict[Any, dict[str, dict[str, float]]] = {}
         escalados: dict[Any, dict[str, float]] = {}
@@ -587,46 +593,32 @@ async def resumen(
             dias_serie, puntos, ultima = await _serie_diaria(
                 session, tenant_id, p, agente_de, zona
             )
-            if runtime == "v3":
-                escalados = await _escalados(session, tenant_id, p, agente_de)
+            escalados = await _escalados(session, tenant_id, p, agente_de)
 
     claves = {a.key for a in agentes}
-    # El General existe aunque falte su fila (negocio legacy sin backfill): absorbe lo no atribuido.
-    filas: list[tuple[str, str, str, str, uuid.UUID | None]] = [
-        (REF_GENERAL if a.key == KEY_GENERAL else str(a.id), a.key, a.name, a.kind, a.id)
-        for a in agentes
-    ]
-    if acceso.agentes and KEY_GENERAL not in claves:
-        filas.insert(0, (REF_GENERAL, KEY_GENERAL, "General", "specialist", None))
+    filas: list[tuple[str, str, str, str, uuid.UUID]] = [(str(a.id), a.key, a.name, a.kind, a.id) for a in agentes]
 
     huerfanos = [x for x in providers if x.agent_key not in claves]
     salida: list[dict[str, Any]] = []
     for ref, key, nombre, tipo, agente_id in filas:
-        es_general = key == KEY_GENERAL
+        absorbe = agente_id == por_defecto  # lo no atribuido (ADR-0192)
         vacio = {
             v: {"turnos": 0.0, "conversaciones": 0.0, "costo": 0.0} for v in ("actual", "previo")
         }
         sin_escalar = {"actual": 0.0, "previo": 0.0}
-        # La fila virtual del General (`agente_id` None) no tiene datos propios: solo lo no atribuido.
-        act = actividad.get(agente_id, vacio) if agente_id is not None else vacio
-        esc = (
-            (escalados.get(agente_id, sin_escalar) if agente_id is not None else sin_escalar)
-            if runtime == "v3"
-            else None
-        )
-        n_tareas = tareas.get(agente_id, 0.0) if agente_id is not None else 0.0
-        if es_general:
-            # Lo no atribuido (agente `None`) es del General.
+        act = actividad.get(agente_id, vacio)
+        esc = escalados.get(agente_id, sin_escalar)
+        n_tareas = tareas.get(agente_id, 0.0)
+        if absorbe:
             for v in ("actual", "previo"):
                 extra = actividad.get(None, vacio)[v]
                 act = {**act, v: {k: act[v][k] + extra[k] for k in act[v]}}
-            if esc is not None:
-                extra_e = escalados.get(None, sin_escalar)
-                esc = {v: esc[v] + extra_e[v] for v in esc}
+            extra_e = escalados.get(None, sin_escalar)
+            esc = {v: esc[v] + extra_e[v] for v in esc}
             n_tareas += tareas.get(None, 0.0)
-        propios = [x for x in providers if x.agent_key == key] + (huerfanos if es_general else [])
-        claves_serie = [agente_id] if agente_id is not None else []
-        if es_general:
+        propios = [x for x in providers if x.agent_key == key]
+        claves_serie: list[uuid.UUID | None] = [agente_id]
+        if absorbe:
             claves_serie.append(None)
         salida.append(
             {
@@ -649,11 +641,11 @@ async def resumen(
             "previo_hasta": p.previo_hasta,
             "dias": p.dias,
         },
-        "runtime": runtime,
         "general": {
             "kpis": [_kpi_a_dict(k, p.dias) for k in general],
             # Todo el negocio: cada clave de `puntos` (agentes, Coordinador y lo no atribuido).
             "serie": _serie_de(puntos, list(puntos), dias_serie, acceso.costos),
+            "modulos_sin_agente": [await _modulo(x, tenant_id, p) for x in huerfanos] if acceso.agentes else [],
         },
         "agentes": salida,
     }

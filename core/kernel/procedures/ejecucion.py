@@ -5,13 +5,9 @@ acciones de su etapa (más las del core), los datos se validan en el servidor (t
 formato y el *resolver* de la habilidad), lo que compromete espera una confirmación explícita y
 la tarea se cierra con un evento de dominio del outbox.
 
-Cuándo actúa:
-- **Activo** con `tenants.aos_procedures` (exige `aos_runtime = 'v3'`, CHECK de 0070).
-- **Sombra** con `aos_runtime = 'v3'` y `aos_procedures` apagada: el turno sigue con el flujo de
-  siempre y el motor solo calcula y registra diferencias (`sombra.py`), sin cambiar nada de lo que
-  ve el modelo ni la respuesta.
-- Apagado en cualquier otro caso: `contexto_del_motor` devuelve None tras la misma lectura de
-  banderas de antes y el turno es idéntico.
+Cuándo actúa: siempre que el turno tiene negocio (ADR-0191, HU-AOS-69: el motor ya no es una
+bandera por negocio). Sin procedimientos disponibles el turno no tiene foco y ofrece las acciones
+de siempre.
 
 Transacciones y efectos (revisión del agente `arquitecto`):
 - Antes del efecto, fail-closed: el chequeo de etapa y de confirmación y `action_requested` se
@@ -35,7 +31,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 from agentcore_contracts import Procedure, Slot, Stage
 from sqlalchemy import or_, select, text
@@ -57,7 +53,6 @@ log = get_logger(__name__)
 # (nombre, args, clave estable) -> resultado: lo inyecta el loop (envuelve su ejecución segura de
 # acciones; la clave da la idempotencia de la precondición entre reintentos).
 Ejecutor = Callable[[str, dict[str, Any], str], Awaitable[dict[str, Any]]]
-Modo = Literal["activo", "sombra"]
 
 _TIMEOUT_RESOLVER_S = 3.0
 # Resumen de confirmación que provee un pack (HU-AOS-07): corre al cerrar el turno, sin lock.
@@ -568,12 +563,11 @@ def _contexto_de_herramienta(
 
 
 class ContextoMotor:
-    """El motor durante un turno del loop (activo o en sombra)."""
+    """El motor durante un turno del loop."""
 
     def __init__(
         self,
         *,
-        modo: Modo,
         tenant_id: uuid.UUID,
         conversation_id: uuid.UUID,
         customer_id: uuid.UUID,
@@ -597,7 +591,6 @@ class ContextoMotor:
         a2a: Any = None,
         colaboracion: Any = None,
     ) -> None:
-        self.modo: Modo = modo
         # HU-AOS-20: banderas de la colaboración del negocio (`banderas.Colaboracion`), ya leídas
         # con el resto de banderas del turno; las usa el verificador (horarios y preguntas).
         self.colaboracion = colaboracion
@@ -647,29 +640,18 @@ class ContextoMotor:
             t.name: getattr(t, "plugin_id", None) for t in (*self._base, *self._candidatas)
         }
         self._cambio = False
-        self._sombra: Any = None
         # HU-AOS-20: títulos de lo que el cliente pidió y no cupo en la pila (solo este turno).
         self._sobrantes: list[str] = []
         # HU-AOS-09: args de cada acción que pidió confirmación (por hash: son los que firma el
         # botón) y resultados de las acciones de la etapa en el turno, para armar el resumen.
         self._pedidas: dict[str, tuple[str, dict[str, Any]]] = {}
         self._resultados: dict[str, list[Mapping[str, Any]]] = {}
-        if modo == "sombra":
-            from core.kernel.procedures.sombra import Sombra
-
-            self._sombra = Sombra(tenant_id, conversation_id, procedimientos, self._core)
         self.tarjeta = self._con_pista_sin_foco(tarjeta)
 
     # -- lo que ve el modelo
     @property
-    def activo(self) -> bool:
-        """Motor activo (`tenants.aos_procedures`); en sombra, False: nada de lo que ve el modelo
-        ni de la salida cambia."""
-        return self.modo == "activo"
-
-    @property
     def en_foco(self) -> bool:
-        return self.modo == "activo" and self._foco is not None
+        return self._foco is not None
 
     @property
     def foco_task_id(self) -> uuid.UUID | None:
@@ -680,8 +662,6 @@ class ContextoMotor:
         """Acciones a ofrecer: las de siempre sin foco; con foco, las de la etapa más las del core
         que el turno ya ofrecía (las declarativas del negocio no: fail-closed). Activo, además, los
         comandos del hilo que aplican al estado (HU-AOS-06)."""
-        if self.modo != "activo":
-            return list(self._base)
         if self._foco is None:
             # Una tool declarativa del negocio con el nombre de un comando no se ofrece, ni las
             # puertas de los procedimientos disponibles: sin foco no hay camino de siempre para
@@ -747,8 +727,6 @@ class ContextoMotor:
     def _todas_las_puertas(self) -> frozenset[str]:
         """Puertas de acción de los procedimientos disponibles del negocio (todos, no solo los
         candidatos: una tarea en pausa no abre el camino de siempre por otro lado)."""
-        if self.modo != "activo":
-            return frozenset()
         fuente = self._de_la_release if self._de_la_release is not None else self.procedimientos
         return frozenset().union(
             *(motor.acciones_de_puerta(p) | (motor.acciones_de_riesgo_alto(p) & self._core) for p in fuente.values())
@@ -775,7 +753,7 @@ class ContextoMotor:
         gobierno) y con candidatos. Nombra las puertas que el negocio tiene como tools. Si los
         rótulos fallan, la tarjeta queda como estaba (la negación en `antes_de_accion` es la
         garantía)."""
-        if self.modo != "activo" or self._foco is not None or self._sin_gobierno is not None or not self._candidatos():
+        if self._foco is not None or self._sin_gobierno is not None or not self._candidatos():
             return tarjeta
         from core.kernel.tarjeta import pista_sin_foco
 
@@ -826,8 +804,6 @@ class ContextoMotor:
         return handoff.destinos_para_el_modelo(handoff.destinos_de_handoff(self._a2a, self._abiertas_propias))
 
     def _comandos_aplicables(self) -> list[str]:
-        if self.modo != "activo":
-            return []
         from core.kernel import decisions
 
         # Con un handoff aceptado no se abren tareas nuevas: el destino podría no gobernarlas.
@@ -879,7 +855,7 @@ class ContextoMotor:
         return salida
 
     def comandos(self) -> list[Any]:
-        """Los comandos que aplican al estado, como `MCPTool` (vacío fuera del modo activo)."""
+        """Los comandos que aplican al estado, como `MCPTool`."""
         nombres = self._comandos_aplicables()
         if not nombres:
             return []
@@ -897,11 +873,8 @@ class ContextoMotor:
 
     def afirmaciones(self) -> list[Any]:
         """Las `claims` con frases de los procedimientos disponibles, compiladas a `Afirmacion`
-        para el verificador (ADR-0119, HU-AOS-07). Solo con el motor activo: en sombra o apagado
-        no se verifica nada nuevo. Se respaldan con las acciones del turno y con el estado de las
+        para el verificador (ADR-0119, HU-AOS-07). Se respaldan con las acciones del turno y con el estado de las
         tareas (los datos que declara cada `claim`)."""
-        if self.modo != "activo":
-            return []
         from core.kernel.procedures.afirmaciones import compilar_afirmaciones
 
         salida: list[Any] = []
@@ -913,8 +886,8 @@ class ContextoMotor:
         return salida
 
     def es_comando(self, nombre: str) -> bool:
-        """¿Lo despacha el motor? Solo activo y solo los nombres reservados de los comandos."""
-        return self.modo == "activo" and nombre in comandos.NOMBRES
+        """¿Lo despacha el motor? Solo los nombres reservados de los comandos."""
+        return nombre in comandos.NOMBRES
 
     async def ejecutar_comando(self, nombre: str, args: Mapping[str, Any]) -> dict[str, Any]:
         """Aplica un comando del modelo y devuelve el `CommandResult` del design (§5.2): `ok`, la
@@ -949,8 +922,6 @@ class ContextoMotor:
     # -- antes y después de cada acción
     async def antes_de_accion(self, accion: str, args: dict[str, Any]) -> Previo:
         """Decide con la proyección leída bajo lock (nunca con la del inicio del turno)."""
-        if self.modo != "activo":
-            return Previo()
         # Una puerta de un procedimiento se decide siempre bajo el lock, aunque sea del core
         # (`sub_aplicar_cambio_plan`): sin foco se niega salvo el respaldo v2 (releído aquí, nunca
         # el del inicio del turno) y con foco sigue la etapa. Las demás del core pasan como siempre.
@@ -1066,10 +1037,7 @@ class ContextoMotor:
     ) -> dict[str, Any]:
         """Registra el resultado en la tarea que autorizó la acción, fija los datos del servidor y
         avanza. Nunca lanza."""
-        if self.modo == "sombra":
-            await self._sombra.observar(accion, args, resultado)
-            return resultado
-        if self.modo != "activo" or previo is None or not previo.gobernada:
+        if previo is None or not previo.gobernada:
             return resultado
         escalar = False
         task_id: uuid.UUID | None = None
@@ -1157,10 +1125,7 @@ class ContextoMotor:
         return foco
 
     async def tras_lote(self) -> bool:
-        """Al terminar un lote de acciones: vuelca la sombra y dice si cambiaron las acciones a
-        ofrecer (la etapa o el foco cambiaron en el lote)."""
-        if self._sombra is not None:
-            await self._sombra.volcar()
+        """Al terminar un lote de acciones: dice si cambiaron las acciones a ofrecer (la etapa o el foco cambiaron en el lote)."""
         if not self._cambio:
             return False
         self._cambio = False
@@ -1171,8 +1136,6 @@ class ContextoMotor:
         """Relee el foco, las tareas abiertas y la tarjeta (lo que ofrece la vuelta siguiente y lo
         que devuelve un comando). No toca `_cambio`: el loop recalcula las tools con `tras_lote`.
         False si la lectura falló: la tarjeta queda vacía (nunca la de antes del cambio)."""
-        if self.modo != "activo":
-            return True
         try:
             from core.db.session import get_session
 
@@ -1192,10 +1155,8 @@ class ContextoMotor:
             return False
 
     async def instantaneas(self) -> list[dict[str, Any]] | None:
-        """Estado de las tareas para el verificador (ADR-0119, HU-AOS-06), o None fuera del modo
-        activo o si la lectura falla (el verificador sigue como sin estado)."""
-        if self.modo != "activo":
-            return None
+        """Estado de las tareas para el verificador (ADR-0119, HU-AOS-06), o None si la lectura
+        falla (el verificador sigue como sin estado)."""
         try:
             from core.db.session import get_session
 
@@ -1251,8 +1212,6 @@ class ContextoMotor:
 
         Antes, una regla `start` del router (HU-AOS-17) inicia su procedimiento por `_iniciar`
         (salud del pack, una sola tarea en foco), después de las políticas del turno."""
-        if self.modo != "activo":
-            return
         await self._iniciar_por_regla()
         if self._foco is None:
             return
@@ -1477,8 +1436,6 @@ class ContextoMotor:
 
     # -- comandos (los ofrece HU-AOS-06; aquí se aplican)
     async def aplicar_comando(self, nombre: str, args: Mapping[str, Any]) -> ResultadoComando:
-        if self.modo != "activo":
-            return ResultadoComando(False, [mensaje("sin_tarea")])
         try:
             if nombre == "iniciar_procedimiento":
                 return await self._iniciar(str(args.get("procedure_id") or ""))
@@ -2024,8 +1981,6 @@ class ContextoMotor:
         texto del modelo. Fail-closed: si la petición es de este turno pero no hay un resumen fiel
         (faltan los args, un monto es ambiguo o choca con un argumento, o algo falla), sale el
         texto fijo `sin_resumen`, sin datos ni botón. Solo si no se pudo leer la tarea, None."""
-        if self.modo != "activo":
-            return None
         pedida: tuple[uuid.UUID, int, dict[str, Any]] | None = None
         try:
             pedida = await self._pedir_accion_debida()
@@ -2097,8 +2052,6 @@ class ContextoMotor:
         pendiente) de la petición que registró, para anularla si después no se puede enviar."""
         from core.mcp.host import mcp_host
 
-        if self.modo != "activo":
-            return None
         async with _con_lock(self.tenant_id, self.conversation_id) as s:
             foco = await _foco(s, self.tenant_id, self.conversation_id, self._permitidos)
             if foco is None or foco.tarea.pending_confirmation is not None:
@@ -2168,8 +2121,6 @@ class ContextoMotor:
 
         None (el loop escala como siempre) sin foco, si falta una acción o un dato del servidor, o
         si algo falla. Se audita sin valores."""
-        if self.modo != "activo":
-            return None
         try:
             confirmacion = await self.confirmacion_del_turno()
             if confirmacion is not None:
@@ -2546,9 +2497,9 @@ async def contexto_del_motor(
     texto_cliente: str,
     confirmar_tambien: frozenset[str] = frozenset(),
 ) -> ContextoMotor | None:
-    """El motor del turno, o None si el negocio no lo usa (misma lectura de banderas de siempre).
+    """El motor del turno, o None sin negocio en contexto.
 
-    Activo: abre el episodio (expira las tareas viejas), lee las tareas abiertas, arma la tarjeta
+    Abre el episodio (expira las tareas viejas), lee las tareas abiertas, arma la tarjeta
     con las definiciones de los procedimientos y fija la tarea en foco. Fail-closed: un error de
     base o de los playbooks sube por el camino de error del turno."""
     from core.db.session import get_session
@@ -2585,43 +2536,36 @@ async def contexto_del_motor(
         comunes["declaradas_por_el_agente"] = declaradas_por(release_vigente.agente_del_turno()) or frozenset()
     async with get_session() as session:
         banderas = await banderas_del_negocio(session, tenant_id)
-        if banderas.procedimientos:
-            # Un solo episodio por turno: con release (aos_runtime = v3) manda su `idleMinutes`.
-            await abrir_episodio(
-                session,
-                tenant_id=tenant_id,
-                conversation_id=conversation_id,
-                idle_minutes=release_vigente.idle_minutes(DEFAULT_IDLE_MINUTES),
-            )
-            filas = await state.tareas_abiertas(session, tenant_id=tenant_id, conversation_id=conversation_id)
-            tarjeta = _tarjeta(filas)
-            foco = await _foco(session, tenant_id, conversation_id, comunes["permitidos"])
-    if banderas.procedimientos:
-        # HU-AOS-19: colaboración A2A del turno (solo con release `release/2` y grafo congelado).
-        if "de_la_release" in comunes:
-            from core.kernel import decisions
-            from core.kernel.handoff import ContextoA2A
-
-            contexto_a2a = ContextoA2A.del_turno(conversation_id)
-            if contexto_a2a is not None:
-                decisions.anotar_a2a(contexto_a2a.estado)
-                comunes["a2a"] = contexto_a2a
-        # Si el inbound fue un botón, su título no es un sí escrito: el turno no confirma por texto.
-        por_boton = await _tomar_marca_interactivo(tenant_id, conversation_id)
-        if por_boton:
-            texto_cliente = ""
-        return ContextoMotor(
-            modo="activo", procedimientos=registro.disponibles(enabled, disabled), tarjeta=tarjeta,
-            foco=foco, texto_cliente=texto_cliente, por_boton=por_boton, seq_al_empezar={f.id: f.last_seq for f in filas},
-            confirmar_tambien=confirmar_tambien, abiertas=frozenset(f.procedure_id for f in filas),
-            abiertas_propias=_propias(filas), colaboracion=banderas.colaboracion,
-            sin_gobierno=_sin_gobierno(filas, foco), **comunes,
+        # Un solo episodio por turno: con release manda su `idleMinutes`.
+        await abrir_episodio(
+            session,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            idle_minutes=release_vigente.idle_minutes(DEFAULT_IDLE_MINUTES),
         )
-    if banderas.runtime == "v3" and registro.hay_procedimientos():
-        procs = registro.disponibles(enabled, disabled)
-        if procs:
-            return ContextoMotor(modo="sombra", procedimientos=procs, **comunes)
-    return None
+        filas = await state.tareas_abiertas(session, tenant_id=tenant_id, conversation_id=conversation_id)
+        tarjeta = _tarjeta(filas)
+        foco = await _foco(session, tenant_id, conversation_id, comunes["permitidos"])
+    # HU-AOS-19: colaboración A2A del turno (solo con release `release/2` y grafo congelado).
+    if "de_la_release" in comunes:
+        from core.kernel import decisions
+        from core.kernel.handoff import ContextoA2A
+
+        contexto_a2a = ContextoA2A.del_turno(conversation_id)
+        if contexto_a2a is not None:
+            decisions.anotar_a2a(contexto_a2a.estado)
+            comunes["a2a"] = contexto_a2a
+    # Si el inbound fue un botón, su título no es un sí escrito: el turno no confirma por texto.
+    por_boton = await _tomar_marca_interactivo(tenant_id, conversation_id)
+    if por_boton:
+        texto_cliente = ""
+    return ContextoMotor(
+        procedimientos=registro.disponibles(enabled, disabled), tarjeta=tarjeta,
+        foco=foco, texto_cliente=texto_cliente, por_boton=por_boton, seq_al_empezar={f.id: f.last_seq for f in filas},
+        confirmar_tambien=confirmar_tambien, abiertas=frozenset(f.procedure_id for f in filas),
+        abiertas_propias=_propias(filas), colaboracion=banderas.colaboracion,
+        sin_gobierno=_sin_gobierno(filas, foco), **comunes,
+    )
 
 
 # ---------------------------------------------------------------- entradas sin LLM (consumer)
@@ -2652,21 +2596,15 @@ async def entrada_sin_llm(conversation: Any, fields: Mapping[str, str]) -> None:
 
 async def _entrada_sin_llm(conversation: Any, interactivo: str, media: list[Any]) -> None:
     from core.db.session import get_session
-    from core.kernel.banderas import banderas_del_negocio
     from core.kernel.episodio import DEFAULT_IDLE_MINUTES, abrir_episodio
     from core.shared import release_vigente
 
     tenant_id, conversation_id = conversation.tenant_id, conversation.id
-    async with get_session() as s:
-        banderas = await banderas_del_negocio(s, tenant_id)
-    if interactivo and banderas.ruteo != "off" and banderas.runtime == "v3":
-        # El payload del botón para las reglas del router (HU-AOS-17): solo con el ruteo encendido.
+    if interactivo:
+        # El payload del botón para las reglas del router (HU-AOS-17).
         from core.kernel.router import guardar_payload
 
         await guardar_payload(tenant_id, conversation_id, interactivo)
-    if not banderas.procedimientos:
-        return
-    if interactivo:
         await _marcar_interactivo(tenant_id, conversation_id)
     permitidos = frozenset(await registro.packs_permitidos(tenant_id))
     async with get_session() as s:
@@ -2794,11 +2732,6 @@ async def cerrar_por_evento(
         if payload.get(nombre) is not None and len(str(payload[nombre])) <= 200
     ]
     if not por_valor:
-        return 0
-    from core.kernel.banderas import banderas_del_negocio
-
-    # La bandera primero: con el motor apagado no se consulta ninguna tarea (una lectura por PK).
-    if not (await banderas_del_negocio(session, tenant_id)).procedimientos:
         return 0
     filas = (
         await session.execute(

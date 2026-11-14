@@ -1,6 +1,6 @@
 """Router del Coordinador: qué especialista atiende el turno (HU-AOS-17, ADR-0138; D-AOS-8).
 
-Solo con `tenants.aos_routing` distinto de `off` (exige `aos_runtime = 'v3'`); lo llama
+En todo turno que enruta (ADR-0191: ya no es bandera del negocio); lo llama
 `release_del_turno.asignar` con la conversación bloqueada. Sin LLM y sin embeddings. En orden:
 
 1. **Tarea en foco** (`conversation_tasks` activa en la posición 0): atiende su dueño
@@ -50,19 +50,17 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-MODOS = ("off", "shadow", "active")
 # Tope del texto que miran las reglas (`keywordAny`); el puntaje recorta aún más.
 MAX_TEXTO = 2000
 FUENTES = ("task", "rule", "trigger", "coprocessor", "default")
 VENTANA_ESTABILIDAD = 6
 
 
-def modo_efectivo(bandera: str, routing: Routing | None) -> str:
-    """La bandera del negocio, salvo que el KernelSpec congelado pida sombra (solo baja)."""
-    modo = bandera if bandera in MODOS else "off"
-    if modo == "active" and routing is not None and routing.shadowMode:
+def modo_efectivo(routing: Routing | None) -> str:
+    """`active`, salvo que el KernelSpec congelado de la release pida sombra (`routing.shadowMode`)."""
+    if routing is not None and routing.shadowMode:
         return "shadow"
-    return modo
+    return "active"
 
 
 @dataclass(frozen=True)
@@ -550,7 +548,7 @@ async def cambios_de_dueno(session: AsyncSession, tenant_id: uuid.UUID, conversa
 
 # ------------------------------------------------------------------ payload del botón (Redis)
 # `aos:ruteo:payload:{negocio}:{conversación}` (convención de MULTITENANT: el negocio primero). Lo
-# escribe `entrada_sin_llm` (consumer) solo con `aos_routing` ≠ off y lo consume el turno con
+# escribe `entrada_sin_llm` (consumer) y lo consume el turno con
 # GETDEL: con debounce el turno corre en otra tarea y el payload no viaja en `latest_message`.
 _PAYLOAD = "aos:ruteo:payload"
 # Corto: un payload de un turno que se abortó no debe disparar una regla en un mensaje posterior.
@@ -593,7 +591,6 @@ async def tomar_payload(tenant_id: uuid.UUID, conversation_id: uuid.UUID) -> str
 
 __all__ = [
     "FUENTES",
-    "MODOS",
     "Entrada",
     "Ruta",
     "TareaEnFoco",

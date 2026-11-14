@@ -91,9 +91,10 @@ def _guion(ruta: Path, datos: dict[str, list[bool]]) -> None:
 
 async def _negocio_y_candidata(nombre: str = "Otro") -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
     """(tenant, conexión, release activa, candidata que toca todos los procedimientos)."""
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
     from core.releases.build import construir
-    from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
     slug = uniq("corredor")
@@ -109,7 +110,7 @@ async def _negocio_y_candidata(nombre: str = "Otro") -> tuple[uuid.UUID, uuid.UU
         t=tid,
         ext=uniq("ig"),
     )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     ((activa,),) = await _sql(tid, "select active_release_id from channel_connections where id = :c", c=cid)
     await _sql(tid, "update app_settings set assistant_name = :n where tenant_id = :t", n=nombre, t=tid)

@@ -21,9 +21,7 @@ defecto y está habilitado (`default_disabled`, `default_required`). 422
 Permisos: el GET pide la sección `connections` (lectura); las escrituras, `settings` con
 escritura, como la API de agentes (asignar o habilitar un agente cambia lo que dice el
 asistente), y además poder ver `connections`. El GET muestra key, nombre y última versión de
-los agentes a quien ve la conexión: es lo que la consola de conexiones necesita, sin contenido. Además, mientras el runtime del negocio sea `legacy` (ADR-0112) las instancias no
-hacen nada, así que solo escriben el master o los negocios con `aos_runtime = 'v3'` (403
-`aos_runtime_legacy`). Con v3, los cambios aplican con la próxima release (HU-AOS-14).
+los agentes a quien ve la conexión: es lo que la consola de conexiones necesita, sin contenido. Los cambios aplican con la próxima release (HU-AOS-14).
 """
 
 from __future__ import annotations
@@ -37,7 +35,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from core.admin.permissions import effective_access
 from core.admin.roles import actua_como_master
 from core.agents import instancias as svc
-from core.agents.versiones import escritura_habilitada
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.plan_limits import plan_limit_error, plan_limit_responses
@@ -107,12 +104,6 @@ async def _puede_escribir(principal: Principal) -> uuid.UUID:
     # agentes de una conexión que no puede ver.
     if await effective_access(principal.admin, "connections", tid) is None:
         raise ApiError.forbidden("Sin permiso para la sección 'connections'.")
-    if not await escritura_habilitada(tid):
-        raise ApiError(
-            403,
-            "aos_runtime_legacy",
-            "Los agentes se activan con el Agent OS de este negocio: por ahora solo los edita el administrador.",
-        )
     return tid
 
 

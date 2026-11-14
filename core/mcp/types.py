@@ -37,11 +37,13 @@ if TYPE_CHECKING:
     import httpx
 
     from core.mcp.host import MCPHost
+    from core.mcp.sandbox import SandboxPrueba
     from core.primeros_pasos.contrato import ContenidoCargado
     from core.qa.contrato_datos import (
         ContextoDeNegocio,
         EntradaDeEscenario,
         FormaDeDatos,
+        RegistroDescrito,
         RegistroSembrado,
         ResumenDeEscenario,
     )
@@ -55,6 +57,8 @@ log = get_logger(__name__)
 
 # handler(arguments, context) -> resultado JSON-serializable
 ToolHandler = Callable[[dict[str, Any], "ToolContext"], Awaitable[dict[str, Any]]]
+# simulador(arguments, context) -> resultado ficticio para el canal `test` (HU-ARCH-14)
+SimuladorFn = Callable[[dict[str, Any], "ToolContext"], Awaitable[dict[str, Any]]]
 GuardrailFn = Callable[[str, list[dict[str, Any]]], Awaitable["GuardrailResult"]]
 AfirmacionesFn = Callable[[], Awaitable[list["Afirmacion"]]]
 # fuente(conversation_id, customer_id) -> referencias vigentes de la conversación (ADR-0130)
@@ -93,6 +97,9 @@ class ToolContext:
     agent_id: uuid.UUID | None = None
     agent_version_id: uuid.UUID | None = None
     knowledge: Mapping[str, Any] | None = None
+    # Estado efímero de la prueba del panel (HU-ARCH-14): solo se inyecta con `channel == "test"`.
+    # Los simuladores guardan/leen aquí cotizaciones, pedidos, citas, etc. sin tocar la base.
+    sandbox: SandboxPrueba | None = None
 
 
 # Sufijos que nunca son un destino público (DNS interno, mDNS, metadata de cloud).
@@ -373,6 +380,15 @@ class MCPTool:
     # efectos externos). Solo una tool marcada puede responder una consulta entre agentes
     # (fail-closed: sin la marca, no se ofrece). La declara quien la escribe.
     solo_lectura: bool = False
+    # HU-ARCH-14 (D-SPEC-02-3): la tool escribe en tablas del negocio o en un sistema externo.
+    # En el canal `test` el host NO ejecuta el handler: usa `simular` o falla cerrado.
+    side_effects: bool = False
+    # Implementación ficticia para el canal `test`. Devuelve el mismo contrato que el handler,
+    # marcado `simulado=True` por el host. Puede usar `context.sandbox` para multi-turno.
+    simular: SimuladorFn | None = None
+    # Única excepción deliberada: escribe, pero solo sobre el cliente sintético de la prueba
+    # (`channel == "test"`), que no cuenta y se purga al cerrar. Memoria/perfil del cliente.
+    permite_en_prueba: bool = False
     # SPEC-40 (ADR-0172 §5): la tool puede ser la acción de una opción directa (un toque del
     # cliente la ejecuta sin LLM). Fail-closed: lo declara SOLO quien escribe la tool, y solo si
     # es de lectura o de escritura reversible; nada financiero ni destructivo en v1 (D-SPEC-40-3).
@@ -687,6 +703,18 @@ class BaseModule(ABC):
     async def retirar_datos_de_prueba(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> int:
         """Retira lo sembrado (borrado lógico o desactivación, nunca físico). Devuelve cuántos."""
         raise NotImplementedError
+
+    async def describir_registros(
+        self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]
+    ) -> list[RegistroDescrito]:
+        """Hook opcional (HU-QA-16, ADR-0194): pone en palabras lo que este pack sembró o importó
+        (`registros`, de `test_data_records`) para la lista «Lo cargado» del asistente de agentes.
+
+        Es POR LOTE (una consulta por `kind`, nunca una por registro), de solo lectura, bajo el
+        `tenant_scope` del negocio y filtrando además por `tenant_id`. El pack elige qué `kind` describe
+        (el producto sí; la variante, la cuota o el pago no) y omite lo retirado o lo que no reconoce.
+        Default: `[]` (lo de este pack sale solo en el conteo `sin_detalle`)."""
+        return []
 
     def plantillas_de_importacion(self) -> list[PlantillaDeImportacion]:
         """Hook opcional (HU-QA-12, ADR-0180): las plantillas CSV con las que el dueño importa sus

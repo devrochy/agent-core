@@ -1,18 +1,17 @@
 """HU-AOS-17 · enrutamiento entre especialistas con el loop real y un modelo guionado (sin LLM).
 
-Negocio `aos_runtime = v3` con el motor de procedimientos, `pack_commerce` y `pack_calendar`, dos
-especialistas publicados (Ventas por defecto con `contratar_plan`, Agenda con `agendar_cita`) y
-`AOS_CONNECTION_ROUTING` encendida:
+Negocio con `pack_commerce` y `pack_calendar` y dos especialistas publicados (Ventas por defecto con
+`contratar_plan`, Agenda con `agendar_cita`). El ruteo ya no es bandera del negocio (ADR-0191,
+HU-AOS-69): corre en `active`, salvo que la release pida sombra (`routing.shadowMode`):
 
-- **off** (por defecto): todo como antes: `route_source = default`, atiende Ventas, sin sombra.
-- **shadow**: decide y registra (`shadow_route` con Agenda por disparador) pero sigue Ventas.
+- **sombra de la release**: decide y registra (`shadow_route` con Agenda por disparador) pero sigue Ventas.
 - **active**: "quiero agendar una demo" → atiende Agenda (`route_source = trigger`, confianza
   ≥ 0,80), `conversations.active_agent_instance_id` = Agenda y el hilo ve solo `agendar_cita`.
 - **Tarea en foco**: con una tarea de Ventas en foco, el siguiente turno lo atiende Ventas sin
   clasificar (`task`, `focus_task_id`).
 - **Regla de botón**: el payload `plan:` de la regla del KernelSpec inicia `contratar_plan` con
   Ventas como dueño (`rule`, `rule_id`, `focus_task_id`).
-- **Aislamiento**: el payload y la bandera de un negocio no cambian la ruta de otro.
+- **Aislamiento**: el payload de un negocio no cambia la ruta de otro.
 """
 
 from __future__ import annotations
@@ -58,24 +57,6 @@ async def _sql(tid: uuid.UUID | None, sql: str, **params: Any) -> list[Any]:
             return list(resultado.all()) if getattr(resultado, "returns_rows", False) else []
 
 
-async def _banderas(tid: uuid.UUID, runtime: str, procedimientos: bool) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("update tenants set aos_procedures = false where id = :t"), {"t": tid})
-            await conn.execute(
-                text("update tenants set aos_runtime = :r, aos_procedures = :p where id = :t"),
-                {"t": tid, "r": runtime, "p": procedimientos},
-            )
-    finally:
-        await engine.dispose()
-
-
 @pytest.fixture(scope="module", autouse=True)
 async def _proceso() -> None:
     """Packs registrados en `pack_versions` y activos en el proceso, y las tools del core."""
@@ -93,11 +74,12 @@ async def _proceso() -> None:
 
 
 async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:
-    """Negocio v3 con commerce y calendar, una conexión conversacional y su release 1 (General
-    por defecto, construida en legacy como el backfill). (tid, conexión)."""
+    """Negocio v3 con commerce y calendar, una conexión conversacional y su release 1 (especialista
+    «atencion» por defecto, ADR-0192). (tid, conexión)."""
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
-    from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
     slug = f"aos17-{uuid.uuid4().hex[:8]}"
@@ -114,9 +96,8 @@ async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:
         "values (:id, :t, 'instagram', 'meta', :ext, 'instagram_meta')",
         id=cid, t=tid, ext=f"ig-{uuid.uuid4().hex[:10]}",
     )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
-    await _banderas(tid, "v3", True)
     return tid, cid
 
 
@@ -264,26 +245,25 @@ async def _tareas(tid: uuid.UUID, conv: uuid.UUID) -> list[Any]:
 
 @pytest.fixture
 def _ruteo(monkeypatch: Any) -> None:
-    from core.config import get_settings
-
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
+    pass
 
 
-async def _modo(tid: uuid.UUID, modo: str) -> None:
-    from core.kernel.ruteo_sombra import escribir_modo
-
-    await escribir_modo(tid, modo)
-
-
-async def _con_dos_especialistas(modo: str, reglas: list[dict[str, Any]] | None = None) -> tuple[uuid.UUID, uuid.UUID, dict[str, uuid.UUID]]:
-    """Negocio con Ventas (por defecto) y Agenda publicados y su release; `reglas` en el KernelSpec."""
+async def _con_dos_especialistas(
+    reglas: list[dict[str, Any]] | None = None, *, sombra: bool = False
+) -> tuple[uuid.UUID, uuid.UUID, dict[str, uuid.UUID]]:
+    """Negocio con Ventas (por defecto) y Agenda publicados y su release; `reglas` en el KernelSpec y,
+    con `sombra`, `routing.shadowMode` (la release pide sombra)."""
     tid, cid = await _negocio()
     await _especialista(tid, cid, "ventas", PLAN, {"consultar_inventario"}, defecto=True)
     await _especialista(tid, cid, "agenda", CITA, {"list_appointment_types", "check_availability"}, defecto=False)
+    cambios: dict[str, Any] = {}
     if reglas is not None:
-        await _reglas_del_coordinador(tid, reglas)
+        cambios["rules"] = reglas
+    if sombra:
+        cambios["shadowMode"] = True
+    if cambios:
+        await _routing_del_coordinador(tid, **cambios)
     await _publicar_release(tid, cid)
-    await _modo(tid, modo)
     filas = await _sql(
         tid,
         "select a.key, i.id from agent_instances i join agents a on a.tenant_id = i.tenant_id and a.id = i.agent_id "
@@ -294,6 +274,24 @@ async def _con_dos_especialistas(modo: str, reglas: list[dict[str, Any]] | None 
 
 
 async def _reglas_del_coordinador(tid: uuid.UUID, reglas: list[dict[str, Any]]) -> None:
+    await _routing_del_coordinador(tid, rules=reglas)
+
+
+async def _sombra_de_la_release(tid: uuid.UUID, cid: uuid.UUID, sombra: bool) -> None:
+    """La release nueva de la conexión pide (o deja de pedir) sombra (`routing.shadowMode`)."""
+    from core.releases.build import construir
+    from core.releases.promocion import promover
+    from core.shared.tenant import tenant_scope
+
+    aid, version = await _routing_del_coordinador(tid, shadowMode=sombra)
+    async with tenant_scope(tid):
+        build = await construir(tid, cid, actor="test", modules=_modules(), fijadas={aid: version})
+        await promover(tid, cid, build.release_id, actor="test")
+
+
+async def _routing_del_coordinador(tid: uuid.UUID, **cambios: Any) -> tuple[uuid.UUID, uuid.UUID]:
+    """Publica el Coordinador con `cambios` en su `routing`. Devuelve (agente, versión): si el contenido
+    repite una versión anterior, `publicar` la reutiliza y el build hay que fijarlo a ella."""
     from core.agents import versiones
     from core.kernel.procedures import catalogo_de_acciones
     from core.shared.tenant import tenant_scope
@@ -304,9 +302,10 @@ async def _reglas_del_coordinador(tid: uuid.UUID, reglas: list[dict[str, Any]]) 
         "where a.key = 'coordinador' order by v.version desc limit 1",
     )
     nuevo = dict(contenido)
-    nuevo["routing"] = {**(nuevo.get("routing") or {}), "rules": reglas}
+    nuevo["routing"] = {**(nuevo.get("routing") or {}), **cambios}
     async with tenant_scope(tid):
-        await versiones.publicar(tid, aid, catalogo=catalogo_de_acciones(_modules()), contenido=nuevo)
+        version, _ = await versiones.publicar(tid, aid, catalogo=catalogo_de_acciones(_modules()), contenido=nuevo)
+    return aid, version.id
 
 
 async def _decision(tid: uuid.UUID, conv: uuid.UUID) -> dict[str, Any]:
@@ -328,21 +327,9 @@ async def _dueno(tid: uuid.UUID, conv: uuid.UUID) -> uuid.UUID | None:
 DEMO = "quiero agendar una demo"
 
 
-# ---------------------------------------------------------------- off, sombra y activo
-async def test_apagado_todo_sigue_igual(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, inst = await _con_dos_especialistas("off")
-    conv = await _conversacion(tid, cid)
-    g = await _turno(tid, conv, monkeypatch, ["¿Qué plan te interesa?"], texto=DEMO)
-    d = await _decision(tid, conv)
-    assert d["route_source"] == "default"
-    assert d["shadow_route"] is None and d["candidates"] is None and d["rule_id"] is None
-    assert d["active_instance_id"] == str(inst["ventas"])
-    assert await _dueno(tid, conv) == inst["ventas"]
-    assert g.enums[0] == [PLAN]
-
-
+# ---------------------------------------------------------------- sombra de la release y activo
 async def test_sombra_decide_y_registra_pero_atiende_el_de_siempre(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, inst = await _con_dos_especialistas("shadow")
+    tid, cid, inst = await _con_dos_especialistas(sombra=True)
     conv = await _conversacion(tid, cid)
     g = await _turno(tid, conv, monkeypatch, ["¿Qué plan te interesa?"], texto=DEMO)
     d = await _decision(tid, conv)
@@ -357,7 +344,7 @@ async def test_sombra_decide_y_registra_pero_atiende_el_de_siempre(_ruteo: None,
 
 
 async def test_activo_el_disparador_pasa_el_turno_a_agenda(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, inst = await _con_dos_especialistas("active")
+    tid, cid, inst = await _con_dos_especialistas()
     conv = await _conversacion(tid, cid)
     g = await _turno(tid, conv, monkeypatch, ["¿Para qué día?"], texto=DEMO)
     d = await _decision(tid, conv)
@@ -373,7 +360,7 @@ async def test_activo_el_disparador_pasa_el_turno_a_agenda(_ruteo: None, monkeyp
 
 
 async def test_activo_con_tarea_de_ventas_en_foco_atiende_ventas_sin_clasificar(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, inst = await _con_dos_especialistas("active")
+    tid, cid, inst = await _con_dos_especialistas()
     conv = await _conversacion(tid, cid)
     await _turno(tid, conv, monkeypatch, [("iniciar_procedimiento", {"procedure_id": PLAN}), "¿Qué plan?"], texto="quiero el plan premium")
     ((task_id, dueno_tarea),) = await _sql(
@@ -391,7 +378,7 @@ async def test_activo_la_regla_del_boton_inicia_el_procedimiento(_ruteo: None, m
     from core.shared.tenant import tenant_scope
 
     reglas = [{"id": "boton_plan", "when": {"interactivePayloadPrefix": "plan:"}, "start": PLAN}]
-    tid, cid, inst = await _con_dos_especialistas("active", reglas)
+    tid, cid, inst = await _con_dos_especialistas(reglas)
     conv = await _conversacion(tid, cid)
     async with tenant_scope(tid):
         conversacion = type("C", (), {"tenant_id": tid, "id": conv})()
@@ -418,36 +405,24 @@ async def test_el_build_rechaza_una_regla_a_un_agente_que_no_esta(_ruteo: None) 
     assert error.value.codigo == "ruteo_invalido"
 
 
-# ---------------------------------------------------------------- aislamiento y orden de banderas
+# ---------------------------------------------------------------- aislamiento
 async def test_la_ruta_de_un_negocio_no_cruza_a_otro(_ruteo: None, monkeypatch: Any) -> None:
     from core.kernel.router import guardar_payload
 
     reglas = [{"id": "boton_plan", "when": {"interactivePayloadPrefix": "plan:"}, "start": PLAN}]
-    a, cid_a, _inst_a = await _con_dos_especialistas("active", reglas)
-    b, cid_b, inst_b = await _con_dos_especialistas("off", reglas)
+    a, cid_a, _inst_a = await _con_dos_especialistas(reglas)
+    b, cid_b, inst_b = await _con_dos_especialistas(reglas)
     conv_a = await _conversacion(a, cid_a)
     conv_b = await _conversacion(b, cid_b)
     # Un payload guardado para la conversación de B bajo el negocio A no le llega a B.
     await guardar_payload(a, conv_b, "plan:premium")
     await _turno(b, conv_b, monkeypatch, ["Hola."], texto="Pagar")
     d = await _decision(b, conv_b)
-    assert d["route_source"] == "default" and d["active_instance_id"] == str(inst_b["ventas"])
+    assert d["route_source"] != "rule" and d["rule_id"] is None and d["active_instance_id"] == str(inst_b["ventas"])
     assert await _sql(b, "select id from conversation_tasks where conversation_id = :c", c=conv_b) == []
     # A no ve las decisiones de B (RLS + tenant_id).
     assert await _sql(a, "select id from core_decisions where conversation_id = :c", c=conv_b) == []
     del conv_a
-
-
-async def test_el_ruteo_exige_v3_y_volver_a_legacy_lo_apaga(_ruteo: None) -> None:
-    from core.releases.migracion_v3 import _escribir_bandera
-
-    tid, _cid = await _negocio()
-    await _modo(tid, "shadow")
-    await _escribir_bandera(None, tid, runtime="legacy", procedimientos=False)
-    ((runtime, ruteo),) = await _sql(None, "select aos_runtime, aos_routing from tenants where id = :t", t=tid)
-    assert (runtime, ruteo) == ("legacy", "off")
-    with pytest.raises(ValueError):
-        await _modo(tid, "active")
 
 
 # ---------------------------------------------------------------- punta a punta con los presets v2 (HU-AOS-46)
@@ -455,10 +430,11 @@ async def _negocio_con_preset_suscripciones() -> tuple[uuid.UUID, uuid.UUID, Any
     """Negocio v3 con commerce, calendar y subscriptions, una conexión y `presets-v2 --aplicar`
     (su función) del preset `suscripciones`. Devuelve (tid, conexión, reporte, id y manifiesto de
     la release candidata, sin promover)."""
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.presets.agentes import backfill_presets_v2
-    from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
     slug = f"aos17p-{uuid.uuid4().hex[:8]}"
@@ -478,8 +454,7 @@ async def _negocio_con_preset_suscripciones() -> tuple[uuid.UUID, uuid.UUID, Any
         "values (:id, :t, 'instagram', 'meta', :ext, 'instagram_meta')",
         id=cid, t=tid, ext=f"ig-{uuid.uuid4().hex[:10]}",
     )
-    assert not (await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())).fallo
-    await _banderas(tid, "v3", True)
+    assert not (await release_inicial(tid, _modules())).fallo
 
     (reporte,) = await backfill_presets_v2(tenant_ids=[tid], preset_id="suscripciones", aplicar=True, modules=_modules())
     assert not reporte.fallo, reporte.errores
@@ -512,7 +487,7 @@ REGLAS_SUSCRIPCIONES = {
 async def test_preset_suscripciones_v2_con_ruteo_activo_de_punta_a_punta(_ruteo: None, monkeypatch: Any) -> None:
     """`agent-core db presets-v2 --aplicar` (su función) crea Ventas, Agenda y Suscripciones con las
     reglas `preset_*` del Coordinador; el build de la release no falla con `ruteo_invalido`; el
-    General (por defecto) también declara los procedimientos de los especialistas y aun así una
+    especialista por defecto («atencion») también declara los procedimientos de los especialistas y aun así una
     demo la atiende Agenda, por la regla o por el disparador."""
     from core.releases.promocion import promover
     from core.shared.tenant import tenant_scope
@@ -524,9 +499,8 @@ async def test_preset_suscripciones_v2_con_ruteo_activo_de_punta_a_punta(_ruteo:
         await promover(tid, cid, candidata, actor="test")
     componentes = {c["agent_key"]: c for c in manifest["components"]}
     declarados = {k: {p["id"] for p in c["procedures"]} for k, c in componentes.items() if c["role"] == "specialist"}
-    assert CITA in declarados["agenda"] and CITA in declarados["general"]  # la ambigüedad existe
-    assert componentes["general"]["is_default"] and not componentes["agenda"]["is_default"]
-    await _modo(tid, "active")
+    assert CITA in declarados["agenda"] and CITA in declarados["atencion"]  # la ambigüedad existe
+    assert componentes["atencion"]["is_default"] and not componentes["agenda"]["is_default"]
     inst = await _instancias(tid, cid)
 
     # Por la regla del preset (palabra «agendar»).
@@ -537,18 +511,18 @@ async def test_preset_suscripciones_v2_con_ruteo_activo_de_punta_a_punta(_ruteo:
     assert d["active_instance_id"] == str(inst["agenda"]) and await _dueno(tid, conv) == inst["agenda"]
     assert g.enums[0] == [CITA]
 
-    # Por el disparador, sin palabra de regla: el General también declara `agendar_cita`, pero va a Agenda.
+    # Por el disparador, sin palabra de regla: el especialista por defecto también declara `agendar_cita`, pero va a Agenda.
     otra = await _conversacion(tid, cid)
     await _turno(tid, otra, monkeypatch, ["¿A qué hora?"], texto="¿tienen espacio el jueves?")
     d = await _decision(tid, otra)
     assert d["route_source"] == "trigger" and d["active_instance_id"] == str(inst["agenda"])
     assert d["candidates"][0] == {"procedure_id": CITA, "owner": "agenda", "score": d["candidates"][0]["score"]}
 
-    # Un saludo sigue con el General (el de siempre).
+    # Un saludo sigue con el especialista por defecto.
     tercera = await _conversacion(tid, cid)
     await _turno(tid, tercera, monkeypatch, ["Hola."], texto="hola, buenas tardes")
     d = await _decision(tid, tercera)
-    assert d["route_source"] == "default" and d["active_instance_id"] == str(inst["general"])
+    assert d["route_source"] == "default" and d["active_instance_id"] == str(inst["atencion"])
 
 
 # ---------------------------------------------------------------- dogfooding de solvershub (HU-AOS-22)
@@ -591,10 +565,10 @@ async def _ruta(tid: uuid.UUID, cid: uuid.UUID, monkeypatch: Any, texto: str) ->
 
 async def test_dogfooding_solvershub_ventas_agenda_y_suscripciones(_ruteo: None, monkeypatch: Any) -> None:
     """HU-AOS-22: el negocio con el preset `suscripciones` v2 y las frases propias de Ventas.
-    En sombra atiende el General y se registra la ruta; en activo «quiero agendar una demo» va a
+    «quiero agendar una demo» va a
     Agenda, «quiero contratar Premium» y «cuánto cuesta el plan basic» a Suscripciones (que desde
     SPEC-43 vende los planes con `contratar_plan`), «cambiar mi plan» a Suscripciones por su regla
-    y un saludo al General. «cuánto cuesta el plan basic» caía en el disparador de cambiar_plan
+    y un saludo al especialista por defecto. «cuánto cuesta el plan basic» caía en el disparador de cambiar_plan
     hasta publicar las frases de `contratar_plan`."""
     from core.releases.promocion import promover
     from core.shared.tenant import tenant_scope
@@ -604,16 +578,9 @@ async def test_dogfooding_solvershub_ventas_agenda_y_suscripciones(_ruteo: None,
     async with tenant_scope(tid):
         await promover(tid, cid, candidata, actor="test")
     inst = await _instancias(tid, cid)
-    assert {"general", "ventas", "agenda", "suscripciones"} <= set(inst)
+    assert {"atencion", "ventas", "agenda", "suscripciones"} <= set(inst)
 
-    # Sombra: decide y registra, pero atiende el General (el de siempre).
-    await _modo(tid, "shadow")
-    d = await _ruta(tid, cid, monkeypatch, DEMO)
-    assert d["route_source"] == "default" and d["active_instance_id"] == str(inst["general"])
-    assert d["shadow_route"]["agent_key"] == "agenda" and d["shadow_route"]["rule_id"] == "preset_agenda_palabras"
-
-    # Activo, sin las frases de Ventas: la pregunta de precio cae en Suscripciones por el disparador.
-    await _modo(tid, "active")
+    # Sin las frases de Ventas: la pregunta de precio cae en Suscripciones por el disparador.
     d = await _ruta(tid, cid, monkeypatch, "cuánto cuesta el plan basic")
     assert d["route_source"] == "trigger" and d["active_instance_id"] == str(inst["suscripciones"])
 
@@ -625,7 +592,7 @@ async def test_dogfooding_solvershub_ventas_agenda_y_suscripciones(_ruteo: None,
         ("quiero contratar Premium", "suscripciones", "trigger", None),
         ("cambiar mi plan", "suscripciones", "rule", "preset_suscripciones_mi_plan"),
         ("cuánto cuesta el plan basic", "suscripciones", "trigger", None),
-        ("hola, buenas tardes", "general", "default", None),
+        ("hola, buenas tardes", "atencion", "default", None),
     ]
     for texto, agente, fuente, regla in esperados:
         d = await _ruta(tid, cid, monkeypatch, texto)
@@ -685,7 +652,6 @@ async def test_agenda_captura_el_lead_del_prospecto_y_agenda_la_demo(_ruteo: Non
     assert agenda.estado == "creado" and not agenda.avisos, agenda
     async with tenant_scope(tid):
         await promover(tid, cid, candidata, actor="test")
-    await _modo(tid, "active")
     inst = await _instancias(tid, cid)
 
     dia = (datetime.now(ZoneInfo("America/Bogota")) + timedelta(days=7)).date().isoformat()
@@ -738,7 +704,6 @@ async def test_agenda_no_duplica_el_lead_de_un_cliente_existente(_ruteo: None, m
     tid, cid, _reporte, candidata, _manifest = await _negocio_con_preset_suscripciones()
     async with tenant_scope(tid):
         await promover(tid, cid, candidata, actor="test")
-    await _modo(tid, "active")
     inst = await _instancias(tid, cid)
 
     previa = await _conversacion(tid, cid)

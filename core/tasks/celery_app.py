@@ -199,6 +199,17 @@ def _memory_retention() -> Any:
     return purge_expired_memory()
 
 
+# Purga de pruebas huérfanas del panel (HU-ARCH-14): red de seguridad del cierre.
+_PLAYGROUND_CLEANUP_TASK = "core.playground_cleanup"
+
+
+@core_cron(_PLAYGROUND_CLEANUP_TASK, crontab(minute="10"))
+def _playground_cleanup() -> Any:
+    from core.tasks.playground_cleanup import purgar_pruebas_vencidas
+
+    return purgar_pruebas_vencidas()
+
+
 # Retención del centro de notificaciones (ADR-0167): baja lógica a los 180 días.
 _NOTIFICATIONS_RETENTION_TASK = "core.notifications_retention"
 
@@ -265,7 +276,7 @@ def _memory_consolidation() -> Any:
 
 
 # Esperas vencidas del motor de procedimientos (HU-AOS-07): una tarea que espera el pago y no lo
-# recibe en 72 h se cancela con `espera_vencida`. Sin negocios con `aos_procedures`, no hace nada.
+# recibe en 72 h se cancela con `espera_vencida`.
 _KERNEL_ESPERAS_TASK = "core.kernel_esperas_vencidas"
 
 

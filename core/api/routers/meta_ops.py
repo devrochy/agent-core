@@ -487,6 +487,12 @@ class WawebState(BaseModel):
     status: str
     risk_ok: bool
     jid: str | None = None
+    phone: str | None = None
+    push_name: str | None = None
+    business_name: str | None = None
+    platform: str | None = None
+    linked_at: datetime | None = None
+    last_connected_at: datetime | None = None
     qr_image: str | None = None
     last_error: str | None = None
 

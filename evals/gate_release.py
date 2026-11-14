@@ -13,7 +13,7 @@ Qué hace, en `agentcore_eval`:
 2. Toma un candado de sesión (las corridas se serializan: la foto conserva los UUID de la release) y
    purga los restos de una corrida caída (`gate-eval-*` suspendidos o viejos).
 3. Por cada set de escenarios: negocio efímero (`preparar_negocio` del set, sin motor legado), foto de
-   la release candidata (`snapshot.importar`), `aos_runtime = v3` y `aos_procedures`, y los escenarios
+   la release candidata (`snapshot.importar`) y los escenarios
    `k` veces con `journeys.correr_journey` (canal `test`, pasarela y correo simulados).
 4. Tras cada INTENTO suma el gasto (el `usage_ledger` del efímero y el cliente simulado, que no deja fila)
    y corta al pasar el presupuesto.
@@ -218,13 +218,6 @@ class ContadorDelSimulador:
         simulador.ClienteSimulado.siguiente = contado  # type: ignore[method-assign]
 
 
-async def _encender_v3(dueno: Any, tenant_id: uuid.UUID) -> None:
-    async with dueno.begin() as conn:
-        await conn.execute(
-            text("update tenants set aos_runtime = 'v3', aos_procedures = true where id = :t"), {"t": tenant_id}
-        )
-
-
 async def _correr_set(
     entrada: dict[str, Any],
     set_id: str,
@@ -247,12 +240,11 @@ async def _correr_set(
     pagos = journeys.PagoSimulado(monto_minimo=float((negocio.get("pagos_simulados") or {}).get("monto_minimo", 0)))
     slug = f"{PREFIJO_SLUG}{uuid.uuid4().hex[:10]}"
     # Se registra antes de crearlo: si `preparar_negocio` falla a medias, el `finally` lo purga.
-    tenant_id = await journeys.preparar_negocio(negocio, pagos, slug=slug, replica=False, motor=False)
+    tenant_id = await journeys.preparar_negocio(negocio, pagos, slug=slug, replica=False)
     estado["efimeros"].append(tenant_id)
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             conexion = await snapshot.importar(session, tenant_id, entrada["foto"])
-    await _encender_v3(dueno, tenant_id)
     journeys._CONEXION_V3[tenant_id] = conexion
     resultados: list[dict[str, Any]] = []
     raiz_grabaciones = journeys.EVALS_DIR / "cassettes" / "journeys" / set_id

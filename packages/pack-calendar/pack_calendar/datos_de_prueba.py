@@ -15,7 +15,12 @@ from sqlalchemy import select, update
 
 from core.db.models import utcnow
 from core.db.session import get_session
-from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
+from core.qa.contrato_datos import (
+    ContextoDeNegocio,
+    FormaDeDatos,
+    RegistroDescrito,
+    RegistroSembrado,
+)
 from core.shared.tenant import tenant_scope
 from pack_calendar.models import Appointment, AppointmentType, CalendarBlock
 
@@ -99,3 +104,33 @@ async def retirar(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> in
                 res = await session.execute(update(modelo).where(*condiciones).values(deleted_at=utcnow()))
                 total += res.rowcount or 0  # type: ignore[attr-defined]
     return total
+
+
+def _duracion(minutos: int) -> str:
+    horas, resto = divmod(minutos, 60)
+    if not horas:
+        return f"{resto} min"
+    return f"{horas} h {resto} min" if resto else f"{horas} h"
+
+
+async def describir(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> list[RegistroDescrito]:
+    """Los servicios (tipos de cita) del lote con su duración (HU-QA-16). Las citas y los bloqueos no
+    salen como filas: sin la zona del negocio su hora sería engañosa, y el agente los consulta solo."""
+    ids = [r.ref for r in registros if r.kind == "tipo"]
+    if not ids:
+        return []
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            filas = (
+                await session.execute(
+                    select(AppointmentType.id, AppointmentType.name, AppointmentType.duration_minutes).where(
+                        AppointmentType.tenant_id == tenant_id,
+                        AppointmentType.id.in_(ids),
+                        AppointmentType.deleted_at.is_(None),
+                    )
+                )
+            ).all()
+    return [
+        RegistroDescrito(kind="tipo", ref=tipo_id, nombre=nombre, detalle=_duracion(int(minutos or 0)))
+        for tipo_id, nombre, minutos in filas
+    ]

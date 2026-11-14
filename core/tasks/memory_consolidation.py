@@ -8,9 +8,6 @@ no suma latencia ni locks a la conversación, y un fallo no tumba ningún turno.
 
 Una tarea que no deja hechos (sin datos confirmados, o solo de pago) se vuelve a mirar cada
 noche hasta salir de la ventana: es una lectura por el índice `ix_conversation_tasks_closed`.
-
-Hoy no hay tareas sin `tenants.aos_procedures` encendida, así que con las banderas apagadas
-esto no escribe nada.
 """
 
 from __future__ import annotations

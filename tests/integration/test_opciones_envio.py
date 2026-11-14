@@ -37,7 +37,7 @@ from test_opciones_toque_entorno import (  # noqa: F401  (fixtures y ayudas del 
     _LlmProhibido,
     _salientes,
     herramienta,
-    legacy,
+    negocio_opciones,
 )
 
 pytestmark = [
@@ -99,6 +99,8 @@ async def _sql(tid: uuid.UUID, sql: str, **params: Any) -> list[Any]:
 @pytest.fixture(scope="module")
 async def negocios() -> AsyncIterator[tuple[Negocio, Negocio, Negocio]]:
     """A y B con la bandera encendida; `apagado` sin ella (el valor por defecto)."""
+    from release_de_prueba import montar_release_en
+
     from core.alta_negocio import onboard_tenant
     from core.kernel.opciones import bandera
     from core.shared.tenant import tenant_scope
@@ -111,6 +113,9 @@ async def negocios() -> AsyncIterator[tuple[Negocio, Negocio, Negocio]]:
         if encendido:
             async with tenant_scope(tid):
                 await bandera.fijar(tid, True, actor="test")
+        # Todo turno corre sobre la release de su conexión (ADR-0191): la de WhatsApp y la del chat web.
+        for canal in ("whatsapp", "web"):
+            await montar_release_en(tid, canal)
         salida.append(Negocio(tid, slug))
     yield salida[0], salida[1], salida[2]
     for n in salida:
@@ -175,6 +180,9 @@ async def conversacion(
         )
         s.add(conv)
         await s.flush()
+        if meta is not None:  # la de una cuenta de Meta propia: sin la conexión de pruebas que pone el conftest
+            conv.connection_id = None
+            await s.flush()
         return conv.id
 
     return await _scoped(tid, _f)
@@ -758,12 +766,12 @@ async def test_la_tool_solo_se_ofrece_con_la_bandera_y_envia_a_la_conversacion_d
 
 
 # ---------------------------------------------------------------- journey: envío → toque → respuesta, LLM en cero
-async def test_journey_envio_toque_resuelto_respuesta_fija_con_el_llm_en_cero(legacy, herramienta, cola, monkeypatch) -> None:  # type: ignore[no-untyped-def]  # noqa: F811
+async def test_journey_envio_toque_resuelto_respuesta_fija_con_el_llm_en_cero(negocio_opciones, herramienta, cola, monkeypatch) -> None:  # type: ignore[no-untyped-def]  # noqa: F811
     from core.kernel.opciones import payload
     from core.orchestrator import consumer
     from core.shared.tenant import tenant_scope
 
-    tid, _ = legacy
+    tid, _ = negocio_opciones
     await _binding(tid)
     await _bandera(tid, True)
     _inmediato(monkeypatch)

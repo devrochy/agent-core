@@ -61,8 +61,9 @@ async def _packs_registrados() -> None:
 
 async def _negocio(*, packs: list[str] | None = None) -> tuple[uuid.UUID, str, uuid.UUID]:
     """Negocio con una conexión conversacional, sus agentes base y la release 1. (tid, slug, conexión)."""
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
-    from core.releases.release_uno import backfill_releases
 
     slug = uniq("aos59")
     tid, _ = await onboard_tenant(name=f"AOS-59 {slug}", slug=slug, persona={"tone": "cercano"}, packs=packs)
@@ -75,20 +76,15 @@ async def _negocio(*, packs: list[str] | None = None) -> tuple[uuid.UUID, str, u
         t=tid,
         ext=uniq("ig"),
     )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     return tid, slug, cid
 
 
-async def _general(tid: uuid.UUID) -> uuid.UUID:
-    from core.agents.instancias import agentes_base
-    from core.agents.tolerante import KEY_GENERAL
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(tid):
-        async with get_session() as session:
-            return (await agentes_base(session, tid))[KEY_GENERAL]
+async def _especialista(tid: uuid.UUID) -> uuid.UUID:
+    """El especialista por defecto de la conexión (ADR-0192: ya no hay General)."""
+    (fila,) = await _sql(tid, "select id from agents where tenant_id = :t and key = 'atencion' and deleted_at is null", t=tid)
+    return fila[0]
 
 
 def _catalogo_de_antes() -> Any:
@@ -101,7 +97,7 @@ def _catalogo_de_antes() -> Any:
 
 
 async def _publicar_con_lo_retirado(tid: uuid.UUID, aid: uuid.UUID, *, distinto: bool = True) -> Any:
-    """Publica una versión del General que nombra la acción y el procedimiento retirados."""
+    """Publica una versión del especialista que nombra la acción y el procedimiento retirados."""
     from core.agents import versiones
     from core.shared.tenant import tenant_scope
 
@@ -174,7 +170,7 @@ async def _negocio_del_incidente(*, distinto: bool = True, **kw: Any) -> tuple[u
     """`distinto`: la versión con lo retirado cambia además otro campo, así que corregida no repite
     ninguna versión anterior (con False, queda idéntica a la 1: el caso del hash repetido)."""
     tid, slug, cid = await _negocio(**kw)
-    aid = await _general(tid)
+    aid = await _especialista(tid)
     version = await _publicar_con_lo_retirado(tid, aid, distinto=distinto)
     await _release_a_mano(tid, cid, version, aid)
     return tid, slug, cid, aid, version
@@ -225,7 +221,7 @@ async def test_auditar_ve_la_version_y_la_release_activa_y_no_escribe_nada() -> 
     assert negocio.afectado
     en_versiones = {(f.agente, f.version, f.ruta, f.codigo, f.nombre) for f in negocio.filas if f.ambito == "version"}
     assert any(
-        (agente, numero, codigo, nombre) == ("general", version.version, "procedimiento_inexistente", VIEJO)
+        (agente, numero, codigo, nombre) == ("atencion", version.version, "procedimiento_inexistente", VIEJO)
         and ruta.startswith("procedures[")
         for agente, numero, ruta, codigo, nombre in en_versiones
     )
@@ -306,13 +302,13 @@ async def test_migrar_dry_run_no_escribe_y_aplicar_publica_reconstruye_y_es_idem
 
     seco = await _migrar(tid, aplicar=False)
     (n,) = seco.negocios
-    assert seco.dry_run and [(a.agente, a.accion) for a in n.agentes] == [("general", "por_migrar")]
+    assert seco.dry_run and [(a.agente, a.accion) for a in n.agentes] == [("atencion", "por_migrar")]
     assert [c.accion for c in n.conexiones] == ["por_reconstruir"]
     assert await _conteos(tid) == antes
 
     real = await _migrar(tid, aplicar=True)
     (n,) = real.negocios
-    assert not real.fallo and [(a.agente, a.accion) for a in n.agentes] == [("general", "migrada")]
+    assert not real.fallo and [(a.agente, a.accion) for a in n.agentes] == [("atencion", "migrada")]
     assert [c.accion for c in n.conexiones] == ["promovida"]
 
     async with tenant_scope(tid):
@@ -325,10 +321,10 @@ async def test_migrar_dry_run_no_escribe_y_aplicar_publica_reconstruye_y_es_idem
 
     numero, manifiesto = await _activa(tid, cid)
     assert numero == 3
-    general = next(c for c in manifiesto["components"] if c["agent_id"] == str(aid))
-    assert general["version"] == nueva.version
-    assert VIEJO not in [p["id"] for p in general["procedures"]]
-    assert any(p["id"] == NUEVO for p in general["procedures"])
+    componente = next(c for c in manifiesto["components"] if c["agent_id"] == str(aid))
+    assert componente["version"] == nueva.version
+    assert VIEJO not in [p["id"] for p in componente["procedures"]]
+    assert any(p["id"] == NUEVO for p in componente["procedures"])
 
     # Quedó auditado y una segunda corrida no hace nada.
     despues = await _conteos(tid)
@@ -379,7 +375,7 @@ async def test_parte_de_la_ultima_version_publicada_y_no_toca_el_borrador() -> N
         publicada = (await versiones.listar_versiones(tid, aid))[0]
     assert despues.content == antes  # el borrador no se tocó
     assert publicada.content["description"] != "Lo que el dueño está redactando"  # salió de la publicada
-    assert [(f.agente, f.nombre) for f in n.borradores if f.nombre == ACCION] == [("general", ACCION)]
+    assert [(f.agente, f.nombre) for f in n.borradores if f.nombre == ACCION] == [("atencion", ACCION)]
 
 
 async def test_con_un_canary_en_curso_construye_la_release_pero_no_la_promueve() -> None:

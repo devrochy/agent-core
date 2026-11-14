@@ -1,0 +1,128 @@
+name: base-segura
+
+# Decide si un PR atrasado respecto a su base puede mergearse sin actualizarlo.
+# Reemplaza a «Require branches to be up to date»: solo pide actualizar cuando
+# la base cambió algo que se cruza con el PR, para no re-correr el CI pesado en
+# cada merge. Publica el commit status `base-segura` sobre el head del PR.
+#
+# pull_request_target: corre con el workflow de la base y un token con escritura
+# (también en PR de Dependabot). NO hace checkout del código del PR: solo API.
+# Runner `livianos`: runner aparte en la misma máquina, sin las etiquetas por
+# defecto, para no hacer cola detrás del CI pesado.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  statuses: write
+  pull-requests: read
+  contents: read
+
+concurrency:
+  group: base-segura-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  base-segura:
+    runs-on: livianos
+    timeout-minutes: 5
+    steps:
+      - name: Evaluar PR frente a su base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENTO: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          RAMA: ${{ github.ref_name }}
+          URL_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Si la base cambió tipos de la API generados, cuenta solo para PR que tocan código.
+          TIPOS_API: ''
+          CODIGO_PR: ''
+          # Si la base cambió alguno de estos, todo PR atrasado debe actualizarse.
+          SENSIBLES_BASE: |
+            ^\.github/workflows/
+            ^uv\.lock$
+            ^pyproject\.toml$
+        run: |
+          set -uo pipefail
+          tmp=$(mktemp -d)
+
+          publicar() { # sha estado descripción
+            gh api -X POST "repos/$REPO/statuses/$1" -f state="$2" -f context=base-segura \
+              -f description="${3:0:140}" -f target_url="$URL_RUN" >/dev/null
+          }
+
+          evaluar() {
+            local n=$1 pr base sha cmp atras mb cruces=""
+            pr=$(gh api "repos/$REPO/pulls/$n") || return 1
+            [ "$(jq -r .state <<<"$pr")" = open ] || return 0
+            base=$(jq -r .base.ref <<<"$pr")
+            sha=$(jq -r .head.sha <<<"$pr")
+
+            cmp=$(gh api "repos/$REPO/compare/${base}...${sha}") || { publicar "$sha" error "No se pudo comparar con $base"; return 1; }
+            atras=$(jq -r .behind_by <<<"$cmp")
+            if [ "$atras" = 0 ]; then
+              publicar "$sha" success "Al día con $base"
+              echo "#$n: al día"
+              return 0
+            fi
+            mb=$(jq -r .merge_base_commit.sha <<<"$cmp")
+
+            # Archivos que cambió la base desde que el PR se separó (incluye nombres anteriores).
+            gh api "repos/$REPO/compare/${mb}...${base}" \
+              -q '(.files // [])[] | .filename, (.previous_filename // empty)' | sort -u >"$tmp/base" || return 1
+            gh api --paginate "repos/$REPO/pulls/$n/files" \
+              -q '.[] | .filename, (.previous_filename // empty)' | sort -u >"$tmp/pr" || return 1
+
+            # La API corta en 300 archivos: si se llega, no se puede comparar bien.
+            if [ "$(wc -l <"$tmp/base")" -ge 300 ] || [ "$(wc -l <"$tmp/pr")" -ge 3000 ]; then
+              cruces="demasiados archivos para comparar"
+            fi
+
+            # a) archivos en común
+            comunes=$(comm -12 "$tmp/base" "$tmp/pr" | head -5 | paste -sd, -)
+            [ -n "$comunes" ] && cruces="${cruces:+$cruces; }$comunes"
+
+            # b) la base tocó algo sensible para cualquier PR
+            while IFS= read -r re; do
+              [ -z "$re" ] && continue
+              # Cambiar este mismo check no obliga a actualizar: corre con la versión de la base.
+              f=$(grep -v '^\.github/workflows/base-segura\.yml$' "$tmp/base" | grep -E -m1 "$re" || true)
+              [ -n "$f" ] && cruces="${cruces:+$cruces; }base: $f"
+            done <<<"$SENSIBLES_BASE"
+
+            # c) la base cambió los tipos de la API y el PR toca código
+            if [ -n "$TIPOS_API" ] && grep -qE "$TIPOS_API" "$tmp/base" && grep -qE "$CODIGO_PR" "$tmp/pr"; then
+              cruces="${cruces:+$cruces; }base: tipos de la API"
+            fi
+
+            # d) los dos lados agregan migraciones en la misma cadena de Alembic
+            sed -nE 's#^(.*alembic/versions)/[^/]+$#\1#p' "$tmp/base" | sort -u >"$tmp/mig_base"
+            sed -nE 's#^(.*alembic/versions)/[^/]+$#\1#p' "$tmp/pr" | sort -u >"$tmp/mig_pr"
+            mig=$(comm -12 "$tmp/mig_base" "$tmp/mig_pr" | paste -sd, -)
+            [ -n "$mig" ] && cruces="${cruces:+$cruces; }migraciones en $mig"
+
+            if [ -n "$cruces" ]; then
+              publicar "$sha" failure "Atrasado $atras commits; actualizar: $cruces"
+              echo "#$n: atrasado $atras, se cruza en: $cruces"
+            else
+              publicar "$sha" success "Atrasado $atras commits, sin cruce con $base"
+              echo "#$n: atrasado $atras, sin cruce"
+            fi
+          }
+
+          case "$EVENTO" in
+            pull_request_target) prs="$PR" ;;
+            push) prs=$(gh pr list -R "$REPO" --state open --base "$RAMA" --limit 100 --json number -q '.[].number') ;;
+            *) prs=$(gh pr list -R "$REPO" --state open --limit 100 --json number -q '.[].number') ;;
+          esac
+
+          fallos=0
+          for n in $prs; do
+            evaluar "$n" || { echo "::warning::No se pudo evaluar #$n"; fallos=1; }
+          done
+          exit $fallos

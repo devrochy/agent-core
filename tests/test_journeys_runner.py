@@ -189,41 +189,8 @@ def test_documento_y_celular_unicos_por_intento() -> None:
     )
 
 
-def test_runtime_en_un_set_con_motor_mide_con_y_sin_procedimientos() -> None:
-    # pass^k con y sin el motor sobre el mismo set (ADR-0112): legacy es la línea base de un agente.
-    con_motor = {"motor_de_procedimientos": True}
-    assert journeys.modo_de_runtime(con_motor, None) == (None, False)  # lo de siempre: lo decide el set
-    assert journeys.modo_de_runtime(con_motor, "legacy") == (False, False)
-    assert journeys.modo_de_runtime(con_motor, "v3") == (True, False)  # el motor no monta releases
-    sin_motor: dict[str, object] = {}
-    assert journeys.modo_de_runtime(sin_motor, None) == (None, False)
-    assert journeys.modo_de_runtime(sin_motor, "legacy") == (False, False)
-    assert journeys.modo_de_runtime(sin_motor, "v3") == (False, True)  # release 1 por conexión (HU-AOS-15)
-
-
-def test_sin_el_motor_se_omiten_los_journeys_que_lo_requieren() -> None:
-    # contratar_plan / cambiar_plan solo existen con el motor (`solo_con_motor_activo`, SPEC-43): como
-    # línea base darían 0 % por diseño. Solo `--runtime legacy` sobre un set con motor los omite.
-    negocio, rutas = journeys.rutas_del_set("procedimientos", [""])
-    requieren = {r.stem for r in rutas if json.loads(r.read_text(encoding="utf-8")).get("requiere_motor")}
-    assert requieren == {
-        "01-contratar-premium-mensual",
-        "02-cambia-de-plan-antes-de-confirmar",
-        "05-informar-planes-sin-comprar",  # sub_listar_planes solo se ofrece con el motor (ADR-0185)
-    }
-
-    a_correr, omitidos = journeys.separar_los_que_requieren_motor(rutas, negocio, "legacy")
-    assert set(omitidos) == requieren
-    assert {r.stem for r in a_correr} == {r.stem for r in rutas} - requieren
-    for runtime in ("v3", None):
-        assert journeys.separar_los_que_requieren_motor(rutas, negocio, runtime) == (rutas, [])
-    # Un set sin motor no se toca (v3 ahí monta releases, no el motor).
-    assert journeys.separar_los_que_requieren_motor(rutas, {}, "legacy") == (rutas, [])
-
-
 def test_el_set_de_procedimientos_configura_solo_packs_que_activa() -> None:
     negocio, rutas = journeys.rutas_del_set("procedimientos", [""])
-    assert negocio["motor_de_procedimientos"] is True
     assert set(negocio["config"]) <= set(negocio["packs"])
     assert "pack_calendar" in negocio["packs"]  # agendar_cita (04-agendar-una-demo)
     assert {r.stem for r in rutas} >= {"04-agendar-una-demo"}

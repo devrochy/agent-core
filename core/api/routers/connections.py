@@ -44,6 +44,14 @@ class ConnectionItem(BaseModel):
     is_primary: bool
     created_at: datetime | None
     coexistence: bool = False
+    display_name: str | None = Field(
+        default=None,
+        description="Nombre visible de la conexión (p. ej. perfil de WhatsApp Web); null si no se conoce.",
+    )
+    display_phone_number: str | None = Field(
+        default=None,
+        description="Número visible de la conexión (WhatsApp Web); null si no se conoce.",
+    )
 
 
 class ConnectionsResponse(BaseModel):
@@ -58,6 +66,12 @@ async def list_connections_endpoint(
     tenant_id = principal.tenant_id
     connections = await list_connections()
 
+    identidades: dict[uuid.UUID, Any] = {}
+    if tenant_id is not None and connections:
+        from core.waweb.connections import identities_by_connection
+
+        identidades = await identities_by_connection(tenant_id, [c.id for c in connections])
+
     rows = [
         ConnectionItem(
             id=c.id,
@@ -70,6 +84,8 @@ async def list_connections_endpoint(
             active=c.active,
             is_primary=c.is_primary,
             created_at=c.created_at,
+            display_name=(identidades.get(c.id).display_name if identidades.get(c.id) else None),
+            display_phone_number=(identidades.get(c.id).phone if identidades.get(c.id) else None),
         )
         for c in connections
     ]
@@ -125,6 +141,7 @@ async def list_connections_endpoint(
                     is_primary=False,
                     created_at=mc.created_at,
                     coexistence=bool((mc.health or {}).get("coexistence")),
+                    display_phone_number=phones.get(mc.id),
                 )
             )
 
@@ -181,9 +198,13 @@ class ConsoleConnection(BaseModel):
     display_phone_number: str | None = Field(
         default=None,
         description=(
-            "WhatsApp oficial: el número como lo sincronizó Meta (p. ej. «+57 300 1234567»). "
-            "Null en los demás canales o si el número aún no se sincronizó."
+            "Número visible: en WhatsApp oficial el que sincronizó Meta (p. ej. «+57 300 1234567»); "
+            "en WhatsApp Web, el del teléfono vinculado. Null si aún no se conoce."
         ),
+    )
+    display_name: str | None = Field(
+        default=None,
+        description="Nombre visible del WhatsApp Web (perfil o negocio); null en los demás canales.",
     )
     conversational: bool
     active: bool
@@ -230,10 +251,6 @@ class ConnectionsConsole(BaseModel):
     page: int
     page_size: int
     has_more: bool
-    runtime: Literal["legacy", "v3"]
-    routing: Literal["off", "shadow", "active"] = Field(
-        description="`tenants.aos_routing`, solo lectura."
-    )
     consistency: ConsoleConsistency | None = Field(description="pass^k del último run del negocio.")
     can_edit: bool = Field(description="Acceso de escritura a `connections`.")
     unassigned_agents: list[ConsoleUnassignedAgent] = Field(
@@ -288,6 +305,7 @@ async def connections_console(
                 label=c.label,
                 external_id=c.external_id,
                 display_phone_number=c.display_phone_number,
+                display_name=c.display_name,
                 conversational=c.conversational,
                 active=c.active,
                 is_primary=c.is_primary,
@@ -315,8 +333,6 @@ async def connections_console(
         page=page,
         page_size=page_size,
         has_more=page * page_size < datos.total,
-        runtime="v3" if datos.runtime == "v3" else "legacy",
-        routing=datos.routing if datos.routing in ("off", "shadow", "active") else "off",  # type: ignore[arg-type]
         consistency=(
             ConsoleConsistency(
                 pass_k=datos.consistency.pass_k,

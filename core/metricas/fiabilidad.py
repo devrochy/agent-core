@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy import text
 
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import sql_no_es_prueba
 
 FALSO_POSITIVO = "verifier_false_positive"
 MIN_TURNOS = 20
@@ -78,6 +79,7 @@ def _turnos(f: Filtro, alias: str = "d") -> tuple[str, dict[str, Any]]:
     partes = [
         f"{alias}.tenant_id = :t", f"{alias}.created_at >= :desde", f"{alias}.created_at < :hasta",
         f"{alias}.outcome IN ('routed', 'escalated')",
+        sql_no_es_prueba(f"{alias}.conversation_id"),
     ]
     params: dict[str, Any] = {"desde": f.desde, "hasta": f.hasta}
     if f.connection_id is not None:
@@ -293,6 +295,7 @@ async def completitud(session: Any, tenant_id: uuid.UUID, f: Filtro) -> list[dic
                 f"FROM conversation_tasks t {union}"
                 "WHERE t.tenant_id = :t AND t.parent_task_id IS NULL AND t.status = ANY(:terminales) "
                 f"AND t.completed_at >= :desde AND t.completed_at < :hasta{extra} "
+                f"AND {sql_no_es_prueba('t.conversation_id')} "
                 "GROUP BY 1 ORDER BY 2 DESC"
             ),
             params,
@@ -416,7 +419,10 @@ async def costo(session: Any, tenant_id: uuid.UUID, f: Filtro, *, por: str) -> l
 
     _exigir_scope(tenant_id)
     params: dict[str, Any] = {"t": tenant_id, "desde": f.desde, "hasta": f.hasta, "fuera": list(NO_ES_ACTIVIDAD)}
-    filtro = "u.tenant_id = :t AND u.created_at >= :desde AND u.created_at < :hasta AND u.kind <> ALL(:fuera)"
+    filtro = (
+        "u.tenant_id = :t AND u.created_at >= :desde AND u.created_at < :hasta "
+        f"AND u.kind <> ALL(:fuera) AND {sql_no_es_prueba('u.conversation_id')}"
+    )
     if f.connection_id is not None:
         filtro += " AND u.connection_id = :c"
         params["c"] = f.connection_id

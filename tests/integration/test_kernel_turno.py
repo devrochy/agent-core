@@ -365,7 +365,7 @@ async def test_conexion_pausada_guarda_sin_ia_y_no_ejecuta_el_coordinador(monkey
     conv = await _conversacion_de(tid, cliente)
     [d] = await _decisiones(tid, conv)
     assert (d["outcome"], d["blocked_by"]) == ("blocked", "connection_paused")
-    assert d["connection_id"] is None, "Embedded Signup/BYOK: sin conexión canónica hasta HU-AOS-11"
+    assert d["connection_id"] is not None, "el consumer le asegura al número su conexión canónica (ADR-0191)"
     assert [r["status"] for r in await _resultado(tid, d["id"])] == ["silent"]
     assert len(await _filas(tid, "SELECT 1 FROM messages WHERE conversation_id = :c", c=conv)) == 1
 

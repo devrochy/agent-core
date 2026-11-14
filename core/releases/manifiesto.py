@@ -14,7 +14,7 @@ el CI de la release del motor, ADR-0117 §2 y ADR-0120):
   `(pack_id, version, manifest_hash)` registrada en `pack_versions`; `tenant_plugins`: los
   plugins del negocio (ADR-0089) solo por nombre.
 - `playbook_overrides`: los overrides del negocio (ADR-0026) de los nombres de la allowlist,
-  con su texto y hash. En runtime (con `aos_runtime = 'v3'`) se leen de aquí, no de `TENANTS_ROOT`.
+  con su texto y hash. En runtime se leen de aquí, no de `TENANTS_ROOT`.
 - `flow_tenant`: las secciones crudas del `flow.json` del negocio (ADR-0109) con su hash, o
   `null`. Los procedimientos abiertos se derivan al cargar la release (flujo del core y de los
   packs del binario + estas secciones), no se congelan.

@@ -23,6 +23,7 @@ from core.kernel.oferta import sin_motor_activo, solo_con_motor_activo
 from core.mcp.types import BaseSkill, MCPTool, RegistroCreado, ToolContext
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from pack_cobranza import sandbox as sandbox_prueba
 from pack_cobranza.enlazar import cliente_por_telefono
 from pack_cobranza.models import (
     Abono,
@@ -180,6 +181,7 @@ class CobranzaSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.consultar_saldo,
+                solo_lectura=True,
             ),
             MCPTool(
                 name="cob_estado_cuenta",
@@ -189,6 +191,7 @@ class CobranzaSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.estado_cuenta,
+                solo_lectura=True,
             ),
             MCPTool(
                 name="cob_evaluar_negociacion",
@@ -206,6 +209,7 @@ class CobranzaSkill(BaseSkill):
                     "required": ["tipo", "valor"],
                 },
                 handler=self.evaluar_negociacion_tool,
+                solo_lectura=True,
             ),
             MCPTool(
                 name="cob_registrar_promesa_pago",
@@ -223,6 +227,8 @@ class CobranzaSkill(BaseSkill):
                     "required": ["fecha", "valor"],
                 },
                 handler=self.registrar_promesa,
+                side_effects=True,
+                simular=sandbox_prueba.simular_registrar_promesa,
                 crea_registro=_PROMESA_CREADA,
                 # Con el motor activo la promesa va por el procedimiento (HU-AOS-08).
                 connection_predicate=sin_motor_activo(),
@@ -251,6 +257,7 @@ class CobranzaSkill(BaseSkill):
                     "required": [],
                 },
                 handler=self.opciones_promesa,
+                solo_lectura=True,
                 connection_predicate=solo_con_motor_activo(),
             ),
             MCPTool(
@@ -274,6 +281,8 @@ class CobranzaSkill(BaseSkill):
                     "required": ["fecha", "alcance", "monto"],
                 },
                 handler=self.registrar_promesa_saldo,
+                side_effects=True,
+                simular=sandbox_prueba.simular_registrar_promesa_saldo,
                 crea_registro=_PROMESA_CREADA,
                 connection_predicate=solo_con_motor_activo(),
             ),
@@ -293,6 +302,8 @@ class CobranzaSkill(BaseSkill):
                     "required": ["valor"],
                 },
                 handler=self.registrar_abono,
+                side_effects=True,
+                simular=sandbox_prueba.simular_registrar_abono,
                 sensible=True,
             ),
             MCPTool(
@@ -304,6 +315,8 @@ class CobranzaSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.consultar_suscripcion,
+                solo_lectura=True,
+                simular=sandbox_prueba.simular_consultar_suscripcion,
             ),
             MCPTool(
                 name="cob_crear_suscripcion",
@@ -322,6 +335,8 @@ class CobranzaSkill(BaseSkill):
                     "required": ["concepto", "valor"],
                 },
                 handler=self.crear_suscripcion,
+                side_effects=True,
+                simular=sandbox_prueba.simular_crear_suscripcion,
             ),
             MCPTool(
                 name="cob_pausar_suscripcion",
@@ -335,6 +350,8 @@ class CobranzaSkill(BaseSkill):
                     "required": [],
                 },
                 handler=self.pausar_suscripcion,
+                side_effects=True,
+                simular=sandbox_prueba.simular_pausar_suscripcion,
             ),
             MCPTool(
                 name="cob_cancelar_suscripcion",
@@ -348,6 +365,8 @@ class CobranzaSkill(BaseSkill):
                     "required": [],
                 },
                 handler=self.cancelar_suscripcion,
+                side_effects=True,
+                simular=sandbox_prueba.simular_cancelar_suscripcion,
             ),
             MCPTool(
                 name="cob_renovar_suscripcion",
@@ -357,6 +376,8 @@ class CobranzaSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.renovar_suscripcion,
+                side_effects=True,
+                simular=sandbox_prueba.simular_renovar_suscripcion,
             ),
             MCPTool(
                 name="cob_link_suscripcion",
@@ -366,6 +387,8 @@ class CobranzaSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.link_suscripcion,
+                side_effects=True,
+                simular=sandbox_prueba.simular_link_suscripcion,
             ),
         ]
         # NOTA (auditoría M3): las operaciones de administración/de campo (registrar

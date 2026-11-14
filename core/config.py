@@ -190,6 +190,9 @@ class Settings(BaseSettings):
     eval_redis_db: int = Field(default=15, ge=1, le=15, alias="EVAL_REDIS_DB")
     # Retención de la memoria semántica en días (ADR-0053). 0 = sin purga automática.
     memory_retention_days: int = Field(default=0, alias="MEMORY_RETENTION_DAYS")
+    # Huérfanas de la prueba del panel (HU-ARCH-14): se purgan las conversaciones `test`
+    # sin actividad en las últimas N horas. 0 = desactivado (solo se purga al cerrar).
+    playground_retention_hours: int = Field(default=6, ge=0, alias="PLAYGROUND_RETENTION_HOURS")
 
     # --- WhatsApp (Meta Cloud API) ---
     whatsapp_verify_token: str = Field(default="", alias="WHATSAPP_VERIFY_TOKEN")
@@ -250,11 +253,7 @@ class Settings(BaseSettings):
     message_split_style: SplitStyle = Field(default="un_mensaje", alias="MESSAGE_SPLIT_STYLE")
 
     # --- Agent OS (ADR-0112) ---
-    # Ruteo por (conexión, cliente) de ADR-0115: global por entorno porque su *contract* es
-    # global. Apagada, el consumer usa la conversación abierta del cliente (la de siempre).
-    # Se enciende antes que `tenants.aos_runtime = 'v3'` y se apaga después de volver todos a
-    # `legacy`.
-    aos_connection_routing: bool = Field(default=False, alias="AOS_CONNECTION_ROUTING")
+    # El ruteo por (conexión, cliente) de ADR-0115 ya no es una bandera: es siempre (ADR-0191).
 
     # --- Onboarding obligatorio (HU-SH-10, adenda a ADR-0124) ---
     # Fecha de corte (AAAA-MM-DD): solo los negocios creados desde ese día pasan por el recorrido
@@ -360,6 +359,16 @@ class Settings(BaseSettings):
     # 4000 es el supuesto de `modelo-de-precios.md` (calc_precios.py): PENDIENTE DEL DUEÑO fijar
     # la TRM oficial (HU-BILL-01). Rango acotado: un valor absurdo en un env no factura a todos.
     billing_trm_cop: float = Field(default=4000.0, ge=2000, le=8000, alias="BILLING_TRM_COP")
+    # Acciones de IA cotizadas (HU-BILL-16, ADR-0194, enmienda de ADR-0144 §11): antes de gastar
+    # se verifica que el crédito del mes alcance y, si no, 409 `plan_limit_creditos`. Encendido
+    # por decisión del dueño (D-71); apagado solo mide. No afecta los turnos ni la ingesta.
+    billing_bloquear_por_creditos: bool = Field(default=True, alias="BILLING_BLOQUEAR_POR_CREDITOS")
+    # Costo de referencia en USD de reconocer UNA imagen con la llave de la plataforma, para
+    # cotizar antes de llamar al proveedor: ~1.500 tokens de entrada y ~300 de salida con
+    # Claude Haiku 4.5 (`core/media/catalog.py`) ≈ 0,003. Lo registrado después es el costo real.
+    billing_vision_costo_referencia_usd: float = Field(
+        default=0.003, ge=0, le=1, alias="BILLING_VISION_COSTO_REFERENCIA_USD"
+    )
 
     # --- Observabilidad ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")

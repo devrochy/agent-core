@@ -14,6 +14,7 @@ import uuid
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
@@ -68,7 +69,17 @@ async def _negocio() -> uuid.UUID:
     from core.alta_negocio import onboard_tenant
 
     slug = f"escala-{uuid.uuid4().hex[:8]}"
-    tid, _ = await onboard_tenant(name=f"Escala {slug}", slug=slug, persona={"tone": "cercano"})
+    tid, _ = await onboard_tenant(
+        name=f"Escala {slug}", slug=slug, persona={"tone": "cercano"}, packs=["pack_commerce"], sembrar_ejemplos=False
+    )
+    # Todo turno corre sobre una release (ADR-0191) y solo ejecuta lo que concede la versión del
+    # agente (HU-ARCH-34): se conceden las tools de comercio que estos tests simulan.
+    from release_de_prueba import conceder_herramientas, montar_release_en
+
+    await montar_release_en(tid, "whatsapp")
+    await conceder_herramientas(
+        tid, [{"tool": t, "enabled": True, "scopes": []} for t in ("crear_pedido", "confirmar_pago_pedido")]
+    )
     return tid
 
 
@@ -208,6 +219,19 @@ async def test_en_el_playground_no_se_crea_escalacion(monkeypatch) -> None:
 
     t1 = await _negocio()
     conversation_id = await _conversacion(t1, channel=TEST_CHANNEL)
+    # El Centro de pruebas prueba por la conexión real del negocio (ADR-0191 §3).
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(t1):
+        async with get_session() as session:
+            await session.execute(
+                text(
+                    "update conversations set connection_id = (select id from channel_connections "
+                    "where tenant_id = :t and active_release_id is not null limit 1) where id = :c"
+                ),
+                {"t": t1, "c": conversation_id},
+            )
     _tools_falsas(monkeypatch, {"crear_pedido": {"error": ERROR_MONTO, "escalate": True}})
 
     result = await _turno(t1, conversation_id, monkeypatch, _Proveedor(["crear_pedido"]))

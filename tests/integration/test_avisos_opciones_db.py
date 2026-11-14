@@ -53,7 +53,7 @@ from test_opciones_toque_entorno import (
 from test_opciones_toque_entorno import (  # noqa: F401  (fixtures del journey)
     _binding,
     herramienta,
-    legacy,
+    negocio_opciones,
 )
 
 pytestmark = [

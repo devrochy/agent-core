@@ -7,7 +7,7 @@ prueba. Gherkin de la HU:
 
 - **Pedido con entrega:** a domicilio, sin dirección (o sin confirmarla) la tarea no pasa a
   confirmar.
-Más: bandera apagada. Los recorridos de plan (elegir, cotizar, inscribir, Free sin link, datos del negocio
+Los recorridos de plan (elegir, cotizar, inscribir, Free sin link, datos del negocio
 vendedor) salieron de commerce con SPEC-43/HU-COM-17: ahora viven en `pack_subscriptions.contratar_plan` y los
 cubre `test_procedimiento_contratar_plan`.
 
@@ -70,24 +70,6 @@ CATALOGO = {
 # ---------------------------------------------------------------- negocio y entorno
 
 
-async def _banderas(tid: uuid.UUID, encendidas: bool) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("update tenants set aos_procedures = false where id = :t"), {"t": tid})
-            await conn.execute(
-                text("update tenants set aos_runtime = :r, aos_procedures = :p where id = :t"),
-                {"t": tid, "r": "v3" if encendidas else "legacy", "p": encendidas},
-            )
-    finally:
-        await engine.dispose()
-
-
 @pytest.fixture(scope="module")
 async def negocio() -> AsyncIterator[tuple[uuid.UUID, Any]]:
     import pack_payments.payments as capacidad
@@ -116,7 +98,7 @@ async def negocio() -> AsyncIterator[tuple[uuid.UUID, Any]]:
     )
     async with tenant_scope(tid):
         await plugin_manager.save_config("pack_commerce", {"checkout_fields": CHECKOUT})
-    await _banderas(tid, True)
+    await journeys.encender_runtime_v3(tid)  # todo turno corre sobre la release de su conexión (ADR-0191)
     yield tid, pagos
     capacidad.build_provider = original
     await deactivate_tenant(str(tid))
@@ -290,42 +272,14 @@ async def test_una_direccion_sin_confirmar_atascada_se_desatasca(negocio, monkey
     assert tarea.stage == "confirmar" and (tarea.slots.get("address") or {}).get("confirmed") is True
 
 
-async def test_con_la_bandera_apagada_no_se_ofrece_nada_nuevo(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    tid, pagos = negocio
-    await _banderas(tid, False)
-    try:
-        ctx = await _cliente(tid, pagos)
-        _, guion = await _turno(ctx, monkeypatch, "¿Ya pagué?", [
-            ("verificar_pago_pedido", {}),  # inventada o inyectada: no se ejecuta
-            "Claro, te cuento.",
-        ])
-    finally:
-        await _banderas(tid, True)
-    assert "no está disponible" in guion.resultados[0]
-    assert await _filas(ctx, "select id from pack_commerce_quotes where tenant_id = :t and customer_id = :c",
-                        c=ctx.customer_id) == []
-    ofrecidas = set(guion.tools[0])
-    assert "generar_cotizacion" in ofrecidas and "crear_pedido" in ofrecidas
-    assert "verificar_pago_pedido" not in ofrecidas
-    assert not ofrecidas & {"iniciar_procedimiento", "actualizar_tarea", "confirmar_tarea", "cancelar_tarea"}
-    assert await _tarea(ctx) is None
-
-
-async def test_las_frases_de_los_procedimientos_se_verifican_solo_con_el_motor(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+async def test_las_frases_de_los_procedimientos_se_verifican_con_el_motor(negocio, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """"Quedó registrado tu pedido" solo lo declara `tomar_pedido` (las `COMPLETION_CLAIMS` de
-    commerce no lo atrapan): con el motor activo, sin `crear_pedido`, el verificador lo rechaza."""
+    commerce no lo atrapan): con el motor, sin `crear_pedido`, el verificador lo rechaza."""
     tid, pagos = negocio
     afirma, corrige = "Listo, quedó registrado tu pedido.", "Te ayudo a terminar tu compra."
     ctx = await _cliente(tid, pagos)
     resultado, _ = await _turno(ctx, monkeypatch, "¿Ya está?", [afirma, corrige])
     assert resultado.text == corrige
-    await _banderas(tid, False)
-    try:
-        ctx = await _cliente(tid, pagos)
-        resultado, _ = await _turno(ctx, monkeypatch, "¿Ya está?", [afirma, corrige])
-    finally:
-        await _banderas(tid, True)
-    assert resultado.text == afirma
 
 
 # ---------------------------------------------------------------- cierre por pago (dueño, 2026-10-11)
@@ -516,7 +470,6 @@ async def test_un_pago_de_otro_negocio_o_de_otro_pedido_no_cierra_la_tarea(negoc
         pagos, slug=slug_b,
     )
     try:
-        await _banderas(tid_b, True)
         # En el otro negocio: un pago con el MISMO número público y un `order.paid` con el id del
         # pedido de este negocio (lo que llegaría si alguien lo inyectara allá).
         async with tenant_scope(tid_b):

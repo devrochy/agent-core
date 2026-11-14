@@ -161,3 +161,23 @@ async def test_reglas_remiten_a_la_lista_de_proximos_dias() -> None:
     reglas = next(b for b in blocks if "## Reglas de operación" in b)
 
     assert "Próximos días" in reglas
+
+
+async def test_el_tono_y_la_calidez_llegan_al_prompt() -> None:
+    """La voz configurada no se queda en `template_vars`: el playbook `tono` la usa."""
+    calido = "\n".join(await build_system_blocks(_spec(), _ctx(tone="cercano", warmth=4, emojis="sparse")))
+    muy_calido = "\n".join(await build_system_blocks(_spec(), _ctx(tone="cercano", warmth=5, emojis="sparse")))
+
+    assert "«cercano» y tu calidez es 4 de 5" in calido
+    assert "«cercano» y tu calidez es 5 de 5" in muy_calido
+    assert calido != muy_calido
+
+
+async def test_el_tono_y_los_emojis_cambian_el_prompt() -> None:
+    formal = "\n".join(await build_system_blocks(_spec(), _ctx(tone="formal", emojis="none")))
+    informal = "\n".join(await build_system_blocks(_spec(), _ctx(tone="informal", emojis="free")))
+
+    assert "«formal»" in formal
+    assert "no uses emojis" in formal
+    assert "«informal»" in informal
+    assert "puedes usar emojis libremente" in informal

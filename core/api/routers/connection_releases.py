@@ -29,8 +29,7 @@ ADR-0117 nombra las rutas como `/api/v1/connections/{id}/...`; viven bajo `/admi
 
 Permisos: lectura con la sección `connections`; construir con `connections` en escritura;
 promover y volver atrás, además, propietario o master (cambian lo que atiende a clientes reales).
-Mientras el negocio esté en `aos_runtime = 'legacy'` las escrituras quedan para el master (403
-`aos_runtime_legacy`), como en `agents`: la release no hace nada hasta `v3`. 404 si la conexión
+404 si la conexión
 o la release no son del negocio.
 """
 
@@ -44,8 +43,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.exc import DBAPIError
 
-from core.admin.roles import actua_como_master, es_master
-from core.agents.versiones import escritura_habilitada
+from core.admin.roles import es_master
 from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
 from core.releases import build as svc_build
@@ -251,12 +249,6 @@ def _tenant(principal: Principal) -> uuid.UUID:
 
 async def _puede_escribir(principal: Principal) -> uuid.UUID:
     tid = _tenant(principal)
-    if not actua_como_master(principal.admin) and not await escritura_habilitada(tid):
-        raise ApiError(
-            403,
-            "aos_runtime_legacy",
-            "Las versiones se activan con el Agent OS de este negocio: por ahora solo las gestiona el administrador.",
-        )
     return tid
 
 
@@ -315,6 +307,16 @@ async def build_release(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> BuildOut:
     tid = await _puede_escribir(principal)
+    # ADR-0191 (adenda 2026-11-14): un build manual también congela la voz vigente del negocio.
+    from core.agents.base import sembrar_voz_del_negocio
+
+    try:
+        await sembrar_voz_del_negocio(tid)
+    except PermissionError:
+        raise
+    except Exception:
+        # La siembra no debe bloquear el build: si falla, se construye con la voz anterior.
+        log.warning("voz_del_negocio_no_sembrada", tenant_id=str(tid), exc_info=True)
     try:
         resultado = await svc_build.construir(
             tid,
@@ -613,7 +615,7 @@ async def start_canary(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> None:
     """Prueba la versión con una parte de las conversaciones nuevas (HU-AOS-32). Mismas reglas que
-    publicar: dueño o master, gate aprobado si está cerrado, `aos_runtime = v3` (409 `requiere_v3`).
+    publicar: dueño o master y gate aprobado si está cerrado.
     Si la plataforma la apagó (`CANARY_DISPONIBLE`), responde 409 `canary_no_disponible`."""
     from core.releases import canary
 

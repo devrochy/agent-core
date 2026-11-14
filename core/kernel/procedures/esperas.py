@@ -9,8 +9,8 @@ hace más de `ESPERA_MAXIMA` (el link vence a las 24 h por defecto, `link_expira
 
 - No le escribe al cliente ni escala: es limpieza. El pedido sigue vivo y, si después se paga,
   commerce lo marca pagado igual. No es el `recovery.timeout` del contrato (sigue pendiente).
-- Solo recorre los negocios con `tenants.aos_procedures` (con las banderas apagadas no consulta
-  ninguna tarea), cada uno bajo su `tenant_scope`.
+- Recorre los negocios no borrados (también los suspendidos: la limpieza no depende del plan),
+  cada uno bajo su `tenant_scope`.
 - Una transacción por tarea y orden de bloqueo conversación → tarea, como el turno. Si un turno
   tiene la conversación bloqueada (`SKIP LOCKED`), la tarea queda para la corrida siguiente: el
   cron nunca espera a una conversación ni la frena.
@@ -119,14 +119,14 @@ async def vencer_esperas_del_negocio(tenant_id: uuid.UUID, *, now: datetime | No
 
 
 async def vencer_esperas(*, now: datetime | None = None) -> int:
-    """Cron: recorre los negocios con el motor de procedimientos encendido."""
+    """Cron: recorre los negocios no borrados."""
     from core.db.session import get_session
-    from core.kernel.banderas import negocios_con_procedimientos
+    from core.kernel.banderas import negocios_vivos
 
     if not registro.con_cierre_por_evento():
         return 0
     async with get_session() as s:
-        negocios = await negocios_con_procedimientos(s)
+        negocios = await negocios_vivos(s)
     total = 0
     for tenant_id in negocios:
         try:

@@ -11,7 +11,7 @@ import uuid
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _api_helpers import api_headers, uniq
 from sqlalchemy import text
 
 pytestmark = [
@@ -52,8 +52,9 @@ async def _packs_registrados() -> None:
 
 async def _negocio() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     """(tid, conexión, release activa)."""
+    from release_de_prueba import release_inicial
+
     from core.alta_negocio import onboard_tenant
-    from core.releases.release_uno import backfill_releases
 
     slug = uniq("veredicto")
     tid, _ = await onboard_tenant(name=f"Veredicto {slug}", slug=slug, persona={"tone": "cercano"})
@@ -66,7 +67,7 @@ async def _negocio() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
         t=tid,
         ext=uniq("ig"),
     )
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     ((activa,),) = await _sql(tid, "select active_release_id from channel_connections where id = :c", c=cid)
     return tid, cid, activa
@@ -195,7 +196,6 @@ async def test_solo_el_master_fuerza_con_motivo_y_queda_auditado(app_client) -> 
     from core.db.session import get_session
 
     tid, cid, uno = await _negocio()
-    await banderas_como_dueno(tid, aos_runtime="v3")
     dos = await _candidata(tid, cid, "Forzada")
     await _registrar(tid, cid, dos, uno, aprueba=False)
     base = f"/api/v1/admin/connections/{cid}/releases/{dos}/promote"

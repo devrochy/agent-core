@@ -18,7 +18,6 @@ import pytest
 from core.kernel.release_del_turno import (
     con_release,
     decidir_destino,
-    fijar_release_del_turno,
     plan_revalidacion,
     tuvo_efecto_irreversible,
 )
@@ -301,27 +300,3 @@ def test_playbook_y_flujo_salen_de_la_release(tmp_path: Any, monkeypatch: Any) -
     assert tono == "Texto congelado"
     assert identidad is not None  # sin override congelado: el default del core
     assert flujo is not None and any(s.id == "propia" for s in flujo.sections)
-
-
-def test_fijar_no_consulta_nada_con_el_ruteo_por_conexion_apagado(monkeypatch: Any) -> None:
-    from core.config import get_settings
-
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", False)
-
-    def _sin_base() -> Any:
-        raise AssertionError("no debe abrir sesión")
-
-    monkeypatch.setattr("core.db.session.get_session", _sin_base)
-
-    @dataclass
-    class _Conv:
-        id: uuid.UUID
-        tenant_id: uuid.UUID
-        connection_id: uuid.UUID
-
-    assert (
-        asyncio.run(
-            _en_scope(T, lambda: fijar_release_del_turno(_Conv(uuid.uuid4(), T, uuid.uuid4())))
-        )
-        is None
-    )

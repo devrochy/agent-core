@@ -46,7 +46,7 @@ from test_opciones_toque_entorno import (  # noqa: F401  (fixtures y ayudas del 
     _salientes,
     _sql,
     herramienta,
-    legacy,
+    negocio_opciones,
 )
 
 pytestmark = [
@@ -167,10 +167,10 @@ async def crear_menu_de_texto(
 
 
 @pytest.fixture
-def cada_tenant_con_la_bandera_encendida(legacy, monkeypatch):  # type: ignore[no-untyped-def]  # noqa: F811
+def cada_tenant_con_la_bandera_encendida(negocio_opciones, monkeypatch):  # type: ignore[no-untyped-def]  # noqa: F811
     """El negocio del módulo con la bandera encendida y el binding de la tool habilitado y sin confirmación."""
     _inmediato(monkeypatch)
-    return legacy[0]
+    return negocio_opciones[0]
 
 
 # ---------------------------------------------------------------- journeys: QR y chat web

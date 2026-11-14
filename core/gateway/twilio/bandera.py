@@ -1,7 +1,7 @@
 """Bandera por negocio de los canales que se abren de a uno (ADR-0186 §12): APAGADA por defecto.
 
-Vive en `tenants.settings["canales"] = {"whatsapp_twilio": bool, ...}`: clave propia, fuera de `agent_os` (ese
-grupo del registro de configuración depende de `aos_runtime = v3`), mismo patrón que `avisos_bandera`. Con la
+Vive en `tenants.settings["canales"] = {"whatsapp_twilio": bool, ...}`: clave propia, fuera de `agent_os`,
+mismo patrón que `avisos_bandera`. Con la
 bandera apagada, el tipo de conexión del canal sigue «Próximamente» en el catálogo del negocio y su alta responde
 404. Solo la cambia el master: `fijar` es el ÚNICO escritor y lo llama la ruta de plataforma master-only
 (`/admin/platform/tenants/{id}/canales/{canal}`); una prueba lo vigila. Un valor desconocido cuenta como apagado.

@@ -20,12 +20,15 @@ from sqlalchemy import or_, select, text
 from core.datos_cliente.guardar import guardar as guardar_datos
 from core.datos_cliente.legado import base_desde_lista, requeridos_efectivos
 from core.datos_cliente.servicio import evaluar_accion
+from core.db.models import Conversation
 from core.db.session import get_owned, get_session
 from core.kernel.oferta import solo_con_motor_activo
 from core.mcp.types import BaseSkill, MCPTool, Referencia, RegistroCreado, ToolContext
 from core.memory import entity as entity_memory
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import is_panel_test
+from pack_commerce import sandbox as sandbox_prueba
 from pack_commerce.datos import A_LEGADO, ACCION_POR_ENTREGA
 from pack_commerce.etapas import (
     CODIGOS_DE_MOTIVO,
@@ -302,6 +305,9 @@ async def referencias_vigentes(conversation_id: uuid.UUID, customer_id: uuid.UUI
     """
     tenant_id = get_current_tenant_id()
     async with get_session() as session:
+        conversacion = await session.get(Conversation, conversation_id)
+        if is_panel_test(conversacion):
+            return await _referencias_del_sandbox(conversation_id)
         quote = await _cotizacion_vigente(session, conversation_id, customer_id)
         order = (
             await session.execute(
@@ -341,6 +347,45 @@ async def referencias_vigentes(conversation_id: uuid.UUID, customer_id: uuid.UUI
                     ("estado", order.status),
                     ("estado_pago", order.payment_status),
                     ("total", _float(order.total) if en_curso else None),
+                ),
+            )
+        )
+    return referencias
+
+
+async def _referencias_del_sandbox(conversation_id: uuid.UUID) -> list[Referencia]:
+    """Referencias ficticias de la prueba (HU-ARCH-14): cotización y pedido del sandbox."""
+    from core.mcp.sandbox import SandboxPrueba
+
+    sandbox = SandboxPrueba.de_contexto(conversation_id)
+    cotizaciones = sorted(await sandbox.listar("quotes"), key=lambda q: str(q.get("creado") or ""))
+    pedidos = sorted(await sandbox.listar("orders"), key=lambda p: str(p.get("creado") or ""))
+    referencias: list[Referencia] = []
+    cotizacion = next((q for q in reversed(cotizaciones) if q.get("status") != "convertida"), None)
+    pedido = pedidos[-1] if pedidos else None
+    if cotizacion is not None:
+        referencias.append(
+            Referencia(
+                tipo="cotizacion",
+                datos=(
+                    ("quote_id", uuid.UUID(str(cotizacion["quote_id"]))),
+                    ("estado", cotizacion.get("status", "draft")),
+                    ("total", float(cotizacion.get("total") or 0)),
+                    ("pedido", "ninguno"),
+                ),
+            )
+        )
+    if pedido is not None:
+        en_curso = cotizacion is None and pedido.get("status") in ORDER_STATUS_ACTIVE
+        referencias.append(
+            Referencia(
+                tipo="pedido" if en_curso else "pedido_anterior",
+                datos=(
+                    ("order_id", uuid.UUID(str(pedido["order_id"]))),
+                    ("numero", pedido.get("public_order_number", "")),
+                    ("estado", pedido.get("status", "abierto")),
+                    ("estado_pago", pedido.get("payment_status", "pendiente")),
+                    ("total", float(pedido.get("total") or 0) if en_curso else None),
                 ),
             )
         )
@@ -659,6 +704,8 @@ class LeadSkill(BaseSkill):
                     "required": ["name", "interest"],
                 },
                 handler=self.crear_lead,
+                side_effects=True,
+                simular=sandbox_prueba.simular_crear_lead,
                 # HU-AOS-47: procedencia del lead (no cuenta el que ya existía ni el reintento).
                 crea_registro=RegistroCreado(
                     kind="lead", id_key="lead_id", es_nuevo=lambda r: r.get("status") == "created"
@@ -681,6 +728,8 @@ class LeadSkill(BaseSkill):
                     "required": ["score"],
                 },
                 handler=self.calificar_lead,
+                side_effects=True,
+                simular=sandbox_prueba.simular_calificar_lead,
             ),
             MCPTool(
                 name="actualizar_lead",
@@ -714,6 +763,8 @@ class LeadSkill(BaseSkill):
                     },
                 },
                 handler=self.actualizar_lead,
+                side_effects=True,
+                simular=sandbox_prueba.simular_actualizar_lead,
             ),
         ]
 
@@ -860,6 +911,7 @@ class CatalogSkill(BaseSkill):
                     },
                 },
                 handler=self.consultar_inventario,
+                solo_lectura=True,
             ),
             MCPTool(
                 name="recomendar_producto",
@@ -876,6 +928,7 @@ class CatalogSkill(BaseSkill):
                     },
                 },
                 handler=self.recomendar_producto,
+                solo_lectura=True,
             ),
         ]
 
@@ -1084,6 +1137,8 @@ class OrderSkill(BaseSkill):
                     "required": ["items"],
                 },
                 handler=self.generar_cotizacion,
+                side_effects=True,
+                simular=sandbox_prueba.simular_generar_cotizacion,
             ),
             MCPTool(
                 name="aplicar_promocion",
@@ -1100,6 +1155,8 @@ class OrderSkill(BaseSkill):
                     "required": ["quote_id"],
                 },
                 handler=self.aplicar_promocion,
+                side_effects=True,
+                simular=sandbox_prueba.simular_aplicar_promocion,
             ),
             MCPTool(
                 name="confirmar_cotizacion",
@@ -1118,6 +1175,8 @@ class OrderSkill(BaseSkill):
                     "required": ["quote_id"],
                 },
                 handler=self.confirmar_cotizacion,
+                side_effects=True,
+                simular=sandbox_prueba.simular_confirmar_cotizacion,
                 sensible=True,
             ),
             MCPTool(
@@ -1172,6 +1231,8 @@ class OrderSkill(BaseSkill):
                     "required": ["quote_id", "payment_method", "customer_data"],
                 },
                 handler=self.crear_pedido,
+                side_effects=True,
+                simular=sandbox_prueba.simular_crear_pedido,
                 # HU-AOS-47: procedencia del pedido (`duplicate` es el de la misma cotización).
                 crea_registro=RegistroCreado(
                     kind="pedido",
@@ -1210,6 +1271,8 @@ class OrderSkill(BaseSkill):
                     "required": ["order_id", "items"],
                 },
                 handler=self.agregar_item_pedido,
+                side_effects=True,
+                simular=sandbox_prueba.simular_agregar_item_pedido,
             ),
             MCPTool(
                 name="consultar_estado_pedido",
@@ -1225,6 +1288,8 @@ class OrderSkill(BaseSkill):
                     "required": ["public_order_number"],
                 },
                 handler=self.consultar_estado_pedido,
+                solo_lectura=True,
+                simular=sandbox_prueba.simular_consultar_estado_pedido,
             ),
             MCPTool(
                 name="confirmar_pago_pedido",
@@ -1246,10 +1311,12 @@ class OrderSkill(BaseSkill):
                     "required": ["order_id"],
                 },
                 handler=self.confirmar_pago_pedido,
+                side_effects=True,
+                simular=sandbox_prueba.simular_confirmar_pago_pedido,
             ),
             # Solo la ofrece el motor de procedimientos, en la etapa `esperar_pago` de
             # `tomar_pedido` (HU-AOS-07, cierre por pago): ninguna sección de
-            # flow.json la nombra y su predicado la apaga sin `tenants.aos_procedures`.
+            # flow.json la nombra y su predicado la apaga fuera de un turno con negocio.
             MCPTool(
                 name="verificar_pago_pedido",
                 description=(
@@ -1265,6 +1332,8 @@ class OrderSkill(BaseSkill):
                     "required": ["order_id"],
                 },
                 handler=self.verificar_pago_pedido,
+                solo_lectura=True,
+                simular=sandbox_prueba.simular_verificar_pago_pedido,
                 connection_predicate=solo_con_motor_activo(),
             ),
         ]

@@ -102,7 +102,7 @@ def test_resolver_refs_abiertos_rangos_y_fail_closed() -> None:
 
 
 def test_el_general_declara_los_publicados_con_rango_compatible() -> None:
-    from core.agents.tolerante import _declarados
+    from core.agents.procedimientos_de_negocio import declarados as _declarados
 
     refs = _declarados([_proc(PLAN, "1.2.0"), _proc(PLAN, "1.1.0"), _proc(CITA, "1.0.0"), _proc("x.y", "2.3.1")], {"x.y"})
     assert refs == [{"id": CITA, "version": "^1.0"}, {"id": PLAN, "version": "^1.0"}]

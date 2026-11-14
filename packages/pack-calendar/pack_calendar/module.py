@@ -464,8 +464,7 @@ class GoogleCalendarModule(BaseModule):
         from core.shared.events import ON_APPOINTMENT_CHANGED
 
         host.subscribe(ON_APPOINTMENT_CHANGED, _on_cita_cambiada)
-        # HU-AOS-08: procedimiento `agendar_cita` y sus resolvers (solo los usa el motor, detrás
-        # de `tenants.aos_procedures`).
+        # HU-AOS-08: procedimiento `agendar_cita` y sus resolvers (solo los usa el motor).
         from pack_calendar.procedimientos import registrar
 
         registrar(host, PLUGIN_ID)
@@ -494,6 +493,12 @@ class GoogleCalendarModule(BaseModule):
         from pack_calendar.datos_de_prueba import retirar
 
         return await retirar(tenant_id, registros)
+
+    async def describir_registros(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> list[Any]:
+        """Lo sembrado o importado en palabras, para «Lo cargado» del asistente (HU-QA-16)."""
+        from pack_calendar.datos_de_prueba import describir
+
+        return await describir(tenant_id, registros)
 
     def plantillas_de_importacion(self) -> list[PlantillaDeImportacion]:
         """Importar tipos de cita desde un CSV (HU-QA-12, ADR-0180)."""

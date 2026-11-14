@@ -77,9 +77,7 @@ class PuntoActividadOut(BaseModel):
 
 
 class AgenteResumen(BaseModel):
-    ref: str = Field(
-        description="Id del agente o el literal `general`, como en `/admin/agents/{ref}`."
-    )
+    ref: str = Field(description="Id del agente, como en `/admin/agents/{ref}`.")
     key: str
     name: str
     kind: str
@@ -103,6 +101,10 @@ class BloqueGeneral(BaseModel):
             "no atribuido); vacía sin la sección `agents`."
         ),
     )
+    modulos_sin_agente: list[ModuloOut] = Field(
+        default_factory=list,
+        description="Módulos activos del negocio que ningún agente cubre (ADR-0192: ya no cuelgan del General).",
+    )
 
 
 class PeriodoOut(BaseModel):
@@ -115,7 +117,6 @@ class PeriodoOut(BaseModel):
 
 class ResumenPorAgente(BaseModel):
     periodo: PeriodoOut
-    runtime: str
     general: BloqueGeneral
     agentes: list[AgenteResumen]
 

@@ -232,12 +232,11 @@ async def preparar_negocio(
     *,
     slug: str | None = None,
     replica: bool = False,
-    motor: bool | None = None,
 ) -> uuid.UUID:
     """Negocio de prueba de la corrida: preset, plan, catálogo y config de packs. Con
     `replica`, además los artefactos del negocio copiados a su directorio (catálogo, seed de
-    packs y voz de marca, como `agent-core tenant seed --voz-de-marca`) y sin ejemplos.
-    `motor` (de `modo_de_runtime`) manda sobre `motor_de_procedimientos` del set."""
+    packs y voz de marca, como `agent-core tenant seed --voz-de-marca`) y sin ejemplos. El motor de
+    procedimientos corre en todo negocio (ADR-0191): no hay nada que encender."""
     from core.admin.views import set_pack_for_tenant
     from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
@@ -277,50 +276,12 @@ async def preparar_negocio(
     if definicion.get("vendedor"):
         _como_vendedor(tenant_id)
     await publicar_documentos_legales(tenant_id, definicion.get("documentos_legales") or [])
-    if definicion.get("motor_de_procedimientos") if motor is None else motor:
-        await encender_motor_de_procedimientos(tenant_id)
     pagos.instalar()
     return tenant_id
 
 
-def modo_de_runtime(negocio: dict[str, Any], runtime: str | None) -> tuple[bool | None, bool]:
-    """(motor, releases) de la corrida según `--runtime`.
-
-    - Sin `--runtime`: lo de siempre (`motor_de_procedimientos` del set, sin releases).
-    - Set con motor: `legacy` es la línea base de un agente, sin el motor; `v3` enciende el
-      motor (`aos_runtime = v3` y `aos_procedures`, HU-AOS-07). Así se mide pass^k con y sin
-      procedimientos sobre el mismo set (ADR-0112). No monta conexión ni release: el motor no
-      las necesita.
-    - Set sin motor: `v3` monta la release 1 por conexión (HU-AOS-15); `legacy`, nada."""
-    if runtime is None:
-        return None, False
-    if negocio.get("motor_de_procedimientos"):
-        return runtime == "v3", False
-    return False, runtime == "v3"
-
-
-def separar_los_que_requieren_motor(
-    rutas: list[Path], negocio: dict[str, Any], runtime: str | None
-) -> tuple[list[Path], list[str]]:
-    """`(a correr, omitidos)` según `--runtime`. Un journey con `"requiere_motor": true` ejercita un
-    procedimiento cuyas acciones el core solo ofrece con el motor encendido (`solo_con_motor_activo`:
-    `contratar_plan` y `cambiar_plan`, SPEC-43 / HU-AOS-08): sin él no hay camino a cumplirlo, así
-    que medirlo como línea base daría 0 % por diseño y no diría nada del modelo. Solo aplica a
-    `--runtime legacy` sobre un set con motor; con `v3` o sin `--runtime` corren todos."""
-    if runtime != "legacy" or not negocio.get("motor_de_procedimientos"):
-        return rutas, []
-    a_correr: list[Path] = []
-    omitidos: list[str] = []
-    for ruta in rutas:
-        if json.loads(ruta.read_text(encoding="utf-8")).get("requiere_motor"):
-            omitidos.append(ruta.stem)
-        else:
-            a_correr.append(ruta)
-    return a_correr, omitidos
-
-
 def _exigir_base_local(*urls: str | None, que: str) -> None:
-    """Las escrituras de banderas y conexiones van por la URL del dueño Y por la de la app:
+    """Las escrituras de conexiones van por la URL del dueño Y por la de la app:
     las dos tienen que ser locales (si no, la corrida escribiría en una base real)."""
     from sqlalchemy.engine import make_url
 
@@ -334,12 +295,9 @@ def _exigir_base_local(*urls: str | None, que: str) -> None:
 
 async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     """Runtime por releases (HU-AOS-15) para el negocio de la corrida: una conexión
-    conversacional, su release 1 (`backfill_releases`, desde el AgentSpec v2) y
-    `aos_runtime = 'v3'` sin `aos_procedures`. Exige `AOS_CONNECTION_ROUTING=true` en el entorno.
-    Devuelve la conexión: `nuevo_cliente` liga a ella las conversaciones de la corrida. Sirve para
-    medir pass^k legacy vs v3 con el mismo set (`--runtime v3`)."""
+    conversacional y su release 1 (`backfill_releases`). Devuelve la conexión: `nuevo_cliente` liga a
+    ella las conversaciones de la corrida. Toda corrida la monta (ADR-0191)."""
     from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     from core.config import get_settings
     from core.db.session import get_session
@@ -349,10 +307,8 @@ async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     from core.shared.tenant import tenant_scope
 
     settings = get_settings()
-    if not settings.aos_connection_routing:
-        raise SystemExit("--runtime v3 exige AOS_CONNECTION_ROUTING=true (orden de banderas, ADR-0112).")
     url = settings.migrations_database_url or settings.database_url
-    _exigir_base_local(url, settings.database_url, que="El runtime v3 de los journeys")
+    _exigir_base_local(url, settings.database_url, que="La release de los journeys")
     conexion = uuid.uuid4()
     async with tenant_scope(tenant_id):
         async with get_session() as session:
@@ -367,44 +323,80 @@ async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     reporte_packs = await sync_packs(modulos)
     if reporte_packs.fallo:
         raise SystemExit(f"sync-packs falló: {reporte_packs.errores}")
+    await agentes_nativos(tenant_id, conexion, modulos)
     reporte = await backfill_releases(dry_run=False, tenant_id=tenant_id, modules=modulos)
     if reporte.fallo:
         raise SystemExit(f"No se pudo construir la release 1 del negocio de la corrida: {reporte.errores}")
-    engine = create_async_engine(url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("update tenants set aos_runtime = 'v3' where id = :t"), {"t": tenant_id})
-    finally:
-        await engine.dispose()
     _CONEXION_V3[tenant_id] = conexion
     return conexion
 
 
-# Conexión del negocio de la corrida con `--runtime v3` (las conversaciones nuevas se ligan a ella).
+async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: list[Any]) -> uuid.UUID:
+    """Coordinador y un especialista «atencion» por defecto en la conexión, sin el lector tolerante
+    (ADR-0191/0192): el especialista lleva la base de la configuración del negocio, los bindings de
+    todas las acciones de sus packs habilitados y del core, y los procedimientos que publican. Es lo
+    que hacía el General para la corrida. Devuelve el id del especialista."""
+    from sqlalchemy import select
+
+    from core.agents import versiones
+    from core.agents.base import asegurar_coordinador, contenido_base
+    from core.agents.instancias import (
+        ConflictoInstancia,
+        agregar_instancia,
+        asegurar_instancias_base,
+    )
+    from core.agents.procedimientos_de_negocio import declarados, procedimientos_publicados
+    from core.agents.spec import enabled_packs, leer_spec_activo, load_active_spec
+    from core.db.models import AgentRecord
+    from core.db.session import get_session
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.kernel.procedures.catalogo import CORE_OWNER
+    from core.shared.tenant import tenant_scope
+    from core.subscriptions.tools import SOLO_PROCEDIMIENTO
+
+    async with tenant_scope(tenant_id):
+        await load_active_spec(tenant_id)  # siembra el default si el negocio no tiene uno
+        await asegurar_coordinador(tenant_id, modules=modulos)
+        async with get_session() as session:
+            await asegurar_instancias_base(session, tenant_id, conexion)
+            existente = (
+                await session.execute(
+                    select(AgentRecord.id).where(
+                        AgentRecord.tenant_id == tenant_id, AgentRecord.key == "atencion", AgentRecord.deleted_at.is_(None)
+                    )
+                )
+            ).scalar_one_or_none()
+        if existente is not None:  # idempotente: negocios de prueba que se reusan entre módulos
+            try:
+                await agregar_instancia(tenant_id, conexion, existente, is_default=True)
+            except ConflictoInstancia as exc:
+                if exc.code != "already_assigned":
+                    raise
+            return existente
+        leido = await leer_spec_activo(tenant_id)
+        if leido is None:
+            raise SystemExit("El negocio de la corrida no tiene AgentSpec activo.")
+        spec = leido[1]
+        habilitados = enabled_packs(spec)
+        catalogo = catalogo_de_acciones(modulos)
+        contenido = contenido_base(spec)
+        contenido["tools"] = [
+            {"tool": nombre, "enabled": True, "scopes": list(getattr(info, "scopes", ()))}
+            for nombre, info in sorted(catalogo.items())
+            if (info.owner in habilitados or info.owner == CORE_OWNER) and nombre not in SOLO_PROCEDIMIENTO
+        ]
+        contenido["procedures"] = declarados(procedimientos_publicados(spec), set())
+        del leido, spec
+        agente = await versiones.crear_agente(tenant_id, key="atencion", kind="specialist", name="Atención")
+        await versiones.publicar(
+            tenant_id, agente.id, catalogo=catalogo, contenido=contenido, notes="Agente de la corrida de journeys."
+        )
+        await agregar_instancia(tenant_id, conexion, agente.id, is_default=True)
+        return agente.id
+
+
+# Conexión del negocio de la corrida (las conversaciones nuevas se ligan a ella).
 _CONEXION_V3: dict[uuid.UUID, uuid.UUID] = {}
-
-
-async def encender_motor_de_procedimientos(tenant_id: uuid.UUID) -> None:
-    """Motor de procedimientos (HU-AOS-07) para el negocio de la corrida: `aos_runtime = v3` y
-    `aos_procedures`, como lo haría el master. Lo pide un set con `"motor_de_procedimientos": true`
-    en su `negocio.json`; el negocio es de la corrida, nunca uno real. Las banderas solo las
-    escribe el rol dueño (el mismo que migra)."""
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    url = settings.migrations_database_url or settings.database_url
-    _exigir_base_local(url, settings.database_url, que="Las banderas del motor")
-    engine = create_async_engine(url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(
-                text("update tenants set aos_runtime = 'v3', aos_procedures = true where id = :t"), {"t": tenant_id}
-            )
-    finally:
-        await engine.dispose()
 
 
 async def publicar_documentos_legales(tenant_id: uuid.UUID, documentos: list[dict[str, Any]]) -> None:
@@ -439,7 +431,7 @@ async def nuevo_cliente(tenant_id: uuid.UUID, nombre: str) -> tuple[uuid.UUID, u
             await session.flush()
             conversacion = Conversation(
                 tenant_id=tenant_id, customer_id=cliente.id, channel=TEST_CHANNEL, status="open", state={"is_test": True},
-                # Con `--runtime v3` la conversación es de la conexión con release (HU-AOS-15).
+                # La conversación es de la conexión de la corrida, con su release (HU-AOS-15, ADR-0191).
                 connection_id=_CONEXION_V3.get(tenant_id),
             )
             session.add(conversacion)
@@ -535,25 +527,6 @@ async def _herramientas_desde(ctx: Contexto, desde: datetime) -> list[dict[str, 
                 )
             ).scalars().all()
     return [{"nombre": f.actor.removeprefix("tool:"), "entrada": f.input or {}, "salida": f.output or {}} for f in filas]
-
-
-async def runtime_efectivo(tenant_id: uuid.UUID) -> dict[str, Any]:
-    """Banderas del negocio de la corrida tal como quedaron en la base (prueba del runtime)."""
-    from sqlalchemy import text
-
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(tenant_id):
-        async with get_session() as session:
-            fila = (
-                await session.execute(
-                    text("select aos_runtime, aos_procedures from tenants where id = :t"), {"t": tenant_id}
-                )
-            ).first()
-    if fila is None:
-        return {"aos_runtime": None, "aos_procedures": None}
-    return {"aos_runtime": fila[0], "aos_procedures": bool(fila[1])}
 
 
 def pidio_relevo(herramientas: list[dict[str, Any]]) -> bool:
@@ -1079,15 +1052,6 @@ async def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--umbral", type=float, default=1.0, help="pass@1 mínimo (0..1) para salir con 0")
     parser.add_argument("--reporte", default="", help="Ruta del reporte JSON (opcional)")
     parser.add_argument("--detalle", action="store_true", help="Imprimir la conversación de cada intento")
-    parser.add_argument(
-        "--runtime",
-        choices=("legacy", "v3"),
-        default=None,
-        help="Sin la opción, como siempre. En un set sin motor: legacy o v3 (el negocio de la corrida corre su "
-        "release 1, HU-AOS-15; exige AOS_CONNECTION_ROUTING=true). En un set con motor de procedimientos: "
-        "legacy es la línea base de un agente (sin el motor) y v3 enciende el motor (ADR-0112). Sirve para "
-        "comparar pass^k entre runtimes.",
-    )
     sys.path.insert(0, str(EVALS_DIR))
     import grabaciones
 
@@ -1109,12 +1073,6 @@ async def main(argv: list[str] | None = None) -> int:
     if not rutas:
         print(f"No hay journeys que matcheen '{args.patron}' en {carpeta or JOURNEYS_DIR / args.set}")
         return 1
-    rutas, args.omitidos = separar_los_que_requieren_motor(rutas, negocio, args.runtime)
-    for omitido in args.omitidos:
-        print(f"Omitido en {args.runtime}: {omitido} (necesita el motor de procedimientos; no hay línea base sin él).")
-    if not rutas:
-        print(f"Nada que medir en {set_id}@{args.runtime}: todos los journeys piden el motor.")
-        return 0
     k = max(1, args.k)
     # Antes de la réplica: `preparar_replica` cambia TENANTS_ROOT a un temporal que se borra.
     args.raiz_grabaciones = grabaciones.raiz(args.grabaciones, carpeta.parent if carpeta else None) / "journeys"
@@ -1127,12 +1085,8 @@ async def main(argv: list[str] | None = None) -> int:
         await _preparar_proceso()
         pagos = PagoSimulado(monto_minimo=float((negocio.get("pagos_simulados") or {}).get("monto_minimo", 0)))
         CORREOS.instalar()
-        motor, releases = modo_de_runtime(negocio, args.runtime)
-        tenant_id = await preparar_negocio(negocio, pagos, slug=slug, replica=carpeta is not None, motor=motor)
-        if releases:
-            await encender_runtime_v3(tenant_id)
-        if args.runtime:
-            set_id = f"{set_id}@{args.runtime}"
+        tenant_id = await preparar_negocio(negocio, pagos, slug=slug, replica=carpeta is not None)
+        await encender_runtime_v3(tenant_id)
         return await _correr_set(args, set_id, rutas, k, tenant_id, pagos)
     except cassette.ErrorGrabacion as exc:
         print(f"\n{exc}")
@@ -1152,18 +1106,12 @@ async def _correr_set(args: argparse.Namespace, set_id: str, rutas: list[Path], 
         texto_resumen,
     )
 
-    efectivo = await runtime_efectivo(tenant_id)
-    print(
-        f"Corriendo {len(rutas)} journeys del set {set_id} con k={k} (negocio {tenant_id}, "
-        f"aos_runtime={efectivo['aos_runtime']}, aos_procedures={efectivo['aos_procedures']})...\n"
-    )
+    print(f"Corriendo {len(rutas)} journeys del set {set_id} con k={k} (negocio {tenant_id})...\n")
 
     import grabaciones
 
     resultados: list[ResultadoEscenario] = []
     extra = f"--tenant {args.tenant}" if args.tenant else ("" if args.set == "suscripciones" else f"--set {args.set}")
-    if getattr(args, "runtime", None):
-        extra = f"{extra} --runtime {args.runtime}".strip()
     raiz_grabaciones: Path = getattr(args, "raiz_grabaciones", grabaciones.CASSETTES_DIR / "journeys" / args.set)
     for ruta in rutas:
         escenario = ResultadoEscenario(nombre=ruta.stem)
@@ -1181,19 +1129,12 @@ async def _correr_set(args: argparse.Namespace, set_id: str, rutas: list[Path], 
 
     resumen = resumir(resultados, k)
     print("\n" + texto_resumen(f"Journeys {set_id}", resumen, args.umbral))
-    omitidos: list[str] = getattr(args, "omitidos", [])
-    if omitidos:
-        # El cruce con v3 es sobre los journeys que ambos pueden cumplir: lo dice el log, no se infiere.
-        print(f"Omitidos (piden el motor): {len(omitidos)} · {', '.join(omitidos)}")
     simulador = {"k": k, "semillas": list(range(k))}
     # En replay se repite lo grabado: no mide la consistencia del modelo y no se guarda (ADR-0119).
     if cassette.modo_activo() != "replay":
         await _guardar(tenant_id, set_id, resultados, k, simulador)
     if args.reporte:
         datos = reporte(set_id, resultados, k, simulador)
-        # Lo que de verdad corrió el negocio (no solo lo pedido con `--runtime`).
-        datos["runtime"] = {"pedido": getattr(args, "runtime", None), **await runtime_efectivo(tenant_id)}
-        datos["omitidos"] = omitidos
         escribir_reporte(args.reporte, datos)
     # El gate del 0A no cambia (ADR-0119): se mide sobre pass@1; pass^k se reporta.
     return 0 if resumen.pass_1 >= args.umbral else 1

@@ -11,7 +11,7 @@ sus *resolvers* con `MCPHost.register_resolver`. Este módulo es el único lecto
   tarea abierta ya no está en el binario (un deploy subió la versión), devuelve None: el motor no
   gobierna esa tarea (queda el flujo v2 de respaldo) hasta la revalidación de HU-AOS-14.
 
-Con una release en el turno (`aos_runtime = v3`, HU-AOS-16, adenda de ADR-0118) la fuente es
+Con una release en el turno (HU-AOS-16, adenda de ADR-0118) la fuente es
 la release: `disponibles` devuelve los procedimientos PUBLICADOS que la versión del agente en
 foco declara (resueltos en el build y congelados en `pack_versions`; nunca los abiertos
 `0.0.0`), y `definicion` busca primero en la release y después en el binario. Con una release
@@ -52,12 +52,6 @@ def _clave(proc: Procedure) -> tuple[str, str, str, str]:
 
 def _todos() -> list[Procedure]:
     return [p for lista in mcp_host.get_procedures().values() for p in lista]
-
-
-def hay_procedimientos() -> bool:
-    """¿Algún pack registró procedimientos? Chequeo en memoria, sin BD (costo del modo sombra
-    y del cierre por evento cuando no hay ninguno)."""
-    return any(mcp_host.get_procedures().values())
 
 
 def _valido(proc: Procedure) -> bool:

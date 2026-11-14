@@ -27,8 +27,8 @@ from sqlalchemy import bindparam, text
 
 from core.db.models import utcnow
 from core.db.session import get_session
-from core.kernel.banderas import banderas_del_negocio
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import sql_no_es_prueba
 
 VENTANA_CONSUMO = timedelta(days=7)
 MAX_SIN_CONEXION = 50
@@ -97,9 +97,11 @@ class ConexionFila:
     active_release: ReleaseFila | None = None
     canary_release: ReleaseFila | None = None
     usage_7d: ConsumoFila = ConsumoFila()
-    # Número de WhatsApp como lo muestra Meta («+57 300 1234567»); None si no es de Meta o aún no se
-    # sincronizó. Sale de la tabla, sin llamar a Meta.
+    # Número visible: el de Meta («+57 300 1234567») o el del WhatsApp Web vinculado. None si aún
+    # no se conoce. Sale de las tablas, sin llamar a Meta ni al connector.
     display_phone_number: str | None = None
+    # Nombre visible del WhatsApp Web (perfil o negocio); None en los demás canales.
+    display_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -120,8 +122,6 @@ class Consistencia:
 class Consola:
     items: list[ConexionFila]
     total: int
-    runtime: str
-    routing: str
     consistency: Consistencia | None
     unassigned_agents: list[AgenteSinConexion]
 
@@ -164,7 +164,6 @@ def _exigir_scope(tenant_id: uuid.UUID) -> None:
 async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
     _exigir_scope(tenant_id)
     async with get_session() as session:
-        banderas = await banderas_del_negocio(session, tenant_id)
         total = int(
             (
                 await session.execute(
@@ -186,7 +185,7 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                     "SELECT cc.id, cc.channel, cc.type_id, cc.label, cc.external_id, "
                     "  coalesce(ct.produces_conversations, true), cc.active, cc.is_primary, cc.created_at, "
                     "  cc.meta_connection_id, mc.status, cc.active_release_id, cc.canary_release_id, "
-                    "  pn.display_phone_number "
+                    "  pn.display_phone_number, ws.phone, ws.push_name, ws.business_name "
                     "FROM channel_connections cc "
                     "LEFT JOIN connection_types ct ON ct.id = cc.type_id "
                     "LEFT JOIN meta_connections mc "
@@ -196,6 +195,9 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                     "LEFT JOIN phone_numbers pn "
                     "  ON pn.tenant_id = cc.tenant_id AND pn.connection_id = cc.meta_connection_id "
                     "  AND pn.phone_number_id = cc.external_id AND pn.deleted_at IS NULL "
+                    # Una sesión viva por conexión (índice único parcial): no duplica filas.
+                    "LEFT JOIN waweb_sessions ws "
+                    "  ON ws.tenant_id = cc.tenant_id AND ws.connection_id = cc.id AND ws.deleted_at IS NULL "
                     "WHERE cc.tenant_id = :t AND cc.deleted_at IS NULL "
                     "  AND cc.type_id IS DISTINCT FROM 'playground' "
                     "  AND (cc.meta_connection_id IS NULL OR mc.id IS NOT NULL) "
@@ -237,14 +239,13 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                 active_release=releases.get(activa) if activa is not None else None,
                 canary_release=releases.get(f[12]) if f[12] is not None else None,
                 usage_7d=consumo.get(cid, ConsumoFila()),
-                display_phone_number=f[13] or None,
+                display_phone_number=f[13] or f[14] or None,
+                display_name=f[15] or f[16] or None,
             )
         )
     return Consola(
         items=items,
         total=total,
-        runtime=banderas.runtime,
-        routing=banderas.ruteo,
         consistency=consistencia,
         unassigned_agents=sin_conexion,
     )
@@ -338,7 +339,7 @@ async def _releases(
 async def _consumo(
     session: Any, tenant_id: uuid.UUID, ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, ConsumoFila]:
-    """Últimos 7 días. Con `aos_runtime = legacy` el loop escribe `connection_id` NULL: da cero."""
+    """Últimos 7 días."""
     if not ids:
         return {}
     filas = (
@@ -349,6 +350,7 @@ async def _consumo(
                 "FROM usage_ledger "
                 "WHERE tenant_id = :t AND connection_id IS NOT NULL AND connection_id IN :ids AND created_at >= :desde "
                 "  AND kind <> 'eval' "
+                f"  AND {sql_no_es_prueba('conversation_id')} "
                 "GROUP BY connection_id"
             ).bindparams(bindparam("ids", expanding=True)),
             {"t": tenant_id, "ids": ids, "desde": utcnow() - VENTANA_CONSUMO},

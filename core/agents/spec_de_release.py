@@ -1,6 +1,6 @@
 """El AgentSpec del turno desde la release (HU-AOS-15, adenda de ADR-0117).
 
-Con `tenants.aos_runtime = 'v3'` el loop ejecuta la versión congelada del especialista en foco
+El loop ejecuta la versión congelada del especialista en foco
 (`agentspec/3`) y el KernelSpec del Coordinador (`kernelspec/1`) de la release de la
 conversación, no el AgentSpec v2 de `agent_specs`. El loop lee hoy la forma v2 en ~25 puntos
 (persona, modelo, memoria, playbooks, bindings, políticas, packs, guardrails y tools
@@ -17,8 +17,7 @@ Reglas:
 - Fail-closed: un contenido congelado que no valida el contrato es `VistaInvalida` (sube por el
   camino de error del turno). Una tool declarativa con referencias a secretos en la URL o el
   body se omite (hoy `core/mcp/declarative.py` solo resuelve referencias en headers: incluirla
-  mandaría el placeholder literal a un tercero); el comando `migrar-a-v3` la reporta y bloquea
-  el negocio hasta la parte 2.
+  mandaría el placeholder literal a un tercero).
 
 Importa solo contratos y `core.shared.release_vigente` (módulo hoja): nunca `core.releases`.
 """
@@ -151,8 +150,8 @@ def spec_v2_desde_release(
 
 
 def spec_del_turno(spec: AgentSpec) -> AgentSpec:
-    """El AgentSpec que ejecuta el turno: la vista v2 de la release vigente (`aos_runtime = v3`)
-    o `spec` tal cual sin release (legacy): el único punto de enganche del loop."""
+    """El AgentSpec que ejecuta el turno: la vista v2 de la release vigente
+    o `spec` tal cual sin release: el único punto de enganche del loop."""
     actual = release_vigente.vigente()
     if actual is None or actual.foco is None:
         return spec

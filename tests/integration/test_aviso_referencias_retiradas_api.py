@@ -24,7 +24,6 @@ from typing import Any
 
 import pytest
 from _api_helpers import api_headers, uniq
-from sqlalchemy import text
 from test_referencias_retiradas import (  # los helpers del incidente de #676
     ACCION,
     VIEJO,
@@ -96,19 +95,6 @@ async def _conteos(tid: uuid.UUID) -> tuple[Any, ...]:
     return tuple(fila)
 
 
-async def _runtime_v3(tid: uuid.UUID) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("update tenants set aos_runtime = 'v3' where id = :t"), {"t": tid})
-    finally:
-        await engine.dispose()
-
 
 async def _borrador_con_lo_retirado(tid: uuid.UUID, aid: uuid.UUID) -> None:
     """El borrador del dueño, escrito ANTES del retiro: una acción y un procedimiento que ya no existen.
@@ -159,7 +145,7 @@ async def test_master_ve_el_mismo_informe_que_el_cli(app_client) -> None:
     ] == [(f.ambito, f.agente, f.version, f.ruta, f.codigo, f.nombre, f.destino, f.donde) for f in cli.filas]
 
     en_version = _fila(informe, "version", ACCION)
-    assert en_version["agent"] == "general" and en_version["version"] == version.version
+    assert en_version["agent"] == "atencion" and en_version["version"] == version.version
     assert en_version["code"] == "accion_inexistente" and en_version["kind"] == "action"
     assert en_version["path"].startswith("tools[") and en_version["destination"] == "quitar"
     assert en_version["where"] and "release #" in en_version["where"][0]
@@ -211,7 +197,7 @@ async def test_el_dueno_ve_solo_lo_suyo_en_palabras_simples(app_client) -> None:
     aviso = r.json()
     assert aviso["affected_agents"] == 1
     (agente,) = aviso["agents"]
-    assert (agente["agent_id"], agente["key"]) == (str(aid), "general")
+    assert (agente["agent_id"], agente["key"]) == (str(aid), "atencion")
     assert agente["name"] and agente["published_version"] == version.version
     assert agente["in_use"] is True  # la release activa de la conexión lo congeló
     assert agente["blocks_publish"] is False  # el borrador está limpio: publicar no falla
@@ -330,7 +316,6 @@ async def test_el_editor_tampoco_publica_lo_retirado_aunque_sea_un_procedimiento
     from core.shared.tenant import tenant_scope
 
     a, _, cid, _, _ = await _negocio_del_incidente()
-    await _runtime_v3(a)
     master = await api_headers(app_client, a)
     async with tenant_scope(a):
         agente = await versiones.crear_agente(a, key="ventas59", kind="specialist", name="Ventas 59", description="", actor=None)

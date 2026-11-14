@@ -5,7 +5,7 @@ Sin LLM ni red. Criterios de la HU:
   overrides de playbooks, secciones del negocio y los campos de `AppSettings` del prompt, con
   `manifest_hash`; no se activa sola; idempotente por hash.
 - **Release 1:** por conexión conversacional, desde el AgentSpec v2 activo, idempotente; con
-  `aos_runtime = legacy` no cambia lo que lee el loop.
+  sin cambio en lo que lee el loop.
 - **Sticky por episodio:** con la 2 publicada, una conversación en la 1 sigue en ella hasta el
   fin del episodio, y su siguiente episodio usa la 2.
 - **Rollback:** cambio de puntero; las conversaciones de la release retirada cambian en su
@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _api_helpers import api_headers, uniq
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
@@ -84,9 +84,9 @@ async def _negocio() -> tuple[uuid.UUID, str, uuid.UUID]:
 
 
 async def _release_uno(tid: uuid.UUID) -> Any:
-    from core.releases.release_uno import backfill_releases
+    from release_de_prueba import release_inicial
 
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     return reporte
 
@@ -634,10 +634,8 @@ async def test_api_releases_permisos_aislamiento_y_rollback(app_client) -> None:
     )
     assert r.status_code == 404
 
-    # El dueño en legacy no escribe (403); con v3 sí.
+    # El dueño escribe: sin 403 por runtime (ADR-0191).
     dueno = await api_headers(app_client, tid, email=await _dueno(tid), password=PASSWORD)
-    assert (await app_client.post(f"{base}/releases", headers=dueno, json={})).status_code == 403
-    await banderas_como_dueno(tid, aos_runtime="v3")
     await _cambiar_nombre(tid, "Desde la API")
     r = await app_client.post(f"{base}/releases", headers=dueno, json={"notes": "cambio de nombre"})
     assert r.status_code == 201, r.text
@@ -665,15 +663,13 @@ async def test_api_releases_permisos_aislamiento_y_rollback(app_client) -> None:
     assert (await app_client.post(f"{base}/rollback", headers=dueno, json={})).status_code == 409
 
 
-async def test_fijar_release_del_turno_solo_con_v3(monkeypatch) -> None:
-    from core.config import get_settings
+async def test_fijar_release_del_turno_fija_la_release_activa(monkeypatch) -> None:
     from core.db.models import Conversation
     from core.db.session import get_session
     from core.kernel.release_del_turno import con_release, fijar_release_del_turno
     from core.shared import release_vigente
     from core.shared.tenant import tenant_scope
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
     tid, _, cid = await _negocio()
     await _release_uno(tid)
     uno = await _activa(tid, cid)
@@ -687,14 +683,6 @@ async def test_fijar_release_del_turno_solo_con_v3(monkeypatch) -> None:
         asignacion = await fijar_release_del_turno(conversacion)
         return asignacion, release_vigente.vigente()
 
-    async with tenant_scope(tid):
-        asignacion, vigente = await turno()
-    assert asignacion is None and vigente is None  # legacy: nada
-    assert (await _sql(tid, "select release_id from conversations where id = :c", c=conv))[0][
-        0
-    ] is None
-
-    await banderas_como_dueno(tid, aos_runtime="v3")
     async with tenant_scope(tid):
         asignacion, vigente = await turno()
     assert asignacion is not None and asignacion.release_id == uno

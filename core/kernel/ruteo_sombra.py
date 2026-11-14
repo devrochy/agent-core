@@ -1,26 +1,28 @@
-"""Operación del enrutamiento (HU-AOS-17, ADR-0138): la bandera `tenants.aos_routing` y el reporte
-del enrutamiento. Solo el master (CLI `agent-core db ruteo` y `db reporte-ruteo`). Sin LLM.
+"""Reporte del enrutamiento (HU-AOS-17, ADR-0138). Solo el master (CLI `agent-core db reporte-ruteo`).
+Sin LLM. El ruteo ya no es bandera del negocio (ADR-0191, HU-AOS-69): corre en `active` en todo
+turno, salvo en las conexiones cuya release pide sombra (`routing.shadowMode` del KernelSpec).
 
 El reporte tiene **dos fuentes**, y cada una dice qué mide:
 
 1. **Golden de ruteo** (`reporte_de_golden`, verdad esperada por escenario): cada frase de
    `evals/ruteo/golden.jsonl` (o de un archivo propio del negocio) se pasa por el router de la
    **release activa** de cada conexión, y la predicción se compara con el procedimiento esperado.
-   No depende del tráfico ni de que el agente inicie nada, y vale igual con el ruteo en `off`,
+   No depende del tráfico ni de que el agente inicie nada, y vale igual con la release en
    `shadow` o `active`. Es la medida de la **configuración de ruteo** (ejemplos, reglas, umbrales).
 2. **Tráfico real** (`reporte_de_sombra`): lo que el router predijo en turnos reales frente al
    primer procedimiento que se inició en esa conversación entre ese turno y el siguiente
    (`conversation_tasks.created_at`). Dos orígenes de la predicción:
-   - `sombra`: `core_decisions.shadow_route` (el ruteo en `shadow` decide y no cambia quién atiende);
-   - `activo`: con `aos_routing = active` no se escribe `shadow_route`; la predicción es un
+   - `sombra`: `core_decisions.shadow_route` (una release que pide sombra decide y no cambia quién
+     atiende);
+   - `activo`: en `active` no se escribe `shadow_route`; la predicción es un
      disparador (`route_source = 'trigger'`, su procedimiento es el primer candidato) y lo real es lo
      que inicia el especialista al que se enrutó. Las reglas no se miden en activo: la `start` la
      inicia el motor por construcción y la de agente no predice un procedimiento.
 
    La **verdad** es un inicio del agente (`iniciar_procedimiento`), no una etiqueta: si el agente no
    inicia nada, la predicción queda **sin verdad** (no se puede saber si fue falsa) y no cuenta como
-   un fallo. Solo cuenta como falso positivo el turno donde se inició otro procedimiento. Hay verdad
-   solo con `aos_procedures` encendida, y como `iniciar_procedimiento` ofrece solo los
+   un fallo. Solo cuenta como falso positivo el turno donde se inició otro procedimiento. Como
+   `iniciar_procedimiento` ofrece solo los
    procedimientos del agente en foco, la medida es justa si el agente que atiende los declara todos.
 """
 
@@ -34,8 +36,6 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
-
-from core.kernel.router import MODOS
 
 MAX_DIAS = 31
 _PREDICEN = ("rule", "trigger")
@@ -320,33 +320,26 @@ def cumple_meta(reporte: Reporte) -> bool | None:
     )
 
 
-def leyenda_trafico(modo: str, con_procedimientos: bool, reporte: Reporte) -> list[str]:
+def leyenda_trafico(reporte: Reporte) -> list[str]:
     """Qué mide el tráfico real y por qué puede salir vacío o sin verdad. Puro: el CLI lo imprime."""
     notas = [
         "Qué mide: la predicción del router en turnos reales (sin tarea en foco) frente al primer procedimiento "
         "que se inició en esa conversación hasta el turno siguiente. La verdad es un inicio del agente, no una "
         "etiqueta: «Sin verdad» = se predijo y no se inició nada (no prueba que fuera falso)."
     ]
-    if modo == "off":
-        notas.append("El ruteo está apagado (aos_routing = off): no se registran predicciones. Usa el golden (fuente 1).")
-    elif modo == "active":
+    notas.append(
+        "El ruteo está activo en todo negocio: el router no escribe shadow_route, así que este reporte usa los "
+        "turnos enrutados por disparador (su procedimiento es el primer candidato) frente a lo que inicia el "
+        "especialista al que se enrutó. Las reglas no se miden en activo (la `start` la inicia el motor por "
+        f"construcción; la de agente no predice un procedimiento): {reporte.reglas_activas} en la ventana. "
+        "Las conexiones cuya release pide sombra (`routing.shadowMode`) aportan turnos de origen `sombra`."
+    )
+    if not reporte.turnos:
         notas.append(
-            "El ruteo está activo: el router no escribe shadow_route, así que este reporte usa solo los turnos "
-            "enrutados por disparador (su procedimiento es el primer candidato) frente a lo que inicia el "
-            "especialista al que se enrutó. Las reglas no se miden en activo (la `start` la inicia el motor por "
-            f"construcción; la de agente no predice un procedimiento): {reporte.reglas_activas} en la ventana."
+            "Sin turnos medibles: no hubo disparadores en la ventana (o todo fue por regla o con tarea en "
+            "foco). Usa el golden (fuente 1)."
         )
-        if not reporte.turnos:
-            notas.append(
-                "Sin turnos medibles: no hubo disparadores en la ventana (o todo fue por regla o con tarea en "
-                "foco). Los turnos de antes de pasar a activo, en sombra, sí cuentan si caen en la ventana."
-            )
-    if not con_procedimientos and reporte.turnos:
-        notas.append(
-            "aos_procedures está apagada: nadie puede iniciar un procedimiento, así que no hay verdad en este "
-            "reporte. Mide con el golden (fuente 1)."
-        )
-    elif reporte.turnos and not reporte.reales:
+    elif not reporte.reales:
         notas.append(
             "Ninguna conversación inició un procedimiento: en sombra el router no inicia nada, lo inicia el agente "
             "por defecto con `iniciar_procedimiento`, y aquí no lo hizo. Las predicciones quedan sin verdad (no es "
@@ -425,43 +418,6 @@ async def reporte_de_pila(tenant_id: uuid.UUID, dias: int = 7) -> ReportePila:
     return metricas_de_pila((predichos(f[0]), [str(x) for x in (f[1] or [])]) for f in filas)
 
 
-async def escribir_modo(tenant_id: uuid.UUID, modo: str, database_url: str | None = None) -> None:
-    """Fija `tenants.aos_routing` con el rol dueño y `aos_fijar_banderas` (migración 0097; el
-    panel del master usa la misma función con su `admin_id`). Exige `aos_runtime = 'v3'` para
-    encenderla (la función y el CHECK de 0094 también)."""
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-    from core.kernel.banderas import BanderasAOS, fijar_banderas
-
-    if modo not in MODOS:
-        raise ValueError(f"modo inválido: {modo}")
-    url = database_url or get_settings().migrations_database_url
-    if not url:
-        raise PermissionError("falta MIGRATIONS_DATABASE_URL (rol dueño) para escribir las banderas")
-    engine = create_async_engine(url)
-    try:
-        async with engine.begin() as conn:
-            fila = (
-                await conn.execute(
-                    text("SELECT aos_runtime, aos_procedures FROM tenants WHERE id = :t AND deleted_at IS NULL FOR UPDATE"),
-                    {"t": tenant_id},
-                )
-            ).first()
-            if fila is None:
-                raise LookupError("negocio no encontrado")
-            if modo != "off" and fila[0] != "v3":
-                raise ValueError("el enrutamiento exige aos_runtime = 'v3' (migrar-a-v3 primero)")
-            await fijar_banderas(
-                conn,
-                tenant_id,
-                BanderasAOS(runtime=str(fila[0]), procedimientos=bool(fila[1]), ruteo=modo),
-                actor="system:ruteo",
-            )
-    finally:
-        await engine.dispose()
-
-
 __all__ = [
     "GOLDEN_POR_DEFECTO",
     "MAX_DIAS",
@@ -474,7 +430,6 @@ __all__ = [
     "ReportePila",
     "cargar_golden",
     "cumple_meta",
-    "escribir_modo",
     "evaluar_golden",
     "leyenda_trafico",
     "metricas",

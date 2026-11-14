@@ -99,6 +99,10 @@ ON_ORDER_PAID = "order.paid"
 # Centro de notificaciones (ADR-0167): se escribe en el outbox junto con la fila de
 # `notifications` y el handler del core envía el push (idempotente por `push_sent_at`).
 ON_NOTIFICATION_CREATED = "notification.created"  # payload: notification_id
+# ADR-0191: una conexión conversacional nueva (o revivida) con sus instancias base pide su
+# release 1. Se escribe en el outbox en la transacción del alta; el handler la construye y la
+# promueve después del commit (idempotente: solo conexiones sin ninguna release). payload: connection_id
+ON_CONNECTION_RELEASE_1 = "connection.release_1"
 
 # HU-AOS-18 (adenda de ADR-0116): la guarda A2A cortó un ciclo (o una autollamada) entre agentes.
 # In-process, después de confirmar el evento del ledger. Sin payload de la operación.

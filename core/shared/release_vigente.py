@@ -1,6 +1,6 @@
 """Release del turno en curso (ADR-0117 §2 y §4, HU-AOS-14).
 
-Con `tenants.aos_runtime = 'v3'` el kernel asigna a la conversación una release de su conexión
+El kernel asigna a la conversación una release de su conexión
 (`core.kernel.release_del_turno`) y deja aquí lo que el runtime lee de ella en vez del disco y de
 `AppSettings`: los overrides de playbooks (ADR-0026), las secciones `tenant` del flujo
 (ADR-0109), los campos de `AppSettings` que entran al prompt y el `episode.idleMinutes` del
@@ -179,6 +179,13 @@ def marcar_v3_sin_release(tenant_id: uuid.UUID) -> None:
         ranura.v3_sin_release = tenant_id
 
 
+def sin_release() -> bool:
+    """¿El turno es de un negocio v3 sin release activa (del negocio del `tenant_scope`)? El loop no
+    responde en ese caso (ADR-0191): no hay vuelta al v2."""
+    ranura = _ranura.get()
+    return ranura is not None and ranura.valor is None and ranura.v3_sin_release is not None
+
+
 def fijar_inicio(
     tenant_id: uuid.UUID,
     procedure_id: str | None,
@@ -331,6 +338,7 @@ __all__ = [
     "max_stack",
     "nombre_de_agente",
     "procedimientos_del_agente",
+    "sin_release",
     "tomar_inicio",
     "vigente",
     "write_namespaces_del_turno",

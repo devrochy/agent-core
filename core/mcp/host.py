@@ -84,6 +84,10 @@ class MCPHost:
         for tool in skill.get_tools():
             if tool.name in self._tools:
                 raise PluginError(plugin_id, f"Tool duplicada: {tool.name}")
+            if not tool.solo_lectura and not tool.side_effects:
+                # HU-ARCH-14: el sandbox no puede adivinar si escribe. La auditoría de CI lo
+                # rechaza; en runtime solo avisamos para no tumbar un pack ya instalado.
+                log.warning("tool_sin_declaracion_de_prueba", tool=tool.name, plugin=plugin_id)
             tool.plugin_id = plugin_id
             self._tools[tool.name] = tool
         log.info("skill_registered", skill=skill.name, plugin=plugin_id,
@@ -327,29 +331,68 @@ class MCPHost:
         tool = self._tools.get(tool_name)
         if tool is None:
             return {"error": f"Herramienta desconocida: {tool_name}"}
-
-        try:
-            result = await tool.handler(arguments, context)
-        except BusinessError as exc:
-            # Rechazo de negocio (HU-ARCH-18): resultado controlado, el pack
-            # SIGUE habilitado. Nunca se convierte en PluginError.
-            result = exc.as_result()
-        except PluginError:
-            raise
-        except Exception as exc:
-            raise PluginError(tool.plugin_id, f"Tool '{tool_name}' falló: {exc}") from exc
-
-        await event_bus.emit(
-            ON_TOOL_EXECUTED,
-            tool_name=tool_name,
-            plugin_id=tool.plugin_id,
-            conversation_id=context.conversation_id,
-        )
-        return result
+        return await ejecutar_tool(tool, arguments, context)
 
     @staticmethod
     def serialize_result(result: dict[str, Any]) -> str:
         return json.dumps(result, ensure_ascii=False, default=str)
+
+
+async def ejecutar_tool(
+    tool: MCPTool, arguments: dict[str, Any], context: ToolContext
+) -> dict[str, Any]:
+    """Ejecuta una tool y aplica el sandbox de la prueba del panel (HU-ARCH-14).
+
+    - tool de lectura con `simular`: usa el simulador (p. ej. consultar un pedido ficticio).
+    - tool con `side_effects`: usa `simular`; si no lo declara, falla cerrado y NO toca nada.
+    - `permite_en_prueba`: única excepción, escribe solo sobre el cliente sintético de la prueba
+      (memoria/perfil), que no cuenta y se purga al cerrar.
+    - sin `context.sandbox` (canales reales y evals): handler real, sin cambios.
+    """
+    from core.shared.test_mode import marcar_simulado
+
+    # Solo la prueba del panel inyecta sandbox; los evals del canal `test` corren las tools reales.
+    en_prueba = context.sandbox is not None
+    simulado = False
+    try:
+        if en_prueba and tool.simular is not None:
+            resultado = await tool.simular(arguments, context)
+            simulado = True
+        elif en_prueba and tool.side_effects and not tool.permite_en_prueba:
+            resultado = {
+                "error": "herramienta_sin_simulador",
+                "simulado": True,
+                "message": (
+                    "Esta acción no se ejecuta en la prueba del panel para no alterar la data. "
+                    "Declará `solo_lectura` o un simulador en la tool (HU-ARCH-14)."
+                ),
+            }
+            simulado = True
+        else:
+            resultado = await tool.handler(arguments, context)
+    except BusinessError as exc:
+        # Rechazo de negocio (HU-ARCH-18): resultado controlado, el pack
+        # SIGUE habilitado. Nunca se convierte en PluginError.
+        resultado = exc.as_result()
+    except PluginError:
+        raise
+    except Exception as exc:
+        raise PluginError(tool.plugin_id, f"Tool '{tool.name}' falló: {exc}") from exc
+
+    if not isinstance(resultado, dict):
+        resultado = {"result": resultado}
+    if simulado:
+        resultado = {**resultado, "simulado": True}
+        marcar_simulado()
+
+    await event_bus.emit(
+        ON_TOOL_EXECUTED,
+        tool_name=tool.name,
+        plugin_id=tool.plugin_id,
+        conversation_id=context.conversation_id,
+        simulado=simulado,
+    )
+    return resultado
 
 
 mcp_host = MCPHost()
@@ -365,6 +408,7 @@ def new_tool_context(
     agent_id: uuid.UUID | None = None,
     agent_version_id: uuid.UUID | None = None,
     knowledge: Mapping[str, Any] | None = None,
+    sandbox: Any = None,
 ) -> ToolContext:
     return ToolContext(
         conversation_id=conversation_id,
@@ -376,4 +420,5 @@ def new_tool_context(
         agent_id=agent_id,
         agent_version_id=agent_version_id,
         knowledge=knowledge,
+        sandbox=sandbox,
     )

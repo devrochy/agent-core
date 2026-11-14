@@ -157,8 +157,7 @@ def backfill_releases(
 ) -> None:
     """Agent OS (HU-AOS-14): la release 1 de cada conexión conversacional que no tiene ninguna,
     construida desde el AgentSpec v2 activo (refresca el Coordinador y el General con el backfill
-    de agentes) y los artefactos del disco, y promovida. Idempotente. Exige `sync-packs` antes.
-    No cambia la conducta: con `aos_runtime = legacy` el runtime ignora la release."""
+    de agentes) y los artefactos del disco, y promovida. Idempotente. Exige `sync-packs` antes."""
     import asyncio
 
     from cli.tenant_ref import resolve_tenant
@@ -222,71 +221,6 @@ def evaluar_release(
         console.print(f"  sin escenarios: {r.sin_escenarios}; no medibles sin ruteo: {r.no_medibles}")
     console.print(f"Costo: {r.costo_usd:.4f} USD")
     if r.estado not in ("aprobada", "rechazada", "exento", "sin_cambios", "ya_medida", "sin_escenarios"):
-        raise typer.Exit(1)
-
-
-@app.command("migrar-a-v3")
-def migrar_a_v3(
-    tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
-    todos: bool = typer.Option(False, "--todos", help="Todos los negocios vivos."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="No escribe: reporta precondiciones, bloqueos y avisos."),
-    volver: bool = typer.Option(False, "--volver", help="Devuelve el negocio a `aos_runtime = legacy`."),
-    construir: bool = typer.Option(
-        False, "--construir", help="Si la release activa está desactualizada, construye y promueve una nueva."
-    ),
-    apagar_procedimientos: bool = typer.Option(
-        False, "--apagar-procedimientos", help="Con --volver: apaga también `aos_procedures` si estaba encendida."
-    ),
-    database_url: str | None = typer.Option(
-        None, "--database-url", help="Para escribir las banderas; por defecto MIGRATIONS_DATABASE_URL (el rol dueño)."
-    ),
-) -> None:
-    """Agent OS (HU-AOS-15): enciende `tenants.aos_runtime = 'v3'` (nunca `aos_procedures`) en un
-    negocio listo: backfills de conexiones, agentes y releases hechos, `AOS_CONNECTION_ROUTING`
-    encendida y la release activa de cada conexión al día y ejecutable. Un negocio que no cumple
-    queda bloqueado con el motivo. Corre primero con `--dry-run`. Precondición de producto
-    (runbook del PR): el pass^4 del negocio medido antes; si después de migrar empeora, `--volver`."""
-    import asyncio
-
-    from rich.table import Table
-
-    from cli.tenant_ref import resolve_tenant
-    from core.plugin_manager import plugin_manager
-    from core.releases.migracion_v3 import ReporteMigracion
-    from core.releases.migracion_v3 import migrar_a_v3 as correr
-
-    if bool(tenant) == todos:
-        raise typer.BadParameter("Indica --tenant <slug> o --todos (uno de los dos).")
-    if construir and todos:
-        raise typer.BadParameter("--construir promueve releases: solo con --tenant, nunca con --todos.")
-
-    async def _run() -> ReporteMigracion:
-        ids = [await resolve_tenant(tenant)] if tenant else None
-        return await correr(
-            tenant_ids=ids,
-            dry_run=dry_run,
-            volver=volver,
-            construir=construir,
-            apagar_procedimientos=apagar_procedimientos,
-            modules=plugin_manager.scan(),
-            database_url=database_url,
-        )
-
-    reporte = asyncio.run(_run())
-    titulo = "Migración a v3" if not volver else "Vuelta a legacy"
-    tabla = Table(title=titulo + (" (dry-run: no se escribió nada)" if dry_run else ""))
-    for columna in ("Negocio", "Antes", "Acción", "Conexiones"):
-        tabla.add_column(columna)
-    for n in reporte.negocios:
-        antes = n.runtime_antes + (" + procedimientos" if n.procedimientos else "")
-        tabla.add_row(n.slug, antes, n.accion, str(n.conexiones))
-    console.print(tabla)
-    for n in reporte.negocios:
-        for aviso in n.avisos:
-            console.print(f"[yellow]Aviso:[/yellow] {n.slug}: {aviso}")
-        for bloqueo in n.bloqueos:
-            console.print(f"[red]Bloqueado:[/red] {n.slug}: {bloqueo}")
-    if reporte.fallo:
         raise typer.Exit(1)
 
 
@@ -372,7 +306,7 @@ def migrar_referencias(
     """Agent OS (HU-AOS-59): aplica el registro de retiros (`core/agents/retiros.py`) a un negocio. Cada
     agente afectado publica una versión nueva (etiqueta y nota) partiendo de su última versión
     PUBLICADA, nunca del borrador; luego se reconstruye y promueve la release de cada conexión
-    afectada, igual que `migrar-a-v3 --construir` (con un canary en curso se construye pero no se
+    afectada, igual que un build del dueño (con un canary en curso se construye pero no se
     promueve). El reemplazo de un procedimiento solo se agrega si el negocio tiene su habilidad.
     Idempotente. Cambia agentes en vivo: se revierte desde las versiones del panel (HU-AOS-27)."""
     import asyncio
@@ -474,34 +408,6 @@ def contract_aos(
         raise typer.Exit(1)
 
 
-@app.command("ruteo")
-def ruteo(
-    tenant: str = typer.Option(..., "--tenant", help="El negocio (slug o UUID)."),
-    modo: str = typer.Option(..., "--modo", help="off | shadow | active"),
-    database_url: str | None = typer.Option(
-        None, "--database-url", help="Por defecto MIGRATIONS_DATABASE_URL (el rol dueño)."
-    ),
-) -> None:
-    """Agent OS (HU-AOS-17): fija `tenants.aos_routing` del negocio. `shadow` decide y registra la
-    ruta en `core_decisions.shadow_route` sin cambiar quién atiende; `active` enruta. Exige
-    `aos_runtime = 'v3'`. Runbook: una semana en `shadow` y `reporte-ruteo` antes de `active`."""
-    import asyncio
-
-    from cli.tenant_ref import resolve_tenant
-    from core.kernel.banderas import BanderasRechazadas
-    from core.kernel.ruteo_sombra import escribir_modo
-
-    async def _run() -> None:
-        await escribir_modo(await resolve_tenant(tenant), modo, database_url)
-
-    try:
-        asyncio.run(_run())
-    except (ValueError, LookupError, PermissionError, BanderasRechazadas) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(1) from None
-    console.print(f"aos_routing = {modo}")
-
-
 @app.command("reporte-bindings")
 def reporte_bindings(
     tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID); por defecto, todos los v3."),
@@ -555,7 +461,7 @@ def reporte_ruteo(
     y diciendo qué mide cada una. Meta de R3: ≥ 0,90 / ≥ 0,85.
 
     1. **Golden**: frases con el procedimiento esperado contra la release activa de cada conexión.
-       No depende del tráfico ni de que el agente inicie nada; sirve con el ruteo en off, shadow o active.
+       No depende del tráfico ni de que el agente inicie nada; sirve con la release en shadow o active.
     2. **Tráfico real**: lo que el router predijo frente a lo que se inició (sombra o activo)."""
     import asyncio
 
@@ -563,8 +469,6 @@ def reporte_ruteo(
     from rich.table import Table
 
     from cli.tenant_ref import resolve_tenant
-    from core.db.session import get_session
-    from core.kernel.banderas import BanderasAOS, banderas_del_negocio
     from core.kernel.ruteo_sombra import (
         META_PRECISION,
         META_RECALL,
@@ -589,17 +493,15 @@ def reporte_ruteo(
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from None
 
-    async def _run() -> tuple[BanderasAOS, list[ReporteGolden], Reporte | None, ReportePila | None]:
+    async def _run() -> tuple[list[ReporteGolden], Reporte | None, ReportePila | None]:
         tenant_id = await resolve_tenant(tenant)
         async with tenant_scope(tenant_id):
-            async with get_session() as session:
-                banderas = await banderas_del_negocio(session, tenant_id)
             por_golden = await reporte_de_golden(tenant_id, casos) if fuente != "trafico" else []
             if fuente == "golden":
-                return banderas, por_golden, None, None
-            return banderas, por_golden, await reporte_de_sombra(tenant_id, dias), await reporte_de_pila(tenant_id, dias)
+                return por_golden, None, None
+            return por_golden, await reporte_de_sombra(tenant_id, dias), await reporte_de_pila(tenant_id, dias)
 
-    banderas, por_golden, reporte, pila = asyncio.run(_run())
+    por_golden, reporte, pila = asyncio.run(_run())
 
     def _pct(valor: float | None) -> str:
         return "no medible" if valor is None else f"{valor:.2f}"
@@ -620,10 +522,7 @@ def reporte_ruteo(
         meta = f"meta R3: precisión ≥ {META_PRECISION:.2f} y recall ≥ {META_RECALL:.2f}"
         return f"no medible ({meta})" if ok is None else ("CUMPLE" if ok else "NO CUMPLE") + f" ({meta})"
 
-    console.print(
-        f"Negocio {tenant}: aos_runtime = {banderas.runtime} · aos_procedures = "
-        f"{'on' if banderas.procedimientos else 'off'} · aos_routing = {banderas.ruteo}"
-    )
+    console.print(f"Negocio {tenant}")
     if fuente != "trafico":
         console.print("\n[bold]1. Golden de ruteo[/bold] (verdad esperada por escenario; no depende del tráfico ni del agente)")
         if not por_golden:
@@ -650,7 +549,7 @@ def reporte_ruteo(
         console.print(
             f"\n[bold]2. Tráfico real[/bold] · {reporte.turnos} turnos en {dias} días (origen de la predicción → {origenes})"
         )
-        for nota in leyenda_trafico(banderas.ruteo, banderas.procedimientos, reporte):
+        for nota in leyenda_trafico(reporte):
             console.print(f"  {nota}")
         if reporte.metricas:
             console.print(_tabla("Tráfico real: lo predicho frente a lo iniciado", reporte, "Reales"))
@@ -664,122 +563,10 @@ def reporte_ruteo(
         )
 
 
-@app.command("backfill-agentes")
-def backfill_agentes(
-    dry_run: bool = typer.Option(False, "--dry-run", help="No escribe: reporta lo que haría."),
-    tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
-    lote: int = typer.Option(500, "--lote", min=1, help="Conexiones por transacción."),
-) -> None:
-    """Agent OS, paso B2 (HU-AOS-13): por negocio, el Coordinador y el General (desde el
-    AgentSpec v2 activo) con sus versiones y una instancia de cada uno en cada conexión
-    conversacional. Idempotente. Exige el backfill de conexiones (`backfill-conexiones`)
-    hecho antes; correr primero con `--dry-run`. No cambia la conducta: el runtime sigue en
-    `aos_runtime = legacy`."""
-    import asyncio
-
-    from rich.table import Table
-
-    from cli.tenant_ref import resolve_tenant
-    from core.agents.backfill_agentes import ReporteAgentes
-    from core.agents.backfill_agentes import backfill_agentes as correr
-    from core.plugin_manager import plugin_manager
-
-    async def _run() -> ReporteAgentes:
-        tenant_id = await resolve_tenant(tenant) if tenant else None
-        return await correr(dry_run=dry_run, tenant_id=tenant_id, lote=lote, modules=plugin_manager.scan())
-
-    reporte = asyncio.run(_run())
-    tabla = Table(title="Backfill de agentes" + (" (dry-run: no se escribió nada)" if dry_run else ""))
-    tabla.add_column("Concepto")
-    tabla.add_column("Cantidad", justify="right")
-    filas = [
-        ("Negocios", reporte.negocios),
-        ("Negocios migrados", reporte.migrados),
-        ("Negocios bloqueados (falta el backfill de conexiones)", len(reporte.bloqueados)),
-        ("Negocios con error", len(reporte.errores)),
-        ("AgentSpec por defecto sembrado", reporte.specs_sembrados),
-        *((f"Agentes: {k}", v) for k, v in sorted(reporte.agentes.items())),
-        *((f"Versiones: {k}", v) for k, v in sorted(reporte.versiones.items())),
-        *((f"Instancias: {k}", v) for k, v in sorted(reporte.instancias.items())),
-        *((f"Secretos: {k}", v) for k, v in sorted(reporte.secretos.items())),
-        ("Conexiones conversacionales", reporte.conexiones_conversacionales),
-        ("Conexiones sin agentes (integraciones o sin tipo)", reporte.conexiones_sin_agentes),
-        ("Choques con una conexión manual del mismo número", reporte.choques_manuales),
-        ("Avisos de la conversión (ver el log)", reporte.avisos),
-    ]
-    for concepto, cantidad in filas:
-        tabla.add_row(concepto, str(cantidad))
-    console.print(tabla)
-    for problema in reporte.bloqueados:
-        console.print(f"[yellow]Bloqueado:[/yellow] negocio {problema.tenant_id}: {problema.mensaje}")
-    for problema in reporte.errores:
-        console.print(f"[red]Error:[/red] negocio {problema.tenant_id}: {problema.mensaje}")
-    if reporte.fallo:
-        raise typer.Exit(1)
-
-
-@app.command("recorte-general")
-def recorte_general(
-    tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
-    todos: bool = typer.Option(False, "--todos", help="Todos los negocios vivos con aos_runtime = v3."),
-    apagar: bool = typer.Option(False, "--apagar", help="Apaga la bandera en vez de encenderla."),
-    aplicar: bool = typer.Option(False, "--aplicar", help="Escribe. Sin esto es dry-run: reporta lo que haría."),
-) -> None:
-    """SPEC-39 (HU-AOS-52): enciende `settings.agent_os.recortar_general` para que cada especialista
-    que se cree le quite al General lo suyo. Solo cambia la bandera (auditada como
-    `agent_os_recorte_general`): no republica a nadie. Los negocios nuevos ya nacen con ella
-    encendida; este comando es para los que ya existían. Exige `--tenant` o `--todos`."""
-    import asyncio
-
-    from sqlalchemy import text
-
-    from cli.tenant_ref import resolve_tenant
-    from core.agents import coordinacion
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    if bool(tenant) == todos:
-        console.print("[red]Indica --tenant <slug|uuid> o --todos (uno solo).[/red]")
-        raise typer.Exit(2)
-
-    async def _run() -> list[tuple[str, str, bool | None, str]]:
-        async with get_session() as session:
-            if tenant:
-                negocios = (
-                    await session.execute(
-                        text("SELECT id, slug FROM tenants WHERE id = :t AND deleted_at IS NULL"),
-                        {"t": await resolve_tenant(tenant)},
-                    )
-                ).all()
-            else:
-                negocios = (
-                    await session.execute(
-                        text("SELECT id, slug FROM tenants WHERE aos_runtime = 'v3' AND deleted_at IS NULL ORDER BY slug")
-                    )
-                ).all()
-        filas: list[tuple[str, str, bool | None, str]] = []
-        for tid, slug in negocios:
-            async with tenant_scope(tid):
-                antes = await coordinacion.estado_de_bandera(tid)
-                if antes is (not apagar) or not aplicar:
-                    resultado = "sin cambios" if antes is (not apagar) else "cambiaría"
-                else:
-                    await coordinacion.fijar_bandera(tid, not apagar, actor="cli:recorte-general")
-                    resultado = "cambiado"
-            filas.append((str(tid), slug, antes, resultado))
-        return filas
-
-    filas = asyncio.run(_run())
-    console.print("Recorte del General" + ("" if aplicar else " (dry-run: no se escribió nada)"))
-    for tid, slug, antes, resultado in filas:
-        console.print(f"  {slug} ({tid}): antes={antes} → {resultado}")
-    console.print(f"{len(filas)} negocio(s).")
-
-
 @app.command("presets-v2")
 def presets_v2(
     tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
-    todos: bool = typer.Option(False, "--todos", help="Todos los negocios vivos con aos_runtime = v3."),
+    todos: bool = typer.Option(False, "--todos", help="Todos los negocios vivos."),
     preset: str | None = typer.Option(
         None, "--preset", help="Preset a usar en vez del registrado en el negocio (solo con --tenant)."
     ),
@@ -789,8 +576,7 @@ def presets_v2(
     especialistas del preset (Ventas, Agenda, Cobranza, Suscripciones) que falten, con su
     instancia en cada conexión (nunca por defecto), agrega las reglas del Coordinador y construye
     la release candidata de cada conexión que cambió, SIN activarla. Idempotente: no duplica
-    agentes, no pisa lo que el dueño cambió y no devuelve instancias quitadas. Solo actúa con
-    `AOS_CONNECTION_ROUTING` encendida y `aos_runtime = 'v3'`. Dry-run por defecto."""
+    agentes, no pisa lo que el dueño cambió y no devuelve instancias quitadas. Dry-run por defecto."""
     import asyncio
 
     from rich.table import Table

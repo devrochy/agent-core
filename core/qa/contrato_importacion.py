@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -51,6 +51,15 @@ class PlantillaDeImportacion:
       para el dueño, en español. Los nombres de campo son los de las columnas.
     - `columna_clave` / `clave`: clave natural de la fila (SKU, nombre, documento). Dos filas del mismo
       archivo con la misma clave son un error de la segunda.
+    - `sinonimos`: columna → otras cabeceras con que la nombra un archivo real (ya normalizadas o no:
+      se comparan con `normalizar_cabecera`). Es el mapeo heurístico, antes de la IA (ADR-0194).
+    - `en_produccion`: la plantilla se puede importar también fuera de test (ADR-0194 §2). Es dato de
+      la plantilla: el cliente pinta lo que el servidor declara.
+    - Fotos (ADR-0194 §2, una foto = una fila): `esquema_foto` es lo que la IA de visión debe devolver
+      al ver la foto; `desde_foto(datos, image_key)` lo convierte en los valores de una fila de la
+      precarga (texto, como el CSV), y `columna_foto` es la columna interna donde viaja la clave de
+      la foto: no está en `columnas` (la plantilla descargable no la muestra), solo la llena el flujo
+      de fotos y la valida el pack al importar. Sin `esquema_foto`, la plantilla no importa fotos.
     """
 
     id: str
@@ -62,6 +71,15 @@ class PlantillaDeImportacion:
     columna_clave: str
     clave: Callable[[Any], str]
     ayuda: str = ""
+    sinonimos: Mapping[str, tuple[str, ...]] = field(default_factory=dict, hash=False, compare=False)
+    en_produccion: bool = False
+    esquema_foto: type[BaseModel] | None = None
+    desde_foto: Callable[[Any, str], dict[str, str]] | None = None
+    columna_foto: str | None = None
+
+    @property
+    def importa_fotos(self) -> bool:
+        return self.esquema_foto is not None and self.desde_foto is not None and self.columna_foto is not None
 
     @property
     def nombres(self) -> tuple[str, ...]:

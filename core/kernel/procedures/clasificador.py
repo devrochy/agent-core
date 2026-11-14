@@ -3,7 +3,7 @@
 Decide si el texto del cliente es una confirmación EXPLÍCITA de lo que el kernel le pidió
 confirmar. El botón firmado sigue siendo la vía preferida (payload determinista, sin interpretar
 texto); este clasificador cubre los canales sin botón y al cliente que escribe en vez de tocarlo.
-Solo lo usa el motor activo (`tenants.aos_procedures`), a través de `textos.confirmacion_alta`.
+Solo lo usa el motor, a través de `textos.confirmacion_alta`.
 
 Precisión antes que cobertura: un falso "sí" ejecuta algo que compromete; un falso "no" solo hace
 que el asistente vuelva a pedir la confirmación. Reglas, en orden:

@@ -59,7 +59,11 @@ async def _conexion(tid: uuid.UUID, tipo: str) -> tuple[uuid.UUID, str]:
             )
             session.add(fila)
             await session.flush()
-            return fila.id, external_id
+            cid = fila.id
+    from release_de_prueba import release_inicial
+
+    await release_inicial(tid)  # con su release: todo turno corre sobre una (ADR-0191)
+    return cid, external_id
 
 
 async def _activa(tid: uuid.UUID, cid: uuid.UUID, activa: bool) -> None:

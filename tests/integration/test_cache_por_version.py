@@ -1,7 +1,7 @@
 """HU-AOS-35 · caché por versión de lo compilado y prefijo estable (adenda de ADR-0117).
 
 Contra el stack real, con el loop real y un modelo guionado (sin LLM ni red), un negocio con su
-release 1 y `aos_runtime = 'v3'`:
+release 1:
 - **Una compilación por versión:** dos turnos de dos clientes compilan una vez; el prefijo (todos
   los bloques menos el dinámico) es idéntico byte a byte y es el de la ruta de siempre; los bytes
   de lo compilado cuentan en el tope de la caché.
@@ -115,11 +115,11 @@ async def _negocio(slug: str, pagos: Any) -> tuple[uuid.UUID, uuid.UUID]:
         id=cid, t=tid, ext=f"ig-{cid.hex[:8]}",
     )
     journeys._CONEXION_V3[tid] = cid
-    from core.releases.release_uno import backfill_releases
+    from release_de_prueba import release_inicial
 
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    await journeys.agentes_nativos(tid, cid, _modules())  # sin General (ADR-0192)
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
-    await _admin_sql("update tenants set aos_runtime = 'v3' where id = :t", t=tid)
     return tid, cid
 
 
@@ -127,7 +127,6 @@ async def _negocio(slug: str, pagos: Any) -> tuple[uuid.UUID, uuid.UUID]:
 async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID, uuid.UUID, Any]]:
     import pack_payments.payments as capacidad
 
-    from core.config import get_settings
     from core.releases.packs import sync_packs
     from core.tenants import deactivate_tenant, purge_tenant
 
@@ -138,11 +137,7 @@ async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID, uuid.UUID, Any
     slugs = [f"cache35-a-{uuid.uuid4().hex[:6]}", f"cache35-b-{uuid.uuid4().hex[:6]}"]
     a, cid_a = await _negocio(slugs[0], pagos)
     b, _ = await _negocio(slugs[1], pagos)
-    settings = get_settings()
-    antes = settings.aos_connection_routing
-    settings.aos_connection_routing = True
     yield a, cid_a, b, pagos
-    settings.aos_connection_routing = antes
     capacidad.build_provider = original
     for tid, slug in zip((a, b), slugs, strict=True):
         await deactivate_tenant(str(tid))
@@ -230,14 +225,6 @@ async def test_dos_turnos_compilan_una_vez_y_comparten_el_prefijo(negocios, monk
     assert list(compilado.bloques_fijos) == prefijo1
     assert compilado.bytes > 0 and release.bytes >= compilado.bytes
     assert cargar._bytes_en_cache >= release.bytes
-
-    # La ruta de siempre (legacy) arma el mismo prefijo.
-    await _admin_sql("update tenants set aos_runtime = 'legacy' where id = :t", t=a)
-    try:
-        _r, g_legacy, _ = await _turno(a, pagos, monkeypatch, "Caro")
-    finally:
-        await _admin_sql("update tenants set aos_runtime = 'v3' where id = :t", t=a)
-    assert g_legacy.bloques[0][:-1] == prefijo1
 
 
 async def test_lo_compilado_se_entrega_como_copia(negocios) -> None:  # type: ignore[no-untyped-def]
@@ -347,7 +334,7 @@ async def test_costos_por_agente_aislado_y_sin_filas_anteriores_al_corte(negocio
     [(instancia, agente)] = await _sql(
         a,
         "select ai.id, ai.agent_id from agent_instances ai join agents ag on ag.tenant_id = ai.tenant_id "
-        "and ag.id = ai.agent_id where ai.tenant_id = :t and ai.connection_id = :c and ag.key = 'general'",
+        "and ag.id = ai.agent_id where ai.tenant_id = :t and ai.connection_id = :c and ag.key = 'atencion'",
         t=a, c=cid,
     )
     # Una fila vieja (sin `cache_write_tokens`), una medible y una que no es actividad.

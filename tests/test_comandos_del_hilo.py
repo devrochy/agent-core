@@ -46,7 +46,7 @@ def _herramienta(nombre: str, plugin_id: str = "pack_commerce") -> MCPTool:
                    handler=_nada, plugin_id=plugin_id)
 
 
-def _motor(*, modo: str = "activo", foco: tuple[Proyeccion, Procedure] | None = None, abiertas=frozenset(),
+def _motor(*, foco: tuple[Proyeccion, Procedure] | None = None, abiertas=frozenset(),
            base: list[MCPTool] | None = None) -> ContextoMotor:
     proc = _proc()
     candidatas = [_herramienta("informar_plan"), _herramienta("generar_cotizacion"), _herramienta("crear_pedido")]
@@ -57,7 +57,6 @@ def _motor(*, modo: str = "activo", foco: tuple[Proyeccion, Procedure] | None = 
         assert stage is not None
         _f = _Foco(fila=types.SimpleNamespace(id=uuid.uuid4()), tarea=tarea, proc=p, stage=stage)  # type: ignore[arg-type]
     return ContextoMotor(
-        modo=modo,  # type: ignore[arg-type]
         tenant_id=uuid.uuid4(), conversation_id=uuid.uuid4(), customer_id=uuid.uuid4(), channel="whatsapp",
         procedimientos={proc.id: proc}, herramientas_base=base or [_herramienta("escalate_to_human", "core")],
         candidatas=candidatas, foco=_f, abiertas=abiertas,
@@ -167,12 +166,6 @@ def test_con_foco_las_acciones_de_la_etapa_mas_los_comandos() -> None:
     ]
     # `confirmar_cotizacion` está en la etapa pero no se ofrece (no hay tool): no se anuncia.
     assert m._acciones() == ["generar_cotizacion"]
-
-
-def test_en_sombra_no_hay_comandos() -> None:
-    m = _motor(modo="sombra")
-    assert [t.name for t in m.herramientas()] == ["escalate_to_human"]
-    assert m.comandos() == [] and not m.es_comando(comandos.INICIAR)
 
 
 async def test_un_comando_que_no_aplica_no_se_aplica(monkeypatch) -> None:  # type: ignore[no-untyped-def]

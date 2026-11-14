@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from _api_helpers import banderas_como_dueno, uniq
+from _api_helpers import uniq
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -55,9 +55,8 @@ async def _packs_registrados() -> None:
 
 @pytest.fixture
 def ruteo_encendido(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.config import get_settings
+    pass
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
 
 
 async def _negocio() -> tuple[uuid.UUID, str, uuid.UUID]:
@@ -74,16 +73,20 @@ async def _negocio() -> tuple[uuid.UUID, str, uuid.UUID]:
         t=tid,
         ext=uniq("ig"),
     )
+    from release_de_prueba import _journeys
+
+    await _journeys().agentes_nativos(tid, cid, _modules())  # Coordinador + especialista (ADR-0192)
     return tid, slug, cid
 
 
 async def _con_dos_releases(tid: uuid.UUID, cid: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
+    from release_de_prueba import release_inicial
+
     from core.releases.build import construir
     from core.releases.promocion import promover
-    from core.releases.release_uno import backfill_releases
     from core.shared.tenant import tenant_scope
 
-    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
     (uno,) = (await _sql(tid, "select active_release_id from channel_connections where id = :c", c=cid))[0]
     await _sql(tid, "update app_settings set assistant_name = 'Dos' where tenant_id = :t", t=tid)
@@ -147,28 +150,13 @@ async def _revisar(tid: uuid.UUID) -> Any:
 async def test_un_negocio_listo_no_tiene_bloqueos(ruteo_encendido) -> None:  # type: ignore[no-untyped-def]
     tid, _slug, cid = await _negocio()
     await _con_dos_releases(tid, cid)
-    await banderas_como_dueno(tid, aos_runtime="v3")
     reporte = await _revisar(tid)
     assert reporte.bloqueos == [] and reporte.dry_run and not reporte.aplicado
-
-
-async def test_bloquea_si_el_ruteo_esta_apagado_o_el_negocio_sigue_en_legacy(  # type: ignore[no-untyped-def]
-    monkeypatch,
-) -> None:
-    from core.config import get_settings
-
-    tid, slug, cid = await _negocio()
-    await _con_dos_releases(tid, cid)
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", False)
-    reporte = await _revisar(tid)
-    assert any("AOS_CONNECTION_ROUTING" in b for b in reporte.bloqueos)
-    assert any(slug in b and "legacy" in b and "migrar-a-v3" in b for b in reporte.bloqueos)
 
 
 async def test_bloquea_una_conversacion_sin_conexion_aunque_este_cerrada(ruteo_encendido) -> None:  # type: ignore[no-untyped-def]
     tid, slug, cid = await _negocio()
     await _con_dos_releases(tid, cid)
-    await banderas_como_dueno(tid, aos_runtime="v3")
     await _conversacion(tid, None, estado="closed")
     reporte = await _revisar(tid)
     assert reporte.sin_conexion == 1
@@ -180,10 +168,9 @@ async def test_un_negocio_dado_de_baja_no_pide_releases_pero_sus_conversaciones_
     await _conversacion(tid, None, estado="closed")  # sin conexión
     await _conversacion(tid, cid, cliente := uuid.uuid4())
     await _conversacion(tid, cid, cliente)  # repetida
-    await banderas_como_dueno(tid, aos_runtime="legacy")
     await _baja_logica(tid)
     reporte = await _revisar(tid)
-    # Ni runtime ni releases (ya no atiende), pero sí la conversación sin conexión y la repetida.
+    # Sin releases (ya no atiende), pero sí la conversación sin conexión y la repetida.
     assert reporte.sin_conexion == 1 and reporte.duplicadas == 1
     assert all("baja" in b for b in reporte.bloqueos) and len(reporte.bloqueos) == 1, reporte.bloqueos
 
@@ -193,13 +180,12 @@ async def test_pide_dos_releases_estables_sin_rollback(ruteo_encendido) -> None:
     from core.shared.tenant import tenant_scope
 
     tid, _slug, cid = await _negocio()
-    await banderas_como_dueno(tid, aos_runtime="v3")
     # Sin release activa.
     assert any("no tiene release activa" in b for b in (await _revisar(tid)).bloqueos)
 
-    from core.releases.release_uno import backfill_releases
+    from release_de_prueba import release_inicial
 
-    await backfill_releases(dry_run=False, tenant_id=tid, modules=_modules())
+    await release_inicial(tid, _modules())
     # Una sola release: no alcanza.
     assert any("se piden 2 estables" in b for b in (await _revisar(tid)).bloqueos)
 
@@ -315,12 +301,10 @@ async def test_aplicar_exige_confirmacion_y_el_contract_es_global(ruteo_encendid
     tid, _slug, _cid = await _negocio()
     with pytest.raises(ValueError):
         await contraer(dry_run=False, confirmado=True, tenant_ids=[tid])
-    from core.config import get_settings
 
     # Sin confirmación explícita no aplica, aunque todo lo demás estuviera bien.
     reporte = await contraer(dry_run=False, confirmado=False)
     assert any("--confirmo-sin-vuelta-atras" in b for b in reporte.bloqueos) and not reporte.aplicado
-    assert get_settings().aos_connection_routing
 
 
 # ---------------------------------------------------------------- DDL en un esquema descartable

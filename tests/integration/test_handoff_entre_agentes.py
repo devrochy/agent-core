@@ -1,12 +1,12 @@
 """HU-AOS-19 parte 1 · handoff en dos fases con el loop real y un modelo guionado (sin LLM).
 
-Negocio `aos_runtime = v3` con el motor y `pack_commerce`, dos especialistas que declaran
+Negocio con el motor y `pack_commerce`, dos especialistas que declaran
 `contratar_plan` (Ventas por defecto y Soporte) y Agenda, que solo declara `agendar_cita`:
 
 - **Sin pérdida:** Ventas, con una tarea a medias, pasa a Soporte. Al cerrar el turno, el dueño de la
   conversación y de la tarea es Soporte, los datos siguen igual, hay `owner_changed`, el ledger dice
   `handoff_applied` y `turn_outcomes.final_instance_id` = Soporte. El turno siguiente lo atiende
-  Soporte con la misma tarea, con el ruteo apagado y activo (`source = task`).
+  Soporte con la misma tarea (`source = task`).
 - **Contrato expuesto:** Agenda no declara la tarea abierta, así que no se ofrece.
 - **Ping-pong:** Ventas → Soporte → Ventas pasa; el tercer pedido sale `owner_frozen`.
 - **Fase 2 que no aplica:** con un turno escalado, o con el dueño cambiado por otro turno, el dueño
@@ -28,7 +28,6 @@ from test_enrutamiento_especialistas import (
     _decision,
     _dueno,
     _especialista,
-    _modo,
     _modules,
     _negocio,
     _publicar_release,
@@ -65,12 +64,11 @@ async def _proceso() -> None:
 
 @pytest.fixture
 def _ruteo(monkeypatch: Any) -> None:
-    from core.config import get_settings
-
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
+    pass
 
 
-async def _equipo(modo: str, enlaces: list[tuple[str, str]] | None) -> tuple[uuid.UUID, uuid.UUID, dict[str, uuid.UUID], dict[str, uuid.UUID]]:
+
+async def _equipo(enlaces: list[tuple[str, str]] | None) -> tuple[uuid.UUID, uuid.UUID, dict[str, uuid.UUID], dict[str, uuid.UUID]]:
     """(tid, conexión, instancias por key, agentes por key). `enlaces`: pares con `handoff`."""
     from core.agents import grafo_a2a
     from core.shared.tenant import tenant_scope
@@ -91,7 +89,6 @@ async def _equipo(modo: str, enlaces: list[tuple[str, str]] | None) -> tuple[uui
                 ],
             )
     await _publicar_release(tid, cid)
-    await _modo(tid, modo)
     filas = await _sql(
         tid,
         "select a.key, i.id from agent_instances i join agents a on a.tenant_id = i.tenant_id and a.id = i.agent_id "
@@ -130,9 +127,8 @@ async def _ledger(tid: uuid.UUID, conv: uuid.UUID) -> list[tuple[str, str | None
 
 
 # ---------------------------------------------------------------- sin pérdida
-@pytest.mark.parametrize("modo", ["off", "active"])
-async def test_handoff_sin_perdida(_ruteo: None, monkeypatch: Any, modo: str) -> None:
-    tid, cid, inst, _ = await _equipo(modo, [("ventas", "soporte")])
+async def test_handoff_sin_perdida(_ruteo: None, monkeypatch: Any) -> None:
+    tid, cid, inst, _ = await _equipo([("ventas", "soporte")])
     conv = await _conversacion(tid, cid)
     task_id = await _tarea_con_dato(tid, conv, monkeypatch)
 
@@ -162,14 +158,13 @@ async def test_handoff_sin_perdida(_ruteo: None, monkeypatch: Any, modo: str) ->
     g = await _turno(tid, conv, monkeypatch, ["Sigo con tu plan."], texto="¿seguimos?")
     d = await _decision(tid, conv)
     assert d["active_instance_id"] == str(inst["soporte"]) and d["focus_task_id"] == str(task_id)
-    if modo == "active":
-        assert d["route_source"] == "task"
+    assert d["route_source"] == "task"
     assert "actualizar_tarea" in g.tools[0] and PASAR not in g.tools[0]  # Soporte no tiene enlaces
 
 
 # ---------------------------------------------------------------- contrato expuesto y sin grafo
 async def test_no_se_ofrece_un_destino_que_no_declara_la_tarea(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, inst, _ = await _equipo("off", [("ventas", "agenda")])
+    tid, cid, inst, _ = await _equipo([("ventas", "agenda")])
     conv = await _conversacion(tid, cid)
     g = await _turno(tid, conv, monkeypatch, ["Hola."], texto="hola")
     assert PASAR in g.tools[0]  # sin tareas abiertas, Agenda sí es destino
@@ -182,7 +177,7 @@ async def test_no_se_ofrece_un_destino_que_no_declara_la_tarea(_ruteo: None, mon
 
 
 async def test_sin_grafo_no_se_ofrece(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, _inst, _ = await _equipo("off", None)
+    tid, cid, _inst, _ = await _equipo(None)
     conv = await _conversacion(tid, cid)
     g = await _turno(tid, conv, monkeypatch, ["Hola."], texto="hola")
     assert PASAR not in g.tools[0]
@@ -190,7 +185,7 @@ async def test_sin_grafo_no_se_ofrece(_ruteo: None, monkeypatch: Any) -> None:
 
 # ---------------------------------------------------------------- ping-pong
 async def test_ping_pong_se_congela_en_el_tercer_cambio(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, inst, _ = await _equipo("off", [("ventas", "soporte"), ("soporte", "ventas")])
+    tid, cid, inst, _ = await _equipo([("ventas", "soporte"), ("soporte", "ventas")])
     conv = await _conversacion(tid, cid)
     await _turno(tid, conv, monkeypatch, [(PASAR, {"agente": "soporte"}), "Te paso."], texto="uno")
     assert await _dueno(tid, conv) == inst["soporte"]
@@ -237,7 +232,7 @@ async def test_un_turno_escalado_no_cambia_de_dueno(monkeypatch: Any) -> None:
     from core.kernel import handoff
     from core.shared.tenant import tenant_scope
 
-    tid, cid, inst, _ = await _equipo("off", [("ventas", "soporte")])
+    tid, cid, inst, _ = await _equipo([("ventas", "soporte")])
     conv = await _conversacion(tid, cid)
     turno = await _pendiente(tid, cid, conv, inst, "escalated")
     async with tenant_scope(tid):
@@ -250,7 +245,7 @@ async def test_si_otro_turno_cambio_el_dueno_se_cancela(monkeypatch: Any) -> Non
     from core.kernel import handoff
     from core.shared.tenant import tenant_scope
 
-    tid, cid, inst, _ = await _equipo("off", [("ventas", "soporte")])
+    tid, cid, inst, _ = await _equipo([("ventas", "soporte")])
     conv = await _conversacion(tid, cid)
     turno = await _pendiente(tid, cid, conv, inst, "replied")
     await _sql(tid, "update conversations set active_agent_instance_id = :a where id = :c", a=inst["agenda"], c=conv)
@@ -264,7 +259,7 @@ async def test_fuera_del_negocio_no_aplica(monkeypatch: Any) -> None:
     from core.kernel import handoff
     from core.shared.tenant import tenant_scope
 
-    tid, cid, inst, _ = await _equipo("off", [("ventas", "soporte")])
+    tid, cid, inst, _ = await _equipo([("ventas", "soporte")])
     otro, _ = await _negocio()
     conv = await _conversacion(tid, cid)
     turno = await _pendiente(tid, cid, conv, inst, "replied")
@@ -278,7 +273,7 @@ async def test_una_tarea_abierta_despues_de_aceptar_cancela_el_handoff(monkeypat
     from core.kernel import handoff, state
     from core.shared.tenant import tenant_scope
 
-    tid, cid, inst, _ = await _equipo("off", [("ventas", "soporte")])
+    tid, cid, inst, _ = await _equipo([("ventas", "soporte")])
     conv = await _conversacion(tid, cid)
     turno = await _pendiente(tid, cid, conv, inst, "replied")  # aceptado sin tareas abiertas
     async with tenant_scope(tid):

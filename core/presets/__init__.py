@@ -90,8 +90,8 @@ class PresetManifest(BaseModel):
     # uno de sus packs. Solo se guarda si queda habilitado.
     proveedor_suscripciones: str | None = None
     # Presets v2 (ADR-0139, HU-AOS-46): keys de las plantillas de agente especialista
-    # (`core/presets/plantillas/<key>.json`) que el preset instala en un negocio con el Agent OS
-    # (`aos_runtime = 'v3'`). Sin `agentes` el manifiesto es v1: el negocio sigue con el General.
+    # (`core/presets/plantillas/<key>.json`) que el preset instala en el negocio.
+    # Sin `agentes` el manifiesto es v1 y no instala especialistas.
     agentes: list[Annotated[str, Field(pattern=r"^[a-z0-9_]{2,40}$")]] = Field(default_factory=list, max_length=10)
 
     @property
@@ -198,7 +198,7 @@ class PlantillaAgente(BaseModel):
 
     @model_validator(mode="after")
     def _coherente(self) -> PlantillaAgente:
-        from core.agents.tolerante import KEYS_RESERVADAS
+        from core.agents.claves import KEYS_RESERVADAS
 
         if self.key in KEYS_RESERVADAS:
             raise ValueError(f"la key {self.key!r} está reservada para los agentes del sistema")

@@ -13,8 +13,7 @@ comparan con el binario de hoy y, con `aplicar`, se publica y se reconstruye.
 - el manifiesto de la release ACTIVA de cada conexión conversacional viva (`release`): las versiones
   que congela (`components[].agent_version_id`) y los procedimientos que resolvió
   (`components[].procedures`). Una release cuenta aunque la versión más nueva del agente ya esté
-  limpia: es lo que corre. Se mira el manifiesto, no el estado del negocio (`migrar-a-v3
-  --dry-run` dice `ya_estaba` aunque la release sea vieja).
+  limpia: es lo que corre. Se mira el manifiesto, no el estado del negocio.
 - las conexiones borradas y las que no producen conversaciones (`playground`, integraciones como
   Google Calendar) se reportan aparte: no tienen release que corra ni cuentan como falla.
 
@@ -26,8 +25,8 @@ publicada (nunca del borrador), recibe el registro de retiros (`core.agents.reti
 con `revisar_spec` (la misma regla que al publicar) y se publica con etiqueta y nota. El reemplazo
 de un procedimiento solo se agrega si todas las conexiones del agente tienen la habilidad que lo
 trae. Luego, por cada conexión viva cuya release activa estaba afectada, se construye la release
-(`build.construir`, sin refrescar desde la ficha v2) y se promueve con la exención
-`migrar_referencias`, la misma ruta de `migrar-a-v3 --construir`. Con un canary en curso la
+(`build.construir`) y se promueve con la exención
+`migrar_referencias`. Con un canary en curso la
 release se construye pero NO se promueve: el canary no se detiene a ciegas. Idempotente: sin
 afectados no hace nada. Sin LLM.
 """
@@ -125,21 +124,21 @@ def _json(valor: Any) -> Any:
     return json.loads(valor) if isinstance(valor, str) else valor
 
 
-async def _negocios(tenant_ids: Iterable[uuid.UUID] | None) -> list[tuple[uuid.UUID, str, str]]:
+async def _negocios(tenant_ids: Iterable[uuid.UUID] | None) -> list[tuple[uuid.UUID, str]]:
     async with get_session() as session:
         if tenant_ids is None:
             filas = await session.execute(
-                text("SELECT id, slug, aos_runtime FROM tenants WHERE deleted_at IS NULL ORDER BY slug")
+                text("SELECT id, slug FROM tenants WHERE deleted_at IS NULL ORDER BY slug")
             )
         else:
             filas = await session.execute(
                 text(
-                    "SELECT id, slug, aos_runtime FROM tenants "
+                    "SELECT id, slug FROM tenants "
                     "WHERE id = ANY(cast(:ids AS uuid[])) AND deleted_at IS NULL ORDER BY slug"
                 ),
                 {"ids": list(tenant_ids)},
             )
-        return [(f[0], str(f[1]), str(f[2])) for f in filas.all()]
+        return [(f[0], str(f[1])) for f in filas.all()]
 
 
 @dataclass(frozen=True)
@@ -353,7 +352,7 @@ async def auditar(
 
     binario = ref.binario_de(modules if modules is not None else plugin_manager.list_modules())
     reporte = ReporteAuditoria()
-    for tid, slug, _runtime in await _negocios(tenant_ids):
+    for tid, slug in await _negocios(tenant_ids):
         try:
             async with tenant_scope(tid):
                 reporte.negocios.append(await _auditar_negocio(tid, slug, binario))
@@ -390,7 +389,6 @@ class ConexionReconstruida:
 class NegocioMigrado:
     tenant_id: uuid.UUID
     slug: str
-    runtime: str
     agentes: list[AgenteMigrado] = field(default_factory=list)
     conexiones: list[ConexionReconstruida] = field(default_factory=list)
     borradores: list[Fila] = field(default_factory=list)
@@ -575,7 +573,7 @@ async def _reconstruir(
     try:
         resultado = await construir(
             tenant_id, conexion.id, actor=ACTOR, origin="platform", modules=modulos,
-            notas="migrar-referencias --aplicar", refrescar=False,
+            notas="migrar-referencias --aplicar",
         )
     except ErrorDelBuild as exc:
         fila.accion = "bloqueada"
@@ -621,8 +619,8 @@ async def migrar(
     binario = ref.binario_de(modulos)
     catalogo = catalogo_de_acciones(modulos)
     reporte = ReporteMigracion(dry_run=not aplicar)
-    for tid, slug, runtime in await _negocios([tenant_id]):
-        negocio = NegocioMigrado(tid, slug, runtime)
+    for tid, slug in await _negocios([tenant_id]):
+        negocio = NegocioMigrado(tid, slug)
         reporte.negocios.append(negocio)
         async with tenant_scope(tid):
             previo = await _auditar_negocio(tid, slug, binario)
@@ -637,11 +635,6 @@ async def migrar(
             conexiones = {c.id: c for c in await _leer_conexiones(tid)}
             for cid, numero in previo.conexiones_afectadas.items():
                 negocio.conexiones.append(await _reconstruir(tid, conexiones[cid], numero, modulos, aplicar=aplicar))
-        if runtime == "legacy" and not negocio.sin_cambios:
-            negocio.avisos.append(
-                "el negocio está en `legacy`: el General y el Coordinador se regeneran desde la ficha v2 en cada build "
-                "normal; si la ficha nombra algo retirado, reaparecerá (la ficha v2 queda fuera de HU-AOS-59)"
-            )
         log.info(
             "migrar_referencias", tenant_id=str(tid), aplicar=aplicar,
             agentes=len(negocio.agentes), conexiones=len(negocio.conexiones),

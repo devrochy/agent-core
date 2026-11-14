@@ -143,7 +143,6 @@ def entorno_del_subproceso(
             "MIGRATIONS_DATABASE_URL": url_eval_dueno,
             "REDIS_URL": redis,
             "TENANTS_ROOT": tenants_root,
-            "AOS_CONNECTION_ROUTING": "true",
             "PYTHONUNBUFFERED": "1",
         }
     )

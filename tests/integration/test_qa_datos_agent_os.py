@@ -1,16 +1,15 @@
 """HU-QA-09 · «Preparar mis datos» deja el negocio de prueba del tester listo para el Agent OS.
 
-Con `QA_TESTERS_ENABLED` y `AOS_CONNECTION_ROUTING` (monkeypatch), sin LLM real:
+Con `QA_TESTERS_ENABLED` (monkeypatch), sin LLM real:
 
-- **Negocio nuevo:** chat web activo con clave y origen de la landing, `aos_runtime = v3`,
-  `aos_procedures`, `aos_routing = active`, General + Ventas + Agenda en el chat web (Cobranza la crea el tester en el editor y no se toca)
+- **Negocio nuevo:** chat web activo con clave y origen de la landing (el motor y el ruteo ya no son
+  banderas, ADR-0191), Ventas (por defecto) + Agenda en el chat web (Cobranza la crea el tester en el
+  editor y no se toca)
   con las reglas `preset_*` del Coordinador y la release activa; la respuesta trae la clave, el
   enlace y los agentes. Volver a pulsar responde 200 sin contraseñas y no duplica nada.
-- **Negocio legacy existente** (preparado con el Agent OS apagado, como los `qa-` de test):
-  queda en legacy con el motivo; al volver a pulsar se completa sin duplicar.
 - **Fallo a medias:** si la promoción falla después del preset, el reintento completa y las
-  reglas del Coordinador siguen (no se vuelve a legacy).
-- **Aislamiento:** no toca otro negocio; un slug que no es del tester no recibe banderas.
+  reglas del Coordinador siguen.
+- **Aislamiento:** no toca otro negocio; un slug que no es del tester no recibe nada.
 - **Ruteo activo:** «quiero agendar una demo» por el chat web lo atiende Agenda (modelo guionado).
 """
 
@@ -75,7 +74,6 @@ def entorno(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     from core.config import get_settings
 
     monkeypatch.setattr(get_settings(), "qa_testers_enabled", True)
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
     monkeypatch.setattr(get_settings(), "landing_base_url", LANDING)
     return monkeypatch
 
@@ -89,13 +87,6 @@ async def _tester(app_client: Any, t1: uuid.UUID) -> dict[str, str]:
     async with get_session() as session:
         session.add(Admin(email=email, password_hash=hash_password(PASSWORD), role="tester", active=True))
     return await api_headers(app_client, t1, email=email, password=PASSWORD)
-
-
-async def _banderas(tid: uuid.UUID) -> tuple[str, bool, str]:
-    ((runtime, procedimientos, ruteo),) = await _sql(
-        None, "select aos_runtime, aos_procedures, aos_routing from tenants where id = :t", t=tid
-    )
-    return str(runtime), bool(procedimientos), str(ruteo)
 
 
 async def _foto(tid: uuid.UUID) -> dict[str, Any]:
@@ -115,7 +106,6 @@ async def _foto(tid: uuid.UUID) -> dict[str, Any]:
         except Exception:  # tabla de un pack con otro nombre: no se cuenta
             continue
         foto[clave] = n
-    foto["banderas"] = await _banderas(tid)
     foto["activas"] = sorted(
         str(r) for (r,) in await _sql(tid, "select active_release_id from channel_connections where tenant_id = :t and deleted_at is null", t=tid)
     )
@@ -139,16 +129,15 @@ def _verificar_listo(datos: dict[str, Any]) -> None:
     chat = aos["chat_web"]
     assert chat["activo"] and chat["clave"] and chat["enlace"] == f"{LANDING}/w/{chat['clave']}"
     keys = {a["key"] for a in aos["agentes"]}
-    assert {"coordinador", "general", "ventas", "agenda"} <= keys, keys
+    assert {"coordinador", "ventas", "agenda"} <= keys, keys
     assert "cobranza" not in keys  # la crea el tester desde el editor
-    assert [a["key"] for a in aos["agentes"] if a["por_defecto"]] == ["general"]
+    assert [a["key"] for a in aos["agentes"] if a["por_defecto"]] == ["ventas"]
     # La pestaña Datos del panel lo muestra en `contenido`, sin cambios en el panel.
     seccion = next(c for c in datos["contenido"] if c["habilidad"] == "Agent OS")
     assert any(chat["enlace"] in d for d in seccion["detalle"])
 
 
 async def _verificar_negocio(tid: uuid.UUID, clave: str) -> None:
-    assert await _banderas(tid) == ("v3", True, "active")
     ((cid, activa, origenes),) = await _sql(
         tid,
         "select id, active, settings->'allowed_origins' from channel_connections "
@@ -209,35 +198,7 @@ async def test_negocio_nuevo_queda_listo_para_el_agent_os(app_client: Any, tenan
     assert (await _sql(tid, "select count(*) from agent_instances where agent_id = :a", a=cobranza.id))[0][0] == 0
 
 
-# ---------------------------------------------------------------- negocio legacy existente
-async def test_re_preparar_un_negocio_legacy_existente(app_client: Any, tenant_setup: Any, entorno: Any) -> None:
-    from core.config import get_settings
-
-    t1, _t2 = tenant_setup
-    headers = await _tester(app_client, t1)
-
-    # Como los `qa-` de test: preparados antes, con el Agent OS apagado.
-    entorno.setattr(get_settings(), "aos_connection_routing", False)
-    r = await app_client.post("/api/v1/admin/qa/datos", headers=headers)
-    assert r.status_code == 201, r.text
-    datos = r.json()
-    tid = uuid.UUID(datos["negocio"]["id"])
-    assert datos["estado"] == "listo" and datos["error"] is None
-    assert datos["agent_os"]["estado"] == "error" and "AOS_CONNECTION_ROUTING" in datos["agent_os"]["motivo"]
-    assert await _banderas(tid) == ("legacy", False, "off")
-    assert (await _sql(tid, "select count(*) from agents where tenant_id = :t", t=tid))[0][0] == 0
-
-    # Se enciende la variable y el tester vuelve a pulsar: se completa.
-    entorno.setattr(get_settings(), "aos_connection_routing", True)
-    r = await app_client.post("/api/v1/admin/qa/datos", headers=headers)
-    assert r.status_code == 200, r.text
-    _verificar_listo(r.json())
-    await _verificar_negocio(tid, r.json()["agent_os"]["chat_web"]["clave"])
-
-    antes = await _foto(tid)
-    r = await app_client.post("/api/v1/admin/qa/datos", headers=headers)
-    assert r.status_code == 200, r.text
-    assert await _foto(tid) == antes
+# ---------------------------------------------------------------- fallo a medias
 
 
 async def test_un_fallo_a_medias_se_reintenta_sin_perder_las_reglas(app_client: Any, tenant_setup: Any, entorno: Any) -> None:
@@ -256,8 +217,6 @@ async def test_un_fallo_a_medias_se_reintenta_sin_perder_las_reglas(app_client: 
     datos = r.json()
     tid = uuid.UUID(datos["negocio"]["id"])
     assert datos["agent_os"]["estado"] == "error" and "promoción caída" in datos["agent_os"]["motivo"]
-    # Ya en v3 (funcional con el General); no se apagó a legacy ni se encendió el ruteo.
-    assert await _banderas(tid) == ("v3", False, "off")
     assert "preset_agenda_palabras" in await _reglas(tid)
 
     entorno.setattr(datos_aos, "_activar_releases", original)
@@ -287,7 +246,7 @@ async def test_no_toca_otro_negocio(app_client: Any, tenant_setup: Any, entorno:
         assert await _foto(t) == fotos[t]
         assert await _sql(t, "select web_chat_config from app_settings where tenant_id = :t and deleted_at is null", t=t) == chats[t]
 
-    # Un id o un slug que no son del negocio de prueba: ni chat web, ni backfills, ni banderas.
+    # Un id o un slug que no son del negocio de prueba: ni chat web ni agentes.
     ((slug_t1,),) = await _sql(None, "select slug from tenants where id = :t", t=t1)
     for tid, slug in ((t1, slug_t1), (t1, f"qa-{uuid.uuid4().hex[:12]}"), (t2, r.json()["negocio"]["slug"])):
         motivo = await datos_aos.preparar(tid, slug)

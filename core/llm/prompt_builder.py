@@ -67,7 +67,7 @@ class PromptContext:
     relacion: str = ""                # ficha de la relación con cada módulo (HU-CRM-14); "" sin datos
     referencias: list[str] = field(default_factory=list)  # ids vigentes de la conversación (ADR-0130)
     accion_por_confirmar: str = ""    # acción que espera el sí del cliente (HU-ARCH-36); "" sin pendiente
-    state_card: str = ""              # tarjeta de estado (ADR-0114); "" con aos_procedures apagada
+    state_card: str = ""              # tarjeta de estado (ADR-0114); "" sin tareas abiertas
     team_notes: str = ""              # notas del equipo sobre el cliente (ADR-0147); "" sin notas
     service_hours: str = ""           # horario del equipo humano (HU-AOS-58); "" si no es informativo
     no_disponible: str = ""           # etapas del flujo sin herramientas en este turno (HU-AOS-35); "" si no hay
@@ -80,7 +80,7 @@ class PromptContext:
         emoji_names = {
             "none": "no uses emojis",
             "sparse": "usa emojis con moderación",
-            "free": "podés usar emojis libremente",
+            "free": "puedes usar emojis libremente",
         }
         return {
             "assistant_name": self.assistant_name,

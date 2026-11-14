@@ -1,6 +1,7 @@
 # ADR-0142 — Planes por agentes: métricas `agentes` y `colaboradores`, crédito mensual y punto de enforcement
 
 - **Estado:** propuesto (HU-BILL-05, 2026-10-19). Cifras aprobadas por el dueño el 2026-10-19; las demás
+- **Nota de estado:** ADR-0192 (propuesto, 2026-11-12): sin General, la enmienda «el General no cuenta en el plan» deja de aplicar.
   decisiones revisables están marcadas abajo.
 - **Fecha:** 2026-10-19
 - **Contexto:** D-35 («SolversHub vende agentes»), `modelo-de-precios.md §5` (docs), HU-BILL-05 y HU-AOS-37

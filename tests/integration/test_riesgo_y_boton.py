@@ -66,24 +66,6 @@ async def _scope(tid: uuid.UUID | None) -> AsyncIterator[Any]:
             yield session
 
 
-async def _banderas(tid: uuid.UUID, procedimientos: bool) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("update tenants set aos_procedures = false where id = :t"), {"t": tid})
-            await conn.execute(
-                text("update tenants set aos_runtime = :r, aos_procedures = :p where id = :t"),
-                {"t": tid, "r": "v3" if procedimientos else "legacy", "p": procedimientos},
-            )
-    finally:
-        await engine.dispose()
-
-
 def _herramienta(nombre: str, resultado: dict[str, Any]) -> Any:
     from core.mcp.types import MCPTool
 
@@ -134,6 +116,14 @@ def _habilitar(pack_de_prueba: Any, monkeypatch) -> None:  # type: ignore[no-unt
         return {"core", PACK}
 
     monkeypatch.setattr(registro, "packs_permitidos", permitidos)
+
+    # El pack de prueba no existe en el binario, así que ninguna release puede concederlo: estos
+    # Gherkin miden la mecánica del motor y corren el turno sin release (como antes del ruteo por
+    # conexión siempre, ADR-0191). La concesión por release la cubren los tests de HU-ARCH-34.
+    async def _sin_release(*_a: Any, **_k: Any) -> None:
+        return None
+
+    monkeypatch.setattr("core.orchestrator.loop.fijar_release_del_turno", _sin_release)
     LLAMADAS.clear()
 
 
@@ -247,15 +237,11 @@ async def _turno(conv: Any, proveedores: _Proveedores, monkeypatch, texto: str) 
 
 
 async def test_etapa_de_riesgo_alto_usa_thinking_y_queda_en_el_ledger(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    await _banderas(negocio, True)
-    try:
-        conv = await _conversacion(negocio, "listo, págalo")
-        await _tarea(conv, "pagar")
-        base, alto = _Guion(["no debería responder"]), _Guion([("crear_pedido_r", {}), "Tu pedido quedó creado."])
-        proveedores = _Proveedores(base, alto=alto)
-        resultado = await _turno(conv, proveedores, monkeypatch, "listo, págalo")
-    finally:
-        await _banderas(negocio, False)
+    conv = await _conversacion(negocio, "listo, págalo")
+    await _tarea(conv, "pagar")
+    base, alto = _Guion(["no debería responder"]), _Guion([("crear_pedido_r", {}), "Tu pedido quedó creado."])
+    proveedores = _Proveedores(base, alto=alto)
+    resultado = await _turno(conv, proveedores, monkeypatch, "listo, págalo")
     assert resultado is not None and alto.llamadas == 2 and base.llamadas == 0
     assert any(p.get("thinking") is True and p.get("model") == "deepseek-flash" for p in proveedores.pedidos)
     assert ("crear_pedido_r", {}) in LLAMADAS
@@ -264,15 +250,11 @@ async def test_etapa_de_riesgo_alto_usa_thinking_y_queda_en_el_ledger(negocio: u
 
 
 async def test_etapa_normal_no_cambia_el_modelo(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    await _banderas(negocio, True)
-    try:
-        conv = await _conversacion(negocio, "¿cuánto es?")
-        await _tarea(conv, "confirmar")
-        base, alto = _Guion(["Te cuento el total enseguida."]), _Guion([])
-        proveedores = _Proveedores(base, alto=alto)
-        await _turno(conv, proveedores, monkeypatch, "¿cuánto es?")
-    finally:
-        await _banderas(negocio, False)
+    conv = await _conversacion(negocio, "¿cuánto es?")
+    await _tarea(conv, "confirmar")
+    base, alto = _Guion(["Te cuento el total enseguida."]), _Guion([])
+    proveedores = _Proveedores(base, alto=alto)
+    await _turno(conv, proveedores, monkeypatch, "¿cuánto es?")
     assert base.llamadas == 1 and alto.llamadas == 0
     assert all(p.get("thinking") is not True for p in proveedores.pedidos)
 
@@ -294,14 +276,10 @@ async def test_reintento_del_verificador_usa_el_respaldo(negocio: uuid.UUID, mon
 
     monkeypatch.setattr(loop, "load_active_spec", spec_con_respaldo)
     monkeypatch.setattr(loop, "verificar_seguro", verificar)
-    await _banderas(negocio, True)
-    try:
-        conv = await _conversacion(negocio, "hola")
-        base = _Guion(["El total es $999.999."])
-        respaldo = _Guion(["Te confirmo el total enseguida."], model="deepseek-v4-pro")
-        resultado = await _turno(conv, _Proveedores(base, respaldo=respaldo), monkeypatch, "hola")
-    finally:
-        await _banderas(negocio, False)
+    conv = await _conversacion(negocio, "hola")
+    base = _Guion(["El total es $999.999."])
+    respaldo = _Guion(["Te confirmo el total enseguida."], model="deepseek-v4-pro")
+    resultado = await _turno(conv, _Proveedores(base, respaldo=respaldo), monkeypatch, "hola")
     assert resultado is not None and resultado.text == "Te confirmo el total enseguida."
     assert base.llamadas == 1 and respaldo.llamadas == 1
     modelo, politica = (await _politica_en_ledger(conv))[-1]
@@ -317,48 +295,44 @@ async def test_boton_con_resumen_del_servidor_y_confirmacion_por_payload(negocio
     encolados: list[str] = []
     monkeypatch.setattr("core.tasks.outbound_send.outbound_send_task.delay", lambda mid, tid: encolados.append(mid))
     args = {"periodicidad": "anual", "cantidad": 2}
-    await _banderas(negocio, True)
-    try:
-        conv = await _conversacion(negocio, "lo quiero anual")
-        task = await _tarea(conv, "confirmar")
-        guion = _Guion([("cotizar_r", {}), ("aceptar_r", args), "¡Perfecto! Son 3 unidades por $1, ¿confirmas?"])
-        resultado = await _turno(conv, _Proveedores(guion), monkeypatch, "lo quiero anual")
-        assert resultado is not None and resultado.confirmacion is not None
-        # El cliente ve lo que el servidor va a ejecutar, no lo que redactó el modelo.
-        assert "3 unidades" not in resultado.text and "$1," not in resultado.text
-        assert "Periodicidad: anual" in resultado.text and "Cantidad: 2" in resultado.text
-        assert "Total: $600.000" in resultado.text and "confirmo" in resultado.text
-        assert ("aceptar_r", args) not in LLAMADAS  # todavía no se ejecuta
-        async with tenant_scope(negocio):
-            await entregar(conv.id, resultado)
-        async with _scope(negocio) as s:
-            fila = (await s.execute(
-                text("select id, content, interactive from messages where tenant_id = :t and conversation_id = :c "
-                     "and direction = 'outbound' order by created_at desc limit 1"),
-                {"t": negocio, "c": conv.id},
-            )).one()
-        assert encolados == [str(fila.id)]
-        payload = fila.interactive["buttons"][0]["id"]
-        assert fila.interactive["type"] == "button" and payload.startswith("confirmar:")
-        assert "Cantidad: 2" in fila.content and "«Confirmar»" in fila.content
-        assert (await _tipos(conv, task))[-1] == "confirmation_requested"
+    conv = await _conversacion(negocio, "lo quiero anual")
+    task = await _tarea(conv, "confirmar")
+    guion = _Guion([("cotizar_r", {}), ("aceptar_r", args), "¡Perfecto! Son 3 unidades por $1, ¿confirmas?"])
+    resultado = await _turno(conv, _Proveedores(guion), monkeypatch, "lo quiero anual")
+    assert resultado is not None and resultado.confirmacion is not None
+    # El cliente ve lo que el servidor va a ejecutar, no lo que redactó el modelo.
+    assert "3 unidades" not in resultado.text and "$1," not in resultado.text
+    assert "Periodicidad: anual" in resultado.text and "Cantidad: 2" in resultado.text
+    assert "Total: $600.000" in resultado.text and "confirmo" in resultado.text
+    assert ("aceptar_r", args) not in LLAMADAS  # todavía no se ejecuta
+    async with tenant_scope(negocio):
+        await entregar(conv.id, resultado)
+    async with _scope(negocio) as s:
+        fila = (await s.execute(
+            text("select id, content, interactive from messages where tenant_id = :t and conversation_id = :c "
+                 "and direction = 'outbound' order by created_at desc limit 1"),
+            {"t": negocio, "c": conv.id},
+        )).one()
+    assert encolados == [str(fila.id)]
+    payload = fila.interactive["buttons"][0]["id"]
+    assert fila.interactive["type"] == "button" and payload.startswith("confirmar:")
+    assert "Cantidad: 2" in fila.content and "«Confirmar»" in fila.content
+    assert (await _tipos(conv, task))[-1] == "confirmation_requested"
 
-        # El cliente toca el botón: el payload confirma sin interpretar texto.
-        async with tenant_scope(negocio):
-            await entrada_sin_llm(conv, {"interactive_id": payload})
-        assert (await _tipos(conv, task))[-1] == "confirmed"
+    # El cliente toca el botón: el payload confirma sin interpretar texto.
+    async with tenant_scope(negocio):
+        await entrada_sin_llm(conv, {"interactive_id": payload})
+    assert (await _tipos(conv, task))[-1] == "confirmed"
 
-        # Turno siguiente: la misma acción con los mismos argumentos se ejecuta.
-        async with _scope(negocio) as s:
-            s.add(Message(tenant_id=negocio, conversation_id=conv.id, direction="inbound", sender_type="customer",
-                          content="Confirmar"))
-        guion = _Guion([("aceptar_r", args), "Listo, quedó confirmado."])
-        await _turno(conv, _Proveedores(guion), monkeypatch, "Confirmar")
-        assert ("aceptar_r", args) in LLAMADAS
-        tipos = await _tipos(conv, task)
-        assert "action_succeeded" in tipos and "stage_entered" in tipos
-    finally:
-        await _banderas(negocio, False)
+    # Turno siguiente: la misma acción con los mismos argumentos se ejecuta.
+    async with _scope(negocio) as s:
+        s.add(Message(tenant_id=negocio, conversation_id=conv.id, direction="inbound", sender_type="customer",
+                      content="Confirmar"))
+    guion = _Guion([("aceptar_r", args), "Listo, quedó confirmado."])
+    await _turno(conv, _Proveedores(guion), monkeypatch, "Confirmar")
+    assert ("aceptar_r", args) in LLAMADAS
+    tipos = await _tipos(conv, task)
+    assert "action_succeeded" in tipos and "stage_entered" in tipos
 
 
 async def test_dos_cotizaciones_distintas_no_ofrecen_boton(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -375,14 +349,10 @@ async def test_dos_cotizaciones_distintas_no_ofrecen_boton(negocio: uuid.UUID, m
     herramienta = mcp_host.get_tool("cotizar_r")
     assert herramienta is not None
     monkeypatch.setattr(herramienta, "handler", cotizar)
-    await _banderas(negocio, True)
-    try:
-        conv = await _conversacion(negocio, "lo quiero")
-        await _tarea(conv, "confirmar")
-        guion = _Guion([("cotizar_r", {}), ("cotizar_r", {}), ("aceptar_r", {"cantidad": 1}), "Son $600.000, ¿confirmas?"])
-        resultado = await _turno(conv, _Proveedores(guion), monkeypatch, "lo quiero")
-    finally:
-        await _banderas(negocio, False)
+    conv = await _conversacion(negocio, "lo quiero")
+    await _tarea(conv, "confirmar")
+    guion = _Guion([("cotizar_r", {}), ("cotizar_r", {}), ("aceptar_r", {"cantidad": 1}), "Son $600.000, ¿confirmas?"])
+    resultado = await _turno(conv, _Proveedores(guion), monkeypatch, "lo quiero")
     assert resultado is not None and resultado.confirmacion is not None
     assert resultado.confirmacion.modo == "explicit" and resultado.text == conf.sin_resumen().texto
     assert "600.000" not in resultado.text
@@ -394,27 +364,23 @@ async def test_si_a_secas_no_confirma_y_confirmo_si(negocio: uuid.UUID, monkeypa
     from core.mcp.host import mcp_host
     from core.shared.tenant import tenant_scope
 
-    await _banderas(negocio, True)
-    try:
-        conv = await _conversacion(negocio, "lo quiero")
-        task = await _tarea(conv, "confirmar")
-        guion = _Guion([("aceptar_r", {"cantidad": 1}), "¿Confirmas?"])
-        await _turno(conv, _Proveedores(guion), monkeypatch, "lo quiero")
-        async with _scope(negocio) as s:
-            s.add(Message(tenant_id=negocio, conversation_id=conv.id, direction="outbound", sender_type="agent", content="x"))
-        herramientas = mcp_host.get_skill_tools(["prueba_aos09"])
-        for texto, esperado in (("Sí", False), ("Sí, confirmo", True)):
-            async with tenant_scope(negocio):
-                motor = await contexto_del_motor(
-                    conv.id, customer_id=conv.customer_id, channel="whatsapp", enabled={"core", PACK}, disabled=set(),
-                    herramientas_base=herramientas, candidatas=herramientas, texto_cliente=texto,
-                )
-                assert motor is not None
-                r = await motor.aplicar_comando("confirmar_tarea", {})
-            assert r.ok is esperado, texto
-        assert (await _tipos(conv, task))[-1] in ("confirmed", "stage_entered")
-    finally:
-        await _banderas(negocio, False)
+    conv = await _conversacion(negocio, "lo quiero")
+    task = await _tarea(conv, "confirmar")
+    guion = _Guion([("aceptar_r", {"cantidad": 1}), "¿Confirmas?"])
+    await _turno(conv, _Proveedores(guion), monkeypatch, "lo quiero")
+    async with _scope(negocio) as s:
+        s.add(Message(tenant_id=negocio, conversation_id=conv.id, direction="outbound", sender_type="agent", content="x"))
+    herramientas = mcp_host.get_skill_tools(["prueba_aos09"])
+    for texto, esperado in (("Sí", False), ("Sí, confirmo", True)):
+        async with tenant_scope(negocio):
+            motor = await contexto_del_motor(
+                conv.id, customer_id=conv.customer_id, channel="whatsapp", enabled={"core", PACK}, disabled=set(),
+                herramientas_base=herramientas, candidatas=herramientas, texto_cliente=texto,
+            )
+            assert motor is not None
+            r = await motor.aplicar_comando("confirmar_tarea", {})
+        assert r.ok is esperado, texto
+    assert (await _tipos(conv, task))[-1] in ("confirmed", "stage_entered")
 
 
 async def _resumen_entregado(negocio: uuid.UUID, monkeypatch) -> tuple[Any, uuid.UUID, Any, Any]:  # type: ignore[no-untyped-def]
@@ -459,22 +425,18 @@ async def test_un_toque_que_no_confirma_no_vence_el_si_escrito(negocio: uuid.UUI
     kernel le pide escribir «Sí, confirmo», pero el toque (un mensaje suyo posterior al resumen) vencía
     la petición y el sí escrito se volvía a pedir una y otra vez. El rechazo del toque tiene que dejar la
     petición vigente para el sí que el propio aviso pide."""
-    await _banderas(negocio, True)
-    try:
-        conv, task, comando, mensaje = await _resumen_entregado(negocio, monkeypatch)
-        # El toque llegó como el título del botón y no confirmó (payload vencido o rechazado): el
-        # consumer deja la marca de interactivo y el turno no lo toma como un sí escrito.
-        from core.kernel.procedures.ejecucion import _marcar_interactivo
+    conv, task, comando, mensaje = await _resumen_entregado(negocio, monkeypatch)
+    # El toque llegó como el título del botón y no confirmó (payload vencido o rechazado): el
+    # consumer deja la marca de interactivo y el turno no lo toma como un sí escrito.
+    from core.kernel.procedures.ejecucion import _marcar_interactivo
 
-        await mensaje("inbound", "Confirmar")
-        await _marcar_interactivo(negocio, conv.id)
-        assert (await comando("Confirmar", nuevo=False)).ok is False
-        await mensaje("outbound", "Todavía no me quedó claro el sí. Escríbeme «Sí, confirmo».")
-        # El sí escrito que pide el aviso confirma la petición, que sigue vigente.
-        assert (await comando("Si, confirmo")).ok is True
-        assert (await _tipos(conv, task))[-1] in ("confirmed", "stage_entered")
-    finally:
-        await _banderas(negocio, False)
+    await mensaje("inbound", "Confirmar")
+    await _marcar_interactivo(negocio, conv.id)
+    assert (await comando("Confirmar", nuevo=False)).ok is False
+    await mensaje("outbound", "Todavía no me quedó claro el sí. Escríbeme «Sí, confirmo».")
+    # El sí escrito que pide el aviso confirma la petición, que sigue vigente.
+    assert (await comando("Si, confirmo")).ok is True
+    assert (await _tipos(conv, task))[-1] in ("confirmed", "stage_entered")
 
 
 async def test_un_toque_rechazado_renueva_la_peticion_sin_depender_del_modelo(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -483,49 +445,28 @@ async def test_un_toque_rechazado_renueva_la_peticion_sin_depender_del_modelo(ne
     from core.kernel.procedures.ejecucion import entrada_sin_llm, payload_de_confirmacion
     from core.shared.tenant import tenant_scope
 
-    await _banderas(negocio, True)
-    try:
-        conv, task, comando, mensaje = await _resumen_entregado(negocio, monkeypatch)
-        await mensaje("inbound", "Confirmar")
-        async with tenant_scope(negocio):
-            await entrada_sin_llm(conv, {"interactive_id": payload_de_confirmacion(negocio, task, 999)})
-        tipos = await _tipos(conv, task)
-        assert tipos[-1] == "confirmation_requested" and tipos.count("confirmation_requested") == 2
-        # El turno del toque (el mensaje ya está guardado): el modelo pide confirmar y no hay otra renovación.
-        assert (await comando("Confirmar", nuevo=False)).ok is False
-        assert (await _tipos(conv, task)).count("confirmation_requested") == 2
-        await mensaje("outbound", "Todavía no quedó registrada tu aceptación. Escríbeme «Sí, confirmo».")
-        assert (await comando("Si, confirmo")).ok is True
-    finally:
-        await _banderas(negocio, False)
+    conv, task, comando, mensaje = await _resumen_entregado(negocio, monkeypatch)
+    await mensaje("inbound", "Confirmar")
+    async with tenant_scope(negocio):
+        await entrada_sin_llm(conv, {"interactive_id": payload_de_confirmacion(negocio, task, 999)})
+    tipos = await _tipos(conv, task)
+    assert tipos[-1] == "confirmation_requested" and tipos.count("confirmation_requested") == 2
+    # El turno del toque (el mensaje ya está guardado): el modelo pide confirmar y no hay otra renovación.
+    assert (await comando("Confirmar", nuevo=False)).ok is False
+    assert (await _tipos(conv, task)).count("confirmation_requested") == 2
+    await mensaje("outbound", "Todavía no quedó registrada tu aceptación. Escríbeme «Sí, confirmo».")
+    assert (await comando("Si, confirmo")).ok is True
 
 
 async def test_una_peticion_ya_vencida_no_se_revive_con_un_mensaje_que_no_confirma(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Otro intercambio entre el resumen y el mensaje que no confirma vence la petición: un «sí» a una
     pregunta vieja no vale, y no se renueva (la regla de vigencia sigue siendo la del turno anterior)."""
-    await _banderas(negocio, True)
-    try:
-        conv, task, comando, mensaje = await _resumen_entregado(negocio, monkeypatch)
-        await mensaje("inbound", "¿hacen envíos a Cali?")
-        await mensaje("outbound", "Sí, hacemos envíos a Cali.")
-        antes = await _tipos(conv, task)
-        assert (await comando("Confirmar")).ok is False
-        assert await _tipos(conv, task) == antes  # no se renovó
-        await mensaje("outbound", "Todavía no me quedó claro el sí.")
-        resultado = await comando("Si, confirmo")
-        assert resultado.ok is False and "venció" in resultado.errores[0]
-    finally:
-        await _banderas(negocio, False)
-
-
-async def test_con_la_bandera_apagada_nada_cambia(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    await _banderas(negocio, False)
-    conv = await _conversacion(negocio, "lo quiero anual")
-    await _tarea(conv, "pagar")  # aunque haya una tarea, el motor no la gobierna
-    base, alto = _Guion([("aceptar_r", {"cantidad": 2}), "¿Confirmas 2 unidades?"]), _Guion([])
-    proveedores = _Proveedores(base, alto=alto)
-    resultado = await _turno(conv, proveedores, monkeypatch, "lo quiero anual")
-    assert resultado is not None and resultado.confirmacion is None
-    assert resultado.text == "¿Confirmas 2 unidades?"
-    assert alto.llamadas == 0 and all(p.get("thinking") is not True for p in proveedores.pedidos)
-    assert all(politica is None for _, politica in await _politica_en_ledger(conv))
+    conv, task, comando, mensaje = await _resumen_entregado(negocio, monkeypatch)
+    await mensaje("inbound", "¿hacen envíos a Cali?")
+    await mensaje("outbound", "Sí, hacemos envíos a Cali.")
+    antes = await _tipos(conv, task)
+    assert (await comando("Confirmar")).ok is False
+    assert await _tipos(conv, task) == antes  # no se renovó
+    await mensaje("outbound", "Todavía no me quedó claro el sí.")
+    resultado = await comando("Si, confirmo")
+    assert resultado.ok is False and "venció" in resultado.errores[0]

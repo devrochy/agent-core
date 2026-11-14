@@ -97,27 +97,100 @@ class FakeOutbound:
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _conversacion_con_su_conexion():
+    """Todo turno corre sobre la release de su conexión (ADR-0191): una conversación que un test crea
+    a mano sin `connection_id` toma la conexión conversacional del negocio con release activa del mismo
+    canal (la principal primero). Un test que necesita una sin conexión la anula después."""
+    from sqlalchemy import event, text
+
+    from core.db.models import Conversation
+
+    def _antes_de_insertar(_mapper, conexion, conversacion) -> None:  # type: ignore[no-untyped-def]
+        if conversacion.connection_id is not None or conversacion.tenant_id is None:
+            return
+        fila = conexion.execute(
+            text(
+                "select c.id from channel_connections c join connection_types t on t.id = c.type_id "
+                "where c.tenant_id = :t and c.deleted_at is null and c.active_release_id is not null "
+                "and t.produces_conversations and c.channel = :canal "
+                "order by c.is_primary desc, c.created_at limit 1"
+            ),
+            {"t": conversacion.tenant_id, "canal": conversacion.channel or ""},
+        ).first()
+        if fila is not None:
+            conversacion.connection_id = fila[0]
+
+    event.listen(Conversation, "before_insert", _antes_de_insertar)
+    yield
+    event.remove(Conversation, "before_insert", _antes_de_insertar)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _entrada_sin_conexion_va_a_la_de_pruebas():
+    """Una entrada que no trae una conexión conocida del negocio (p. ej. el número de la plataforma en
+    los tests) se atiende por la conexión con release de ese canal (ADR-0191): así la conversación nace
+    y se vuelve a encontrar por la misma conexión, como en producción, donde toda entrada trae la suya."""
+    from sqlalchemy import select, text
+
+    from core.db.models import ChannelConnection
+    from core.orchestrator import consumer
+
+    real = consumer._conexion_validada
+
+    async def _con_respaldo(session, tenant_id, fields):  # type: ignore[no-untyped-def]
+        conexion = await real(session, tenant_id, fields)
+        if conexion is not None or fields.get("provider") == "twilio":
+            return conexion
+        externo = fields.get("connection_external_id")
+        if externo:
+            propia = (
+                await session.execute(
+                    select(ChannelConnection.id).where(
+                        ChannelConnection.tenant_id == tenant_id,
+                        ChannelConnection.external_id == externo,
+                        ChannelConnection.deleted_at.is_(None),
+                    )
+                )
+            ).first()
+            if propia is not None:
+                return None  # la resuelve el camino de siempre del consumer
+        canal = fields.get("channel") or "whatsapp"
+        fila = (
+            await session.execute(
+                text(
+                    "select id from channel_connections where tenant_id = :t and channel = :c "
+                    "and active_release_id is not null and deleted_at is null "
+                    "order by (provider = :p) desc, is_primary desc, created_at limit 1"
+                ),
+                {"t": tenant_id, "c": canal, "p": fields.get("provider") or ""},
+            )
+        ).first()
+        return await session.get(ChannelConnection, fila[0]) if fila is not None else None
+
+    consumer._conexion_validada = _con_respaldo  # type: ignore[assignment]
+    yield
+    consumer._conexion_validada = real  # type: ignore[assignment]
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _alta_sin_agent_os():
-    """Casi todos los tests de integración modelan negocios «de antes»: legacy y sin agentes (lo que dejaba el
-    alta hasta HU-AOS-53). El alta de hoy crea el General y el Coordinador y, con el ruteo encendido, deja el
-    negocio en v3; esos dos pasos se apagan aquí y solo los reactiva `test_alta_agentes_base` (con
-    `_alta_agent_os.ACTIVO = True`)."""
+    """El alta de hoy crea el Coordinador y el negocio nace en v3 (migración 0126, ADR-0191/0192); aquí
+    se apaga para que cada test monte su conexión con release (`release_de_prueba`). Solo
+    `test_alta_agentes_base` y los que activan `_alta_agent_os.ACTIVO` ven el alta real."""
     import _alta_agent_os
 
     import core.alta_negocio as alta
 
-    reales = (alta._agentes_base_al_alta, alta._runtime_al_alta)
+    real = alta._agentes_base_al_alta
 
     async def _agentes(tenant_id: uuid.UUID, *, nuevo: bool) -> list[str]:
-        return await reales[0](tenant_id, nuevo=nuevo) if _alta_agent_os.ACTIVO else []
-
-    async def _runtime(tenant_id: uuid.UUID) -> str:
-        return await reales[1](tenant_id) if _alta_agent_os.ACTIVO else "runtime v3 no aplicado (test)"
+        if _alta_agent_os.ACTIVO:
+            return await real(tenant_id, nuevo=nuevo)
+        return []
 
     alta._agentes_base_al_alta = _agentes  # type: ignore[assignment]
-    alta._runtime_al_alta = _runtime  # type: ignore[assignment]
     yield
-    alta._agentes_base_al_alta, alta._runtime_al_alta = reales  # type: ignore[assignment]
+    alta._agentes_base_al_alta = real  # type: ignore[assignment]
 
 
 @pytest.fixture(scope="module")
@@ -272,7 +345,6 @@ async def tenant_setup():
             session.add(t2)
             await session.flush()
         t1_id, t2_id = t1.id, t2.id
-
     for tid in (t1_id, t2_id):
         async with tenant_scope(tid):
             async with get_session() as session:
@@ -291,9 +363,39 @@ async def tenant_setup():
                             provider="meta",
                             label="it",
                             external_id=PHONE if tid == t1_id else "999",
+                            type_id="whatsapp_meta",  # conversacional: lleva Coordinador y release
                         )
                     )
+    # Todo turno corre sobre una release (ADR-0191): Coordinador + especialista nativos y release 1
+    # en la conexión de cada negocio (sin General, ADR-0192).
+    for tid in (t1_id, t2_id):
+        await _con_release(tid, PHONE if tid == t1_id else "999")
     return t1_id, t2_id
+
+
+async def _con_release(tid: uuid.UUID, external_id: str) -> None:
+    from release_de_prueba import _journeys
+    from sqlalchemy import select
+
+    from core.db.models import ChannelConnection
+    from core.db.session import get_session
+    from core.plugin_manager import plugin_manager
+    from core.releases.release_uno import backfill_releases
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            cid = (
+                await session.execute(
+                    select(ChannelConnection.id).where(
+                        ChannelConnection.tenant_id == tid, ChannelConnection.external_id == external_id
+                    )
+                )
+            ).scalar_one()
+    modulos = plugin_manager.list_modules() or plugin_manager.scan()
+    await _journeys().agentes_nativos(tid, cid, modulos)
+    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=modulos)
+    assert not reporte.fallo, reporte.errores
 
 
 @pytest.fixture(scope="module")

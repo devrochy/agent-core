@@ -3,11 +3,10 @@
 - **API** (`/api/v1/admin/connections/{id}/agents`): agregar un especialista, habilitar o
   deshabilitar, cambiar el agente por defecto y quitar. El Coordinador lo gestiona el sistema
   (exactamente uno por conexión, ADR-0112 §1): no se agrega, no se deshabilita ni se quita por
-  la API. Siempre hay un agente por defecto, habilitado. 404 entre negocios; 403 con
-  `aos_runtime = legacy` para quien no es master.
+  la API. Siempre hay un agente por defecto, habilitado. 404 entre negocios.
 - **Altas posteriores** (ADR-0115 §6, los cinco caminos de ADR-0122 §6 por
-  `numero_para_conexion`): el número nuevo de un negocio con agentes nace con Coordinador y
-  General, en la misma transacción; sin agentes no se crea nada (lo hará el backfill). Religar
+  `numero_para_conexion`): el número nuevo de un negocio con agentes nace con el Coordinador y las
+  instancias de la conexión existente, en la misma transacción; sin agentes no se crea nada. Religar
   un número no recrea lo que el dueño quitó. Un error en las instancias no tumba el alta.
 - **Promoción** (ADR-0127 §3): la conexión del número real nace con las instancias clonadas de
   la de prueba; `clonar_instancias` devuelve el mapa por agente (contrato con HU-AOS-14).
@@ -22,9 +21,9 @@ import uuid
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _api_helpers import api_headers, uniq
+from _ayudas_sql import _conexion, _modules, _sql
 from test_agentes_versionados import PASSWORD, _dueno, spec_en_su_enfoque
-from test_backfill_agentes import _conexion, _legacy_y_settings, _modules, _sql
 from test_byok_produccion import GraphFalso, _alta, _byok_de_prueba, _instalar, _negocio, _num, _url
 
 pytestmark = [
@@ -39,15 +38,17 @@ pytestmark = [
 
 # ---------------------------------------------------------------- helpers
 async def _con_agentes() -> tuple[uuid.UUID, uuid.UUID, str, uuid.UUID]:
-    """Negocio con su BYOK de prueba migrado al Agent OS (backfill de conexiones y de agentes).
-    Devuelve (negocio, cuenta de prueba, número de prueba, su conexión canónica)."""
-    from core.agents.backfill_agentes import backfill_agentes
+    """Negocio con su BYOK de prueba, su conexión canónica y sus agentes nativos (Coordinador y el
+    especialista «atencion» por defecto, ADR-0192). Devuelve (negocio, cuenta de prueba, número de
+    prueba, su conexión canónica)."""
+    from release_de_prueba import _journeys
+
     from core.gateway.conexion_canonica_backfill import backfill_conexiones
 
     tid = await _negocio()
     cuenta, _app, phone = await _byok_de_prueba(tid)
     await backfill_conexiones(dry_run=False, tenant_id=tid)
-    assert not (await backfill_agentes(dry_run=False, tenant_id=tid, modules=_modules())).fallo
+    await _journeys().agentes_nativos(tid, await _canonica(tid, phone), _modules())
     # Premium (5 agentes publicados, ADR-0142): estos tests suman especialistas; el tope del plan
     # se prueba en `test_planes_por_agentes.py`.
     await _sql(tid, "update tenant_subscriptions set plan_id = 'premium' where tenant_id = :t", t=tid)
@@ -65,14 +66,14 @@ async def _canonica(tid: uuid.UUID, phone: str) -> uuid.UUID:
 
 
 async def _instancias(tid: uuid.UUID, cid: uuid.UUID) -> list[tuple[str, str, bool, bool, int]]:
-    """(key, rol, por defecto, habilitada, prioridad) de las instancias vivas, por key."""
+    """(key, rol, por defecto, habilitada, prioridad) de las instancias vivas: el Coordinador y luego por key."""
     return [
         tuple(f)
         for f in await _sql(
             tid,
             "select a.key, i.role, i.is_default, i.enabled, i.priority from agent_instances i "
             "join agents a on a.tenant_id = i.tenant_id and a.id = i.agent_id "
-            "where i.tenant_id = :t and i.connection_id = :c and i.deleted_at is null order by a.key",
+            "where i.tenant_id = :t and i.connection_id = :c and i.deleted_at is null order by i.role, a.key",
             t=tid, c=cid,
         )
     ]
@@ -104,7 +105,6 @@ def _codigo(r: Any) -> tuple[int, str]:
 async def test_api_agrega_cambia_el_por_defecto_y_quita_sin_romper_uno_y_solo_uno(app_client) -> None:
     tid, _cuenta, _phone, cid = await _con_agentes()
     h = await api_headers(app_client, tid)  # master
-    antes = await _legacy_y_settings(tid)
     ventas = await _especialista(app_client, h, "ventas")
     sin_version = await _especialista(app_client, h, "soporte", publicar=False)
     ids = {f["key"]: f["id"] for f in (await app_client.get(_agents(cid), headers=h)).json()}
@@ -133,7 +133,7 @@ async def test_api_agrega_cambia_el_por_defecto_y_quita_sin_romper_uno_y_solo_un
     assert r.status_code == 200 and r.json()["is_default"] is True, r.text
     assert await _instancias(tid, cid) == [
         ("coordinador", "core", False, True, 100),
-        ("general", "specialist", False, True, 100),
+        ("atencion", "specialist", False, True, 100),
         ("ventas", "specialist", True, True, 50),
     ]
     # Quitar el "por defecto" sin elegir otro no existe.
@@ -143,12 +143,12 @@ async def test_api_agrega_cambia_el_por_defecto_y_quita_sin_romper_uno_y_solo_un
     # Habilitar / deshabilitar: el por defecto siempre habilitado.
     r = await app_client.patch(_agents(cid, ids["ventas"]), headers=h, json={"enabled": False})
     assert _codigo(r) == (409, "default_disabled")
-    r = await app_client.patch(_agents(cid, ids["general"]), headers=h, json={"enabled": False, "priority": 7})
+    r = await app_client.patch(_agents(cid, ids["atencion"]), headers=h, json={"enabled": False, "priority": 7})
     assert r.status_code == 200 and (r.json()["enabled"], r.json()["priority"]) == (False, 7), r.text
-    assert _codigo(await app_client.patch(_agents(cid, ids["general"]), headers=h, json={"is_default": True})) == (
+    assert _codigo(await app_client.patch(_agents(cid, ids["atencion"]), headers=h, json={"is_default": True})) == (
         409, "default_disabled",
     )
-    r = await app_client.patch(_agents(cid, ids["general"]), headers=h, json={"enabled": True, "is_default": True})
+    r = await app_client.patch(_agents(cid, ids["atencion"]), headers=h, json={"enabled": True, "is_default": True})
     assert r.status_code == 200 and r.json()["is_default"] is True, r.text
 
     # Uno y solo uno: el Coordinador no se deshabilita, no es "por defecto" y no se quita.
@@ -159,12 +159,12 @@ async def test_api_agrega_cambia_el_por_defecto_y_quita_sin_romper_uno_y_solo_un
         409, "not_specialist",
     )
     assert _codigo(await app_client.delete(_agents(cid, ids["coordinador"]), headers=h)) == (409, "core_required")
-    assert _codigo(await app_client.delete(_agents(cid, ids["general"]), headers=h)) == (409, "default_required")
+    assert _codigo(await app_client.delete(_agents(cid, ids["atencion"]), headers=h)) == (409, "default_required")
 
     # Quitar un especialista es borrado lógico; puede volver a agregarse.
     r = await app_client.delete(_agents(cid, ids["ventas"]), headers=h)
     assert r.status_code == 204, r.text
-    assert [f["key"] for f in (await app_client.get(_agents(cid), headers=h)).json()] == ["coordinador", "general"]
+    assert [f["key"] for f in (await app_client.get(_agents(cid), headers=h)).json()] == ["coordinador", "atencion"]
     (borrada,) = await _sql(tid, "select deleted_at is not null from agent_instances where id = :i", i=ids["ventas"])
     assert borrada[0] is True
     assert _codigo(await app_client.patch(_agents(cid, ids["ventas"]), headers=h, json={"priority": 1})) == (
@@ -174,44 +174,34 @@ async def test_api_agrega_cambia_el_por_defecto_y_quita_sin_romper_uno_y_solo_un
     assert r.status_code == 201 and r.json()["id"] != ids["ventas"], r.text
 
     # Con `legacy` el loop no lee nada de esto: lo que lee queda igual.
-    assert await _legacy_y_settings(tid) == antes
 
 
-async def test_el_general_y_el_coordinador_no_se_archivan_y_un_especialista_solo_fuera_de_conexiones(
+async def test_el_coordinador_no_se_archiva_y_un_especialista_solo_fuera_de_conexiones(
     app_client,
 ) -> None:
     tid, _cuenta, _phone, cid = await _con_agentes()
     h = await api_headers(app_client, tid)
     ventas = await _especialista(app_client, h, "ventas")
-    reservados = dict(await _sql(tid, "select key, id from agents where tenant_id = :t and key in "
-                                      "('general', 'coordinador')", t=tid))
+    agentes = dict(await _sql(tid, "select key, id from agents where tenant_id = :t and key in "
+                                   "('atencion', 'coordinador')", t=tid))
 
     def _archivar(aid: Any) -> Any:
         return app_client.patch(f"/api/v1/admin/agents/{aid}", headers=h, json={"status": "archived"})
 
-    for key in ("general", "coordinador"):
-        assert _codigo(await _archivar(reservados[key])) == (409, "agent_reserved")
-    # Aunque el General ya no esté en ninguna conexión: sin él fallan las conexiones nuevas (core_missing).
+    assert _codigo(await _archivar(agentes["coordinador"])) == (409, "agent_reserved")
+    # El especialista por defecto es un agente más (ADR-0192): en una conexión no se archiva.
+    assert _codigo(await _archivar(agentes["atencion"])) == (409, "agent_in_use")
     r = await app_client.post(_agents(cid), headers=h, json={"agent_id": ventas})
     assert r.status_code == 201, r.text
     ventas_en_cid = r.json()["id"]
     assert (await app_client.patch(_agents(cid, ventas_en_cid), headers=h, json={"is_default": True})).status_code == 200
-    ids = {f["key"]: f["id"] for f in (await app_client.get(_agents(cid), headers=h)).json()}
-    assert (await app_client.delete(_agents(cid, ids["general"]), headers=h)).status_code == 204
-    assert _codigo(await _archivar(reservados["general"])) == (409, "agent_reserved")
-    (estado,) = await _sql(tid, "select status from agents where id = :a", a=reservados["general"])
-    assert estado[0] == "active"
-
-    # Un especialista en una conexión no se archiva; fuera de ellas sí, y se reactiva. Se repone el
-    # General como principal para poder quitar a Ventas.
-    r = await app_client.post(_agents(cid), headers=h, json={"agent_id": str(reservados["general"])})
-    assert r.status_code == 201, r.text
-    assert (await app_client.patch(_agents(cid, r.json()["id"]), headers=h, json={"is_default": True})).status_code == 200
     assert _codigo(await _archivar(ventas)) == (409, "agent_in_use")
-    assert (await app_client.delete(_agents(cid, ventas_en_cid), headers=h)).status_code == 204
-    r = await _archivar(ventas)
+    ids = {f["key"]: f["id"] for f in (await app_client.get(_agents(cid), headers=h)).json()}
+    assert (await app_client.delete(_agents(cid, ids["atencion"]), headers=h)).status_code == 204
+    # Fuera de las conexiones sí se archiva, y se reactiva.
+    r = await _archivar(agentes["atencion"])
     assert r.status_code == 200 and r.json()["status"] == "archived", r.text
-    r = await app_client.patch(f"/api/v1/admin/agents/{ventas}", headers=h, json={"status": "active"})
+    r = await app_client.patch(f"/api/v1/admin/agents/{agentes['atencion']}", headers=h, json={"status": "active"})
     assert r.status_code == 200 and r.json()["status"] == "active", r.text
 
 
@@ -222,7 +212,7 @@ async def test_api_rechaza_integraciones_y_conexiones_sin_coordinador(app_client
     calendario = await _conexion(tid, "google_calendar", channel="calendar", provider="google")
     r = await app_client.post(_agents(calendario), headers=h, json={"agent_id": ventas})
     assert _codigo(r) == (422, "connection_not_conversational")
-    # Una conexión nueva sin backfill todavía no tiene Coordinador: no se le suman especialistas.
+    # Una conexión nueva sin instancias todavía no tiene Coordinador: no se le suman especialistas.
     nueva = await _conexion(tid, "instagram_meta", channel="instagram")
     assert _codigo(await app_client.post(_agents(nueva), headers=h, json={"agent_id": ventas})) == (409, "core_missing")
     assert await _instancias(tid, nueva) == []
@@ -251,30 +241,25 @@ async def test_api_no_cruza_negocios(app_client) -> None:
     # Nada cambió en el otro negocio.
     assert await _instancias(otro, cid_otro) == [
         ("coordinador", "core", False, True, 100),
-        ("general", "specialist", True, True, 100),
+        ("atencion", "specialist", True, True, 100),
     ]
 
 
-async def test_con_runtime_legacy_solo_el_master_escribe_instancias(app_client) -> None:
+async def test_el_dueno_escribe_instancias_sin_403_por_runtime(app_client) -> None:
+    """Sin el camino legacy (ADR-0191) no hay 403 `aos_runtime_legacy`: el dueño escribe aunque el
+    negocio de prueba haya quedado en `legacy`."""
     tid, _c, _p, cid = await _con_agentes()
     ventas = await _especialista(app_client, await api_headers(app_client, tid), "ventas")
     h = await api_headers(app_client, tid, email=await _dueno(tid), password=PASSWORD)
-    assert _codigo(await app_client.post(_agents(cid), headers=h, json={"agent_id": ventas})) == (
-        403, "aos_runtime_legacy",
-    )
-    assert (await app_client.get(_agents(cid), headers=h)).status_code == 200
-
-    await banderas_como_dueno(tid, aos_runtime="v3")
     r = await app_client.post(_agents(cid), headers=h, json={"agent_id": ventas})
     assert r.status_code == 201, r.text
 
 
 # ---------------------------------------------------------------- altas posteriores
-async def test_un_numero_nuevo_nace_con_coordinador_y_general_y_sin_agentes_no_se_crea_nada(
+async def test_un_numero_nuevo_nace_con_coordinador_y_su_especialista_y_sin_agentes_no_se_crea_nada(
     app_client, monkeypatch
 ) -> None:
     tid, _cuenta, _phone, _cid = await _con_agentes()
-    antes = await _legacy_y_settings(tid)
     app_id, waba_id, phone_id = uniq("app"), uniq("waba"), uniq("ph")
     graph = GraphFalso(app_id=app_id, wabas={waba_id: [phone_id]})
     graph.numeros[phone_id] = {"platform_type": "CLOUD_API", "account_mode": "SANDBOX"}
@@ -286,11 +271,10 @@ async def test_un_numero_nuevo_nace_con_coordinador_y_general_y_sin_agentes_no_s
     assert r.status_code == 201, r.text
     assert await _instancias(tid, await _canonica(tid, phone_id)) == [
         ("coordinador", "core", False, True, 100),
-        ("general", "specialist", True, True, 100),
+        ("atencion", "specialist", True, True, 100),
     ]
-    assert await _legacy_y_settings(tid) == antes
 
-    # Un negocio sin agentes (sin backfill): el alta sigue igual y no crea instancias.
+    # Un negocio sin agentes: el alta sigue igual y no crea instancias.
     nuevo = await _negocio()
     app2, waba2, phone2 = uniq("app"), uniq("waba"), uniq("ph")
     graph2 = GraphFalso(app_id=app2, wabas={waba2: [phone2]})
@@ -305,7 +289,6 @@ async def test_un_numero_nuevo_nace_con_coordinador_y_general_y_sin_agentes_no_s
 
 
 async def test_religar_el_numero_no_recrea_lo_que_el_dueno_quito(app_client) -> None:
-    from core.agents.backfill_agentes import backfill_agentes
     from core.db.session import get_session
     from core.gateway.meta_asset_claims import numero_para_conexion
     from core.shared.tenant import tenant_scope
@@ -315,17 +298,14 @@ async def test_religar_el_numero_no_recrea_lo_que_el_dueno_quito(app_client) -> 
     ventas = await _especialista(app_client, h, "ventas")
     r = await app_client.post(_agents(cid), headers=h, json={"agent_id": ventas, "is_default": True})
     assert r.status_code == 201, r.text
-    general = next(f["id"] for f in (await app_client.get(_agents(cid), headers=h)).json() if f["key"] == "general")
-    assert (await app_client.delete(_agents(cid, general), headers=h)).status_code == 204
+    atencion = next(f["id"] for f in (await app_client.get(_agents(cid), headers=h)).json() if f["key"] == "atencion")
+    assert (await app_client.delete(_agents(cid, atencion), headers=h)).status_code == 204
     esperado = [("coordinador", "core", False, True, 100), ("ventas", "specialist", True, True, 100)]
 
-    # Reconectar el número (pasa por numero_para_conexion) y otra corrida del backfill.
+    # Reconectar el número (pasa por numero_para_conexion).
     async with tenant_scope(tid):
         async with get_session() as session:
             await numero_para_conexion(session, tid, cuenta, phone)
-    reporte = await backfill_agentes(dry_run=False, tenant_id=tid, modules=_modules())
-    assert not reporte.fallo
-    assert reporte.instancias["configurada"] >= 1
     assert await _instancias(tid, cid) == esperado
 
 
@@ -369,8 +349,8 @@ async def test_la_promocion_clona_las_instancias_de_la_prueba(app_client, monkey
     ventas = await _especialista(app_client, h, "ventas")
     r = await app_client.post(_agents(cid), headers=h, json={"agent_id": ventas, "priority": 30, "is_default": True})
     assert r.status_code == 201, r.text
-    general = next(f["id"] for f in (await app_client.get(_agents(cid), headers=h)).json() if f["key"] == "general")
-    assert (await app_client.patch(_agents(cid, general), headers=h, json={"enabled": False})).status_code == 200
+    atencion = next(f["id"] for f in (await app_client.get(_agents(cid), headers=h)).json() if f["key"] == "atencion")
+    assert (await app_client.patch(_agents(cid, atencion), headers=h, json={"enabled": False})).status_code == 200
 
     app_id = (await _sql(tid, "select meta_app_id from meta_connections where id = :c", c=cuenta))[0][0]
     waba_real, phone_real = _num(), _num()
@@ -386,7 +366,7 @@ async def test_la_promocion_clona_las_instancias_de_la_prueba(app_client, monkey
     assert real != cid
     assert await _instancias(tid, real) == await _instancias(tid, cid) == [
         ("coordinador", "core", False, True, 100),
-        ("general", "specialist", False, False, 100),
+        ("atencion", "specialist", False, False, 100),
         ("ventas", "specialist", True, True, 30),
     ]
     # Reintentar el paso 1 no duplica nada.
@@ -444,12 +424,12 @@ async def test_choque_con_un_indice_unico_se_traduce_por_nombre() -> None:
     from core.agents.instancias import _conflicto_por_indice
 
     tid, _c, _p, cid = await _con_agentes()
-    (general,) = await _sql(tid, "select id from agents where tenant_id = :t and key = 'general'", t=tid)
+    (atencion,) = await _sql(tid, "select id from agents where tenant_id = :t and key = 'atencion'", t=tid)
     with pytest.raises(IntegrityError) as exc:
         await _sql(
             tid,
             "insert into agent_instances (tenant_id, connection_id, agent_id, role) values (:t, :c, :a, 'specialist')",
-            t=tid, c=cid, a=general[0],
+            t=tid, c=cid, a=atencion[0],
         )
     conflicto = _conflicto_por_indice(exc.value)
     assert conflicto is not None and conflicto.code == "already_assigned"
@@ -503,8 +483,6 @@ async def test_las_escrituras_piden_ver_la_conexion_y_no_cruzan_negocios_como_du
 
     tid, _c, _p, cid = await _con_agentes()
     otro, _c2, _p2, cid_otro = await _con_agentes()
-    for negocio in (tid, otro):
-        await banderas_como_dueno(negocio, aos_runtime="v3")
     ventas = await _especialista(app_client, await api_headers(app_client, tid), "ventas")
 
     # Un dueño de este negocio (v3) no alcanza la conexión del otro.

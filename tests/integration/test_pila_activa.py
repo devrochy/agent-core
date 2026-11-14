@@ -51,9 +51,8 @@ DOS = "quiero el plan premium y una demo el jueves"
 
 @pytest.fixture
 def _ruteo(monkeypatch: Any) -> None:
-    from core.config import get_settings
+    pass
 
-    monkeypatch.setattr(get_settings(), "aos_connection_routing", True)
 
 
 class _GuionConPrompt(_Guion):
@@ -129,7 +128,7 @@ async def _cerrar(tid: uuid.UUID, conv: uuid.UUID, task_id: uuid.UUID) -> None:
 
 
 async def _con_pila() -> tuple[uuid.UUID, uuid.UUID, dict[str, uuid.UUID]]:
-    tid, cid, inst = await _con_dos_especialistas("active")
+    tid, cid, inst = await _con_dos_especialistas()
     await _pila_activa(tid)
     return tid, cid, inst
 
@@ -205,7 +204,7 @@ async def test_digresion_con_foco_encola_en_pausa(_ruteo: None, monkeypatch: Any
 
 # ---------------------------------------------------------------- tope de la pila
 async def test_tres_pedidos_con_max_stack_2_anota_el_sobrante(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, _inst = await _con_dos_especialistas("active")
+    tid, cid, _inst = await _con_dos_especialistas()
     await _especialista(tid, cid, "pedidos", PEDIDO, {"consultar_inventario", "crear_pedido"}, defecto=False)
     await _publicar_release(tid, cid)
     await _pila_activa(tid)

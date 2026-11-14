@@ -385,7 +385,7 @@ async def resolve_flow(
     if flow_tenant is not _DE_LA_RANURA:
         tenant_sections = parse_sections(flow_tenant) if flow_tenant is not None else []
     elif (congelada := release_vigente.vigente()) is not None:
-        # Con `aos_runtime = 'v3'`, las secciones del negocio congeladas en la release del turno
+        # Las secciones del negocio congeladas en la release del turno
         # (ADR-0117 §2), no las del disco.
         tenant_sections = parse_sections(congelada.flow_tenant) if congelada.flow_tenant is not None else []
     else:

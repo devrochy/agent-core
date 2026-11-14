@@ -6,10 +6,10 @@ GENERA y DEVUELVE la respuesta (`TurnResult`); acá se devuelve al navegador --
 nunca se llama a `send_to_conversation`, así que no toca Meta ni waweb.
 
 Historial: vive en working memory (Redis) igual que una conversación real. Además, como
-el consumidor y el envío, se guardan en `messages` el mensaje de la prueba y la respuesta:
-lo que depende de ellos (la aceptación de los términos del alta, ADR-0125) tiene que poder
-probarse desde el panel. Son de la conversación `test`, que queda fuera de las métricas
-de cuota (también `mensajes`), de las listas y del escalamiento (`core/shared/test_mode.py`).
+el consumidor y el envío, se guardan en `messages` el mensaje de la prueba y la respuesta.
+Las tools con efectos se simulan (HU-ARCH-14) y al cerrar o reiniciar la prueba se purga
+la conversación, el cliente sintético y todo lo que colgó de ellos. Mientras dura, queda
+fuera de las métricas, las listas y el escalamiento (`core/shared/test_mode.py`).
 
 Aislamiento: cada operación corre bajo el `tenant_scope` del admin
 (middleware del panel); todas las queries filtran `tenant_id` explícito además
@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
 
-from core.db.models import Conversation, Customer, Message, utcnow
+from core.db.models import Conversation, Customer, Message
 from core.db.session import get_session
 from core.gateway.conexion_pruebas import asegurar_conexion_de_pruebas, validar_conexion_para_probar
 from core.shared.logger import get_logger
@@ -44,6 +45,8 @@ class TestTurn:
     text: str
     image_url: str | None = None
     escalated: bool = False
+    # HU-ARCH-14: alguna tool se ejecutó en modo simulado (no se creó data real).
+    simulado: bool = False
 
 
 async def _get_or_create_customer(session, tenant_id: uuid.UUID) -> Customer:
@@ -69,18 +72,42 @@ async def _get_or_create_customer(session, tenant_id: uuid.UUID) -> Customer:
     return customer
 
 
+async def conexion_real_para_probar(session: Any, tenant_id: uuid.UUID) -> uuid.UUID | None:
+    """La conexión conversacional del negocio con release activa para el Centro de pruebas: la
+    principal primero, luego la más antigua. None si no hay ninguna."""
+    from sqlalchemy import text
+
+    fila = (
+        await session.execute(
+            text(
+                "select c.id from channel_connections c join connection_types t on t.id = c.type_id "
+                "where c.tenant_id = :t and c.deleted_at is null and c.active_release_id is not null "
+                "and t.produces_conversations and c.type_id <> 'playground' "
+                "order by c.is_primary desc, c.created_at limit 1"
+            ),
+            {"t": tenant_id},
+        )
+    ).first()
+    return fila[0] if fila else None
+
+
 async def get_or_create_test_conversation(
     tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None
 ) -> Conversation:
     """Conversación de prueba "viva" del tenant (una sola a la vez por conexión).
 
-    Sin `connection_id` va por la conexión interna del playground (sin release: el camino de
-    siempre). Con `connection_id` (HU-AOS-57) se ata a esa conexión del negocio y el turno corre por
-    su release activa, es decir, por el agente publicado ahí; sigue siendo del canal `test`."""
+    Sin `connection_id`, un negocio v3 prueba por su conexión real con release activa
+    (`conexion_real_para_probar`, ADR-0191); si no tiene ninguna, por la interna del playground.
+    Con `connection_id` (HU-AOS-57) se ata a esa conexión del negocio y el turno corre por su
+    release activa, es decir, por el agente publicado ahí; sigue siendo del canal `test`."""
     async with get_session() as session:
         customer = await _get_or_create_customer(session, tenant_id)
         # El contract del Agent OS vuelve `connection_id` obligatorio: la conversación de prueba
         # también va por una conexión (la interna del negocio, o la elegida si es válida).
+        if connection_id is None:
+            # Un negocio v3 prueba por su conexión real con release (ADR-0191): la interna no tiene
+            # release y su turno fallaría cerrado. Sin ninguna, queda la interna (y el turno no responde).
+            connection_id = await conexion_real_para_probar(session, tenant_id)
         if connection_id is not None:
             conexion_id = await validar_conexion_para_probar(session, tenant_id, connection_id)
         else:
@@ -106,13 +133,18 @@ async def get_or_create_test_conversation(
                 customer_id=customer.id,
                 channel=TEST_CHANNEL,
                 status="open",
-                state={"is_test": True},
+                state={"is_test": True, "panel": True},
                 connection_id=conexion_id,
             )
             session.add(conversation)
             await session.flush()
-        elif conversation.connection_id is None:
-            conversation.connection_id = conexion_id
+        else:
+            estado = dict(conversation.state or {})
+            if not estado.get("panel"):
+                estado["panel"] = True
+                conversation.state = estado
+            if conversation.connection_id is None:
+                conversation.connection_id = conexion_id
             await session.flush()
         return conversation
 
@@ -124,17 +156,56 @@ async def list_test_turns(conversation_id: uuid.UUID) -> list[dict]:
     return await working_memory.get_recent_turns(conversation_id)
 
 
-async def reset_test_conversation(tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None) -> Conversation:
-    """Cierra la prueba actual y arranca una nueva desde cero."""
+async def close_test_conversation(tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None) -> int:
+    """Purga la prueba (conversación, cliente sintético, mensajes, tareas, ledger y memoria).
+
+    Sin `connection_id` cierra todas las pruebas vivas del negocio; con él, solo la de esa
+    conexión. La purga es física y acotada a `channel = 'test'` (HU-ARCH-14): al cerrar la
+    prueba no queda data. Devuelve cuántas conversaciones cerró.
+    """
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            filtros = [
+                Conversation.tenant_id == tenant_id,
+                Conversation.channel == TEST_CHANNEL,
+                Conversation.state["panel"].astext == "true",
+            ]
+            if connection_id is not None:
+                filtros.append(Conversation.connection_id == connection_id)
+            ids = list(
+                (
+                    await session.execute(select(Conversation.id).where(*filtros))
+                ).scalars().all()
+            )
+        await _purga_test(tenant_id, ids)
+    return len(ids)
+
+
+async def _purga_test(tenant_id: uuid.UUID, ids: list[uuid.UUID]) -> None:
+    """Purga las conversaciones indicadas y limpia Redis/sandbox. El llamador ya está en scope."""
+    from core.mcp.sandbox import SandboxPrueba
     from core.memory import working as working_memory
 
-    current = await get_or_create_test_conversation(tenant_id, connection_id)
+    if not ids:
+        return
     async with get_session() as session:
-        row = await session.get(Conversation, current.id)
-        if row is not None and row.tenant_id == tenant_id:
-            row.status = "closed"
-            row.closed_at = utcnow()
-    await working_memory.clear(current.id)
+        for conversation_id in ids:
+            await session.execute(
+                text("select purge_test_conversation(:t, :c)"),
+                {"t": str(tenant_id), "c": str(conversation_id)},
+            )
+    for conversation_id in ids:
+        await working_memory.clear(conversation_id)
+        await SandboxPrueba(tenant_id, conversation_id).limpiar()
+
+
+async def reset_test_conversation(tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None) -> Conversation:
+    """Purga la prueba actual y arranca una nueva desde cero."""
+    # Primero la resuelve/marca: una conversación de antes del marcador `panel` también se purga.
+    await get_or_create_test_conversation(tenant_id, connection_id)
+    await close_test_conversation(tenant_id, connection_id)
     return await get_or_create_test_conversation(tenant_id, connection_id)
 
 
@@ -156,7 +227,12 @@ async def run_test_turn(tenant_id: uuid.UUID, text: str, connection_id: uuid.UUI
         )
     if result.text:
         await _guardar_mensaje(tenant_id, conversation.id, "outbound", result.text)
-    return TestTurn(text=result.text, image_url=result.image_url, escalated=result.escalated)
+    return TestTurn(
+        text=result.text,
+        image_url=result.image_url,
+        escalated=result.escalated,
+        simulado=getattr(result, "simulado", False),
+    )
 
 
 async def _salientes(tenant_id: uuid.UUID, conversation_id: uuid.UUID) -> list[Message]:

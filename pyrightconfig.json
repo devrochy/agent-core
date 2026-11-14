@@ -16,7 +16,6 @@
     "packages/contracts/agentcore_contracts/kernelspec.py",
     "core/agents/contrato_v3.py",
     "core/agents/spec_de_release.py",
-    "core/agents/tolerante.py",
     "core/agents/declarativas.py",
     "core/agents/secretos.py",
     "core/agents/versiones.py",
