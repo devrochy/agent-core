@@ -2,7 +2,7 @@
 
 Con Ventas (por defecto) y Agenda publicados: "quiero agendar una demo" la atiende Agenda por
 disparador; un saludo, Ventas por defecto. Sin release activa, 409; la conexión de otro negocio,
-404. Con el enrutamiento apagado, igual se simula y `mode` lo dice.
+404. Con la release en sombra, igual se simula y `mode` lo dice.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def _ruteo(monkeypatch: Any) -> None:
 
 
 async def test_la_frase_va_al_agente_del_disparador_y_el_saludo_al_por_defecto(_ruteo: None, app_client) -> None:
-    tid, cid, _inst = await _con_dos_especialistas("active")
+    tid, cid, _inst = await _con_dos_especialistas()
     h = await api_headers(app_client, tid)
     antes = (await _sql(tid, "select count(*) from core_decisions"))[0][0]
     r = await app_client.post(URL, headers=h, json={"connection_id": str(cid), "text": "quiero agendar una demo"})
@@ -64,15 +64,15 @@ async def test_la_frase_va_al_agente_del_disparador_y_el_saludo_al_por_defecto(_
     assert (await _sql(tid, "select count(*) from core_decisions"))[0][0] == antes
 
 
-async def test_con_el_enrutamiento_apagado_se_simula_y_lo_dice(app_client) -> None:
-    tid, cid, _inst = await _con_dos_especialistas("off")
+async def test_con_la_release_en_sombra_se_simula_y_lo_dice(app_client) -> None:
+    tid, cid, _inst = await _con_dos_especialistas(sombra=True)
     r = await app_client.post(URL, headers=await api_headers(app_client, tid), json={"connection_id": str(cid), "text": "quiero agendar una demo"})
-    assert r.status_code == 200 and r.json()["mode"] == "off" and r.json()["agent_key"] == "agenda"
+    assert r.status_code == 200 and r.json()["mode"] == "shadow" and r.json()["agent_key"] == "agenda"
 
 
 async def test_sin_release_activa_y_de_otro_negocio(_ruteo: None, app_client) -> None:
     tid, _cid = await _negocio()
-    _otro, otra_conexion, _ = await _con_dos_especialistas("active")
+    _otro, otra_conexion, _ = await _con_dos_especialistas()
     nueva = uuid.uuid4()
     await _sql(
         tid,

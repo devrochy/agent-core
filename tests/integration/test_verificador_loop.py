@@ -75,7 +75,9 @@ async def _negocio(**behavior: Any) -> uuid.UUID:
     from core.shared.tenant import tenant_scope
 
     slug = f"verif-{uuid.uuid4().hex[:8]}"
-    tid, _ = await onboard_tenant(name=f"Verificador {slug}", slug=slug, persona={"tone": "cercano"})
+    tid, _ = await onboard_tenant(
+        name=f"Verificador {slug}", slug=slug, persona={"tone": "cercano"}, packs=["pack_commerce"], sembrar_ejemplos=False
+    )
     async with tenant_scope(tid):
         async with get_session() as session:
             row = (await session.execute(select(AppSettings).where(AppSettings.tenant_id == tid))).scalar_one_or_none()

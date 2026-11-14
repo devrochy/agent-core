@@ -69,7 +69,9 @@ async def _negocio() -> uuid.UUID:
     from core.alta_negocio import onboard_tenant
 
     slug = f"escala-{uuid.uuid4().hex[:8]}"
-    tid, _ = await onboard_tenant(name=f"Escala {slug}", slug=slug, persona={"tone": "cercano"})
+    tid, _ = await onboard_tenant(
+        name=f"Escala {slug}", slug=slug, persona={"tone": "cercano"}, packs=["pack_commerce"], sembrar_ejemplos=False
+    )
     # Todo turno corre sobre una release (ADR-0191) y solo ejecuta lo que concede la versión del
     # agente (HU-ARCH-34): se conceden las tools de comercio que estos tests simulan.
     from release_de_prueba import conceder_herramientas, montar_release_en
