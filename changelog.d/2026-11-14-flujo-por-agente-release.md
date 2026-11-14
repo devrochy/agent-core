@@ -8,3 +8,6 @@
   sigue con los del negocio.
 - Nota: los gates y veredictos de release siguen leyendo el `flow_tenant` global; se revisará
   cuando termine el retiro del General/legacy.
+- La semilla del flujo no se crea sola al publicar: mientras el agente no tenga flujo propio se
+  sigue leyendo `flow_tenant` (conducta anterior y evals). El panel la guarda cuando el dueño
+  confirma el paso «Flujo de atención».
