@@ -96,9 +96,11 @@ class ConexionFila:
     active_release: ReleaseFila | None = None
     canary_release: ReleaseFila | None = None
     usage_7d: ConsumoFila = ConsumoFila()
-    # Número de WhatsApp como lo muestra Meta («+57 300 1234567»); None si no es de Meta o aún no se
-    # sincronizó. Sale de la tabla, sin llamar a Meta.
+    # Número visible: el de Meta («+57 300 1234567») o el del WhatsApp Web vinculado. None si aún
+    # no se conoce. Sale de las tablas, sin llamar a Meta ni al connector.
     display_phone_number: str | None = None
+    # Nombre visible del WhatsApp Web (perfil o negocio); None en los demás canales.
+    display_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -182,7 +184,7 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                     "SELECT cc.id, cc.channel, cc.type_id, cc.label, cc.external_id, "
                     "  coalesce(ct.produces_conversations, true), cc.active, cc.is_primary, cc.created_at, "
                     "  cc.meta_connection_id, mc.status, cc.active_release_id, cc.canary_release_id, "
-                    "  pn.display_phone_number "
+                    "  pn.display_phone_number, ws.phone, ws.push_name, ws.business_name "
                     "FROM channel_connections cc "
                     "LEFT JOIN connection_types ct ON ct.id = cc.type_id "
                     "LEFT JOIN meta_connections mc "
@@ -192,6 +194,9 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                     "LEFT JOIN phone_numbers pn "
                     "  ON pn.tenant_id = cc.tenant_id AND pn.connection_id = cc.meta_connection_id "
                     "  AND pn.phone_number_id = cc.external_id AND pn.deleted_at IS NULL "
+                    # Una sesión viva por conexión (índice único parcial): no duplica filas.
+                    "LEFT JOIN waweb_sessions ws "
+                    "  ON ws.tenant_id = cc.tenant_id AND ws.connection_id = cc.id AND ws.deleted_at IS NULL "
                     "WHERE cc.tenant_id = :t AND cc.deleted_at IS NULL "
                     "  AND cc.type_id IS DISTINCT FROM 'playground' "
                     "  AND (cc.meta_connection_id IS NULL OR mc.id IS NOT NULL) "
@@ -233,7 +238,8 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                 active_release=releases.get(activa) if activa is not None else None,
                 canary_release=releases.get(f[12]) if f[12] is not None else None,
                 usage_7d=consumo.get(cid, ConsumoFila()),
-                display_phone_number=f[13] or None,
+                display_phone_number=f[13] or f[14] or None,
+                display_name=f[15] or f[16] or None,
             )
         )
     return Consola(

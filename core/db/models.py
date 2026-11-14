@@ -428,11 +428,18 @@ class WaWebSession(Base):
         ForeignKey("channel_connections.id", ondelete="CASCADE")
     )
     jid: Mapped[str | None] = mapped_column(Text)  # identidad del dispositivo vinculado
+    # Identidad visible del número vinculado (PairStatusEv/Device de Neonize).
+    phone: Mapped[str | None] = mapped_column(Text)  # solo dígitos, sin + ni @server
+    push_name: Mapped[str | None] = mapped_column(Text)  # nombre de perfil de WhatsApp
+    business_name: Mapped[str | None] = mapped_column(Text)  # WhatsApp Business
+    platform: Mapped[str | None] = mapped_column(Text)  # android | iphone | web…
     creds_encrypted: Mapped[str | None] = mapped_column(Text)
     # pending_qr | connecting | connected | disconnected | logged_out | error
     status: Mapped[str] = mapped_column(Text, default="pending_qr")
     last_qr_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Primera vinculación (no cambia al reconectar); se limpia en reset/logout.
+    linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     risk_ack_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     risk_ack_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

@@ -11,7 +11,7 @@ import pytest
 
 from core.waweb import manager as manager_mod
 from core.waweb import status
-from core.waweb.backend import InboundEvent
+from core.waweb.backend import DeviceIdentity, InboundEvent
 from core.waweb.manager import WaWebConnector
 from core.waweb.policy import WaWebPolicy
 from core.waweb.registry import SessionContext
@@ -38,6 +38,9 @@ class FakeSocket:
 
     async def alive(self):
         return True
+
+    async def identity(self):
+        return None
 
     async def disconnect(self):
         self.closed.set()
@@ -68,6 +71,7 @@ class FakeRegistry:
         self.statuses: dict[uuid.UUID, str] = {}
         self.connection_ids: dict[uuid.UUID, Any] = {}
         self.jids_with: dict[str, list[uuid.UUID]] = {}
+        self.identities: dict[uuid.UUID, dict[str, Any]] = {}
         self.on_set: Any = None
 
     async def active_sessions(self) -> list[SessionContext]:
@@ -78,6 +82,9 @@ class FakeRegistry:
         self.connection_ids[tenant_id] = connection_id
         if self.on_set is not None:
             await self.on_set(tenant_id, new_status)
+
+    async def set_identity(self, tenant_id, **campos):
+        self.identities[tenant_id] = campos
 
     async def tenants_with_jid(self, jid: str) -> list[uuid.UUID]:
         return list(self.jids_with.get(jid, []))
@@ -898,3 +905,40 @@ async def test_reset_del_panel_con_sesion_vinculada_vuelve_a_pedir_qr(
     assert registry.statuses[ctx.tenant_id] == status.PENDING_QR
     # El QR que sigue a un reset es lo esperado: no es una "sesión perdida".
     assert connector._lost_alerted == set()
+
+
+async def test_on_status_connected_persiste_la_identidad(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _clear(_: uuid.UUID) -> None:
+        return None
+
+    monkeypatch.setattr(manager_mod.limits, "clear_disconnects", _clear)
+
+    ctx = _ctx()
+    registry = FakeRegistry([ctx])
+
+    class SocketConIdentidad(FakeSocket):
+        async def identity(self):
+            return DeviceIdentity(
+                jid="573005550103@s.whatsapp.net",
+                phone="573005550103",
+                push_name="Ana",
+                business_name="Panadería Ana",
+                platform="android",
+            )
+
+    sock = SocketConIdentidad()
+    connector = _connector(tmp_path, registry, sock)
+
+    await connector._on_status(ctx, "connected", sock=sock)
+
+    assert registry.statuses[ctx.tenant_id] == status.CONNECTED
+    assert registry.identities[ctx.tenant_id] == {
+        "connection_id": ctx.connection_id,
+        "jid": "573005550103@s.whatsapp.net",
+        "phone": "573005550103",
+        "push_name": "Ana",
+        "business_name": "Panadería Ana",
+        "platform": "android",
+    }

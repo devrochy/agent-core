@@ -25,10 +25,17 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 from pathlib import Path
 
 from core.shared.logger import get_logger
-from core.waweb.backend import InboundEvent, MessageHandler, QrHandler, StatusHandler
+from core.waweb.backend import (
+    DeviceIdentity,
+    InboundEvent,
+    MessageHandler,
+    QrHandler,
+    StatusHandler,
+)
 
 log = get_logger(__name__)
 
@@ -74,10 +81,82 @@ def _jid_number(jid: object) -> str:
     (hacer `str(proto)` devolvía `User: "..."` y producía remitentes basura).
     """
     user = getattr(jid, "User", None)
-    if isinstance(user, str) and user:
-        return user.split(":", 1)[0].lstrip("+")
-    raw = str(jid or "")
-    return raw.split("@", 1)[0].split(":", 1)[0].lstrip("+")
+    raw = user if isinstance(user, str) and user else str(jid or "")
+    return re.sub(r"\D", "", raw.split("@", 1)[0].split(":", 1)[0])
+
+
+_JID_SERVER_DEFECTO = "s.whatsapp.net"
+
+
+def _jid_full(jid: object) -> str | None:
+    """JID completo `<numero>@<servidor>` de un proto de Neonize.
+
+    No usa `str(proto)`: protobuf lo serializa como `User: "..."`. Si el server
+    viene vacío se asume `s.whatsapp.net` (el caso normal del número propio).
+    """
+    user = getattr(jid, "User", None)
+    if not isinstance(user, str) or not user:
+        return None
+    limpio = re.sub(r"\D", "", user.split(":", 1)[0])
+    if not limpio:
+        return None
+    server = getattr(jid, "Server", "") or _JID_SERVER_DEFECTO
+    return f"{limpio}@{server}"
+
+
+def _jid_phone(jid: object) -> str | None:
+    """Teléfono (solo dígitos) si el JID es de un número, no de un LID."""
+    user = getattr(jid, "User", None)
+    raw = user if isinstance(user, str) and user else str(jid or "")
+    digitos = re.sub(r"\D", "", raw.split("@", 1)[0].split(":", 1)[0])
+    if not digitos:
+        return None
+    server = getattr(jid, "Server", "") or _JID_SERVER_DEFECTO
+    if server not in (_JID_SERVER_DEFECTO, "c.us"):
+        return None
+    return digitos
+
+
+def _texto(value: object) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _identity_from_pair(event: object) -> DeviceIdentity:
+    """Identidad que ya viene en `PairStatusEv` (número, negocio y plataforma)."""
+    jid = getattr(event, "ID", None)
+    return DeviceIdentity(
+        jid=_jid_full(jid),
+        phone=_jid_phone(jid),
+        business_name=_texto(getattr(event, "BusinessName", None)),
+        platform=_texto(getattr(event, "Platform", None)),
+    )
+
+
+def _identity_from_device(device: object) -> DeviceIdentity:
+    """Identidad del evento `Device`; Neonize la deja en `client.me`."""
+    if device is None:
+        return DeviceIdentity()
+    jid = getattr(device, "JID", None)
+    return DeviceIdentity(
+        jid=_jid_full(jid),
+        phone=_jid_phone(jid),
+        push_name=_texto(getattr(device, "PushName", None)),
+        # El proto de Neonize trae el typo `BussinessName`.
+        business_name=_texto(getattr(device, "BussinessName", None)),
+        platform=_texto(getattr(device, "Platform", None)),
+    )
+
+
+def _merge_identity(actual: DeviceIdentity | None, nueva: DeviceIdentity) -> DeviceIdentity:
+    if actual is None:
+        return nueva
+    return DeviceIdentity(
+        jid=nueva.jid or actual.jid,
+        phone=nueva.phone or actual.phone,
+        push_name=nueva.push_name or actual.push_name,
+        business_name=nueva.business_name or actual.business_name,
+        platform=nueva.platform or actual.platform,
+    )
 
 
 class NeonizeSocket:
@@ -95,6 +174,7 @@ class NeonizeSocket:
         self.closed = asyncio.Event()
         self._client = None  # type: ignore[assignment]
         self._idle_task: asyncio.Task | None = None
+        self._identity: DeviceIdentity | None = None
 
     async def connect(
         self,
@@ -121,15 +201,22 @@ class NeonizeSocket:
                 await on_qr(code)
 
         async def _connected(_c: object, _event: object) -> None:
-            await on_status("connected", None, None)
+            # `Device` (código 0) ya dejó la identidad en `client.me`; no se
+            # vuelve a llamar al puente Go desde el callback.
+            identidad = _identity_from_device(getattr(client, "me", None))
+            if identidad.jid or identidad.push_name or identidad.business_name:
+                self._identity = _merge_identity(self._identity, identidad)
+            await on_status("connected", None, self._identity.jid if self._identity else None)
 
         async def _pair(_c: object, event: object) -> None:
             error = str(getattr(event, "Error", "") or "")
-            jid = str(getattr(event, "ID", "") or "") or None
+            identidad = _identity_from_pair(event)
+            if not error and (identidad.jid or identidad.phone or identidad.business_name):
+                self._identity = _merge_identity(self._identity, identidad)
             await on_status(
                 "error" if error else "connected",
                 error[:200] or None,
-                None if error else jid,
+                None if error else (self._identity.jid if self._identity else None),
             )
 
         async def _disconnected(_c: object, event: object) -> None:
@@ -252,6 +339,21 @@ class NeonizeSocket:
         finally:
             _BRIDGE_LOCK.release()
         return bool(connected) and bool(logged_in)
+
+    async def identity(self) -> DeviceIdentity | None:
+        """Identidad del dispositivo desde cache; refresca `client.me` si cambió.
+
+        `PairStatusEv` no trae el nombre de perfil y el evento `Device` (que sí)
+        puede llegar después de `ConnectedEv`; Neonize deja ese evento en
+        `client.me` sin llamar a ningún handler. Leerlo en cada consulta permite
+        que el manager complete el nombre en el siguiente sondeo. No toca el
+        puente Go.
+        """
+        if self._client is not None:
+            me = getattr(self._client, "me", None)
+            if me is not None:
+                self._identity = _merge_identity(self._identity, _identity_from_device(me))
+        return self._identity
 
     async def disconnect(self) -> None:
         if self._idle_task is not None:
