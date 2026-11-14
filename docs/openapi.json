@@ -69549,6 +69549,7 @@
         "properties": {
           "fila": {
             "type": "integer",
+            "maximum": 1000000.0,
             "minimum": 1.0,
             "title": "Fila",
             "description": "Número de fila en el archivo original (la cabecera es la 1)."

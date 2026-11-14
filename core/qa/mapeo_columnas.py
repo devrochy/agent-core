@@ -41,6 +41,8 @@ log = get_logger(__name__)
 PLAYBOOK = "mapear_columnas"
 FILAS_DE_MUESTRA = 5
 MAX_CELDA_MUESTRA = 80
+MAX_PENDIENTES_IA = 50  # cabeceras por llamada; con más, no se llama a la IA
+MAX_CABECERA_IA = 120  # caracteres; una cabecera más larga no es un nombre de columna
 TIMEOUT_LLM_S = 45
 MAX_TOKENS = 800
 TEMPERATURA = 0.0
@@ -128,8 +130,18 @@ async def _con_ia(
 
     usadas = {a.columna for a in mapeo if a.columna}
     libres = [c for c in plantilla.nombres if c not in usadas]
-    pendientes = [i for i, a in enumerate(mapeo) if a.columna is None and a.cabecera]
+    # Una cabecera repetida va una sola vez (la IA responde por texto): las copias quedan sin asignar.
+    vistas: set[str] = set()
+    pendientes = []
+    for i, a in enumerate(mapeo):
+        if a.columna is None and a.cabecera and a.cabecera not in vistas:
+            vistas.add(a.cabecera)
+            pendientes.append(i)
     if not libres or not pendientes:
+        return mapeo, None
+    if len(pendientes) > MAX_PENDIENTES_IA or any(len(mapeo[i].cabecera) > MAX_CABECERA_IA for i in pendientes):
+        # Un archivo así no es una hoja de catálogo normal: no se paga una llamada enorme por él.
+        log.info("mapeo_columnas_ia_omitida", plantilla=plantilla.id, pendientes=len(pendientes))
         return mapeo, None
     proveedor = _proveedor()
     try:

@@ -141,3 +141,25 @@ async def test_si_la_ia_falla_quedan_sin_asignar(monkeypatch, error: Exception, 
     )
     assert recibido == motivo
     assert [a.columna for a in mapeo] == [None, "nombre"]
+
+
+async def test_no_se_llama_a_la_ia_con_cabeceras_abusivas(monkeypatch) -> None:
+    llamadas = _ia(monkeypatch, {"asignaciones": []})
+    muchas = _tabla([f"col{i}" for i in range(60)], ["x"] * 60)
+    larga = _tabla(["x" * 500, "Producto"], ["a", "b"])
+    for tabla in (muchas, larga):
+        _mapeo, motivo = await mapeo_columnas._con_ia(
+            TENANT, AGENTE, PRODUCTOS, tabla, mapeo_heuristico(tabla.cabeceras, PRODUCTOS)
+        )
+        assert motivo is None
+    assert llamadas == []
+
+
+async def test_cabecera_repetida_va_una_vez_a_la_ia(monkeypatch) -> None:
+    llamadas = _ia(monkeypatch, {"asignaciones": [{"cabecera": "Cod", "columna": "sku"}]})
+    tabla = _tabla(["Cod", "Cod", "Producto"], ["A", "B", "C"])
+    mapeo, _ = await mapeo_columnas._con_ia(
+        TENANT, AGENTE, PRODUCTOS, tabla, mapeo_heuristico(tabla.cabeceras, PRODUCTOS)
+    )
+    assert json.loads(llamadas[0]["entrada"])["cabeceras_sin_reconocer"] == ["Cod"]
+    assert [a.columna for a in mapeo] == ["sku", None, "nombre"]

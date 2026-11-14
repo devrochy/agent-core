@@ -21,7 +21,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from core.api.deps import Principal, effective_access, get_principal, require
@@ -408,7 +408,7 @@ class IAMapeoOut(BaseModel):
 
 
 class FilaPrecarga(BaseModel):
-    fila: int = Field(ge=1, description="Número de fila en el archivo original (la cabecera es la 1).")
+    fila: int = Field(ge=1, le=1_000_000, description="Número de fila en el archivo original (la cabecera es la 1).")
     valores: dict[str, str | None] = Field(
         max_length=50, description="Columna de la plantilla → texto, como en el CSV. Lo demás se ignora."
     )
@@ -426,6 +426,22 @@ class MapeoPropuesto(BaseModel):
 class PrecargaIn(BaseModel):
     filas: list[FilaPrecarga] = Field(min_length=1, max_length=TOPE_FILAS)
     solo_validas: bool = False
+
+
+TOPE_CUERPO_PRECARGA = 2 * TOPE_BYTES  # el CSV tiene 1 MB; en JSON pesa más por las claves
+
+
+async def _tope_cuerpo(request: Request) -> None:
+    """La precarga no puede pesar más que el CSV que la originó (con margen por el JSON). Se exige
+    `Content-Length`: el servidor HTTP no lee más bytes que los declarados, así que acota el cuerpo
+    antes de que se parsee entero."""
+    declarado = request.headers.get("content-length", "")
+    if not (declarado.isascii() and declarado.isdigit()):
+        raise ApiError(411, "length_required", "Falta el tamaño del cuerpo (Content-Length).")
+    if int(declarado) > TOPE_CUERPO_PRECARGA:
+        raise ApiError(
+            413, "payload_too_large", f"La precarga pesa más de {TOPE_CUERPO_PRECARGA // 1_000_000} MB. Impórtala en partes."
+        )
 
 
 def _filas(cuerpo: PrecargaIn) -> list[tuple[int, dict[str, str | None]]]:
@@ -462,6 +478,7 @@ async def validar_precarga(
     agent_id: uuid.UUID,
     cuerpo: PrecargaIn,
     principal: Annotated[Principal, Depends(require("agents", write=True))],
+    _tope: Annotated[None, Depends(_tope_cuerpo)] = None,
 ) -> dict[str, object]:
     """Vista previa de la precarga editada. No escribe."""
     from core.qa import importar_datos as svc
@@ -479,6 +496,7 @@ async def importar_precarga(
     agent_id: uuid.UUID,
     cuerpo: PrecargaIn,
     principal: Annotated[Principal, Depends(require("agents", write=True))],
+    _tope: Annotated[None, Depends(_tope_cuerpo)] = None,
 ) -> dict[str, object]:
     """Importa la precarga editada: se vuelve a validar contra el esquema del pack. Con errores en
     alguna fila responde 422 `archivo_con_errores` salvo `solo_validas`. Idempotente por clave natural."""
