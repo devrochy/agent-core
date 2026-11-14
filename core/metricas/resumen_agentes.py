@@ -58,7 +58,7 @@ from core.db.models import (
 from core.db.session import get_session
 from core.metricas import fiabilidad
 from core.shared.tenant import get_current_tenant_id
-from core.shared.test_mode import TEST_CHANNEL
+from core.shared.test_mode import TEST_CHANNEL, no_es_prueba, sql_no_es_prueba
 
 log = logging.getLogger(__name__)
 
@@ -148,6 +148,7 @@ async def _costo(session: Any, tenant_id: uuid.UUID, desde: datetime, hasta: dat
                     UsageLedger.created_at >= desde,
                     UsageLedger.created_at < hasta,
                     UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
+                    no_es_prueba(tenant_id, UsageLedger.conversation_id),
                 )
             )
         ).scalar()
@@ -298,6 +299,7 @@ async def _actividad(
                 UsageLedger.created_at >= p.previo_desde,
                 UsageLedger.created_at < p.hasta,
                 UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
+                no_es_prueba(tenant_id, UsageLedger.conversation_id),
             )
             .group_by(UsageLedger.agent_instance_id, ventana)
         )
@@ -332,7 +334,8 @@ async def _escalados(
                 "  ON o.tenant_id = d.tenant_id AND o.turn_id = d.id "
                 "WHERE d.tenant_id = :t AND d.created_at >= :desde AND d.created_at < :hasta "
                 "  AND d.outcome IN ('routed', 'escalated') "
-                "  AND (d.outcome = 'escalated' OR o.status = 'escalated') GROUP BY 1, 2"
+                "  AND (d.outcome = 'escalated' OR o.status = 'escalated') "
+                f"  AND {sql_no_es_prueba('d.conversation_id')} GROUP BY 1, 2"
             ),
             {"t": tenant_id, "corte": p.desde, "desde": p.previo_desde, "hasta": p.hasta},
         )
@@ -353,6 +356,7 @@ async def _tareas_abiertas(
             .where(
                 ConversationTask.tenant_id == tenant_id,
                 ConversationTask.status.in_(ESTADOS_ABIERTOS),
+                no_es_prueba(tenant_id, ConversationTask.conversation_id),
             )
             .group_by(ConversationTask.owner_instance_id)
         )
@@ -410,6 +414,7 @@ async def _serie_diaria(
                 UsageLedger.created_at >= desde,
                 UsageLedger.created_at < p.hasta,
                 UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
+                no_es_prueba(tenant_id, UsageLedger.conversation_id),
             )
             .group_by(UsageLedger.agent_instance_id, dia)
         )

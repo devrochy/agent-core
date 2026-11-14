@@ -28,6 +28,7 @@ from sqlalchemy import bindparam, text
 from core.db.models import utcnow
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import sql_no_es_prueba
 
 VENTANA_CONSUMO = timedelta(days=7)
 MAX_SIN_CONEXION = 50
@@ -349,6 +350,7 @@ async def _consumo(
                 "FROM usage_ledger "
                 "WHERE tenant_id = :t AND connection_id IS NOT NULL AND connection_id IN :ids AND created_at >= :desde "
                 "  AND kind <> 'eval' "
+                f"  AND {sql_no_es_prueba('conversation_id')} "
                 "GROUP BY connection_id"
             ).bindparams(bindparam("ids", expanding=True)),
             {"t": tenant_id, "ids": ids, "desde": utcnow() - VENTANA_CONSUMO},

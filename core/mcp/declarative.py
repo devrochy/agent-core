@@ -161,6 +161,14 @@ def build_tool(definition: dict[str, Any]) -> MCPTool:
         )
         return result
 
+    async def _simular(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """En la prueba del panel una POST externa no sale: devuelve un OK ficticio."""
+        return {
+            "status": "simulado",
+            "method": definition["method"],
+            "tool": definition["name"],
+        }
+
     tool = MCPTool(
         name=definition["name"],
         description=definition["description"],
@@ -171,6 +179,9 @@ def build_tool(definition: dict[str, Any]) -> MCPTool:
         apta_para_opcion=definition.get("option_safe") is True,
         # Una declarativa que escribe (POST) pide siempre la confirmación del cliente.
         sensible=definition["method"] != "GET",
+        solo_lectura=definition["method"] == "GET",
+        side_effects=definition["method"] != "GET",
+        simular=_simular if definition["method"] != "GET" else None,
     )
     # La allowlist viaja con la tool para que el loop arme el ScopedHttp del turno.
     tool._allowed_domains = list(allowed)  # type: ignore[attr-defined]

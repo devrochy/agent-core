@@ -31,6 +31,9 @@ from core.subscriptions import (
     soporta_cotizacion,
     subscription_registry,
 )
+from core.subscriptions import (
+    sandbox as sandbox_prueba,
+)
 
 log = get_logger(__name__)
 
@@ -126,6 +129,7 @@ class SubscriptionSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.consultar,
+                simular=sandbox_prueba.simular_consultar,
                 connection_predicate=predicate,
                 # Solo lee la suscripción y su próximo cargo (HU-AOS-19: puede responder consultas).
                 solo_lectura=True,
@@ -138,6 +142,8 @@ class SubscriptionSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.link_pago,
+                side_effects=True,
+                simular=sandbox_prueba.simular_link_pago,
                 connection_predicate=predicate,
             ),
             MCPTool(
@@ -148,6 +154,8 @@ class SubscriptionSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.pausar,
+                side_effects=True,
+                simular=sandbox_prueba.simular_pausar,
                 connection_predicate=predicate,
             ),
             MCPTool(
@@ -159,6 +167,8 @@ class SubscriptionSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self.cancelar,
+                side_effects=True,
+                simular=sandbox_prueba.simular_cancelar,
                 connection_predicate=predicate,
                 sensible=True,
             ),
@@ -182,6 +192,8 @@ class SubscriptionSkill(BaseSkill):
                     "required": ["plan_code"],
                 },
                 handler=self.cambiar_plan,
+                side_effects=True,
+                simular=sandbox_prueba.simular_cambiar_plan,
                 # Con el motor activo el cambio de plan va por el procedimiento (botón con el
                 # monto del servidor): esta tool no se ofrece (HU-AOS-08). Sin la bandera, igual.
                 connection_predicate=sin_motor_activo(predicate),
@@ -206,6 +218,7 @@ class SubscriptionSkill(BaseSkill):
                     "required": ["plan_code"],
                 },
                 handler=self.cotizar_cambio_plan,
+                solo_lectura=True,
                 connection_predicate=solo_con_motor_activo(predicate),
             ),
             MCPTool(
@@ -231,6 +244,8 @@ class SubscriptionSkill(BaseSkill):
                     "required": ["plan_code", "monto_a_pagar"],
                 },
                 handler=self.aplicar_cambio_plan,
+                side_effects=True,
+                simular=sandbox_prueba.simular_aplicar_cambio_plan,
                 connection_predicate=solo_con_motor_activo(predicate),
             ),
             *self._tools_de_inscripcion(solo_con_motor_activo(predicate)),
@@ -273,6 +288,7 @@ class SubscriptionSkill(BaseSkill):
                     "required": ["plan_code"],
                 },
                 handler=self.cotizar_inscripcion,
+                solo_lectura=True,
                 connection_predicate=predicate,
             ),
             MCPTool(
@@ -292,6 +308,8 @@ class SubscriptionSkill(BaseSkill):
                     "required": ["plan_code", "monto_a_pagar"],
                 },
                 handler=self.confirmar_inscripcion,
+                side_effects=True,
+                simular=sandbox_prueba.simular_confirmar_inscripcion,
                 connection_predicate=predicate,
             ),
             MCPTool(
@@ -332,6 +350,8 @@ class SubscriptionSkill(BaseSkill):
                     "required": ["plan_code", "monto_a_pagar", "customer_data"],
                 },
                 handler=self.inscribir,
+                side_effects=True,
+                simular=sandbox_prueba.simular_inscribir,
                 connection_predicate=predicate,
             ),
         ]

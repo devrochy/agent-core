@@ -107,6 +107,7 @@ class KnowledgeSkill(BaseSkill):
                     "required": ["consulta"],
                 },
                 handler=self.buscar_conocimiento,
+                solo_lectura=True,
                 connection_predicate=self._disponible,
                 resumen_de_auditoria=resumir,
             )

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 # Importar `jobs` a nivel de módulo registra los `@register_cron` en Celery
 # (worker y beat) apenas se escanea el plugin -- no dentro de `on_activate()`,
@@ -34,6 +34,7 @@ from core.shared.dinero import MONEY_IN_TEXT, MONEY_KEYS, parse_money  # noqa: F
 from core.shared.events import ON_CONVERSATION_STARTED, ON_PROCEDURE_SLOTS_SET
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import TEST_CHANNEL
 from pack_commerce import api as leads_api
 
 # Registra las columnas y filtros del pack en la vista global de clientes (ADR-0056, HU-UX-16).
@@ -306,9 +307,19 @@ async def crm_dashboard(request: Request):
     if ctx is None:
         return _login_redirect()
     tenant_id = get_current_tenant_id()
+    from core.db.models import Customer
+
     async with get_session() as session:
+        de_prueba = select(Customer.id).where(
+            Customer.tenant_id == tenant_id, Customer.channel == TEST_CHANNEL
+        )
         leads = (
-            await session.execute(select(Lead).where(Lead.tenant_id == tenant_id))
+            await session.execute(
+                select(Lead).where(
+                    Lead.tenant_id == tenant_id,
+                    or_(Lead.customer_id.is_(None), ~Lead.customer_id.in_(de_prueba)),
+                )
+            )
         ).scalars().all()
         products = (
             await session.execute(
@@ -319,7 +330,12 @@ async def crm_dashboard(request: Request):
             await session.execute(select(Promotion).where(Promotion.tenant_id == tenant_id))
         ).scalars().all()
         orders = (
-            await session.execute(select(Order).where(Order.tenant_id == tenant_id))
+            await session.execute(
+                select(Order).where(
+                    Order.tenant_id == tenant_id,
+                    ~Order.customer_id.in_(de_prueba),
+                )
+            )
         ).scalars().all()
     ctx.update(
         kpi={
@@ -357,7 +373,11 @@ async def _leads_list() -> list[dict[str, Any]]:
         customers = (
             await session.execute(
                 select(Customer)
-                .where(Customer.tenant_id == tenant_id, Customer.deleted_at.is_(None))
+                .where(
+                    Customer.tenant_id == tenant_id,
+                    Customer.deleted_at.is_(None),
+                    Customer.channel != TEST_CHANNEL,
+                )
                 .order_by(Customer.created_at.desc())
                 .limit(200)
             )
@@ -989,10 +1009,15 @@ async def crm_orders(request: Request):
         return _login_redirect()
     tenant_id = get_current_tenant_id()
     async with get_session() as session:
+        from core.db.models import Customer
+
+        de_prueba = select(Customer.id).where(
+            Customer.tenant_id == tenant_id, Customer.channel == TEST_CHANNEL
+        )
         orders = (
             await session.execute(
                 select(Order)
-                .where(Order.tenant_id == tenant_id)
+                .where(Order.tenant_id == tenant_id, ~Order.customer_id.in_(de_prueba))
                 .order_by(Order.created_at.desc())
                 .limit(200)
             )
@@ -1307,12 +1332,17 @@ class CRMModule(BaseModule):
         un tenant sin el pack o con la config apagada recibiría leads fantasma.
         """
         from core.agents.spec import enabled_packs, load_active_spec
+        from core.db.models import Conversation
         from core.plugin_manager import plugin_manager
         from core.shared.tenant import get_current_tenant_id
+        from core.shared.test_mode import is_panel_test
 
         tenant_id = get_current_tenant_id()
         if tenant_id is None:
             return
+        async with get_session() as session:
+            if is_panel_test(await session.get(Conversation, conversation_id)):
+                return
         spec = await load_active_spec(tenant_id)
         if self.id not in enabled_packs(spec):
             return
@@ -1361,9 +1391,15 @@ class CRMModule(BaseModule):
 
         if not str(procedure_id).startswith(f"{self.id}.") or not isinstance(datos, dict):
             return
+        from core.db.models import Conversation
+        from core.shared.test_mode import is_panel_test
+
         actual = get_current_tenant_id()
         if actual is None or actual != tenant_id or not any(datos.get(n) for n in ("full_name", "email", "phone")):
             return
+        async with get_session() as session:
+            if is_panel_test(await session.get(Conversation, conversation_id)):
+                return
         from pack_commerce.skills import completar_lead
 
         try:

@@ -31,6 +31,7 @@ from core.memory import vector as vector_memory
 from core.memory.facts import HechoInvalido, NamespaceNoConcedido
 from core.orchestrator.escalation import escalate
 from core.orchestrator.motivos_escalacion import MOTIVOS_TOOL, motivo_de_tool
+from core.tools import sandbox as sandbox_prueba
 
 
 async def conversation_spent(conversation_id: uuid.UUID) -> float:
@@ -224,6 +225,8 @@ class CoreSkill(BaseSkill):
                     "required": ["reason"],
                 },
                 handler=self._escalate_to_human,
+                side_effects=True,
+                simular=sandbox_prueba.simular_escalar,
             ),
             MCPTool(
                 name="get_customer_profile",
@@ -233,6 +236,7 @@ class CoreSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self._get_customer_profile,
+                solo_lectura=True,
             ),
             MCPTool(
                 name="update_customer_profile",
@@ -251,6 +255,8 @@ class CoreSkill(BaseSkill):
                     "required": ["attributes"],
                 },
                 handler=self._update_customer_profile,
+                side_effects=True,
+                permite_en_prueba=True,
             ),
             MCPTool(
                 name="remember_fact",
@@ -265,6 +271,8 @@ class CoreSkill(BaseSkill):
                     "required": ["content"],
                 },
                 handler=self._remember_fact,
+                side_effects=True,
+                permite_en_prueba=True,
             ),
             MCPTool(
                 name="search_memories",
@@ -281,6 +289,7 @@ class CoreSkill(BaseSkill):
                     "required": ["query"],
                 },
                 handler=self._search_memories,
+                solo_lectura=True,
             ),
             MCPTool(
                 name="load_playbook",
@@ -295,6 +304,7 @@ class CoreSkill(BaseSkill):
                     "required": ["name"],
                 },
                 handler=self._load_playbook,
+                solo_lectura=True,
             ),
             MCPTool(
                 name="get_conversation_usage",
@@ -304,6 +314,7 @@ class CoreSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self._get_conversation_usage,
+                solo_lectura=True,
             ),
             MCPTool(
                 name="set_conversation_note",
@@ -317,6 +328,8 @@ class CoreSkill(BaseSkill):
                     "required": ["note"],
                 },
                 handler=self._set_conversation_note,
+                side_effects=True,
+                permite_en_prueba=True,
             ),
             MCPTool(
                 name="send_email",
@@ -335,6 +348,8 @@ class CoreSkill(BaseSkill):
                     "required": ["to", "body"],
                 },
                 handler=self._send_email,
+                side_effects=True,
+                simular=sandbox_prueba.simular_email,
                 requires_connection_types=["email_smtp"],
             ),
             MCPTool(
@@ -358,6 +373,8 @@ class CoreSkill(BaseSkill):
                     "additionalProperties": False,
                 },
                 handler=self._enviar_plantilla_opciones,
+                side_effects=True,
+                simular=sandbox_prueba.simular_plantilla_opciones,
                 # Solo se ofrece (y se ejecuta) con la bandera `opciones_directas` del negocio encendida.
                 connection_predicate=oferta_habilitada,
                 # NO `apta_para_opcion` (default False): una opción no puede enviar otra plantilla de opciones

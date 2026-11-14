@@ -68,7 +68,7 @@ from core.llm.prompt_builder import (
     build_system_blocks,
 )
 from core.llm.types import LLMMessage, LLMToolCall
-from core.mcp.host import mcp_host, new_tool_context
+from core.mcp.host import ejecutar_tool, mcp_host, new_tool_context
 from core.mcp.translator import skills_summary, to_llm_schemas
 from core.mcp.types import GuardrailResult, ScopedHttp
 from core.memory import entity as entity_memory
@@ -105,6 +105,7 @@ from core.shared.exceptions import BusinessError, LLMProviderError, PluginError
 from core.shared.logger import get_logger
 from core.shared.release_vigente import AgenteCongelado, con_valores_de_release
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import consumir_simulado, reset_simulado
 from core.tools.core_skill import conversation_spent
 
 log = get_logger(__name__)
@@ -145,6 +146,8 @@ class TurnResult:
     # Confirmación armada por el kernel (HU-AOS-09): `text` ya es su versión de texto; egress
     # la envía con botón si el canal lo soporta. None en todo turno sin el motor activo.
     confirmacion: Any = None
+    # HU-ARCH-14: el turno ejecutó al menos una tool en modo simulado (canal `test`).
+    simulado: bool = False
 
 
 @dataclass
@@ -300,6 +303,7 @@ async def _write_usage_ledger(
 @con_release  # ranura de la release del turno (HU-AOS-14)
 @en_turno(anota_resultado=True)  # decisión y resultado del turno (HU-AOS-10)
 async def process_conversation(conversation_id: uuid.UUID, latest_message: str) -> TurnResult | None:
+    reset_simulado()
     settings = get_settings()
 
     async with get_session() as session:
@@ -668,7 +672,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                 usage.escalated = True
                 await _write_usage_ledger(conversation_id, spec, usage, turn_span)
                 fallback_text = await load_response(spec, "fallback") or FALLBACK_REPLY
-                return TurnResult(text=fallback_text, escalated=True)
+                return TurnResult(text=fallback_text, escalated=True, simulado=consumir_simulado())
             response = recovered
 
         turn_cost += _response_cost(provider, response)
@@ -731,7 +735,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                     usage.escalated = True
                     await _write_usage_ledger(conversation_id, spec, usage, turn_span)
                     escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
-                    return TurnResult(text=escalation_text, escalated=True)
+                    return TurnResult(text=escalation_text, escalated=True, simulado=consumir_simulado())
             # La etapa cambió en el lote (HU-AOS-05): la vuelta siguiente ofrece sus acciones.
             if motor is not None and await motor.tras_lote():
                 active_tools = motor.herramientas()
@@ -754,7 +758,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             usage.escalated = True
             await _write_usage_ledger(conversation_id, spec, usage, turn_span)
             escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
-            return TurnResult(text=escalation_text, escalated=True)
+            return TurnResult(text=escalation_text, escalated=True, simulado=consumir_simulado())
 
         # ---- end_turn: guardrails
         # Se siembra con tool_results de turnos ANTERIORES (audit_log) + los del
@@ -884,7 +888,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             usage.escalated = True
             await _write_usage_ledger(conversation_id, spec, usage, turn_span)
             escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
-            return TurnResult(text=escalation_text, escalated=True)
+            return TurnResult(text=escalation_text, escalated=True, simulado=consumir_simulado())
         elif (
             largo_guardado is None
             and _persona_excede_largo(borrador, spec)
@@ -978,7 +982,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     usage.escalated = True
     await _write_usage_ledger(conversation_id, spec, usage, turn_span)
     escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
-    return TurnResult(text=escalation_text, escalated=True)
+    return TurnResult(text=escalation_text, escalated=True, simulado=consumir_simulado())
 
 
 # ------------------------------------------------------------------ helpers
@@ -1204,6 +1208,13 @@ async def _execute_tool_safely(
     declarative = {t.name: t for t in tools_for_spec(spec)} if spec is not None else {}
     agente = identidad or release_vigente.agente_del_turno()
     conocimiento = agente.content.get("knowledge") if agente is not None else None
+    from core.shared.test_mode import is_panel_test
+
+    sandbox = None
+    if is_panel_test(conversation):
+        from core.mcp.sandbox import SandboxPrueba
+
+        sandbox = SandboxPrueba.de_contexto(conversation.id)
     context = new_tool_context(
         conversation_id=conversation.id,
         customer_id=customer.id,
@@ -1216,6 +1227,7 @@ async def _execute_tool_safely(
         agent_id=agente.agent_id if agente is not None else None,
         agent_version_id=agente.version_id if agente is not None else None,
         knowledge=conocimiento if isinstance(conocimiento, dict) else None,
+        sandbox=sandbox,
     )
 
     # Enablement + consentimiento de la tool por tenant (ADR-0019). Aunque las
@@ -1292,8 +1304,9 @@ async def _execute_tool_safely(
         # registrada (evita que un tenant redefina una tool nativa/pack).
         if tool_call.name in declarative and mcp_host.get_tool(tool_call.name) is None:
             # Tool declarativa del tenant (ADR-0052): se ejecuta con su handler
-            # (ScopedHttp acotado), no vía mcp_host (que no la conoce).
-            result = await declarative[tool_call.name].handler(argumentos, context)
+            # (ScopedHttp acotado), no vía mcp_host (que no la conoce). `ejecutar_tool`
+            # aplica el sandbox del canal `test` igual que a las tools registradas.
+            result = await ejecutar_tool(declarative[tool_call.name], argumentos, context)
             # Una tool declarativa devuelve lo que responde una API externa: es dato, no
             # instrucción (invariante 7). Nunca puede pedir relevo humano; solo las tools
             # registradas (pack/core) escalan.
@@ -1682,8 +1695,13 @@ async def _close_turn(
         )
         usage.escalated = True
         escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
-        return TurnResult(text=final_text + "\n\n" + escalation_text, escalated=True, image_url=image_url)
-    return TurnResult(text=final_text, image_url=image_url)
+        return TurnResult(
+            text=final_text + "\n\n" + escalation_text,
+            escalated=True,
+            image_url=image_url,
+            simulado=consumir_simulado(),
+        )
+    return TurnResult(text=final_text, image_url=image_url, simulado=consumir_simulado())
 
 
 async def _finish_turn(

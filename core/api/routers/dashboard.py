@@ -30,7 +30,7 @@ from core.db.models import (
     UsageLedger,
 )
 from core.db.session import get_session
-from core.shared.test_mode import TEST_CHANNEL
+from core.shared.test_mode import TEST_CHANNEL, no_es_prueba
 
 router = APIRouter(prefix="/admin", tags=["admin · dashboard"])
 
@@ -118,6 +118,7 @@ async def get_dashboard(
                     UsageLedger.tenant_id == tenant_id,
                     UsageLedger.created_at >= month_ago,
                     UsageLedger.kind != EVAL,
+                    no_es_prueba(tenant_id, UsageLedger.conversation_id),
                 )
             )
         ).scalar() or 0
