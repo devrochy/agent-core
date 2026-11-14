@@ -17,8 +17,8 @@ de fotos (HU-COM-yy) las usa después.
   `result->>'image_key'`) no se cobra dos veces.
 - **Desglose por `kind`:** `medir_creditos` suma las filas `vision` del ledger a «Imágenes» en vez de
   «IA». `by_concept` de `GET /plan` mantiene sus cuatro claves.
-- **Migración 0129:** el CHECK `ck_usage_kind` admite `'vision'`. Antes no la admitía y las filas en
-  sombra de la ingesta de WhatsApp (`credits = 0`) fallaban en silencio; desde aquí se registran.
-  `vision` cuenta como gasto pero no como turno (`NO_SON_TURNOS`).
+- **Migración 0129:** el CHECK `ck_usage_kind` admite `'vision'` y `'stt'`. Antes no las admitía y
+  las filas en sombra de imágenes y notas de voz de la ingesta de WhatsApp (`credits = 0`) fallaban
+  en silencio; desde aquí se registran. Ambas cuentan como gasto pero no como turno (`NO_SON_TURNOS`).
 - **Despliegue:** migración 0129 (CHECK `NOT VALID` + `VALIDATE`, sin bloquear escrituras). Ninguna
   ruta usa todavía `alcanza`, así que el bloqueo no cambia nada hasta el endpoint de fotos.

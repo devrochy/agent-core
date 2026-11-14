@@ -154,6 +154,7 @@ async def test_la_vision_del_ledger_se_desglosa_aparte_de_la_ia() -> None:
         _fila(tid, credits="4.6", kind="vision", result={"image_key": "t/a.jpg"}),
         _fila(tid, credits="4.6", kind="vision", result={"image_key": "t/b.jpg"}),
         _fila(tid, credits="0.0", kind="vision", result={"media_key": "t/c.jpg"}),  # sombra de WhatsApp
+        _fila(tid, credits="0.0", kind="stt", result={"media_key": "t/d.ogg"}),  # nota de voz en sombra
     )
     async with tenant_scope(tid):
         async with get_session() as session:
