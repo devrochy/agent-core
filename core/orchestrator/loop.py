@@ -31,7 +31,7 @@ from core.agents.spec import enabled_packs, load_active_spec
 from core.agents.spec_de_release import spec_del_turno
 from core.config import get_settings
 from core.config_limites import leer_entero
-from core.datos_cliente.ajustes import herramientas_de as datos_del_cliente_activos
+from core.datos_cliente.ajustes import herramientas_activas as datos_del_cliente_activos
 from core.datos_cliente.aviso_chat import texto_a_anexar as aviso_en_el_chat
 from core.db.models import AppSettings, AuditLog, Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
@@ -430,10 +430,16 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # no ve el `quote_id` que devolvió una tool en un turno anterior.
     referencias = await cargar_referencias(enabled, disabled_for_tenant, conversation_id, customer.id)
     # Ficha de lo que cada módulo habilitado ya sabe del cliente (HU-CRM-14): acotada y tolerante a fallos.
-    # Apagada por defecto: solo la trae el negocio que encendió las herramientas de datos del cliente.
+    # Apagada por defecto: solo la trae el agente que encendió sus herramientas de datos del cliente.
+    agente_del_turno = release_vigente.agente_del_turno()
+    packs_del_agente = (
+        set(agente_del_turno.packs)
+        if agente_del_turno is not None and agente_del_turno.packs is not None
+        else enabled
+    )
     relacion = (
-        await relacion_con_modulos.para_prompt(customer.id, enabled)
-        if datos_del_cliente_activos(app_settings.behavior_config if app_settings else None)
+        await relacion_con_modulos.para_prompt(customer.id, packs_del_agente)
+        if await datos_del_cliente_activos(agente_del_turno.agent_id if agente_del_turno is not None else None)
         else ""
     )
     # Motor de procedimientos (HU-AOS-05), en todo negocio (ADR-0191): trae la tarjeta de estado

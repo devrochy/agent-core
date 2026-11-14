@@ -851,14 +851,14 @@ class CalendarSkill(BaseSkill):
                 "error": "Falta el email del cliente: pedíselo antes de agendar (es obligatorio).",
                 "status": "needs_data",
                 "missing": ["attendee_email"],
-                "faltan_datos": await sobre_faltan_datos({}),
+                "faltan_datos": await sobre_faltan_datos({}, context.agent_id),
             }
         if single_recipient(email) is None:
             return {
                 "error": "El email del cliente no es válido: pedíselo de nuevo.",
                 "status": "needs_data",
                 "missing": ["attendee_email"],
-                "faltan_datos": await sobre_faltan_datos({}),
+                "faltan_datos": await sobre_faltan_datos({}, context.agent_id),
             }
         if not await self._email_provided_by_client(email, context):
             # El modelo inventó el email (probado 2026-10-05): solo se acepta el

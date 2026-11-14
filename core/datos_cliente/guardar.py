@@ -59,12 +59,14 @@ async def _estado(tenant_id: uuid.UUID, customer_id: uuid.UUID) -> tuple[aviso_m
         return aviso, await consentimiento.estado_aviso(session, tenant_id, customer_id, aviso.version)
 
 
-async def _claves_operativas(accion: str | None, operativos: Collection[str]) -> set[str]:
+async def _claves_operativas(
+    accion: str | None, operativos: Collection[str], agent_id: uuid.UUID | None = None
+) -> set[str]:
     claves = {normalizar_clave(k) for k in operativos}
     definicion = registro_datos.obtener(accion) if accion else None
     if definicion is not None:
         try:
-            niveles = await niveles_del_negocio(definicion)
+            niveles = await niveles_del_negocio(definicion, agent_id)
         except Exception:
             log.warning("datos_cliente_niveles_no_disponibles", accion=accion, exc_info=True)
             niveles = {c.clave: c.nivel for c in definicion.campos}
@@ -80,6 +82,7 @@ async def guardar(
     operativos: Collection[str] = (),
     source: str = "agent",
     concedidos: Collection[str] | None = None,
+    agent_id: uuid.UUID | None = None,
 ) -> Guardado:
     """Guarda en el perfil lo que corresponde. Propaga `NamespaceNoConcedido` y `HechoInvalido`."""
     tenant_id = get_current_tenant_id()
@@ -91,7 +94,7 @@ async def guardar(
     permitidos = dict(atributos)
     if aviso.activo and estado != consentimiento.OTORGADO:
         resultado.requiere_aviso = True
-        operativas = await _claves_operativas(accion, operativos)
+        operativas = await _claves_operativas(accion, operativos, agent_id)
         permitidos = {k: v for k, v in atributos.items() if normalizar_clave(str(k)) in operativas}
         resultado.diferidos = [k for k in atributos if k not in permitidos]
     if permitidos:

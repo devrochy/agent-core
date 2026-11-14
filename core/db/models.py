@@ -2412,6 +2412,12 @@ class AgentRecord(Base):
     kind: Mapped[str] = mapped_column(Text, nullable=False)  # core | specialist | backoffice
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Política de datos del cliente de ESTE agente (HU-CRM-28): `{politica: {accion: {clave: nivel}},
+    # herramientas: bool}`. Solo guarda lo que difiere del valor por defecto del módulo. Vive fuera
+    # del AgentSpec porque es configuración operativa del agente (ADR-0190 §5), no una versión.
+    data_policy: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
     source_template: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, default="active", server_default="active")
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

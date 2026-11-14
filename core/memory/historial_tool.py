@@ -15,7 +15,6 @@ from core.admin.lead_registry import LeadProvider, lead_registry
 from core.datos_cliente.ajustes import herramientas_activas
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.shared.logger import get_logger
-from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
@@ -24,13 +23,27 @@ LIMITE_POR_DEFECTO = 5
 TIMEOUT_S = 2.0
 
 
-async def _proveedores() -> list[LeadProvider]:
-    from core.agents.spec import enabled_packs, load_active_spec
-
+def _agente():
+    """El especialista en foco de la release del turno; None fuera de una release."""
     try:
-        habilitados = enabled_packs(await load_active_spec())
+        from core.shared.release_vigente import agente_del_turno
+
+        return agente_del_turno()
     except Exception:
-        return []
+        return None
+
+
+async def _proveedores() -> list[LeadProvider]:
+    agente = _agente()
+    if agente is not None and agente.packs is not None:
+        habilitados = set(agente.packs)
+    else:
+        from core.agents.spec import enabled_packs, load_active_spec
+
+        try:
+            habilitados = enabled_packs(await load_active_spec())
+        except Exception:
+            return []
     return [
         p
         for p in lead_registry.providers_for(habilitados)
@@ -39,10 +52,11 @@ async def _proveedores() -> list[LeadProvider]:
 
 
 async def _hay_modulos(_connection_types: set[str]) -> bool:
-    """Solo con las herramientas de datos del cliente encendidas por el negocio (apagado por defecto:
-    una tool nueva cambia lo que ve el modelo en todos los turnos)."""
+    """Solo con las herramientas de datos del agente encendidas (apagado por defecto: una tool nueva
+    cambia lo que ve el modelo en todos los turnos)."""
     try:
-        if not await herramientas_activas(get_current_tenant_id()):
+        agente = _agente()
+        if not await herramientas_activas(agente.agent_id if agente is not None else None):
             return False
     except Exception:
         return False

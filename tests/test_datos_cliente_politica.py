@@ -93,18 +93,34 @@ def test_limpiar_descarta_acciones_claves_pisos_y_niveles_desconocidos() -> None
     assert limpiar("no es un dict", [ACCION]) == {}
 
 
-def test_con_politica_conserva_el_resto_del_behavior_y_quita_el_bloque_vacio() -> None:
-    behavior = {"palabras_de_baja": ["baja"], "datos_cliente": {"otra": 1}}
-    nuevo = con_politica(behavior, {"a.b": {"name": "no_pedir"}})
-    assert nuevo["palabras_de_baja"] == ["baja"]
-    assert nuevo["datos_cliente"] == {"otra": 1, "politica": {"a.b": {"name": "no_pedir"}}}
-    assert behavior["datos_cliente"] == {"otra": 1}  # no muta la entrada
-    assert "datos_cliente" not in con_politica({"datos_cliente": {"politica": {"a.b": {}}}}, {})
+def test_con_politica_conserva_el_resto_de_la_politica_del_agente() -> None:
+    policy = {"herramientas": True, "otra": 1}
+    nuevo = con_politica(policy, {"a.b": {"name": "no_pedir"}})
+    assert nuevo["herramientas"] is True
+    assert nuevo["otra"] == 1
+    assert nuevo["politica"] == {"a.b": {"name": "no_pedir"}}
+    assert policy == {"herramientas": True, "otra": 1}  # no muta la entrada
+    assert "politica" not in con_politica({"politica": {"a.b": {}}}, {})
 
 
 def test_politica_de_sin_bloque_es_vacia() -> None:
     assert politica_de(None) == {}
-    assert politica_de({"datos_cliente": "x"}) == {}
+    assert politica_de({"politica": "x"}) == {}
+
+
+def test_aplica_a_filtra_por_las_tools_del_agente() -> None:
+    con_tool = AccionDatos(
+        id="ventas.pedido",
+        modulo="ventas",
+        pack="pack_x",
+        etiqueta="Pedido",
+        campos=(CampoPolitica("name", "Nombre", R),),
+        tools=("crear_pedido",),
+    )
+    assert con_tool.aplica_a({"crear_pedido"})
+    assert not con_tool.aplica_a({"otra_tool"})
+    sin_tool = AccionDatos("otra.accion", "otra", "pack_x", "Otra", (CampoPolitica("name", "Nombre", R),))
+    assert sin_tool.aplica_a(set())
 
 
 # ------------------------------------------------------------------ puente con las listas legadas

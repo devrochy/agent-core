@@ -1,0 +1,3 @@
+## Datos del cliente por agente (2026-11-14)
+
+- Propone el ADR-0195 y la HU-CRM-28 (SPEC-33): la política de datos que pide el cliente deja de ser del negocio y pasa a `agents.data_policy` de cada especialista. `AccionDatos.tools` relaciona cada operación con las acciones del agente; el editor del agente gana el paso «Datos del cliente» con la matriz editable y los requisitos de los superpoderes en solo lectura. El runtime resuelve por `ToolContext.agent_id` o el especialista en foco. `scripts/migrar_datos_cliente_agentes.py` copia la política global a cada agente y la elimina del `behavior_config`; el aviso de tratamiento de datos sigue siendo del negocio. Enmienda ADR-0179.

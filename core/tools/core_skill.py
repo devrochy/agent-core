@@ -78,7 +78,13 @@ class CoreSkill(BaseSkill):
         if not attributes:
             return {"error": "attributes vacío: no hay nada que actualizar"}
         try:
-            guardado = await guardar_datos(ctx.customer_id, attributes, source="agent", concedidos=ctx.write_namespaces)
+            guardado = await guardar_datos(
+                ctx.customer_id,
+                attributes,
+                source="agent",
+                concedidos=ctx.write_namespaces,
+                agent_id=ctx.agent_id,
+            )
         except NamespaceNoConcedido:
             return {"error": "este agente no puede guardar datos en el perfil del cliente"}
         except HechoInvalido:
