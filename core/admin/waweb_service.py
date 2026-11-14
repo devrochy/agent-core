@@ -34,6 +34,12 @@ async def session_state(tenant_id: uuid.UUID | None) -> dict[str, Any]:
         "status": state.get("status", ""),
         "risk_ok": state.get("risk_ok", False),
         "jid": state.get("jid"),
+        "phone": state.get("phone"),
+        "push_name": state.get("push_name"),
+        "business_name": state.get("business_name"),
+        "platform": state.get("platform"),
+        "linked_at": state.get("linked_at"),
+        "last_connected_at": state.get("last_connected_at"),
         "qr_image": qr_data_uri(state["qr"]) if state.get("qr") else None,
         # Visible en el panel: por qué falló el vínculo (p. ej. timeout de login).
         "last_error": state.get("last_error"),

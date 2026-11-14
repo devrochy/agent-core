@@ -9,6 +9,8 @@ política anti-baneo del tenant.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -27,6 +29,58 @@ WAWEB_PROVIDER = "waweb"
 WAWEB_TYPE_ID = "whatsapp_waweb"
 WAWEB_CATEGORY = "comunicacion"
 WAWEB_LABEL = "WhatsApp (vínculo por QR)"
+
+
+@dataclass(frozen=True)
+class WaWebIdentity:
+    """Identidad visible de una sesión `waweb` (la que pinta el panel y la app)."""
+
+    jid: str | None = None
+    phone: str | None = None
+    push_name: str | None = None
+    business_name: str | None = None
+    platform: str | None = None
+    linked_at: datetime | None = None
+    last_connected_at: datetime | None = None
+
+    @property
+    def display_name(self) -> str | None:
+        return self.push_name or self.business_name
+
+
+def _identity_de(row: WaWebSession) -> WaWebIdentity:
+    return WaWebIdentity(
+        jid=row.jid,
+        phone=row.phone,
+        push_name=row.push_name,
+        business_name=row.business_name,
+        platform=row.platform,
+        linked_at=row.linked_at,
+        last_connected_at=row.last_connected_at,
+    )
+
+
+async def identities_by_connection(
+    tenant_id: uuid.UUID, connection_ids: list[uuid.UUID] | None = None
+) -> dict[uuid.UUID, WaWebIdentity]:
+    """Identidad `waweb` por `connection_id` (una consulta, sin N+1)."""
+    if connection_ids is not None and not connection_ids:
+        return {}
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            query = select(WaWebSession).where(
+                WaWebSession.tenant_id == tenant_id,
+                WaWebSession.deleted_at.is_(None),
+                WaWebSession.connection_id.is_not(None),
+            )
+            if connection_ids is not None:
+                query = query.where(WaWebSession.connection_id.in_(connection_ids))
+            rows = (await session.execute(query)).scalars().all()
+    return {
+        row.connection_id: _identity_de(row)
+        for row in rows
+        if row.connection_id is not None
+    }
 
 
 async def get_active_connection(tenant_id: uuid.UUID) -> ChannelConnection | None:
@@ -181,6 +235,11 @@ async def reset_session(tenant_id: uuid.UUID) -> WaWebSession:
                 raise ValueError("Sesión waweb no encontrada")
             row.status = "pending_qr"
             row.jid = None
+            row.phone = None
+            row.push_name = None
+            row.business_name = None
+            row.platform = None
+            row.linked_at = None
             row.creds_encrypted = None
             row.last_error = None
             await session.flush()
@@ -201,6 +260,12 @@ async def session_view(tenant_id: uuid.UUID) -> dict[str, Any]:
         "connection_id": conn.id,
         "status": wa_session.status,
         "jid": wa_session.jid,
+        "phone": wa_session.phone,
+        "push_name": wa_session.push_name,
+        "business_name": wa_session.business_name,
+        "platform": wa_session.platform,
+        "linked_at": wa_session.linked_at,
+        "last_connected_at": wa_session.last_connected_at,
         "last_error": wa_session.last_error,
         "risk_ok": risk_ok,
         "risk_ack_at": wa_session.risk_ack_at,

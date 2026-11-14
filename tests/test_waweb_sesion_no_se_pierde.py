@@ -102,6 +102,9 @@ class RegistroDurable:
             self.conectada_alguna_vez = True
             self.last_error = None
 
+    async def set_identity(self, tenant_id, **campos):
+        return None
+
     async def tenants_with_jid(self, jid: str) -> list[uuid.UUID]:
         return []
 
@@ -127,6 +130,9 @@ class SocketNeonize:
 
     async def alive(self):
         return True
+
+    async def identity(self):
+        return None
 
     async def disconnect(self):
         self.closed.set()

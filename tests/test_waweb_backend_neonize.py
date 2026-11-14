@@ -190,3 +190,77 @@ async def test_alive_no_cancela_una_llamada_al_puente_en_curso(tmp_path: Path) -
     assert await socket.alive() is False
     assert not backend_neonize._BRIDGE_LOCK.locked()
     await socket.disconnect()
+
+
+class _JID:
+    def __init__(self, user: str, server: str = "s.whatsapp.net") -> None:
+        self.User = user
+        self.Server = server
+
+    def __str__(self) -> str:  # así lo serializa protobuf, no como el JID real
+        return f'User: "{self.User}"'
+
+
+class _Pair:
+    def __init__(self) -> None:
+        self.ID = _JID("573005550103")
+        self.BusinessName = "Panadería Ana"
+        self.Platform = "android"
+        self.Error = ""
+
+
+class _Device:
+    def __init__(self) -> None:
+        self.JID = _JID("573005550103")
+        self.PushName = "Ana"
+        self.BussinessName = "Panadería Ana"
+        self.Platform = "android"
+
+
+def test_identidad_del_pair_no_usa_str_del_proto() -> None:
+    identidad = backend_neonize._identity_from_pair(_Pair())
+
+    assert identidad.jid == "573005550103@s.whatsapp.net"
+    assert identidad.phone == "573005550103"
+    assert identidad.business_name == "Panadería Ana"
+    assert identidad.platform == "android"
+
+
+def test_identidad_del_device_trae_push_name_y_negocio() -> None:
+    identidad = backend_neonize._identity_from_device(_Device())
+
+    assert identidad.jid == "573005550103@s.whatsapp.net"
+    assert identidad.phone == "573005550103"
+    assert identidad.push_name == "Ana"
+    assert identidad.business_name == "Panadería Ana"
+
+
+def test_merge_identidad_conserva_lo_conocido_y_completa_lo_nuevo() -> None:
+    pair = backend_neonize._identity_from_pair(_Pair())
+    device = backend_neonize._identity_from_device(_Device())
+    merged = backend_neonize._merge_identity(pair, device)
+
+    assert merged.jid == "573005550103@s.whatsapp.net"
+    assert merged.push_name == "Ana"
+    assert merged.business_name == "Panadería Ana"
+
+
+def test_jid_de_lid_no_se_expone_como_telefono() -> None:
+    lid = _JID("123456789012345", "lid")
+
+    assert backend_neonize._jid_full(lid) == "123456789012345@lid"
+    assert backend_neonize._jid_phone(lid) is None
+
+
+async def test_identity_lee_client_me_sin_llamar_al_puente() -> None:
+    class Cliente:
+        me = _Device()
+
+    socket = backend_neonize.NeonizeSocket()
+    socket._client = Cliente()
+
+    identidad = await socket.identity()
+
+    assert identidad is not None
+    assert identidad.phone == "573005550103"
+    assert identidad.push_name == "Ana"

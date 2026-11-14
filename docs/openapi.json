@@ -46938,6 +46938,30 @@
             "type": "boolean",
             "title": "Coexistence",
             "default": false
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name",
+            "description": "Nombre visible de la conexión (p. ej. perfil de WhatsApp Web); null si no se conoce."
+          },
+          "display_phone_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Phone Number",
+            "description": "Número visible de la conexión (WhatsApp Web); null si no se conoce."
           }
         },
         "type": "object",
@@ -60755,6 +60779,74 @@
             ],
             "title": "Jid"
           },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "push_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Push Name"
+          },
+          "business_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Name"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "linked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linked At"
+          },
+          "last_connected_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Connected At"
+          },
           "qr_image": {
             "anyOf": [
               {
@@ -66214,7 +66306,19 @@
               }
             ],
             "title": "Display Phone Number",
-            "description": "WhatsApp oficial: el número como lo sincronizó Meta (p. ej. «+57 300 1234567»). Null en los demás canales o si el número aún no se sincronizó."
+            "description": "Número visible: en WhatsApp oficial el que sincronizó Meta (p. ej. «+57 300 1234567»); en WhatsApp Web, el del teléfono vinculado. Null si aún no se conoce."
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name",
+            "description": "Nombre visible del WhatsApp Web (perfil o negocio); null en los demás canales."
           },
           "conversational": {
             "type": "boolean",
