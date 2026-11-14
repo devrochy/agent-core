@@ -356,6 +356,16 @@ class Settings(BaseSettings):
     # 4000 es el supuesto de `modelo-de-precios.md` (calc_precios.py): PENDIENTE DEL DUEÑO fijar
     # la TRM oficial (HU-BILL-01). Rango acotado: un valor absurdo en un env no factura a todos.
     billing_trm_cop: float = Field(default=4000.0, ge=2000, le=8000, alias="BILLING_TRM_COP")
+    # Acciones de IA cotizadas (HU-BILL-16, ADR-0194, enmienda de ADR-0144 §11): antes de gastar
+    # se verifica que el crédito del mes alcance y, si no, 409 `plan_limit_creditos`. Encendido
+    # por decisión del dueño (D-71); apagado solo mide. No afecta los turnos ni la ingesta.
+    billing_bloquear_por_creditos: bool = Field(default=True, alias="BILLING_BLOQUEAR_POR_CREDITOS")
+    # Costo de referencia en USD de reconocer UNA imagen con la llave de la plataforma, para
+    # cotizar antes de llamar al proveedor: ~1.500 tokens de entrada y ~300 de salida con
+    # Claude Haiku 4.5 (`core/media/catalog.py`) ≈ 0,003. Lo registrado después es el costo real.
+    billing_vision_costo_referencia_usd: float = Field(
+        default=0.003, ge=0, le=1, alias="BILLING_VISION_COSTO_REFERENCIA_USD"
+    )
 
     # --- Observabilidad ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")

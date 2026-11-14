@@ -1136,6 +1136,12 @@ class CRMModule(BaseModule):
 
         return await retirar(tenant_id, registros)
 
+    async def describir_registros(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> list[Any]:
+        """Lo sembrado o importado en palabras, para «Lo cargado» del asistente (HU-QA-16)."""
+        from pack_commerce.datos_de_prueba import describir
+
+        return await describir(tenant_id, registros)
+
     def plantillas_de_importacion(self) -> list[PlantillaDeImportacion]:
         """Importar productos desde un CSV (HU-QA-12, ADR-0180)."""
         from pack_commerce.importacion import plantillas

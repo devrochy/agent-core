@@ -307,6 +307,16 @@ async def build_release(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> BuildOut:
     tid = await _puede_escribir(principal)
+    # ADR-0191 (adenda 2026-11-14): un build manual también congela la voz vigente del negocio.
+    from core.agents.base import sembrar_voz_del_negocio
+
+    try:
+        await sembrar_voz_del_negocio(tid)
+    except PermissionError:
+        raise
+    except Exception:
+        # La siembra no debe bloquear el build: si falla, se construye con la voz anterior.
+        log.warning("voz_del_negocio_no_sembrada", tenant_id=str(tid), exc_info=True)
     try:
         resultado = await svc_build.construir(
             tid,

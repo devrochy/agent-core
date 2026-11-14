@@ -12,7 +12,8 @@ Solo en test (`QA_TESTERS_ENABLED`; la API responde 404 sin la bandera). Por age
 3. Retira el lote anterior del agente (el pack lo borra lógicamente) y siembra el nuevo; cada
    registro creado queda en `test_data_records` para el próximo retiro. Lo que el negocio creó a
    mano no se toca: solo se retira lo que la siembra devolvió como creado.
-4. Mide la llamada en `usage_ledger` (`kind = 'generacion'`) con créditos de plataforma.
+4. Mide la llamada en `usage_ledger` (`kind = 'generacion'`) con créditos de plataforma, con el
+   helper de IA estructurada del core (`core.ia.estructurado`, ADR-0194).
 
 Un lock de sesión por negocio y agente (`pg_try_advisory_xact_lock`) evita dos generaciones a la
 vez del mismo agente (doble clic): la segunda recibe 409.
@@ -20,26 +21,24 @@ vez del mismo agente (doble clic): la segunda recibe 409.
 
 from __future__ import annotations
 
-import asyncio
 import json
-import re
 import uuid
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 from sqlalchemy import select, text, update
 
-from core.db.models import AppSettings, TestDataRecord, UsageLedger, utcnow
+from core.db.models import AppSettings, TestDataRecord, utcnow
 from core.db.session import get_session
 from core.mcp.types import BaseModule
 from core.qa.contrato_datos import (
     ContextoDeNegocio,
     FormaDeDatos,
     PlanParaPrueba,
+    RegistroDescrito,
     RegistroSembrado,
 )
 from core.shared.logger import get_logger
@@ -52,6 +51,8 @@ ORIGEN_IMPORTACION = "importacion"
 TIMEOUT_LLM_S = 90
 MAX_TOKENS = 4000
 TEMPERATURA = 0.4
+# Filas de «Lo cargado» (HU-QA-16): un lote generado trae decenas; lo importado puede traer cientos.
+TOPE_REGISTROS = 200
 
 
 class ErrorDatosDePrueba(Exception):
@@ -359,18 +360,87 @@ async def estado(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> dict[str, Any]:
     }
 
 
+# ------------------------------------------------------------------ lo cargado (HU-QA-16)
+def _seccion(registro: TestDataRecord) -> str:
+    modulo = MODULOS.get(registro.modulo or "")
+    return modulo.seccion if modulo is not None else registro.pack_id
+
+
+async def registros(
+    tenant_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    *,
+    puede_ver: Callable[[str], Awaitable[bool]] | None = None,
+) -> dict[str, Any]:
+    """Lo que el agente tiene cargado para probarlo: el último lote generado más lo importado (vivo),
+    en palabras de cada pack (`describir_registros`), por lote en el orden en que se cargó y, dentro
+    de cada lote, por tipo y nombre.
+
+    - `puede_ver(seccion)`: lo de un módulo cuya sección el usuario no ve no se describe (ni se cuenta).
+    - `sin_detalle`: registros de un pack que no se describe (sin el hook o desinstalado). Lo que un
+      pack elige no listar (variantes, cuotas, citas) no cuenta: va en el detalle de otra fila.
+    """
+    from core.plugin_manager import plugin_manager
+
+    await _agente(tenant_id, agent_id)  # 404 sin eco si no es de este negocio
+    async with get_session() as session:
+        vivos = list(
+            (
+                await session.execute(
+                    select(TestDataRecord)
+                    .where(
+                        TestDataRecord.tenant_id == tenant_id,
+                        TestDataRecord.agent_id == agent_id,
+                        TestDataRecord.deleted_at.is_(None),
+                    )
+                    .order_by(TestDataRecord.created_at, TestDataRecord.id)
+                )
+            ).scalars()
+        )
+    generados = [r for r in vivos if r.origen != ORIGEN_IMPORTACION]
+    lote = _lote(generados)
+    if lote is not None:  # generar retira los lotes anteriores; por si quedó alguno, solo el último
+        generados = [r for r in generados if r.lote_id == lote["lote_id"]]
+        lote["conteos"] = dict(Counter(r.kind for r in generados))
+    elegidos = generados + [r for r in vivos if r.origen == ORIGEN_IMPORTACION]
+    if puede_ver is not None:
+        permitidas = {s for s in {_seccion(r) for r in elegidos} if await puede_ver(s)}
+        elegidos = [r for r in elegidos if _seccion(r) in permitidas]
+        if generados and _seccion(generados[0]) not in permitidas:
+            lote = None  # ni sus conteos: el lote es de un módulo que no ve
+
+    por_pack: dict[str, list[TestDataRecord]] = {}
+    for r in elegidos:
+        por_pack.setdefault(r.pack_id, []).append(r)
+    descritos: dict[tuple[str, uuid.UUID], RegistroDescrito] = {}
+    sin_detalle = 0
+    for pack_id, filas in por_pack.items():
+        pack = plugin_manager.get(pack_id)
+        if pack is None or type(pack).describir_registros is BaseModule.describir_registros:
+            sin_detalle += len(filas)
+            continue
+        for d in await pack.describir_registros(
+            tenant_id, [RegistroSembrado(kind=r.kind, ref=r.record_ref) for r in filas]
+        ):
+            descritos[(d.kind, d.ref)] = d
+
+    # Un lote comparte `created_at`: dentro de él, por tipo y nombre (orden estable para el panel).
+    filas: list[tuple[Any, str, str, dict[str, Any]]] = []
+    for r in elegidos:
+        d = descritos.pop((r.kind, r.record_ref), None)
+        if d is not None:
+            fila = {"tipo": d.kind, "nombre": d.nombre, "detalle": d.detalle, "origen": r.origen}
+            filas.append((r.created_at, d.kind, d.nombre.casefold(), fila))
+    salida = [f[3] for f in sorted(filas, key=lambda f: f[:3])]
+    return {
+        "lote": lote,
+        "registros": salida[:TOPE_REGISTROS],
+        "total": len(salida),
+        "sin_detalle": sin_detalle,
+    }
+
+
 # ------------------------------------------------------------------ generación
-_JSON = re.compile(r"\{.*\}", re.S)
-
-
-def _parsear(contenido: str, esquema: type[BaseModel]) -> BaseModel:
-    """El primer objeto JSON de la respuesta, validado. Lanza ValueError o ValidationError."""
-    hallado = _JSON.search(contenido or "")
-    if hallado is None:
-        raise ValueError("la respuesta no trae un objeto JSON")
-    return esquema.model_validate(json.loads(hallado.group(0)))
-
-
 def _entrada(negocio: Negocio, agente: Agente, forma: FormaDeDatos) -> str:
     return json.dumps(
         {
@@ -388,48 +458,6 @@ def _entrada(negocio: Negocio, agente: Agente, forma: FormaDeDatos) -> str:
     )
 
 
-async def _registrar_consumo(
-    tenant_id: uuid.UUID,
-    proveedor: Any,
-    respuesta: Any,
-    agente: Agente,
-    modulo: str | None = None,
-) -> None:
-    from core.billing.tarifario import TARIFARIO_VIGENTE, creditos_por_evento, trm_vigente
-
-    # Medir nunca rompe la generación: un proveedor sin tarifas (el fake de DEMO_MODE) cuenta 0.
-    try:
-        uso = respuesta.usage
-        estimar = getattr(proveedor, "estimate_cost_usd", None)
-        costo = Decimal(str(estimar(uso.input_tokens, uso.output_tokens))) if estimar else Decimal("0")
-        trm = trm_vigente()
-        async with get_session() as session:
-            session.add(
-                UsageLedger(
-                    tenant_id=tenant_id,
-                    conversation_id=None,
-                    turn_id=None,
-                    kind="generacion",
-                    model=respuesta.model or getattr(proveedor, "model", ""),
-                    input_tokens=uso.input_tokens,
-                    output_tokens=uso.output_tokens,
-                    latency_ms=respuesta.latency_ms,
-                    cost_usd=costo,
-                    result=(
-                        {"proposito": "datos_de_prueba", "agent_id": str(agente.id)}
-                        if modulo is None
-                        else {"proposito": "datos_de_prueba", "modulo": modulo}
-                    ),
-                    credits=creditos_por_evento(costo, "llm_turn", "platform", trm),
-                    key_mode="platform",
-                    tarifario_version=TARIFARIO_VIGENTE.version,
-                    trm_cop=trm,
-                )
-            )
-    except Exception as exc:
-        log.warning("usage_ledger_generacion_write_failed", error=type(exc).__name__)
-
-
 def _proveedor() -> Any:
     from core.llm import resolve_provider
 
@@ -443,30 +471,35 @@ async def _generar(
     forma: FormaDeDatos,
     modulo: str | None = None,
 ) -> Generado:
-    from core.agents.playbooks import load_core_playbook
-    from core.llm.types import LLMMessage
+    from core.ia.estructurado import ErrorFormato, ErrorProveedor, generar_estructurado
 
     respaldo = forma.esquema.model_validate(dict(forma.respaldo))
     try:
-        proveedor = _proveedor()
-        respuesta = await asyncio.wait_for(
-            proveedor.generate(
-                system_blocks=[load_core_playbook(PLAYBOOK)],
-                messages=[LLMMessage(role="user", content=_entrada(negocio, agente, forma))],
-                max_tokens=MAX_TOKENS,
-                temperature=TEMPERATURA,
+        generado = await generar_estructurado(
+            tenant_id,
+            playbook=PLAYBOOK,
+            esquema=forma.esquema,
+            entrada=_entrada(negocio, agente, forma),
+            kind="generacion",
+            result=(
+                {"proposito": "datos_de_prueba", "agent_id": str(agente.id)}
+                if modulo is None
+                else {"proposito": "datos_de_prueba", "modulo": modulo}
             ),
-            timeout=TIMEOUT_LLM_S,
+            # Créditos de plataforma: generar datos de prueba es de test, no usa la llave del negocio.
+            proveedor=_proveedor,
+            key_mode="platform",
+            max_tokens=MAX_TOKENS,
+            temperatura=TEMPERATURA,
+            timeout_s=TIMEOUT_LLM_S,
         )
-    except Exception as exc:  # proveedor caído, sin saldo, timeout: igual quedan datos
-        log.warning("datos_de_prueba_llm_fallo", error=type(exc).__name__, modo=forma.modo)
+    except ErrorProveedor as exc:  # proveedor caído, sin saldo, timeout: igual quedan datos
+        log.warning("datos_de_prueba_llm_fallo", error=exc.causa, modo=forma.modo)
         return Generado(datos=respaldo, origen="plantilla", motivo="proveedor")
-    await _registrar_consumo(tenant_id, proveedor, respuesta, agente, modulo)
-    try:
-        return Generado(datos=_parsear(respuesta.content, forma.esquema), origen="llm")
-    except (ValueError, ValidationError) as exc:
-        log.warning("datos_de_prueba_salida_invalida", error=type(exc).__name__, modo=forma.modo)
+    except ErrorFormato as exc:
+        log.warning("datos_de_prueba_salida_invalida", error=exc.causa, modo=forma.modo)
         return Generado(datos=respaldo, origen="plantilla", motivo="formato")
+    return Generado(datos=generado.datos, origen="llm")
 
 
 # ------------------------------------------------------------------ siembra y retiro
