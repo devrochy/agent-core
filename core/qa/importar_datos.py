@@ -126,6 +126,7 @@ def _info_plantilla(p: PlantillaDeImportacion) -> dict[str, Any]:
         "tope_filas": TOPE_FILAS,
         "tope_bytes": TOPE_BYTES,
         "en_produccion": p.en_produccion,
+        "importa_fotos": p.importa_fotos,
     }
 
 
@@ -268,7 +269,8 @@ def archivo_de_filas(filas: list[tuple[int, dict[str, str | None]]], plantilla: 
         raise ErrorDatosDePrueba(
             422, "demasiadas_filas", f"Son más de {TOPE_FILAS} filas. Impórtalas en partes más pequeñas."
         )
-    conocidas = set(plantilla.nombres)
+    # La columna de la foto no es de la plantilla descargable, pero la precarga sí la trae.
+    conocidas = set(plantilla.nombres) | ({plantilla.columna_foto} if plantilla.columna_foto else set())
     presentes = {c for _, valores in filas for c in valores}
     return Archivo(
         filas=[

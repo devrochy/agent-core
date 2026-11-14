@@ -23,11 +23,12 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from core.api.deps import Principal, effective_access, get_principal, require
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_responses
 from core.config import get_settings
 from core.qa.contrato_importacion import TOPE_BYTES, TOPE_FILAS
 
@@ -255,6 +256,7 @@ class PlantillaImportacionOut(BaseModel):
     tope_filas: int
     tope_bytes: int
     en_produccion: bool = Field(description="La plantilla también se importa fuera de test (ADR-0194).")
+    importa_fotos: bool = Field(description="Se puede cargar desde fotos, una foto por fila (ADR-0194).")
 
 
 class LoteImportado(BaseModel):
@@ -552,5 +554,76 @@ async def importar_precarga(
             solo_validas=cuerpo.solo_validas,
             actor=_actor(principal),
         )
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+
+
+# ------------------------------------------------------------------ fotos: una foto = una fila (ADR-0194)
+class CotizacionFotos(BaseModel):
+    fotos: int
+    creditos: int = Field(description="Créditos que cuestan todas las fotos (redondeado hacia arriba).")
+    por_foto: int
+    llave_propia: bool = Field(description="El negocio usa su propia llave de visión: solo se cobra el fee.")
+    usado: int = Field(description="Créditos usados en el mes.")
+    limite: int | None = Field(description="Créditos del plan al mes; `null` = sin límite.")
+    disponible: int | None
+    alcanza: bool = Field(description="Si el crédito del mes alcanza para todas las fotos.")
+
+
+class FilaDeFoto(BaseModel):
+    image_key: str
+    image_url: str
+    valores: dict[str, str] = Field(description="Fila propuesta para la precarga (columna → texto).")
+    creditos: float | None = Field(description="Créditos cobrados por esta foto (0 si ya se había procesado).")
+    repetida: bool = Field(description="La misma foto ya se había procesado: se respondió sin cobrar otra vez.")
+
+
+@router.get("/{agent_id}/importar-datos/fotos/cotizacion", response_model=CotizacionFotos)
+async def cotizar_fotos(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("agents", write=True))],
+    fotos: Annotated[int, Query(ge=1, le=500)] = 1,
+) -> dict[str, object]:
+    """Cuánto cuesta reconocer `fotos` fotos y si el crédito del mes alcanza. No escribe nada."""
+    from core.qa import importar_datos as svc
+    from core.qa import importar_fotos
+
+    await _habilitado_importar(principal, agent_id)
+    await _permiso_importar(principal, agent_id, escribir=True)
+    try:
+        return await importar_fotos.cotizacion(_tenant(principal), agent_id, fotos)
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+
+
+@router.post(
+    "/{agent_id}/importar-datos/fotos",
+    response_model=FilaDeFoto,
+    responses=plan_limit_responses("creditos"),
+)
+async def importar_foto(
+    agent_id: uuid.UUID,
+    archivo: Annotated[UploadFile, File()],
+    principal: Annotated[Principal, Depends(require("agents", write=True))],
+) -> dict[str, object]:
+    """Una foto → una fila propuesta para la precarga. Cotiza y verifica el crédito antes de llamar a
+    la visión (409 `plan_limit_creditos` si no alcanza, sin cobrar); la misma foto otra vez se
+    responde sin cobrar. La fila se confirma con el resto en `…/importar-datos/filas`."""
+    from core import almacenamiento
+    from core.api.plan_limits import plan_limit_error
+    from core.billing.enforcement import QuotaExceeded
+    from core.qa import importar_datos as svc
+    from core.qa import importar_fotos
+
+    await _habilitado_importar(principal, agent_id)
+    await _permiso_importar(principal, agent_id, escribir=True)
+    limite = almacenamiento.PERFILES["producto"].max_bytes
+    contenido = await archivo.read(limite + 1)
+    try:
+        return await importar_fotos.procesar_foto(
+            _tenant(principal), agent_id, contenido, mimetype=archivo.content_type, nombre=archivo.filename
+        )
+    except QuotaExceeded as exc:
+        raise plan_limit_error(exc) from exc
     except svc.ErrorDatosDePrueba as exc:
         raise _error(exc) from exc

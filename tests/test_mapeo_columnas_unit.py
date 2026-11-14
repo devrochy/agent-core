@@ -163,3 +163,16 @@ async def test_cabecera_repetida_va_una_vez_a_la_ia(monkeypatch) -> None:
     )
     assert json.loads(llamadas[0]["entrada"])["cabeceras_sin_reconocer"] == ["Cod"]
     assert [a.columna for a in mapeo] == ["sku", None, "nombre"]
+
+
+def test_foto_a_fila_de_la_precarga() -> None:
+    from pack_commerce.importacion import ProductoEnFoto
+
+    assert PRODUCTOS.importa_fotos and PRODUCTOS.columna_foto == "imagen"
+    assert "imagen" not in PRODUCTOS.nombres  # no aparece en la plantilla descargable
+    datos = ProductoEnFoto.model_validate({"nombre": "Bolso", "precio": "1.500.000", "descripcion": None})
+    fila = PRODUCTOS.desde_foto(datos, "acme/productos/abcdef0123456789.jpg")
+    assert fila["sku"] == "FOTO-ABCDEF01" and fila["precio"] == "1500000" and fila["imagen"].endswith(".jpg")
+    assert ProductoEnFoto.model_validate({"nombre": "Bolso", "precio": "ilegible"}).precio is None
+    archivo = archivo_de_filas([(1, fila)], PRODUCTOS)
+    assert archivo.filas[0][1]["imagen"] == "acme/productos/abcdef0123456789.jpg" and archivo.ignoradas == []
