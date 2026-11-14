@@ -40,7 +40,7 @@ consumo de `agent-models`, la sección `costs`.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Path, Query, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -664,3 +664,113 @@ async def put_agent_skill(
         campo = "cuenta_id" if str(exc) == "cuenta_id" else "config"
         raise ApiError(422, "invalid_config", "Revisa la configuración de la habilidad.", {campo: "Valor inválido."}) from None
     return _skill(h)
+
+
+# ------------------------------------------------------------------ flujo de atención (ADR-0195)
+class AgentFlowIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    flow: dict[str, Any]
+    lock_version: int = Field(ge=0, lt=2**31)
+
+
+class AgentFlowOut(BaseModel):
+    flow: dict[str, Any]
+    lock_version: int
+    source: Literal["agente", "semilla"] = "agente"
+    seeded: bool = False
+    warnings: list[str] = []
+
+
+class AgentFlowOptionsOut(BaseModel):
+    actions: list[AgentAction]
+    seed: dict[str, Any]
+
+
+def _accion(a: Any) -> AgentAction:
+    return AgentAction(
+        tool=a.tool,
+        pack_id=a.pack_id,
+        group=a.grupo,
+        enabled=a.enabled,
+        in_agent=a.en_el_agente,
+        by_superpower=a.por_superpoder,
+        max_calls_per_conversation=a.max_calls_per_conversation,
+        requires_confirmation=a.requires_confirmation,
+    )
+
+
+async def _flujo_del_agente(
+    tenant_id: uuid.UUID, agent_id: uuid.UUID
+) -> tuple[Any, list[Any], dict[str, Any], set[str]]:
+    """Borrador, acciones, semilla y acciones permitidas del agente."""
+    from core.agents import flujo_agente as fa
+    from core.agents import habilidades_del_agente as hda
+
+    await _agente_o_404(tenant_id, agent_id)
+    borrador = await versiones.obtener_borrador(tenant_id, agent_id)
+    packs = await hda.packs_del_agente(tenant_id, agent_id, await svc.habilitados_del_negocio(tenant_id))
+    acciones = hda.acciones(dict(borrador.content or {}), packs)
+    permitidas = fa.acciones_permitidas(acciones)
+    return borrador, acciones, fa.semilla(packs, permitidas), permitidas
+
+
+@router.get("/agents/{agent_id}/flow", response_model=AgentFlowOut)
+async def get_agent_flow(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> AgentFlowOut:
+    """Flujo del borrador del agente. Sin flujo propio devuelve la semilla de sus packs."""
+    from core.agents import flujo_agente as fa
+
+    borrador, _acciones, semilla, permitidas = await _flujo_del_agente(_tenant(principal), agent_id)
+    propio = borrador.flow is not None
+    flow = borrador.flow if propio else semilla
+    return AgentFlowOut(
+        flow=flow,
+        lock_version=borrador.lock_version,
+        source="agente" if propio else "semilla",
+        seeded=not propio,
+        warnings=fa.avisos_de_acciones(flow, permitidas),
+    )
+
+
+@router.put("/agents/{agent_id}/flow", response_model=AgentFlowOut)
+async def save_agent_flow(
+    agent_id: uuid.UUID,
+    payload: AgentFlowIn,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> AgentFlowOut:
+    """Guarda el flujo con el mismo `lock_version` del borrador. 422 por sección/acción."""
+    from core.agents import flujo_agente as fa
+
+    tid = await _puede_escribir(principal)
+    _borrador, acciones, _semilla, permitidas = await _flujo_del_agente(tid, agent_id)
+    try:
+        borrador = await versiones.guardar_flujo(
+            tid,
+            agent_id,
+            payload.flow,
+            payload.lock_version,
+            acciones=acciones,
+            actor=principal.admin.id,
+        )
+    except versiones.ErroresDeContrato as exc:
+        raise _contrato_422(exc.issues) from None
+    except versiones.Conflicto as exc:
+        raise ApiError(409, "stale_lock_version", str(exc), fields={"lock_version": str(exc.lock_version)}) from None
+    return AgentFlowOut(
+        flow=borrador.flow or {"sections": []},
+        lock_version=borrador.lock_version,
+        warnings=fa.avisos_de_acciones(borrador.flow or {}, permitidas),
+    )
+
+
+@router.get("/agents/{agent_id}/flow/options", response_model=AgentFlowOptionsOut)
+async def get_agent_flow_options(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> AgentFlowOptionsOut:
+    """Acciones que el agente puede poner en su flujo y la semilla de sus packs."""
+    _borrador, acciones, semilla, _permitidas = await _flujo_del_agente(_tenant(principal), agent_id)
+    return AgentFlowOptionsOut(actions=[_accion(a) for a in acciones], seed=semilla)
