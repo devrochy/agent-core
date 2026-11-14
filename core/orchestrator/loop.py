@@ -432,9 +432,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         if datos_del_cliente_activos(app_settings.behavior_config if app_settings else None)
         else ""
     )
-    # Motor de procedimientos (HU-AOS-05): None salvo con `aos_procedures` (activo) o con
-    # procedimientos registrados (sombra, no cambia nada de lo que ve el modelo).
-    # Activo trae la tarjeta de estado (ADR-0114) y, con tarea en foco, las acciones de su etapa.
+    # Motor de procedimientos (HU-AOS-05), en todo negocio (ADR-0191): trae la tarjeta de estado
+    # (ADR-0114) y, con tarea en foco, las acciones de su etapa.
     motor = await contexto_del_motor(
         conversation_id, customer_id=customer.id, channel=conversation.channel, enabled=enabled,
         disabled=disabled_for_tenant, herramientas_base=active_tools, candidatas=candidate_tools,
@@ -443,7 +442,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     if motor is not None:
         motor.ejecutor = _ejecutor_del_motor(conversation, customer, spec)
         motor.ejecutor_de_consulta = _ejecutor_de_consulta(conversation, customer)
-        # Confirmaciones de datos al empezar el turno (adenda 2026-10-12 de ADR-0113); solo activo.
+        # Confirmaciones de datos al empezar el turno (adenda 2026-10-12 de ADR-0113).
         await motor.al_empezar_turno()
         active_tools = motor.herramientas()
     # Tarea en foco al empezar el turno → `core_decisions.focus_task_id` (HU-AOS-15), antes de decidir.
@@ -737,14 +736,13 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             if motor is not None and await motor.tras_lote():
                 active_tools = motor.herramientas()
                 tool_schemas = to_llm_schemas(active_tools) if routing.allow_tools else None
-                if motor.activo:
-                    # Adenda 2026-10-13: y ve la tarjeta y las capacidades vigentes (solo el bloque
-                    # dinámico, el último; el prefijo cacheado y `contexto_urls` no cambian).
-                    prompt_ctx = dataclasses.replace(
-                        prompt_ctx, state_card=motor.tarjeta, active_skills_summary=skills_summary(active_tools)
-                    )
-                    system_blocks = [*system_blocks[:-1], bloque_dinamico(prompt_ctx)]
-            if motor is not None and motor.activo and tope < techo and all(
+                # Adenda 2026-10-13: y ve la tarjeta y las capacidades vigentes (solo el bloque
+                # dinámico, el último; el prefijo cacheado y `contexto_urls` no cambian).
+                prompt_ctx = dataclasses.replace(
+                    prompt_ctx, state_card=motor.tarjeta, active_skills_summary=skills_summary(active_tools)
+                )
+                system_blocks = [*system_blocks[:-1], bloque_dinamico(prompt_ctx)]
+            if motor is not None and tope < techo and all(
                 motor.es_comando(tc.name) for tc in response.tool_calls
             ):
                 tope += 1
@@ -921,7 +919,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             await _registrar_largo_excedido(conversation_id, spec, len(borrador), entregado)
         extras = extract_safe_extras(all_tool_results)
         # Adenda 2026-10-13: con el motor activo, un append cuyo link el texto ya trae no se repite.
-        final_text = apply_safe_extras(borrador, extras, por_enlace=motor is not None and motor.activo)
+        final_text = apply_safe_extras(borrador, extras, por_enlace=motor is not None)
         # HU-AOS-09: si el turno pidió una confirmación, el cliente confirma lo que armó el
         # servidor (args firmados y datos de la tarea), no el texto del modelo.
         confirmacion = await motor.confirmacion_del_turno() if motor is not None else None
@@ -955,7 +953,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
 
     # Se agotaron las iteraciones. Con el motor activo y una tarea en foco, el kernel responde con
     # lo que falta en vez de escalar (adenda 2026-10-13 de ADR-0113); si no lo sabe, escala.
-    salida = await motor.salida_al_agotar() if motor is not None and motor.activo else None
+    salida = await motor.salida_al_agotar() if motor is not None else None
     if salida is not None:
         texto_kernel, confirmacion = salida
         if veredicto is not None and motivos_verificador:
@@ -1129,7 +1127,7 @@ def _modos_del_verificador(motor: Any) -> Modos:
 
 
 async def _estado_del_verificador(motor: ContextoMotor | None, referencias: list[str]) -> EstadoTareas | None:
-    """El estado de las tareas para el verificador (HU-AOS-06): solo con el motor activo; None
+    """El estado de las tareas para el verificador (HU-AOS-06): solo con motor; None
     (verificación sin estado, como siempre) si no hay motor o la lectura falla."""
     tareas = await motor.instantaneas() if motor is not None else None
     if tareas is None:
@@ -1787,11 +1785,11 @@ def _usa_llave_propia(app_settings: AppSettings | None) -> bool:
 def _politica_del_turno(motor: ContextoMotor | None, app_settings: AppSettings | None, spec, routing):  # type: ignore[no-untyped-def]
     """Política de modelo por riesgo del turno (HU-AOS-09, ADR-0132), o None.
 
-    Solo con el motor activo (`tenants.aos_procedures`). Riesgo alto: la etapa en foco al empezar
+    Solo con motor (todo turno con negocio). Riesgo alto: la etapa en foco al empezar
     el turno declara `risk: high` (y el router no eligió ya el modo de razonamiento sin tools).
     Respaldo del verificador: `spec.model.fallback`, solo si es de la misma familia que el modelo
     del turno (con otro proveedor fallaría siempre); si no, se anota `respaldo_no_disponible`."""
-    if motor is None or motor.modo != "activo":
+    if motor is None:
         return None
     from core.kernel.politica_modelo import (
         PoliticaDelTurno,

@@ -14,8 +14,7 @@ confirmación y las acciones de la etapa.
   nombres (dato, etapa, acción) se validan con los patrones del contrato y lo que no cumple se
   descarta. Así un valor nunca abre una línea ni un encabezado nuevo del prompt.
 - Determinista: no lleva horas ni nada que cambie entre corridas con el mismo estado.
-- Solo con `tenants.aos_procedures` encendida. Apagada, la tarjeta es "" y el prompt es
-  idéntico al de siempre. La arma el motor al empezar el turno
+- La arma el motor al empezar el turno
   (`core/kernel/procedures/ejecucion.contexto_del_motor`, HU-AOS-05), con las definiciones de
   los procedimientos (título, etapas, datos requeridos y acciones).
 - Con tarea en foco, una línea dice qué falta para salir de la etapa (`para_avanzar`, adenda

@@ -132,10 +132,9 @@ def test_estabilidad_frena_un_cambio_de_dueno_de_mas() -> None:
 
 
 def test_modo_efectivo_y_sombra() -> None:
-    assert modo_efectivo("active", _routing()) == "active"
-    assert modo_efectivo("active", _routing(shadowMode=True)) == "shadow"
-    assert modo_efectivo("shadow", _routing()) == "shadow"
-    assert modo_efectivo("raro", None) == "off"
+    assert modo_efectivo(_routing()) == "active"
+    assert modo_efectivo(_routing(shadowMode=True)) == "shadow"
+    assert modo_efectivo(None) == "active"
     sombra = decidir(RELEASE, _routing(), Entrada(texto="quiero agendar una demo"), VENTAS).sombra()
     assert sombra["agent_key"] == "agenda" and sombra["route_source"] == "trigger" and sombra["procedure_id"] == CITA
     assert "texto" not in sombra

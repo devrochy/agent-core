@@ -408,34 +408,6 @@ def contract_aos(
         raise typer.Exit(1)
 
 
-@app.command("ruteo")
-def ruteo(
-    tenant: str = typer.Option(..., "--tenant", help="El negocio (slug o UUID)."),
-    modo: str = typer.Option(..., "--modo", help="off | shadow | active"),
-    database_url: str | None = typer.Option(
-        None, "--database-url", help="Por defecto MIGRATIONS_DATABASE_URL (el rol dueño)."
-    ),
-) -> None:
-    """Agent OS (HU-AOS-17): fija `tenants.aos_routing` del negocio. `shadow` decide y registra la
-    ruta en `core_decisions.shadow_route` sin cambiar quién atiende; `active` enruta.
-    Runbook: una semana en `shadow` y `reporte-ruteo` antes de `active`."""
-    import asyncio
-
-    from cli.tenant_ref import resolve_tenant
-    from core.kernel.banderas import BanderasRechazadas
-    from core.kernel.ruteo_sombra import escribir_modo
-
-    async def _run() -> None:
-        await escribir_modo(await resolve_tenant(tenant), modo, database_url)
-
-    try:
-        asyncio.run(_run())
-    except (ValueError, LookupError, PermissionError, BanderasRechazadas) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(1) from None
-    console.print(f"aos_routing = {modo}")
-
-
 @app.command("reporte-bindings")
 def reporte_bindings(
     tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID); por defecto, todos los v3."),
@@ -489,7 +461,7 @@ def reporte_ruteo(
     y diciendo qué mide cada una. Meta de R3: ≥ 0,90 / ≥ 0,85.
 
     1. **Golden**: frases con el procedimiento esperado contra la release activa de cada conexión.
-       No depende del tráfico ni de que el agente inicie nada; sirve con el ruteo en off, shadow o active.
+       No depende del tráfico ni de que el agente inicie nada; sirve con la release en shadow o active.
     2. **Tráfico real**: lo que el router predijo frente a lo que se inició (sombra o activo)."""
     import asyncio
 
@@ -497,8 +469,6 @@ def reporte_ruteo(
     from rich.table import Table
 
     from cli.tenant_ref import resolve_tenant
-    from core.db.session import get_session
-    from core.kernel.banderas import BanderasAOS, banderas_del_negocio
     from core.kernel.ruteo_sombra import (
         META_PRECISION,
         META_RECALL,
@@ -523,17 +493,15 @@ def reporte_ruteo(
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from None
 
-    async def _run() -> tuple[BanderasAOS, list[ReporteGolden], Reporte | None, ReportePila | None]:
+    async def _run() -> tuple[list[ReporteGolden], Reporte | None, ReportePila | None]:
         tenant_id = await resolve_tenant(tenant)
         async with tenant_scope(tenant_id):
-            async with get_session() as session:
-                banderas = await banderas_del_negocio(session, tenant_id)
             por_golden = await reporte_de_golden(tenant_id, casos) if fuente != "trafico" else []
             if fuente == "golden":
-                return banderas, por_golden, None, None
-            return banderas, por_golden, await reporte_de_sombra(tenant_id, dias), await reporte_de_pila(tenant_id, dias)
+                return por_golden, None, None
+            return por_golden, await reporte_de_sombra(tenant_id, dias), await reporte_de_pila(tenant_id, dias)
 
-    banderas, por_golden, reporte, pila = asyncio.run(_run())
+    por_golden, reporte, pila = asyncio.run(_run())
 
     def _pct(valor: float | None) -> str:
         return "no medible" if valor is None else f"{valor:.2f}"
@@ -554,10 +522,7 @@ def reporte_ruteo(
         meta = f"meta R3: precisión ≥ {META_PRECISION:.2f} y recall ≥ {META_RECALL:.2f}"
         return f"no medible ({meta})" if ok is None else ("CUMPLE" if ok else "NO CUMPLE") + f" ({meta})"
 
-    console.print(
-        f"Negocio {tenant}: aos_procedures = "
-        f"{'on' if banderas.procedimientos else 'off'} · aos_routing = {banderas.ruteo}"
-    )
+    console.print(f"Negocio {tenant}")
     if fuente != "trafico":
         console.print("\n[bold]1. Golden de ruteo[/bold] (verdad esperada por escenario; no depende del tráfico ni del agente)")
         if not por_golden:
@@ -584,7 +549,7 @@ def reporte_ruteo(
         console.print(
             f"\n[bold]2. Tráfico real[/bold] · {reporte.turnos} turnos en {dias} días (origen de la predicción → {origenes})"
         )
-        for nota in leyenda_trafico(banderas.ruteo, banderas.procedimientos, reporte):
+        for nota in leyenda_trafico(reporte):
             console.print(f"  {nota}")
         if reporte.metricas:
             console.print(_tabla("Tráfico real: lo predicho frente a lo iniciado", reporte, "Reales"))

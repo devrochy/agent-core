@@ -265,7 +265,7 @@ def _memory_consolidation() -> Any:
 
 
 # Esperas vencidas del motor de procedimientos (HU-AOS-07): una tarea que espera el pago y no lo
-# recibe en 72 h se cancela con `espera_vencida`. Sin negocios con `aos_procedures`, no hace nada.
+# recibe en 72 h se cancela con `espera_vencida`.
 _KERNEL_ESPERAS_TASK = "core.kernel_esperas_vencidas"
 
 

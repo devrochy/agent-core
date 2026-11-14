@@ -87,8 +87,7 @@ class SubscriptionsModule(BaseModule):
 
         fuentes_de_alta.register(PLUGIN_ID, DatosDeAltaDeLaInscripcion())
         host.subscribe("payment.confirmed", self._on_payment_confirmed)
-        # HU-AOS-08: procedimiento `cambiar_plan` y su resolver (solo los usa el motor, detrás de
-        # `tenants.aos_procedures`).
+        # HU-AOS-08: procedimiento `cambiar_plan` y su resolver (solo los usa el motor).
         from pack_subscriptions.procedimientos import registrar
 
         registrar(host, PLUGIN_ID)

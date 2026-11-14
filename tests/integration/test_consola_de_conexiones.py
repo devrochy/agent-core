@@ -1,7 +1,7 @@
 """HU-AOS-23 · consola de conexiones (`GET /api/v1/admin/connections/console`, SPEC-26).
 
 - Por conexión: Coordinador y agentes con la versión de la release activa, release, salud,
-  alcance de la pausa y consumo de 7 días; la bandera `aos_routing` de solo lectura.
+  alcance de la pausa y consumo de 7 días.
 - D-35: los agentes publicados sin conexión salen en `unassigned_agents`.
 - Permisos (ADR-0136: el colaborador lee todo salvo denegación `none`): 403 sin `connections`; `can_edit` solo con escritura; `cost_usd` solo con `costs`.
 - Aislamiento: nada de otro negocio aparece.
@@ -16,7 +16,7 @@ import os
 import uuid
 
 import pytest
-from _api_helpers import api_headers, banderas_como_dueno, uniq
+from _api_helpers import api_headers, uniq
 from _ayudas_sql import _conexion, _sql
 from test_agentes_versionados import PASSWORD
 from test_instancias_por_conexion_api import _con_agentes, _especialista
@@ -52,7 +52,6 @@ async def _colaborador(tid: uuid.UUID, permisos: dict[str, str]) -> str:
 async def test_consola_muestra_coordinador_agentes_release_salud_y_consumo(app_client) -> None:
     tid, cuenta, phone, cid = await _con_agentes()
     h = await api_headers(app_client, tid)  # master
-    await banderas_como_dueno(tid, aos_routing="off")
 
     # Release 1 activa con Coordinador y General; luego se suma Ventas (pendiente de release).
     r = await app_client.post(f"/api/v1/admin/connections/{cid}/releases", headers=h, json={})
@@ -83,7 +82,7 @@ async def test_consola_muestra_coordinador_agentes_release_salud_y_consumo(app_c
     r = await app_client.get(CONSOLA, headers=h)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert (body["routing"], body["can_edit"]) == ("off", True)
+    assert "routing" not in body and body["can_edit"] is True
     assert "runtime" not in body  # todo negocio corre en el Agent OS (ADR-0191)
     assert [a["key"] for a in body["unassigned_agents"]] == ["cobranza"]
     assert body["unassigned_agents"][0]["id"] == huerfano

@@ -6,7 +6,7 @@ La evidencia sale de lo que el sistema hizo, nunca de lo que dijo el modelo:
 - el contexto que el negocio y el cliente ya pusieron en la conversación (prompt
   del sistema y mensajes del cliente), solo para las URLs: la web, el Instagram o
   el catálogo del negocio no salen de ninguna tool;
-- con el motor de procedimientos activo (`tenants.aos_procedures`, HU-AOS-06), el estado
+- con el motor de procedimientos (HU-AOS-06), el estado
   de las tareas del episodio (`EstadoTareas`): los datos que fijó el servidor
   (`source = action:*`) son evidencia de montos y referencias, y los de la tarea en foco
   (o de una que se completó después de la última respuesta) respaldan los cierres de la

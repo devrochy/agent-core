@@ -374,18 +374,18 @@ def _kernelspec_con(ruta: str, valor: float):
 
 
 def test_los_valores_de_las_opciones_de_elegir_del_coordinador_y_las_banderas_salen_del_codigo() -> None:
-    from core.kernel.router import MODOS
+    from core.kernel.banderas import MODOS_PILA
 
-    assert [v.valor for v in POR_CLAVE["aos_routing"].valores] == list(MODOS)
+    assert [v.valor for v in POR_CLAVE["agent_os_pila"].valores] == list(MODOS_PILA)
     confirmacion = POR_CLAVE["kernel_procedures_confirm_irreversible_with"]
     assert {v.valor for v in confirmacion.valores} == {"interactive_button", "explicit"}
 
 
 def test_las_banderas_son_del_master() -> None:
     banderas = [o for o in OPCIONES if o.grupo == "agent_os"]
+    # El motor y el enrutamiento ya no son banderas (ADR-0191, HU-AOS-69): queda la colaboración
+    # con pila de tareas (HU-AOS-20).
     assert {o.clave for o in banderas} == {
-        "aos_procedures", "aos_routing",
-        # HU-AOS-20: colaboración con pila de tareas.
         "agent_os_pila", "agent_os_verificar_horarios", "agent_os_verificar_preguntas",
     }
     assert all(o.editable_por == "master" and o.almacen.startswith("tenants:") for o in banderas)
@@ -394,8 +394,6 @@ def test_las_banderas_son_del_master() -> None:
     # El valor «apagado» de cada bandera es el que ya usa el runtime (`APAGADAS`).
     from core.kernel.banderas import APAGADAS
 
-    assert POR_CLAVE["aos_procedures"].por_defecto == APAGADAS.procedimientos
-    assert POR_CLAVE["aos_routing"].por_defecto == APAGADAS.ruteo
     assert POR_CLAVE["agent_os_pila"].por_defecto == APAGADAS.colaboracion.pila == "off"
     assert POR_CLAVE["agent_os_verificar_horarios"].por_defecto == "shadow"
 
@@ -405,7 +403,7 @@ def test_el_ambito_sale_del_almacen_y_el_dueno_no_ve_los_presupuestos_ni_las_ban
     dueno = {o.clave for o in catalogo_para(es_master=False, guardrails_disponibles=[]).opciones}
     for clave in ("kernel_a2a_turn_budget_usd", "kernel_a2a_turn_budget_tokens", "kernel_routing_coprocessor_max_cost_usd"):
         assert clave not in dueno
-    assert not dueno & {"aos_procedures", "aos_routing"}
+    assert not dueno & {"agent_os_pila", "agent_os_verificar_horarios", "agent_os_verificar_preguntas"}
     assert "kernel_a2a_max_depth" in dueno
 
 

@@ -54,12 +54,6 @@ def _todos() -> list[Procedure]:
     return [p for lista in mcp_host.get_procedures().values() for p in lista]
 
 
-def hay_procedimientos() -> bool:
-    """¿Algún pack registró procedimientos? Chequeo en memoria, sin BD (costo del modo sombra
-    y del cierre por evento cuando no hay ninguno)."""
-    return any(mcp_host.get_procedures().values())
-
-
 def _valido(proc: Procedure) -> bool:
     clave = _clave(proc)
     if clave in _revisados:

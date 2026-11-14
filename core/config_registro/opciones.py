@@ -23,9 +23,8 @@ from core.config_limites import rango
 from core.config_registro.modelo import Dependencia, Opcion, ValorPosible
 from core.db.models import DEFAULT_ASSISTANT_NAME
 from core.gateway.message_splitter import CAPS
-from core.kernel.banderas import APAGADAS, MODOS_PILA, MODOS_VERIFICACION, Colaboracion
+from core.kernel.banderas import MODOS_PILA, MODOS_VERIFICACION, Colaboracion
 from core.kernel.fuera_de_horario import IDIOMA_POR_DEFECTO, IDIOMAS
-from core.kernel.router import MODOS as MODOS_RUTEO
 from core.llm.difficulty_router import (
     DIFFICULTY_SCORE_THRESHOLD,
     LONG_MESSAGE_THRESHOLD,
@@ -771,11 +770,6 @@ COORDINADOR: list[Opcion] = [
 ]  # fmt: skip
 
 # ------------------------------------------------------------------ banderas del Agent OS
-_RUTEO = {
-    "off": ("Apagado", "atiende siempre el agente de la conexión"),
-    "shadow": ("Sombra", "calcula y registra, sin aplicar"),
-    "active": ("Activo", "pasa la conversación al agente elegido"),
-}
 _PILA = {
     "off": ("Apagado", "atiende un pedido por mensaje, como siempre"),
     "shadow": ("Sombra", "anota lo que abriría, sin cambiar nada"),
@@ -786,33 +780,6 @@ _VERIFICAR = {
     "active": ("Activo", "corrige la respuesta"),
 }
 AGENT_OS: list[Opcion] = [
-    Opcion(
-        clave="aos_procedures",
-        grupo="agent_os",
-        tipo="booleano",
-        etiqueta="Procedimientos guiados",
-        explicacion=(
-            "El Coordinador lleva las gestiones (pedidos, citas, cobros) paso a paso y las verifica, en vez de "
-            "dejar que el modelo las cierre solo. Antes de encenderlos, mide el pass^4 del negocio."
-        ),
-        por_defecto=APAGADAS.procedimientos,
-        editable_por="master",
-        almacen="tenants:aos_procedures",
-    ),
-    Opcion(
-        clave="aos_routing",
-        grupo="agent_os",
-        tipo="elegir_una",
-        etiqueta="Enrutamiento entre agentes",
-        explicacion=(
-            "Decide qué agente atiende cada mensaje. «Sombra» calcula y registra sin aplicar; «Activo» sí pasa la "
-            "conversación al agente elegido."
-        ),
-        valores=[ValorPosible(valor=v, etiqueta=_RUTEO.get(v, (v, ""))[0], nota=_RUTEO.get(v, (v, ""))[1]) for v in MODOS_RUTEO],
-        por_defecto=APAGADAS.ruteo,
-        editable_por="master",
-        almacen="tenants:aos_routing",
-    ),
     # Colaboración con pila de tareas (HU-AOS-20, adenda de ADR-0116), en `tenants.settings.agent_os`.
     Opcion(
         clave="agent_os_pila",
@@ -821,7 +788,7 @@ AGENT_OS: list[Opcion] = [
         etiqueta="Dos pedidos en un mensaje",
         explicacion=(
             "Cuando el cliente pide dos cosas a la vez («el Premium y una demo»), el Coordinador abre las dos: una en "
-            "curso y la otra en espera. «Sombra» solo anota lo que abriría; «Activo» las abre. Exige el enrutamiento."
+            "curso y la otra en espera. «Sombra» solo anota lo que abriría; «Activo» las abre."
         ),
         valores=[ValorPosible(valor=v, etiqueta=_PILA.get(v, (v, ""))[0], nota=_PILA.get(v, (v, ""))[1]) for v in MODOS_PILA],
         por_defecto=Colaboracion().pila,

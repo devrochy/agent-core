@@ -230,9 +230,6 @@ class ConnectionsConsole(BaseModel):
     page: int
     page_size: int
     has_more: bool
-    routing: Literal["off", "shadow", "active"] = Field(
-        description="`tenants.aos_routing`, solo lectura."
-    )
     consistency: ConsoleConsistency | None = Field(description="pass^k del último run del negocio.")
     can_edit: bool = Field(description="Acceso de escritura a `connections`.")
     unassigned_agents: list[ConsoleUnassignedAgent] = Field(
@@ -314,7 +311,6 @@ async def connections_console(
         page=page,
         page_size=page_size,
         has_more=page * page_size < datos.total,
-        routing=datos.routing if datos.routing in ("off", "shadow", "active") else "off",  # type: ignore[arg-type]
         consistency=(
             ConsoleConsistency(
                 pass_k=datos.consistency.pass_k,

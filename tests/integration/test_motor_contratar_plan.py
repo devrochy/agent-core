@@ -17,7 +17,6 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 from test_procedimientos_agenda_subs_cobranza import (
-    _banderas,
     _conversacion,
     _Guion,
     _negocio,
@@ -53,7 +52,6 @@ async def _listo() -> tuple[uuid.UUID, Any]:
     """Negocio con el motor y el plan Premium; devuelve (negocio, conversación)."""
     _asegurar_resumen()
     tid = await _negocio(["pack_subscriptions"])
-    await _banderas(tid, True)
     await _con_plan(tid)
     return tid, await _conversacion(tid)
 
@@ -171,7 +169,6 @@ async def test_el_nombre_que_el_modelo_inventa_o_dijo_otro_cliente_no_vale(packs
     """Un dato solo se acepta si el cliente de ESTA conversación lo escribió (incidente del 2026-10-12: el modelo
     fijó `nombre` con el del perfil del canal; la regla filtra por negocio y conversación)."""
     tid = await _negocio(["pack_subscriptions"])
-    await _banderas(tid, True)
     await _con_plan(tid)
     otra = await _conversacion(tid)
     await _turno(otra, _Guion(["Hola Valentina."]), monkeypatch, "Me llamo Valentina Ospina")
@@ -291,7 +288,7 @@ async def test_en_el_negocio_vendedor_el_resumen_lleva_los_documentos_y_el_confi
     """HU-SH-07 por el loop real: en el negocio vendedor (documentos legales publicados) el resumen del kernel lleva
     los enlaces y el «Sí, confirmo» del cliente acepta los términos en el mismo turno de la inscripción, sin
     `terminos_pendientes`. (Antes lo cubría `test_journeys_terminos_alta` sobre `crear_pedido` de planes.)"""
-    from test_conversacion_ordenada_motor import journeys
+    from test_loop_release_v3 import journeys
 
     tid, conv = await _listo()
     monkeypatch.setattr("core.provisioning.vendedores.vendedores_configurados", lambda: frozenset({tid}))

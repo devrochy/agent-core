@@ -1,6 +1,6 @@
 """Adenda 2026-10-12 de ADR-0113 · sin tarea en foco no hay camino de siempre (unitarios).
 
-Hallazgo de la prueba real en test (2026-10-12): con `aos_procedures` encendida y sin tarea en
+Hallazgo de la prueba real en test (2026-10-12): con el motor de procedimientos y sin tarea en
 foco, el modelo cerró una venta con `confirmar_cotizacion` → `crear_pedido` sin iniciar el
 procedimiento. Ahora, con el motor activo y sin foco:
 
@@ -10,7 +10,7 @@ procedimiento. Ahora, con el motor activo y sin foco:
 - la tarjeta lleva la pista de iniciar el recorrido (playbook del kernel, no del negocio);
 - con una tarea activa que el motor no gobierna queda el flujo v2 de respaldo.
 
-En sombra o con la bandera apagada nada cambia. Sin BD ni red: el lock y las lecturas se simulan.
+Sin BD ni red: el lock y las lecturas se simulan.
 Lo que toca la base y el loop real está en `tests/integration/test_motor_sin_foco_en_el_loop.py`.
 """
 
@@ -76,7 +76,7 @@ BASE = [
 
 
 def _motor(
-    *, modo: str = "activo", foco_etapa: str | None = None, abiertas: frozenset[str] = frozenset(),
+    *, foco_etapa: str | None = None, abiertas: frozenset[str] = frozenset(),
     sin_gobierno: str | None = None, tarjeta_base: str = "", procs: list[Procedure] | None = None,
 ) -> ContextoMotor:
     procs = procs if procs is not None else [_publicado("pack-commerce", "contratar_plan"),
@@ -90,7 +90,6 @@ def _motor(
                            stack_position=0, last_seq=1, created_at=T0, updated_at=T0)
         f = _Foco(fila=types.SimpleNamespace(id=uuid.uuid4()), tarea=tarea, proc=plan, stage=stage)  # type: ignore[arg-type]
     return ContextoMotor(
-        modo=modo,  # type: ignore[arg-type]
         tenant_id=uuid.uuid4(), conversation_id=uuid.uuid4(), customer_id=uuid.uuid4(), channel="web",
         procedimientos={p.id: p for p in procs}, herramientas_base=list(BASE), candidatas=list(BASE),
         foco=f, abiertas=abiertas, sin_gobierno=sin_gobierno, tarjeta=tarjeta_base,
@@ -174,12 +173,6 @@ def test_con_todos_los_procedimientos_abiertos_las_puertas_siguen_ocultas() -> N
     m = _motor(abiertas=frozenset({PLAN, PEDIDO}))
     assert "confirmar_cotizacion" not in _nombres(m)
     assert comandos.INICIAR not in _nombres(m)
-    assert m.tarjeta == ""
-
-
-def test_en_sombra_nada_cambia() -> None:
-    m = _motor(modo="sombra")
-    assert _nombres(m) == [t.name for t in BASE]
     assert m.tarjeta == ""
 
 
@@ -310,9 +303,3 @@ async def test_sin_candidatos_se_niega_con_tarea_en_curso(monkeypatch: pytest.Mo
     _simular(monkeypatch, pausa)
     previo = await _motor().antes_de_accion("confirmar_cotizacion", {})
     assert previo.decision is not None and previo.decision.resultado["error"] == mensajes()["tarea_en_curso"]
-
-
-async def test_en_sombra_no_se_niega_nada(monkeypatch: pytest.MonkeyPatch) -> None:
-    lecturas = _simular(monkeypatch, [])
-    previo = await _motor(modo="sombra").antes_de_accion("confirmar_cotizacion", {})
-    assert previo.decision is None and lecturas.locks == 0

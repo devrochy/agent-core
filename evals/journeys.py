@@ -232,12 +232,11 @@ async def preparar_negocio(
     *,
     slug: str | None = None,
     replica: bool = False,
-    motor: bool | None = None,
 ) -> uuid.UUID:
     """Negocio de prueba de la corrida: preset, plan, catálogo y config de packs. Con
     `replica`, además los artefactos del negocio copiados a su directorio (catálogo, seed de
-    packs y voz de marca, como `agent-core tenant seed --voz-de-marca`) y sin ejemplos.
-    `motor` (de `modo_de_runtime`) manda sobre `motor_de_procedimientos` del set."""
+    packs y voz de marca, como `agent-core tenant seed --voz-de-marca`) y sin ejemplos. El motor de
+    procedimientos corre en todo negocio (ADR-0191): no hay nada que encender."""
     from core.admin.views import set_pack_for_tenant
     from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
@@ -277,49 +276,12 @@ async def preparar_negocio(
     if definicion.get("vendedor"):
         _como_vendedor(tenant_id)
     await publicar_documentos_legales(tenant_id, definicion.get("documentos_legales") or [])
-    if definicion.get("motor_de_procedimientos") if motor is None else motor:
-        await encender_motor_de_procedimientos(tenant_id)
     pagos.instalar()
     return tenant_id
 
 
-def modo_de_runtime(negocio: dict[str, Any], runtime: str | None) -> tuple[bool | None, bool]:
-    """(motor, releases) de la corrida según `--runtime`. Todo turno corre sobre la release v3 de su
-    conexión (ADR-0191): la corrida siempre monta una conexión con su release 1.
-
-    - Sin `--runtime`: el motor lo decide el set (`motor_de_procedimientos`).
-    - `sin-motor`: la línea base de un agente, v3 sin procedimientos (antes `legacy`).
-    - `v3`: con el motor si el set lo trae (`aos_procedures`, HU-AOS-07). Así se mide pass^k con y
-      sin procedimientos sobre el mismo set (ADR-0112)."""
-    if runtime is None:
-        return None, True
-    if runtime == "sin-motor":
-        return False, True
-    return bool(negocio.get("motor_de_procedimientos")), True
-
-
-def separar_los_que_requieren_motor(
-    rutas: list[Path], negocio: dict[str, Any], runtime: str | None
-) -> tuple[list[Path], list[str]]:
-    """`(a correr, omitidos)` según `--runtime`. Un journey con `"requiere_motor": true` ejercita un
-    procedimiento cuyas acciones el core solo ofrece con el motor encendido (`solo_con_motor_activo`:
-    `contratar_plan` y `cambiar_plan`, SPEC-43 / HU-AOS-08): sin él no hay camino a cumplirlo, así
-    que medirlo como línea base daría 0 % por diseño y no diría nada del modelo. Solo aplica a
-    `--runtime sin-motor` sobre un set con motor; con `v3` o sin `--runtime` corren todos."""
-    if runtime != "sin-motor" or not negocio.get("motor_de_procedimientos"):
-        return rutas, []
-    a_correr: list[Path] = []
-    omitidos: list[str] = []
-    for ruta in rutas:
-        if json.loads(ruta.read_text(encoding="utf-8")).get("requiere_motor"):
-            omitidos.append(ruta.stem)
-        else:
-            a_correr.append(ruta)
-    return a_correr, omitidos
-
-
 def _exigir_base_local(*urls: str | None, que: str) -> None:
-    """Las escrituras de banderas y conexiones van por la URL del dueño Y por la de la app:
+    """Las escrituras de conexiones van por la URL del dueño Y por la de la app:
     las dos tienen que ser locales (si no, la corrida escribiría en una base real)."""
     from sqlalchemy.engine import make_url
 
@@ -333,8 +295,7 @@ def _exigir_base_local(*urls: str | None, que: str) -> None:
 
 async def encender_runtime_v3(tenant_id: uuid.UUID) -> uuid.UUID:
     """Runtime por releases (HU-AOS-15) para el negocio de la corrida: una conexión
-    conversacional y su release 1 (`backfill_releases`). No toca `aos_procedures`: lo decide el set
-    o `--runtime`. Devuelve la conexión: `nuevo_cliente` liga a
+    conversacional y su release 1 (`backfill_releases`). Devuelve la conexión: `nuevo_cliente` liga a
     ella las conversaciones de la corrida. Toda corrida la monta (ADR-0191)."""
     from sqlalchemy import text
 
@@ -434,31 +395,8 @@ async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: li
         return agente.id
 
 
-# Conexión del negocio de la corrida con `--runtime v3` (las conversaciones nuevas se ligan a ella).
+# Conexión del negocio de la corrida (las conversaciones nuevas se ligan a ella).
 _CONEXION_V3: dict[uuid.UUID, uuid.UUID] = {}
-
-
-async def encender_motor_de_procedimientos(tenant_id: uuid.UUID) -> None:
-    """Motor de procedimientos (HU-AOS-07) para el negocio de la corrida: `aos_procedures`, como lo
-    haría el master. Lo pide un set con `"motor_de_procedimientos": true`
-    en su `negocio.json`; el negocio es de la corrida, nunca uno real. Las banderas solo las
-    escribe el rol dueño (el mismo que migra)."""
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    url = settings.migrations_database_url or settings.database_url
-    _exigir_base_local(url, settings.database_url, que="Las banderas del motor")
-    engine = create_async_engine(url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(
-                text("update tenants set aos_procedures = true where id = :t"), {"t": tenant_id}
-            )
-    finally:
-        await engine.dispose()
 
 
 async def publicar_documentos_legales(tenant_id: uuid.UUID, documentos: list[dict[str, Any]]) -> None:
@@ -589,25 +527,6 @@ async def _herramientas_desde(ctx: Contexto, desde: datetime) -> list[dict[str, 
                 )
             ).scalars().all()
     return [{"nombre": f.actor.removeprefix("tool:"), "entrada": f.input or {}, "salida": f.output or {}} for f in filas]
-
-
-async def runtime_efectivo(tenant_id: uuid.UUID) -> dict[str, Any]:
-    """Banderas del negocio de la corrida tal como quedaron en la base (prueba del runtime)."""
-    from sqlalchemy import text
-
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(tenant_id):
-        async with get_session() as session:
-            fila = (
-                await session.execute(
-                    text("select aos_procedures from tenants where id = :t"), {"t": tenant_id}
-                )
-            ).first()
-    if fila is None:
-        return {"aos_procedures": None}
-    return {"aos_procedures": bool(fila[0])}
 
 
 def pidio_relevo(herramientas: list[dict[str, Any]]) -> bool:
@@ -1133,14 +1052,6 @@ async def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--umbral", type=float, default=1.0, help="pass@1 mínimo (0..1) para salir con 0")
     parser.add_argument("--reporte", default="", help="Ruta del reporte JSON (opcional)")
     parser.add_argument("--detalle", action="store_true", help="Imprimir la conversación de cada intento")
-    parser.add_argument(
-        "--runtime",
-        choices=("sin-motor", "v3"),
-        default=None,
-        help="Sin la opción, el motor lo decide el set. Toda corrida corre sobre la release 1 de una conexión "
-        "(ADR-0191). En un set con motor de procedimientos: sin-motor es la línea base de un agente y v3 "
-        "enciende el motor (ADR-0112). Sirve para comparar pass^k con y sin procedimientos.",
-    )
     sys.path.insert(0, str(EVALS_DIR))
     import grabaciones
 
@@ -1162,12 +1073,6 @@ async def main(argv: list[str] | None = None) -> int:
     if not rutas:
         print(f"No hay journeys que matcheen '{args.patron}' en {carpeta or JOURNEYS_DIR / args.set}")
         return 1
-    rutas, args.omitidos = separar_los_que_requieren_motor(rutas, negocio, args.runtime)
-    for omitido in args.omitidos:
-        print(f"Omitido en {args.runtime}: {omitido} (necesita el motor de procedimientos; no hay línea base sin él).")
-    if not rutas:
-        print(f"Nada que medir en {set_id}@{args.runtime}: todos los journeys piden el motor.")
-        return 0
     k = max(1, args.k)
     # Antes de la réplica: `preparar_replica` cambia TENANTS_ROOT a un temporal que se borra.
     args.raiz_grabaciones = grabaciones.raiz(args.grabaciones, carpeta.parent if carpeta else None) / "journeys"
@@ -1180,12 +1085,8 @@ async def main(argv: list[str] | None = None) -> int:
         await _preparar_proceso()
         pagos = PagoSimulado(monto_minimo=float((negocio.get("pagos_simulados") or {}).get("monto_minimo", 0)))
         CORREOS.instalar()
-        motor, releases = modo_de_runtime(negocio, args.runtime)
-        tenant_id = await preparar_negocio(negocio, pagos, slug=slug, replica=carpeta is not None, motor=motor)
-        if releases:
-            await encender_runtime_v3(tenant_id)
-        if args.runtime:
-            set_id = f"{set_id}@{args.runtime}"
+        tenant_id = await preparar_negocio(negocio, pagos, slug=slug, replica=carpeta is not None)
+        await encender_runtime_v3(tenant_id)
         return await _correr_set(args, set_id, rutas, k, tenant_id, pagos)
     except cassette.ErrorGrabacion as exc:
         print(f"\n{exc}")
@@ -1205,18 +1106,12 @@ async def _correr_set(args: argparse.Namespace, set_id: str, rutas: list[Path], 
         texto_resumen,
     )
 
-    efectivo = await runtime_efectivo(tenant_id)
-    print(
-        f"Corriendo {len(rutas)} journeys del set {set_id} con k={k} (negocio {tenant_id}, "
-        f"aos_procedures={efectivo['aos_procedures']})...\n"
-    )
+    print(f"Corriendo {len(rutas)} journeys del set {set_id} con k={k} (negocio {tenant_id})...\n")
 
     import grabaciones
 
     resultados: list[ResultadoEscenario] = []
     extra = f"--tenant {args.tenant}" if args.tenant else ("" if args.set == "suscripciones" else f"--set {args.set}")
-    if getattr(args, "runtime", None):
-        extra = f"{extra} --runtime {args.runtime}".strip()
     raiz_grabaciones: Path = getattr(args, "raiz_grabaciones", grabaciones.CASSETTES_DIR / "journeys" / args.set)
     for ruta in rutas:
         escenario = ResultadoEscenario(nombre=ruta.stem)
@@ -1234,19 +1129,12 @@ async def _correr_set(args: argparse.Namespace, set_id: str, rutas: list[Path], 
 
     resumen = resumir(resultados, k)
     print("\n" + texto_resumen(f"Journeys {set_id}", resumen, args.umbral))
-    omitidos: list[str] = getattr(args, "omitidos", [])
-    if omitidos:
-        # El cruce con v3 es sobre los journeys que ambos pueden cumplir: lo dice el log, no se infiere.
-        print(f"Omitidos (piden el motor): {len(omitidos)} · {', '.join(omitidos)}")
     simulador = {"k": k, "semillas": list(range(k))}
     # En replay se repite lo grabado: no mide la consistencia del modelo y no se guarda (ADR-0119).
     if cassette.modo_activo() != "replay":
         await _guardar(tenant_id, set_id, resultados, k, simulador)
     if args.reporte:
         datos = reporte(set_id, resultados, k, simulador)
-        # Lo que de verdad corrió el negocio (no solo lo pedido con `--runtime`).
-        datos["runtime"] = {"pedido": getattr(args, "runtime", None), **await runtime_efectivo(tenant_id)}
-        datos["omitidos"] = omitidos
         escribir_reporte(args.reporte, datos)
     # El gate del 0A no cambia (ADR-0119): se mide sobre pass@1; pass^k se reporta.
     return 0 if resumen.pass_1 >= args.umbral else 1

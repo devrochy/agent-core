@@ -8,8 +8,7 @@ Gherkin de la HU:
 - **Verificación con estado:** con una tarea con `pedido_id`, "tu pedido OC-0042 quedó creado"
   pasa y otro número falla (reintento correctivo).
 
-Más: con la bandera apagada (y en sombra) no aparece ningún comando; un turno que solo aplica
-un comando cuenta como resuelto. Modelo guionado (sin LLM real), pack de prueba registrado en el
+Más: un turno que solo aplica un comando cuenta como resuelto. Modelo guionado (sin LLM real), pack de prueba registrado en el
 host del proceso.
 """
 
@@ -87,15 +86,6 @@ async def _owner() -> AsyncIterator[Any]:
             yield conn
     finally:
         await engine.dispose()
-
-
-async def _banderas(tid: uuid.UUID, procedimientos: bool) -> None:
-    async with _owner() as conn:
-        await conn.execute(text("update tenants set aos_procedures = false where id = :t"), {"t": tid})
-        await conn.execute(
-            text("update tenants set aos_procedures = :p where id = :t"),
-            {"t": tid, "p": procedimientos},
-        )
 
 
 def _herramienta(nombre: str, resultado: dict[str, Any]) -> Any:
@@ -258,16 +248,12 @@ def _resultado(guion: _Guion, llamada: int) -> dict[str, Any]:
 
 
 async def test_iniciar_con_un_id_fuera_de_los_candidatos_no_crea_la_tarea(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    await _banderas(negocio, True)
-    try:
-        conv = await _conversacion(negocio, "quiero comprar")
-        guion = _Guion([
-            ("iniciar_procedimiento", {"procedure_id": "pack_otro.robar_datos"}),
-            "¿Qué plan te interesa?",
-        ])
-        resultado = await _turno(conv, guion, monkeypatch, "quiero comprar")
-    finally:
-        await _banderas(negocio, False)
+    conv = await _conversacion(negocio, "quiero comprar")
+    guion = _Guion([
+        ("iniciar_procedimiento", {"procedure_id": "pack_otro.robar_datos"}),
+        "¿Qué plan te interesa?",
+    ])
+    resultado = await _turno(conv, guion, monkeypatch, "quiero comprar")
     assert "iniciar_procedimiento" in guion.tools[0] and "actualizar_tarea" not in guion.tools[0]
     esquema = guion.schemas[0]["iniciar_procedimiento"].parameters
     assert esquema["properties"]["procedure_id"]["enum"] == [PROC_ID]
@@ -278,17 +264,13 @@ async def test_iniciar_con_un_id_fuera_de_los_candidatos_no_crea_la_tarea(negoci
 
 
 async def test_el_comando_vuelve_con_la_tarjeta_y_las_acciones_de_la_nueva_etapa(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    await _banderas(negocio, True)
-    try:
-        conv = await _conversacion(negocio, "quiero el premium")
-        guion = _Guion([
-            ("iniciar_procedimiento", {"procedure_id": PROC_ID}),
-            ("actualizar_tarea", {"slots": {"plan": "premium"}}),
-            "Perfecto, el plan premium. Te creo el pedido.",
-        ])
-        resultado = await _turno(conv, guion, monkeypatch, "quiero el premium")
-    finally:
-        await _banderas(negocio, False)
+    conv = await _conversacion(negocio, "quiero el premium")
+    guion = _Guion([
+        ("iniciar_procedimiento", {"procedure_id": PROC_ID}),
+        ("actualizar_tarea", {"slots": {"plan": "premium"}}),
+        "Perfecto, el plan premium. Te creo el pedido.",
+    ])
+    resultado = await _turno(conv, guion, monkeypatch, "quiero el premium")
     iniciado = _resultado(guion, 1)
     assert iniciado["ok"] is True and iniciado["allowed_actions"] == ["ver_planes_c"]
     assert "1/3 elegir" in iniciado["state_card"] and "plan: FALTA" in iniciado["state_card"]
@@ -325,25 +307,11 @@ async def test_el_comando_vuelve_con_la_tarjeta_y_las_acciones_de_la_nueva_etapa
     assert int((estado or {}).get("turnos_sin_resolver", 0)) == 0
 
 
-async def test_con_la_bandera_apagada_o_en_sombra_no_hay_comandos(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    # Sin procedimientos = modo sombra del motor.
-    await _banderas(negocio, False)
-    conv = await _conversacion(negocio, "quiero comprar")
-    guion = _Guion(["Hola, ¿qué plan te interesa?"])
-    await _turno(conv, guion, monkeypatch, "quiero comprar")
-    assert not set(guion.tools[0]) & COMANDOS
-    assert "Estado de la conversación" not in guion.system[0][-1]
-
-
 async def test_el_verificador_usa_el_pedido_de_la_tarea(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    await _banderas(negocio, True)
-    try:
-        conv = await _conversacion(negocio, "¿ya quedó mi pedido?")
-        await _tarea_con_pedido(conv)
-        guion = _Guion(["¡Sí! Tu pedido OC-0099 quedó creado.", "¡Sí! Tu pedido OC-0042 quedó creado."])
-        resultado = await _turno(conv, guion, monkeypatch, "¿ya quedó mi pedido?")
-    finally:
-        await _banderas(negocio, False)
+    conv = await _conversacion(negocio, "¿ya quedó mi pedido?")
+    await _tarea_con_pedido(conv)
+    guion = _Guion(["¡Sí! Tu pedido OC-0099 quedó creado.", "¡Sí! Tu pedido OC-0042 quedó creado."])
+    resultado = await _turno(conv, guion, monkeypatch, "¿ya quedó mi pedido?")
     assert resultado is not None and resultado.text == "¡Sí! Tu pedido OC-0042 quedó creado."
     reintento = guion.mensajes[1][-1]
     assert reintento.role == "user" and "número de pedido o referencia" in reintento.content
@@ -358,20 +326,16 @@ async def test_dos_comandos_en_el_mismo_lote(negocio: uuid.UUID, monkeypatch) ->
     """`iniciar` + `actualizar` en una misma respuesta: el segundo se decide con el estado que dejó
     el primero (no con la oferta del inicio de la vuelta), y la vuelta siguiente ya ve la etapa
     nueva. Un comando que no aplica al estado vigente se rechaza sin aplicarse."""
-    await _banderas(negocio, True)
-    try:
-        conv = await _conversacion(negocio, "quiero el básico")
-        guion = _Guion([
-            [
-                ("iniciar_procedimiento", {"procedure_id": PROC_ID}),
-                ("actualizar_tarea", {"slots": {"plan": "basico"}}),
-                ("confirmar_tarea", {}),
-            ],
-            "Listo, el plan básico.",
-        ])
-        await _turno(conv, guion, monkeypatch, "quiero el básico")
-    finally:
-        await _banderas(negocio, False)
+    conv = await _conversacion(negocio, "quiero el básico")
+    guion = _Guion([
+        [
+            ("iniciar_procedimiento", {"procedure_id": PROC_ID}),
+            ("actualizar_tarea", {"slots": {"plan": "basico"}}),
+            ("confirmar_tarea", {}),
+        ],
+        "Listo, el plan básico.",
+    ])
+    await _turno(conv, guion, monkeypatch, "quiero el básico")
     resultados = [json.loads(m.content) for m in guion.mensajes[1] if m.role == "tool"]
     assert [r["ok"] for r in resultados] == [True, True, False]
     assert resultados[1]["allowed_actions"] == ["crear_pedido_c"]
@@ -403,20 +367,14 @@ async def test_el_estado_de_otro_negocio_no_es_evidencia(  # type: ignore[no-unt
     en una conversación del negocio A, ni se ve desde A aunque se pida por su id."""
     from core.kernel.procedures.ejecucion import instantaneas_de_tareas
 
-    await _banderas(negocio, True)
-    await _banderas(otro_negocio, True)
-    try:
-        conv_b = await _conversacion(otro_negocio, "¿ya quedó mi pedido?")
-        await _tarea_con_pedido(conv_b)
-        conv_a = await _conversacion(negocio, "¿ya quedó mi pedido?")
-        guion = _Guion(["¡Sí! Tu pedido OC-0042 quedó creado."] * 3)
-        resultado = await _turno(conv_a, guion, monkeypatch, "¿ya quedó mi pedido?")
-        async with _scope(negocio) as s:
-            desde_a = await instantaneas_de_tareas(s, negocio, conv_b.id)
-            cruzado = await instantaneas_de_tareas(s, otro_negocio, conv_b.id)  # RLS: el scope es A
-    finally:
-        await _banderas(negocio, False)
-        await _banderas(otro_negocio, False)
+    conv_b = await _conversacion(otro_negocio, "¿ya quedó mi pedido?")
+    await _tarea_con_pedido(conv_b)
+    conv_a = await _conversacion(negocio, "¿ya quedó mi pedido?")
+    guion = _Guion(["¡Sí! Tu pedido OC-0042 quedó creado."] * 3)
+    resultado = await _turno(conv_a, guion, monkeypatch, "¿ya quedó mi pedido?")
+    async with _scope(negocio) as s:
+        desde_a = await instantaneas_de_tareas(s, negocio, conv_b.id)
+        cruzado = await instantaneas_de_tareas(s, otro_negocio, conv_b.id)  # RLS: el scope es A
     assert desde_a == [] and cruzado == []
     # A no tiene tareas: su tarjeta es solo la pista de iniciar (adenda 2026-10-12), sin la de B.
     tarjeta_a = guion.system[0][-1].split("## Estado de la conversación", 1)[1].split("\n## ", 1)[0]
@@ -440,13 +398,9 @@ async def test_un_negocio_sin_el_pack_no_puede_iniciar_su_procedimiento(  # type
         "core.orchestrator.loop.enabled_packs",
         lambda spec: {"core", PACK} if get_current_tenant_id() == negocio else {"core"},
     )
-    await _banderas(otro_negocio, True)
-    try:
-        conv = await _conversacion(otro_negocio, "quiero comprar")
-        guion = _Guion([("iniciar_procedimiento", {"procedure_id": PROC_ID}), "¿En qué te ayudo?"])
-        await _turno(conv, guion, monkeypatch, "quiero comprar")
-    finally:
-        await _banderas(otro_negocio, False)
+    conv = await _conversacion(otro_negocio, "quiero comprar")
+    guion = _Guion([("iniciar_procedimiento", {"procedure_id": PROC_ID}), "¿En qué te ayudo?"])
+    await _turno(conv, guion, monkeypatch, "quiero comprar")
     assert not set(guion.tools[0]) & COMANDOS
     r = _resultado(guion, 1)
     assert r["ok"] is False and "no aplica al estado actual" in r["errors"][0]
@@ -456,18 +410,14 @@ async def test_un_negocio_sin_el_pack_no_puede_iniciar_su_procedimiento(  # type
 async def test_el_motor_rechaza_los_datos_que_no_escribe_el_modelo(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Aunque el modelo los mande fuera del schema, el motor no guarda un archivo, una opción con
     candidatos ni un dato del servidor escritos por el LLM (todo o nada: tampoco el plan)."""
-    await _banderas(negocio, True)
-    try:
-        conv = await _conversacion(negocio, "quiero el premium")
-        guion = _Guion([
-            ("iniciar_procedimiento", {"procedure_id": PROC_ID}),
-            ("actualizar_tarea", {"slots": {"plan": "premium", "foto": {"media_id": "x"}, "opcion": "premium",
-                                            "pedido_id": "OC-0001"}}),
-            "Listo.",
-        ])
-        await _turno(conv, guion, monkeypatch, "quiero el premium")
-    finally:
-        await _banderas(negocio, False)
+    conv = await _conversacion(negocio, "quiero el premium")
+    guion = _Guion([
+        ("iniciar_procedimiento", {"procedure_id": PROC_ID}),
+        ("actualizar_tarea", {"slots": {"plan": "premium", "foto": {"media_id": "x"}, "opcion": "premium",
+                                        "pedido_id": "OC-0001"}}),
+        "Listo.",
+    ])
+    await _turno(conv, guion, monkeypatch, "quiero el premium")
     r = _resultado(guion, 2)
     assert r["ok"] is False and len(r["errors"]) == 3
     assert all("lo fija el sistema" in e for e in r["errors"])

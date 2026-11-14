@@ -23,8 +23,8 @@ Todo negocio corre en el Agent OS (ADR-0191): cada turno con conexión lleva su 
   irreversible: entonces `escalated` (mismo motivo). Irreversible = un `action_succeeded` de una
   acción con `side_effect = 'irreversible'` en el catálogo del binario **o sin efecto conocido**
   (hoy ninguna acción lo declara: HU-AOS-34). Escalar la conversación a una persona desde el
-  orquestador es precondición de `aos_procedures` (el kernel no importa el orquestador); por eso
-  se devuelven los ids escalados.
+  orquestador le toca al orquestador (el kernel no lo importa); por eso se devuelven los ids
+  escalados.
 
 **Agente en foco y dueño** (HU-AOS-15): el turno lo atiende un especialista de la release
 (`cargar.elegir_foco`): el dueño vigente (`conversations.active_agent_instance_id`) si sigue
@@ -34,11 +34,11 @@ piden `kernelspec.Episode` y ADR-0116 (el handoff en dos fases es de HU-AOS-19: 
 se escribe uno, solo quién atendió). Si el que atiende cambia, se escribe
 `active_agent_instance_id` y `owner_since` en la misma transacción, bajo el lock.
 
-**Enrutamiento** (HU-AOS-17, ADR-0138): con `tenants.aos_routing` ≠ off, `core.kernel.router`
-calcula la ruta (tarea en foco → reglas → disparadores → la de siempre) bajo el mismo lock. En
-`shadow` solo se registra (`core_decisions.shadow_route`); en `active` su agente es el foco y una
-regla `start` deja el procedimiento para el motor (`release_vigente.fijar_inicio`). Con `off`, ni
-una consulta ni una lectura de Redis más.
+**Enrutamiento** (HU-AOS-17, ADR-0138): en todo turno (ADR-0191: ya no es bandera del negocio),
+`core.kernel.router` calcula la ruta (tarea en foco → reglas → disparadores → la de siempre) bajo
+el mismo lock. En `active` su agente es el foco y una regla `start` deja el procedimiento para el
+motor (`release_vigente.fijar_inicio`); si el KernelSpec de la release pide sombra
+(`routing.shadowMode`), solo se registra (`core_decisions.shadow_route`).
 
 Efecto en el turno: deja la release en `core.shared.release_vigente` (la ranura que abre
 `con_release`) y en `core_decisions` (`anotar_release`).
@@ -105,28 +105,26 @@ class Asignacion:
     # Especialista que atiende el turno (HU-AOS-15) y si cambió el dueño de la conversación.
     foco: AgenteCongelado | None = None
     dueno_cambio: bool = False
-    # Enrutamiento (HU-AOS-17): el modo efectivo y la ruta calculada (None con `off`). En
-    # `shadow` la ruta solo se registra; en `active` su agente es el `foco`.
+    # Enrutamiento (HU-AOS-17): el modo efectivo y la ruta calculada (`off` y None si el turno no
+    # enrutó). En `shadow` la ruta solo se registra; en `active` su agente es el `foco`.
     modo_ruteo: str = "off"
     ruta: Ruta | None = None
 
 
 @dataclass(frozen=True)
 class ContextoRuteo:
-    """Lo que el turno le pasa a `asignar` para enrutar (solo con `aos_routing` ≠ off)."""
+    """Lo que el turno le pasa a `asignar` para enrutar."""
 
-    modo: str
     texto: str = ""
     payload: str = ""
-    # Pila de tareas (HU-AOS-20): off | shadow | active. `active` exige además los procedimientos
-    # (`aos_procedures`) y el ruteo efectivo en `active`; si no, se mide en sombra.
+    # Pila de tareas (HU-AOS-20): off | shadow | active. `active` exige además el ruteo efectivo en
+    # `active` (la release no pide sombra); si no, se mide en sombra.
     pila: str = "off"
-    procedimientos: bool = False
 
     def pila_activa(self, routing: Any) -> bool:
         from core.kernel.router import modo_efectivo
 
-        return self.pila == "active" and self.procedimientos and modo_efectivo(self.modo, routing) == "active"
+        return self.pila == "active" and modo_efectivo(routing) == "active"
 
 
 # ------------------------------------------------------------------ reglas (puras)
@@ -467,9 +465,7 @@ async def _enrutar(
     from core.kernel import router
 
     routing = release.ruteo()
-    modo = router.modo_efectivo(ruteo.modo, routing)
-    if modo == "off":
-        return modo, None
+    modo = router.modo_efectivo(routing)
     entrada = await router.leer_entrada(
         session,
         tenant_id=tenant_id,
@@ -609,7 +605,7 @@ async def _pila(
 async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar: bool = True) -> Asignacion | None:
     """Punto de enganche del loop. None sin conexión o sin release activa (fail-closed, HU-ARCH-34).
     Un error de base sube por el camino de error del turno.
-    `texto`: el mensaje del cliente, para el router (solo con `aos_routing` ≠ off). `enrutar=False`:
+    `texto`: el mensaje del cliente, para el router. `enrutar=False`:
     asigna la release y el dueño sticky SIN correr el router ni consumir el payload de botón que
     espera el turno diferido (lo usa el toque de una opción directa, que no es un turno)."""
     tenant_id = get_current_tenant_id()
@@ -628,17 +624,11 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar
             release_vigente.marcar_v3_sin_release(tenant_id)
             return None
         ruteo = None
-        if enrutar and banderas.ruteo != "off":
+        if enrutar:
             from core.kernel.router import tomar_payload
 
             payload = await tomar_payload(tenant_id, conversation.id)
-            ruteo = ContextoRuteo(
-                modo=banderas.ruteo,
-                texto=texto or "",
-                payload=payload,
-                pila=banderas.colaboracion.pila,
-                procedimientos=banderas.procedimientos,
-            )
+            ruteo = ContextoRuteo(texto=texto or "", payload=payload, pila=banderas.colaboracion.pila)
         resultado = await asignar(
             session,
             tenant_id=tenant_id,

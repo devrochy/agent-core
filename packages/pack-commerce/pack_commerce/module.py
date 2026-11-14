@@ -1197,8 +1197,7 @@ class CRMModule(BaseModule):
         # reemplaza a `crm_amount_check` y `crm_completion_check`.
         host.register_afirmaciones(self._afirmaciones)
         # Procedimientos de comercio (HU-AOS-07): datos del pack (`procedures/*.json`), sus
-        # resolvers y el resumen de `confirmar_cotizacion`. Solo los usa el motor del core con
-        # `tenants.aos_procedures`; con la bandera apagada nada cambia.
+        # resolvers y el resumen de `confirmar_cotizacion`. Solo los usa el motor del core.
         from pack_commerce.procedimientos import registrar as registrar_procedimientos
 
         registrar_procedimientos(host)

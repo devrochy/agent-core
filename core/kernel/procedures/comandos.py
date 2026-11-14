@@ -4,8 +4,6 @@ El LLM propone y el kernel decide: el modelo ve los comandos como tools con JSON
 y el motor (`ejecucion.ContextoMotor.aplicar_comando`) los aplica. Este módulo solo decide
 **qué** comandos se ofrecen, arma sus schemas y valida la forma de los argumentos.
 
-- Solo con el motor activo (`tenants.aos_procedures`). En sombra o con la bandera apagada no se
-  ofrece ningún comando y el prompt es idéntico.
 - Solo se ofrecen los que aplican al estado (demasiados comandos confunden al modelo):
   - `iniciar_procedimiento(procedure_id)`: sin tarea en foco y con candidatos; `procedure_id` es
     un enum de esos candidatos, y el motor rechaza cualquier otro id sin crear la tarea;

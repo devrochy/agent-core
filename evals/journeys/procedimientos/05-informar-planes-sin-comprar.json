@@ -4,7 +4,6 @@
   "procedimientos": [
     "pack_subscriptions.contratar_plan"
   ],
-  "requiere_motor": true,
   "descripcion": "ADR-0185 / HU-SUB-37: el cliente solo pregunta por los planes y precios. Con el motor activo el asistente los consulta con sub_listar_planes, responde con las cifras del catálogo y no inicia el procedimiento de compra ni deja una tarea abierta.",
   "pasos": [
     {

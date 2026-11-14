@@ -128,8 +128,7 @@ class CobranzaModule(BaseModule):
         from pack_cobranza.pagos import _on_payment_confirmed
 
         host.subscribe(ON_PAYMENT_CONFIRMED, _on_payment_confirmed)
-        # HU-AOS-08: procedimiento `promesa_de_pago` y su resolver (solo los usa el motor, detrás
-        # de `tenants.aos_procedures`).
+        # HU-AOS-08: procedimiento `promesa_de_pago` y su resolver (solo los usa el motor).
         from pack_cobranza.procedimientos import registrar
 
         registrar(host, self.id)

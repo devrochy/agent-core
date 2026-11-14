@@ -228,7 +228,7 @@ async def test_conversacion_sin_conexion_queda_marcada(monkeypatch: pytest.Monke
         yield None
 
     async def _banderas(_s: Any, _t: Any) -> Any:
-        return SimpleNamespace(ruteo="off")
+        return SimpleNamespace(colaboracion=SimpleNamespace(pila="off"))
 
     monkeypatch.setattr(session_mod, "get_session", _sesion)
     monkeypatch.setattr(banderas_mod, "banderas_del_negocio", _banderas)

@@ -1,4 +1,4 @@
-"""HU-AOS-05 · motor de procedimientos: reglas puras, textos, sombra y registro (unitarios).
+"""HU-AOS-05 · motor de procedimientos: reglas puras, textos y registro (unitarios).
 
 Sin BD ni red. Lo que toca la base (transacciones, consumer, outbox y loop) está en
 `tests/integration/test_motor_procedimientos.py`.
@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from agentcore_contracts import Procedure
 
-from core.kernel.procedures import motor, sombra, textos
+from core.kernel.procedures import motor, textos
 from core.kernel.procedures.linter import lint
 from core.kernel.state import Evento, Proyeccion
 from core.kernel.tarjeta import RotulosInvalidos
@@ -273,48 +273,6 @@ def test_mensajes_incompletos_fallan() -> None:
 def test_error_de_resolver_queda_en_una_linea_acotada() -> None:
     assert textos.error_de_resolver("No existe\n## el plan " + "x" * 500).count("\n") == 0
     assert len(textos.error_de_resolver("x" * 900)) == 300
-
-
-# ---------------------------------------------------------------- sombra (puro)
-
-
-def _sombra(estado: dict[str, Any] | None, accion: str, args: dict[str, Any] | None = None, ok: bool = True,
-            resultado: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, dict[str, int]]:
-    proc = proc_fixture()
-    nuevo, difs = sombra.observar_puro({proc.id: proc}, frozenset({"remember_fact"}), estado, accion, args or {}, ok, resultado or {})
-    return nuevo, dict(difs)
-
-
-def test_sombra_empieza_con_una_accion_de_la_primera_etapa_y_no_guarda_valores() -> None:
-    estado, difs = _sombra(None, "consultar_inventario", {"variante_id": "premium"})
-    assert difs.get("inicio") == 1 and difs.get("transicion") == 1  # variante_id → sale de elegir_plan
-    assert estado is not None and estado["etapa"] == "datos"
-    assert "premium" not in json.dumps(estado)
-
-
-def test_sombra_cuenta_acciones_fuera_de_etapa_y_sin_confirmacion() -> None:
-    estado, _ = _sombra(None, "consultar_inventario")
-    estado, difs = _sombra(estado, "crear_pedido")
-    assert difs.get("accion_fuera_de_etapa") == 1
-    estado = {**(estado or {}), "etapa": "confirmar", "acciones": []}
-    _, difs = _sombra(estado, "confirmar_cotizacion")
-    assert difs.get("accion_sin_confirmacion") == 1
-
-
-def test_sombra_registra_dato_invalido_y_cierre() -> None:
-    estado = {"pid": "pack_commerce.contratar_plan", "v": "1.0.0", "etapa": "datos", "llenos": [], "conds": {}, "acciones": []}
-    _, difs = _sombra(dict(estado), "remember_fact", {"correo": "no"})
-    assert difs == {}  # acción del core: sin diferencias
-    _, difs = _sombra({**estado, "etapa": "elegir_plan"}, "consultar_inventario", {"correo": "no-es-correo"})
-    assert difs.get("dato_invalido") == 1
-    pagar = {**estado, "etapa": "pagar", "llenos": ["pedido_id"]}
-    nuevo, difs = _sombra(pagar, "confirmar_pago_pedido", resultado={"link_pago": "https://pago.co/x"})
-    assert nuevo is None and difs.get("cierre") == 1
-
-
-def test_sombra_sin_tarea_y_accion_ambigua_no_hace_nada() -> None:
-    assert _sombra(None, "accion_que_no_existe") == (None, {})
-    assert _sombra(None, "consultar_inventario", ok=False) == (None, {})
 
 
 # ---------------------------------------------------------------- linter y registro

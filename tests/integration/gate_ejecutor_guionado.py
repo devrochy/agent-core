@@ -27,9 +27,6 @@ async def ejecutor(*, tenant_id: uuid.UUID, set_id: str, nombre: str, ruta: Any,
     guion = json.loads(open(os.environ["EVAL_GATE_GUION"], encoding="utf-8").read())
     async with tenant_scope(tenant_id):
         async with get_session() as session:
-            procs = (
-                await session.execute(text("select aos_procedures from tenants where id = :t"), {"t": tenant_id})
-            ).scalar_one()
             activa = (
                 await session.execute(
                     text("select active_release_id from channel_connections where tenant_id = :t and active_release_id is not null"),
@@ -40,8 +37,7 @@ async def ejecutor(*, tenant_id: uuid.UUID, set_id: str, nombre: str, ruta: Any,
             foco = release.foco() if release else None
             declarados = sorted(json.loads(ruta.read_text(encoding="utf-8")).get("procedimientos") or [])
             montada = bool(
-                procs
-                and release is not None
+                release is not None
                 and foco is not None
                 and set(declarados) <= set(release.procedimientos_de(foco.instance_id))
             )
