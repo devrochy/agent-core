@@ -695,9 +695,8 @@ async def test_pack_versions_solo_cambia_yanked() -> None:
             await tx.rollback()
 
 
-async def test_banderas_por_negocio_sin_runtime(dos_negocios: dict[str, Any]) -> None:
-    """0127: `aos_runtime` ya no existe y `aos_routing` sigue limitada a sus tres valores."""
-    a = dos_negocios["a"]
+async def test_tenants_sin_banderas_del_agent_os() -> None:
+    """0128: no queda ninguna columna `aos_*` en `tenants`, ni la función que las fijaba, ni su guardia."""
     async with _owner() as conn:
         async with conn.begin():
             columnas = (
@@ -708,14 +707,17 @@ async def test_banderas_por_negocio_sin_runtime(dos_negocios: dict[str, Any]) ->
                     )
                 )
             ).scalars().all()
-            assert sorted(columnas) == ["aos_procedures", "aos_routing"]
-            fila = (
-                await conn.execute(text("select aos_procedures, aos_routing from tenants where id = :t"), {"t": a})
-            ).one()
-            assert tuple(fila) == (False, "off")
-        with pytest.raises(IntegrityError, match="ck_tenants_aos_routing"):
-            async with conn.begin():
-                await conn.execute(text("update tenants set aos_routing = 'on' where id = :t"), {"t": a})
+            assert columnas == []
+            objetos = (
+                await conn.execute(
+                    text(
+                        "select proname from pg_proc where proname in ('aos_fijar_banderas', 'tenants_aos_banderas_guard') "
+                        "union all select tgname from pg_trigger where tgname = 'tenants_aos_banderas_guard' "
+                        "union all select conname from pg_constraint where conname like 'ck_tenants_aos%'"
+                    )
+                )
+            ).scalars().all()
+            assert objetos == []
 
 
 async def test_turno_de_otro_negocio_se_rechaza_al_confirmar(dos_negocios: dict[str, Any]) -> None:
