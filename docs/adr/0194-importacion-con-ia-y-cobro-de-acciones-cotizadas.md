@@ -65,7 +65,7 @@ el dominio llega desde la `PlantillaDeImportacion` del pack (sinónimos de cabec
     pack; una sola llamada a la IA para las columnas que no reconoce, con las cabeceras y unas 5 filas de
     muestra) y las filas normalizadas. El cliente las edita y las reenvía en JSON; confirmar vuelve a validar
     contra el esquema del pack. La IA solo puede proponer columnas de la plantilla o «ignorar». Ledger:
-    `kind='generacion'`, `result.proposito='mapeo_catalogo'`.
+    `kind='generacion'`, `result.proposito='mapeo_columnas'`.
   - Fotos: **una foto por petición** (sube la imagen con el perfil `producto`, la pasa por visión y devuelve
     la fila propuesta con su `image_key`). Sin Celery ni polling. Ledger: `kind='vision'`,
     `result.proposito='foto_catalogo'`, `result.image_key`.

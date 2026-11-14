@@ -27,10 +27,12 @@ from pydantic import BaseModel, Field
 from core.api.deps import Principal, effective_access, get_principal, require
 from core.api.errors import ApiError
 from core.config import get_settings
-from core.qa.contrato_importacion import TOPE_BYTES
+from core.qa.contrato_importacion import TOPE_BYTES, TOPE_FILAS
 
 router = APIRouter(prefix="/admin/agents", tags=["admin · agentes"])
 modulos_router = APIRouter(prefix="/admin/datos-de-prueba", tags=["admin · datos de prueba"])
+
+TOPE_CELDA = 2000  # caracteres por valor de la precarga (ADR-0194)
 
 
 
@@ -195,6 +197,9 @@ async def borrar_modulo(
 
 
 # ------------------------------------------------------------------ importar datos existentes (HU-QA-12)
+# En producción (sin `QA_TESTERS_ENABLED`) responden solo si la plantilla del agente se declara
+# `en_produccion` (ADR-0194 §2: hoy, `productos`); si no, 404 como antes. La precarga con mapeo de IA
+# (`…/importar-datos/mapear`, `…/importar-datos/filas[/validar]`) sigue sin estado en el servidor.
 class ColumnaOut(BaseModel):
     nombre: str
     descripcion: str
@@ -209,6 +214,7 @@ class PlantillaImportacionOut(BaseModel):
     columnas: list[ColumnaOut]
     tope_filas: int
     tope_bytes: int
+    en_produccion: bool = Field(description="La plantilla también se importa fuera de test (ADR-0194).")
 
 
 class LoteImportado(BaseModel):
@@ -255,6 +261,21 @@ def _actor(principal: Principal) -> str:
     return f"admin:{principal.admin.email}"
 
 
+async def _habilitado_importar(principal: Principal, agent_id: uuid.UUID) -> None:
+    """En test, siempre. Fuera de test, solo si la plantilla del agente se declara `en_produccion`
+    (ADR-0194 §2); si no, 404 como si la función no existiera."""
+    from core.qa import importar_datos as svc
+
+    if get_settings().qa_testers_enabled:
+        return
+    try:
+        d = await svc.destino(_tenant(principal), agent_id)
+    except svc.ErrorDatosDePrueba as exc:
+        raise ApiError.not_found() from exc
+    if isinstance(d, str) or not d.plantilla.en_produccion:
+        raise ApiError.not_found()
+
+
 async def _permiso_importar(principal: Principal, agent_id: uuid.UUID, *, escribir: bool) -> None:
     """Sección `agents` (la de la ruta) y la del pack del agente: lo que el tester no pueda tocar a mano
     tampoco lo importa por aquí."""
@@ -291,7 +312,7 @@ async def estado_importacion(
     """Si el agente importa datos, su plantilla (columnas y topes) y lo ya importado."""
     from core.qa import importar_datos as svc
 
-    _habilitado()
+    await _habilitado_importar(principal, agent_id)
     try:
         return await svc.estado(_tenant(principal), agent_id)
     except svc.ErrorDatosDePrueba as exc:
@@ -305,7 +326,7 @@ async def plantilla_importacion(
     """La plantilla CSV del agente: cabeceras y filas de ejemplo (UTF-8 con BOM, para Excel)."""
     from core.qa import importar_datos as svc
 
-    _habilitado()
+    await _habilitado_importar(principal, agent_id)
     try:
         nombre, contenido = await svc.plantilla_del_agente(_tenant(principal), agent_id)
     except svc.ErrorDatosDePrueba as exc:
@@ -326,7 +347,7 @@ async def validar_importacion(
     """Vista previa del archivo: errores por fila y cuántas filas se crearían o ya existen. No escribe."""
     from core.qa import importar_datos as svc
 
-    _habilitado()
+    await _habilitado_importar(principal, agent_id)
     await _permiso_importar(principal, agent_id, escribir=True)
     contenido = await _leer_archivo(archivo)
     try:
@@ -346,7 +367,7 @@ async def importar_datos(
     Las filas cuya clave ya existe se omiten (idempotente)."""
     from core.qa import importar_datos as svc
 
-    _habilitado()
+    await _habilitado_importar(principal, agent_id)
     await _permiso_importar(principal, agent_id, escribir=True)
     contenido = await _leer_archivo(archivo)
     try:
@@ -364,9 +385,114 @@ async def borrar_importacion(
     """Retira solo lo que se importó para este agente; lo generado y lo creado a mano no se tocan."""
     from core.qa import importar_datos as svc
 
-    _habilitado()
+    await _habilitado_importar(principal, agent_id)
     await _permiso_importar(principal, agent_id, escribir=True)
     try:
         return await svc.borrar(_tenant(principal), agent_id, actor=_actor(principal))
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+
+
+# ------------------------------------------------------------------ precarga con mapeo de IA (ADR-0194)
+class AsignacionOut(BaseModel):
+    cabecera: str = Field(description="Cabecera tal como viene en el archivo.")
+    columna: str | None = Field(description="Columna de la plantilla; `null` = se ignora.")
+    origen: Literal["heuristica", "ia", "ninguno"]
+
+
+class IAMapeoOut(BaseModel):
+    usada: bool = Field(description="La IA asignó al menos una columna.")
+    motivo_fallo: Literal["proveedor", "formato"] | None = Field(
+        default=None, description="Si se llamó a la IA y no ayudó; esas cabeceras quedan sin asignar."
+    )
+
+
+class FilaPrecarga(BaseModel):
+    fila: int = Field(ge=1, description="Número de fila en el archivo original (la cabecera es la 1).")
+    valores: dict[str, str | None] = Field(
+        max_length=50, description="Columna de la plantilla → texto, como en el CSV. Lo demás se ignora."
+    )
+
+
+class MapeoPropuesto(BaseModel):
+    plantilla: PlantillaImportacionOut
+    mapeo: list[AsignacionOut]
+    columnas_faltantes: list[str] = Field(description="Obligatorias sin cabecera: el cliente debe completarlas.")
+    ia: IAMapeoOut
+    filas: list[FilaPrecarga]
+    vista_previa: VistaPreviaImportacion
+
+
+class PrecargaIn(BaseModel):
+    filas: list[FilaPrecarga] = Field(min_length=1, max_length=TOPE_FILAS)
+    solo_validas: bool = False
+
+
+def _filas(cuerpo: PrecargaIn) -> list[tuple[int, dict[str, str | None]]]:
+    for fila in cuerpo.filas:
+        for columna, valor in fila.valores.items():
+            if len(columna) > 64 or (valor is not None and len(valor) > TOPE_CELDA):
+                raise ApiError(422, "valor_muy_largo", f"La fila {fila.fila} tiene un valor demasiado largo.")
+    return [(f.fila, f.valores) for f in cuerpo.filas]
+
+
+@router.post("/{agent_id}/importar-datos/mapear", response_model=MapeoPropuesto)
+async def mapear_importacion(
+    agent_id: uuid.UUID,
+    archivo: Annotated[UploadFile, File()],
+    principal: Annotated[Principal, Depends(require("agents", write=True))],
+) -> dict[str, object]:
+    """Propone a qué columna de la plantilla va cada cabecera (sinónimos del pack y, para las que no
+    reconoce, una llamada a la IA medida en el ledger) y devuelve las filas normalizadas con su vista
+    previa. No escribe datos: el cliente edita la precarga y la confirma con `…/importar-datos/filas`."""
+    from core.qa import importar_datos as svc
+    from core.qa import mapeo_columnas
+
+    await _habilitado_importar(principal, agent_id)
+    await _permiso_importar(principal, agent_id, escribir=True)
+    contenido = await _leer_archivo(archivo)
+    try:
+        return await mapeo_columnas.mapear(_tenant(principal), agent_id, contenido)
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/{agent_id}/importar-datos/filas/validar", response_model=VistaPreviaImportacion)
+async def validar_precarga(
+    agent_id: uuid.UUID,
+    cuerpo: PrecargaIn,
+    principal: Annotated[Principal, Depends(require("agents", write=True))],
+) -> dict[str, object]:
+    """Vista previa de la precarga editada. No escribe."""
+    from core.qa import importar_datos as svc
+
+    await _habilitado_importar(principal, agent_id)
+    await _permiso_importar(principal, agent_id, escribir=True)
+    try:
+        return await svc.previsualizar_filas(_tenant(principal), agent_id, _filas(cuerpo))
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/{agent_id}/importar-datos/filas", response_model=ImportacionHecha, status_code=201)
+async def importar_precarga(
+    agent_id: uuid.UUID,
+    cuerpo: PrecargaIn,
+    principal: Annotated[Principal, Depends(require("agents", write=True))],
+) -> dict[str, object]:
+    """Importa la precarga editada: se vuelve a validar contra el esquema del pack. Con errores en
+    alguna fila responde 422 `archivo_con_errores` salvo `solo_validas`. Idempotente por clave natural."""
+    from core.qa import importar_datos as svc
+
+    await _habilitado_importar(principal, agent_id)
+    await _permiso_importar(principal, agent_id, escribir=True)
+    try:
+        return await svc.importar_filas(
+            _tenant(principal),
+            agent_id,
+            _filas(cuerpo),
+            solo_validas=cuerpo.solo_validas,
+            actor=_actor(principal),
+        )
     except svc.ErrorDatosDePrueba as exc:
         raise _error(exc) from exc
