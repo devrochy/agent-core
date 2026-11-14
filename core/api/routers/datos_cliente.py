@@ -91,7 +91,23 @@ def _exigir_negocio(principal: Principal) -> None:
         raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
 
 
+_ETIQUETAS = {
+    "name": "Nombre completo",
+    "full_name": "Nombre completo",
+    "phone": "Teléfono",
+    "email": "Correo",
+    "address": "Dirección",
+    "municipality": "Municipio o ciudad",
+    "municipio": "Municipio o ciudad",
+    "delivery_method": "Método de entrega",
+    "payment_method": "Método de pago",
+    "id_document": "Documento",
+}
+
+
 def _etiqueta(clave: str) -> str:
+    if clave in _ETIQUETAS:
+        return _ETIQUETAS[clave]
     limpio = clave.replace("_", " ").strip()
     return limpio[0].upper() + limpio[1:] if limpio else clave
 
