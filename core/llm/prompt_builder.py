@@ -80,7 +80,7 @@ class PromptContext:
         emoji_names = {
             "none": "no uses emojis",
             "sparse": "usa emojis con moderación",
-            "free": "podés usar emojis libremente",
+            "free": "puedes usar emojis libremente",
         }
         return {
             "assistant_name": self.assistant_name,
