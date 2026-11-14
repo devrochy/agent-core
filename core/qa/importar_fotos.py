@@ -10,7 +10,9 @@ muestra el progreso y se detiene si llega `plan_limit_creditos`. Por foto:
 3. **Cotizar y verificar:** `cotizar('vision', 1, key_mode)` y `alcanza` bajo el advisory lock de
    créditos; si no alcanza, 409 `plan_limit_creditos` y no se llama al proveedor. La verificación
    no retiene el lock durante la llamada: dos fotos concurrentes pueden pasar con el mismo saldo
-   (como mucho una foto de más, ADR-0194 §3).
+   (como mucho una foto de más, ADR-0194 §3); dos envíos simultáneos de la MISMA foto también pueden
+   cobrarse dos veces (misma carrera). La foto se guarda antes de verificar el saldo: con un 409 queda
+   en disco sin producto (la limpieza llega con el registro de archivos, `stored_files`).
 4. **Reconocer** con el helper de visión (`core.ia.estructurado.reconocer_imagen`, playbook del kernel
    `reconocer_foto`, esquema de la plantilla) y registrar el consumo real con créditos.
 5. Devolver la fila con `desde_foto` de la plantilla, para que el cliente la edite y la confirme con
@@ -25,6 +27,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from core.db.models import UsageLedger
@@ -83,9 +86,12 @@ async def cotizacion(tenant_id: uuid.UUID, agent_id: uuid.UUID, fotos: int) -> d
     config = _config_vision(await _app_settings(tenant_id))
     total = cotizar("vision", fotos, config.key_mode)
     async with tenant_scope(tenant_id), get_session() as session:
+        # Toma el advisory lock de créditos (transacción corta); con el bloqueo apagado `alcanza`
+        # no lanza, así que «alcanza» se calcula del saldo para que la cotización diga la verdad.
         try:
             saldo = await alcanza(session, tenant_id, total)
-            usado, limite, suficiente = saldo.usado, saldo.limite, True
+            usado, limite = saldo.usado, saldo.limite
+            suficiente = limite is None or usado + total <= limite
         except QuotaExceeded as exc:
             usado, limite, suficiente = Decimal(exc.used), exc.limit, False
     disponible = None if limite is None else max(int(limite) - creditos_enteros(usado), 0)
@@ -167,12 +173,17 @@ def _entrada(negocio: Any, d: Destino) -> str:
 
 def _respuesta(d: Destino, foto: FotoGuardada, salida: dict[str, Any], *, creditos: Decimal | None, repetida: bool) -> dict[str, Any]:
     assert d.plantilla.esquema_foto is not None and d.plantilla.desde_foto is not None
-    datos = d.plantilla.esquema_foto.model_validate(salida)
+    try:
+        datos = d.plantilla.esquema_foto.model_validate(salida)
+    except ValidationError as exc:  # salida guardada con un esquema anterior
+        raise ErrorDatosDePrueba(
+            422, "foto_no_reconocida", "No pudimos usar el resultado de esta foto. Prueba con otra."
+        ) from exc
     return {
         "image_key": foto.key,
         "image_url": foto.url,
         "valores": d.plantilla.desde_foto(datos, foto.key),
-        "creditos": creditos,
+        "creditos": None if creditos is None else float(creditos),
         "repetida": repetida,
     }
 
@@ -229,8 +240,14 @@ async def procesar_foto(
     except ErrorFormato as exc:
         log.info("foto_catalogo_no_reconocida", error=exc.causa, tenant_id=str(tenant_id))
         raise ErrorDatosDePrueba(
-            422, "foto_no_reconocida", "No se reconoció un producto en la foto. Prueba con otra más clara."
+            422, "foto_no_reconocida", "No se reconoció un producto en la foto; se cobró igual porque el proveedor ya la procesó. Prueba con otra más clara."
         ) from exc
+    if reconocido.consumo.credits is None:
+        # Sin fila en el ledger no hay cobro ni idempotencia: devolver la fila daría visión gratis
+        # en cada reintento mientras la escritura siga fallando.
+        raise ErrorDatosDePrueba(
+            503, "vision_no_respondio", "No pudimos registrar la foto. Inténtalo de nuevo en un momento."
+        )
     log.info("foto_catalogo_reconocida", tenant_id=str(tenant_id), agent_id=str(agent_id))
     return _respuesta(
         d,

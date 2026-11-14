@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from decimal import Decimal
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
@@ -535,7 +534,7 @@ class FilaDeFoto(BaseModel):
     image_key: str
     image_url: str
     valores: dict[str, str] = Field(description="Fila propuesta para la precarga (columna → texto).")
-    creditos: Decimal | None = Field(description="Créditos cobrados por esta foto (0 si ya se había procesado).")
+    creditos: float | None = Field(description="Créditos cobrados por esta foto (0 si ya se había procesado).")
     repetida: bool = Field(description="La misma foto ya se había procesado: se respondió sin cobrar otra vez.")
 
 
