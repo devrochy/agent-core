@@ -71,7 +71,8 @@ class ContextoA2A:
 
         release = release_vigente.vigente()
         agente = release_vigente.agente_del_turno()
-        if release is None or release.a2a_graph is None or agente is None:
+        # HU-AOS-72: la prueba de un borrador va directo a ese agente, sin comandos entre agentes.
+        if release is None or release.a2a_graph is None or agente is None or release.efimera:
             return None
         kernel = release_vigente.kernel_del_turno()
         grafo = a2a.GrafoCongelado.desde_manifiesto(

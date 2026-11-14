@@ -9,7 +9,13 @@ Opciones directas (SPEC-40, ADR-0172): `POST /options` envía una plantilla con 
 prueba y `POST /tap` simula el toque de un botón, sin Meta. El payload firmado se valida igual que en
 producción (firma por negocio y conversación, `option_sends`, vigencia, una sola ejecución): ningún camino se
 salta el resolver. **En el canal `test` la tool se simula**: no crea pedidos, citas, cobros ni links reales.
-Al cerrar la prueba (`POST /close`) se purga todo lo que dejó. Permisos como el editor de plantillas con opciones (dueño o master, escritura en
+Al cerrar la prueba (`POST /close`) se purga todo lo que dejó.
+
+Borrador (HU-AOS-72): con `agent_id`, `GET`, `POST /message`, `/reset` y `/close` prueban el BORRADOR de ese
+agente, sin publicarlo: el turno corre con una release efímera armada en memoria (sin release, versión ni
+instancia), directo a ese agente (sin el Coordinador), siempre simulado y sin cupo de agentes. Exige además
+escritura en `settings` (la sección del editor de agentes). Un agente que no es un especialista activo del
+negocio con borrador es 404 `agente_no_encontrado`. Permisos como el editor de plantillas con opciones (dueño o master, escritura en
 `connections`) y con la bandera `opciones_directas.habilitada` encendida (si no, 404).
 """
 
@@ -22,6 +28,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field
 
+from core.admin.permissions import effective_access
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.routers.plantillas_opciones import OpcionesErrorOut
@@ -41,6 +48,14 @@ class TurnIn(BaseModel):
         description=(
             "Conexión del negocio por cuya release se prueba (HU-AOS-57): el turno corre por el agente "
             "publicado ahí. Sin ella, la prueba de siempre (sin release). Sigue siendo del canal `test`."
+        ),
+    )
+    agent_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "Agente cuyo BORRADOR se prueba sin publicarlo (HU-AOS-72): el turno va directo a ese agente, "
+            "simulado y sin release, versión ni instancia. Gana sobre `connection_id`. 404 `agente_no_encontrado` "
+            "si no es un especialista activo del negocio con borrador."
         ),
     )
 
@@ -109,22 +124,43 @@ def _conexion_no_valida(exc: Exception) -> ApiError:
     return ApiError(422, "invalid_connection", str(exc), fields={"connection_id": str(exc)})
 
 
+def _agente_no_encontrado() -> ApiError:
+    return ApiError(404, "agente_no_encontrado", "No existe ese agente en el negocio.")
+
+_AGENT_ID = Query(description="Agente cuyo borrador se prueba (HU-AOS-72). Gana sobre `connection_id`.")
+
+
+async def _exigir_editor_de_agentes(principal: Principal, agent_id: uuid.UUID | None) -> None:
+    """Probar un borrador exige además escritura en `settings`, la sección del editor de agentes."""
+    if agent_id is None or principal.admin.role == "master":
+        return
+    if await effective_access(principal.admin, "settings", principal.tenant_id) != "write":
+        raise ApiError.forbidden("Sin permiso para la sección 'settings'.")
+
+
 @router.get("", response_model=HistoryOut)
 async def playground_history(
     principal: Annotated[Principal, Depends(require("connections"))],
     connection_id: Annotated[uuid.UUID | None, Query(description="Historial de la prueba por esa conexión.")] = None,
+    agent_id: Annotated[uuid.UUID | None, _AGENT_ID] = None,
 ) -> HistoryOut:
     """Historial de la prueba (working memory del canal `test`)."""
     from core.admin import playground
     from core.gateway.conexion_pruebas import ConexionNoValida
+    from core.releases.efimera import BorradorNoEncontrado
 
+    await _exigir_editor_de_agentes(principal, agent_id)
     turns: list[dict[str, Any]] = []
     async with tenant_scope(principal.tenant_id):
         try:
-            conversation = await playground.get_or_create_test_conversation(principal.tenant_id, connection_id)
+            conversation = await playground.get_or_create_test_conversation(
+                principal.tenant_id, connection_id, agent_id
+            )
             turns = await playground.list_test_turns(conversation.id)
         except ConexionNoValida as exc:
             raise _conexion_no_valida(exc) from exc
+        except BorradorNoEncontrado as exc:
+            raise _agente_no_encontrado() from exc
         except Exception:
             # Redis caído o spec ausente: el panel muestra el historial vacío.
             turns = []
@@ -142,16 +178,23 @@ async def playground_message(
         raise ApiError.bad_request("Escribe un mensaje.", "missing_text")
     from core.admin import playground
     from core.gateway.conexion_pruebas import ConexionNoValida
+    from core.releases.efimera import BorradorNoEncontrado
 
+    await _exigir_editor_de_agentes(principal, payload.agent_id)
     async with tenant_scope(principal.tenant_id):
         try:
-            turn = await playground.run_test_turn(principal.tenant_id, text, payload.connection_id)
+            turn = await playground.run_test_turn(
+                principal.tenant_id, text, payload.connection_id, payload.agent_id
+            )
         except ConexionNoValida as exc:
             raise _conexion_no_valida(exc) from exc
+        except BorradorNoEncontrado as exc:
+            raise _agente_no_encontrado() from exc
         except playground.PlaygroundError as exc:
             raise ApiError.bad_request(str(exc), "playground_error") from exc
         # Solo cuenta si el agente contestó: un turno que escaló por falla del modelo no prueba nada.
-        if payload.connection_id is not None and not turn.escalated:
+        # La prueba de un borrador no es la del onboarding (esa va por la conexión publicada).
+        if payload.agent_id is None and payload.connection_id is not None and not turn.escalated:
             await _marcar_prueba_del_onboarding(principal.tenant_id, payload.connection_id)
     return TurnOut(
         text=turn.text,
@@ -165,13 +208,16 @@ async def playground_message(
 async def playground_close(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
     connection_id: Annotated[uuid.UUID | None, Query(description="Cierra la prueba de esa conexión.")] = None,
+    agent_id: Annotated[uuid.UUID | None, _AGENT_ID] = None,
 ) -> Response:
     """Cierra la prueba y purga su data (conversación `test`, cliente sintético, mensajes,
-    tareas, memoria, ledger y decisiones). Sin `connection_id`, cierra todas las del negocio."""
+    tareas, memoria, ledger y decisiones). Sin `connection_id` ni `agent_id`, cierra todas las del
+    negocio; con `agent_id`, solo la del borrador de ese agente (un agente ajeno no cierra nada)."""
     from core.admin import playground
 
+    await _exigir_editor_de_agentes(principal, agent_id)
     async with tenant_scope(principal.tenant_id):
-        await playground.close_test_conversation(principal.tenant_id, connection_id)
+        await playground.close_test_conversation(principal.tenant_id, connection_id, agent_id)
     return Response(status_code=204)
 
 
@@ -179,16 +225,21 @@ async def playground_close(
 async def playground_reset(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
     connection_id: Annotated[uuid.UUID | None, Query(description="Reinicia la prueba de esa conexión.")] = None,
+    agent_id: Annotated[uuid.UUID | None, _AGENT_ID] = None,
 ) -> Response:
     """Purga la prueba actual y arranca una nueva desde cero."""
     from core.admin import playground
     from core.gateway.conexion_pruebas import ConexionNoValida
+    from core.releases.efimera import BorradorNoEncontrado
 
+    await _exigir_editor_de_agentes(principal, agent_id)
     async with tenant_scope(principal.tenant_id):
         try:
-            await playground.reset_test_conversation(principal.tenant_id, connection_id)
+            await playground.reset_test_conversation(principal.tenant_id, connection_id, agent_id)
         except ConexionNoValida as exc:
             raise _conexion_no_valida(exc) from exc
+        except BorradorNoEncontrado as exc:
+            raise _agente_no_encontrado() from exc
     return Response(status_code=204)
 
 

@@ -4025,6 +4025,25 @@
             "description": "Historial de la prueba por esa conexión."
           },
           {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Agente cuyo borrador se prueba (HU-AOS-72). Gana sobre `connection_id`.",
+              "title": "Agent Id"
+            },
+            "description": "Agente cuyo borrador se prueba (HU-AOS-72). Gana sobre `connection_id`."
+          },
+          {
             "name": "X-Tenant-Id",
             "in": "header",
             "required": false,
@@ -4165,7 +4184,7 @@
           "admin · playground"
         ],
         "summary": "Playground Close",
-        "description": "Cierra la prueba y purga su data (conversación `test`, cliente sintético, mensajes, tareas, memoria, ledger y decisiones). Sin `connection_id`, cierra todas las del negocio.",
+        "description": "Cierra la prueba y purga su data (conversación `test`, cliente sintético, mensajes,\ntareas, memoria, ledger y decisiones). Sin `connection_id` ni `agent_id`, cierra todas las del\nnegocio; con `agent_id`, solo la del borrador de ese agente (un agente ajeno no cierra nada).",
         "operationId": "playground_close_api_v1_admin_playground_close_post",
         "parameters": [
           {
@@ -4188,6 +4207,25 @@
             "description": "Cierra la prueba de esa conexión."
           },
           {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Agente cuyo borrador se prueba (HU-AOS-72). Gana sobre `connection_id`.",
+              "title": "Agent Id"
+            },
+            "description": "Agente cuyo borrador se prueba (HU-AOS-72). Gana sobre `connection_id`."
+          },
+          {
             "name": "X-Tenant-Id",
             "in": "header",
             "required": false,
@@ -4202,11 +4240,37 @@
               ],
               "title": "X-Tenant-Id"
             }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
         }
       }
@@ -4218,7 +4282,7 @@
           "admin · playground"
         ],
         "summary": "Playground Reset",
-        "description": "Cierra la prueba actual y arranca una nueva desde cero.",
+        "description": "Purga la prueba actual y arranca una nueva desde cero.",
         "operationId": "playground_reset_api_v1_admin_playground_reset_post",
         "parameters": [
           {
@@ -4239,6 +4303,25 @@
               "title": "Connection Id"
             },
             "description": "Reinicia la prueba de esa conexión."
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Agente cuyo borrador se prueba (HU-AOS-72). Gana sobre `connection_id`.",
+              "title": "Agent Id"
+            },
+            "description": "Agente cuyo borrador se prueba (HU-AOS-72). Gana sobre `connection_id`."
           },
           {
             "name": "X-Tenant-Id",
@@ -60948,6 +61031,19 @@
             ],
             "title": "Connection Id",
             "description": "Conexión del negocio por cuya release se prueba (HU-AOS-57): el turno corre por el agente publicado ahí. Sin ella, la prueba de siempre (sin release). Sigue siendo del canal `test`."
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id",
+            "description": "Agente cuyo BORRADOR se prueba sin publicarlo (HU-AOS-72): el turno va directo a ese agente, simulado y sin release, versión ni instancia. Gana sobre `connection_id`. 404 `agente_no_encontrado` si no es un especialista activo del negocio con borrador."
           }
         },
         "type": "object",

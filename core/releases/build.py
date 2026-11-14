@@ -506,18 +506,27 @@ async def armar_manifiesto(
 ) -> dict[str, Any]:
     """El manifiesto que construiría `construir`, sin escribir la release. `fijadas`:
     `{agent_id: version_id}` que se congelan en lugar de la última versión publicada."""
-    from core.agents.flow import read_tenant_flow_raw
-    from core.agents.spec import enabled_business_packs, leer_spec_activo
     from core.kernel.procedures import catalogo_de_acciones
-    from core.releases.cargar import derivar_procedimientos
-    from core.shared.tenant import tenant_slug
 
     _exigir_scope(tenant_id)
     await _conexion_conversacional(tenant_id, connection_id)
     modulos = _modulos(modules)
     catalogo = catalogo_de_acciones(modulos)
     instancias = await _componentes(tenant_id, connection_id, fijadas or {}, catalogo)
+    return await armar_con_instancias(tenant_id, connection_id, instancias, modulos)
 
+
+async def armar_con_instancias(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID, instancias: list[_Instancia], modulos: list[Any]
+) -> dict[str, Any]:
+    """Pasos 2 a 5 del build con los agentes ya leídos. También lo usa la prueba del borrador
+    (`core.releases.efimera`, adenda HU-AOS-72 de ADR-0191), que arma las instancias en memoria."""
+    from core.agents.flow import read_tenant_flow_raw
+    from core.agents.spec import enabled_business_packs, leer_spec_activo
+    from core.releases.cargar import derivar_procedimientos
+    from core.shared.tenant import tenant_slug
+
+    _exigir_scope(tenant_id)
     leido = await leer_spec_activo(tenant_id)
     del_negocio = set(enabled_business_packs(leido[1])) if leido else set()
     allowlist: set[str] = {p.name for p in leido[1].playbooks} if leido else set()

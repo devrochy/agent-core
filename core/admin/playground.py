@@ -91,20 +91,48 @@ async def conexion_real_para_probar(session: Any, tenant_id: uuid.UUID) -> uuid.
     return fila[0] if fila else None
 
 
+async def _exigir_borrador(session: Any, tenant_id: uuid.UUID, agent_id: uuid.UUID) -> None:
+    """El agente es un especialista activo DEL negocio con borrador (HU-AOS-72). Si no,
+    `BorradorNoEncontrado` (la API responde 404 sin eco del id). Filtra `tenant_id` además de RLS."""
+    from core.releases.efimera import BorradorNoEncontrado
+
+    existe = (
+        await session.execute(
+            text(
+                "SELECT 1 FROM agents a JOIN agent_drafts d ON d.tenant_id = a.tenant_id AND d.agent_id = a.id "
+                "AND d.deleted_at IS NULL WHERE a.tenant_id = :t AND a.id = :a AND a.kind = 'specialist' "
+                "AND a.status = 'active' AND a.deleted_at IS NULL"
+            ),
+            {"t": tenant_id, "a": agent_id},
+        )
+    ).first()
+    if existe is None:
+        raise BorradorNoEncontrado(str(agent_id))
+
+
 async def get_or_create_test_conversation(
-    tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None
+    tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None, agent_id: uuid.UUID | None = None
 ) -> Conversation:
     """Conversación de prueba "viva" del tenant (una sola a la vez por conexión).
 
     Sin `connection_id`, un negocio v3 prueba por su conexión real con release activa
     (`conexion_real_para_probar`, ADR-0191); si no tiene ninguna, por la interna del playground.
     Con `connection_id` (HU-AOS-57) se ata a esa conexión del negocio y el turno corre por su
-    release activa, es decir, por el agente publicado ahí; sigue siendo del canal `test`."""
+    release activa, es decir, por el agente publicado ahí; sigue siendo del canal `test`.
+
+    Con `agent_id` (HU-AOS-72) la prueba es del BORRADOR de ese agente: va por la conexión interna,
+    queda marcada con `state.draft_agent_id` (una por agente) y el turno corre con la release
+    efímera del borrador (`core.releases.efimera`), sin ruteo. `connection_id` se ignora."""
+    from core.releases.efimera import CLAVE_BORRADOR
+
     async with get_session() as session:
+        if agent_id is not None:
+            await _exigir_borrador(session, tenant_id, agent_id)
+            connection_id = None
         customer = await _get_or_create_customer(session, tenant_id)
         # El contract del Agent OS vuelve `connection_id` obligatorio: la conversación de prueba
         # también va por una conexión (la interna del negocio, o la elegida si es válida).
-        if connection_id is None:
+        if connection_id is None and agent_id is None:
             # Un negocio v3 prueba por su conexión real con release (ADR-0191): la interna no tiene
             # release y su turno fallaría cerrado. Sin ninguna, queda la interna (y el turno no responde).
             connection_id = await conexion_real_para_probar(session, tenant_id)
@@ -119,11 +147,16 @@ async def get_or_create_test_conversation(
             Conversation.status != "closed",
             Conversation.deleted_at.is_(None),
         ]
-        if connection_id is not None:
+        if agent_id is not None:
+            filtros.append(Conversation.state[CLAVE_BORRADOR].astext == str(agent_id))
+        elif connection_id is not None:
             filtros.append(Conversation.connection_id == conexion_id)
         else:
             # La de siempre: la interna (o una de antes sin conexión); nunca una atada a un agente.
             filtros.append(or_(Conversation.connection_id.is_(None), Conversation.connection_id == conexion_id))
+        if agent_id is None:
+            # Nunca la prueba de un borrador (HU-AOS-72), que también va por la interna.
+            filtros.append(Conversation.state[CLAVE_BORRADOR].astext.is_(None))
         conversation = (
             await session.execute(select(Conversation).where(*filtros).order_by(Conversation.started_at.desc()))
         ).scalars().first()
@@ -133,7 +166,11 @@ async def get_or_create_test_conversation(
                 customer_id=customer.id,
                 channel=TEST_CHANNEL,
                 status="open",
-                state={"is_test": True, "panel": True},
+                state=(
+                    {"is_test": True, "panel": True, CLAVE_BORRADOR: str(agent_id)}
+                    if agent_id is not None
+                    else {"is_test": True, "panel": True}
+                ),
                 connection_id=conexion_id,
             )
             session.add(conversation)
@@ -156,13 +193,16 @@ async def list_test_turns(conversation_id: uuid.UUID) -> list[dict]:
     return await working_memory.get_recent_turns(conversation_id)
 
 
-async def close_test_conversation(tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None) -> int:
+async def close_test_conversation(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None, agent_id: uuid.UUID | None = None
+) -> int:
     """Purga la prueba (conversación, cliente sintético, mensajes, tareas, ledger y memoria).
 
-    Sin `connection_id` cierra todas las pruebas vivas del negocio; con él, solo la de esa
-    conexión. La purga es física y acotada a `channel = 'test'` (HU-ARCH-14): al cerrar la
+    Sin `connection_id` ni `agent_id` cierra todas las pruebas vivas del negocio; con `connection_id`,
+    solo la de esa conexión; con `agent_id`, solo la del borrador de ese agente (HU-AOS-72). La purga es física y acotada a `channel = 'test'` (HU-ARCH-14): al cerrar la
     prueba no queda data. Devuelve cuántas conversaciones cerró.
     """
+    from core.releases.efimera import CLAVE_BORRADOR
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tenant_id):
@@ -172,7 +212,9 @@ async def close_test_conversation(tenant_id: uuid.UUID, connection_id: uuid.UUID
                 Conversation.channel == TEST_CHANNEL,
                 Conversation.state["panel"].astext == "true",
             ]
-            if connection_id is not None:
+            if agent_id is not None:
+                filtros.append(Conversation.state[CLAVE_BORRADOR].astext == str(agent_id))
+            elif connection_id is not None:
                 filtros.append(Conversation.connection_id == connection_id)
             ids = list(
                 (
@@ -201,19 +243,24 @@ async def _purga_test(tenant_id: uuid.UUID, ids: list[uuid.UUID]) -> None:
         await SandboxPrueba(tenant_id, conversation_id).limpiar()
 
 
-async def reset_test_conversation(tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None) -> Conversation:
+async def reset_test_conversation(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None, agent_id: uuid.UUID | None = None
+) -> Conversation:
     """Purga la prueba actual y arranca una nueva desde cero."""
     # Primero la resuelve/marca: una conversación de antes del marcador `panel` también se purga.
-    await get_or_create_test_conversation(tenant_id, connection_id)
-    await close_test_conversation(tenant_id, connection_id)
-    return await get_or_create_test_conversation(tenant_id, connection_id)
+    await get_or_create_test_conversation(tenant_id, connection_id, agent_id)
+    await close_test_conversation(tenant_id, connection_id, agent_id)
+    return await get_or_create_test_conversation(tenant_id, connection_id, agent_id)
 
 
-async def run_test_turn(tenant_id: uuid.UUID, text: str, connection_id: uuid.UUID | None = None) -> TestTurn:
-    """Procesa un turno contra el loop real y devuelve la respuesta (sin canal)."""
+async def run_test_turn(
+    tenant_id: uuid.UUID, text: str, connection_id: uuid.UUID | None = None, agent_id: uuid.UUID | None = None
+) -> TestTurn:
+    """Procesa un turno contra el loop real y devuelve la respuesta (sin canal). Con `agent_id`, el
+    turno corre con el borrador de ese agente, en modo simulado y sin ruteo (HU-AOS-72)."""
     from core.orchestrator.loop import process_conversation
 
-    conversation = await get_or_create_test_conversation(tenant_id, connection_id)
+    conversation = await get_or_create_test_conversation(tenant_id, connection_id, agent_id)
     await _guardar_mensaje(tenant_id, conversation.id, "inbound", text)
     try:
         result = await process_conversation(conversation.id, text)
