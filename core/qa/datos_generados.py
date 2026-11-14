@@ -12,7 +12,8 @@ Solo en test (`QA_TESTERS_ENABLED`; la API responde 404 sin la bandera). Por age
 3. Retira el lote anterior del agente (el pack lo borra lógicamente) y siembra el nuevo; cada
    registro creado queda en `test_data_records` para el próximo retiro. Lo que el negocio creó a
    mano no se toca: solo se retira lo que la siembra devolvió como creado.
-4. Mide la llamada en `usage_ledger` (`kind = 'generacion'`) con créditos de plataforma.
+4. Mide la llamada en `usage_ledger` (`kind = 'generacion'`) con créditos de plataforma, con el
+   helper de IA estructurada del core (`core.ia.estructurado`, ADR-0194).
 
 Un lock de sesión por negocio y agente (`pg_try_advisory_xact_lock`) evita dos generaciones a la
 vez del mismo agente (doble clic): la segunda recibe 409.
@@ -20,20 +21,17 @@ vez del mismo agente (doble clic): la segunda recibe 409.
 
 from __future__ import annotations
 
-import asyncio
 import json
-import re
 import uuid
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 from sqlalchemy import select, text, update
 
-from core.db.models import AppSettings, TestDataRecord, UsageLedger, utcnow
+from core.db.models import AppSettings, TestDataRecord, utcnow
 from core.db.session import get_session
 from core.mcp.types import BaseModule
 from core.qa.contrato_datos import (
@@ -360,17 +358,6 @@ async def estado(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ generación
-_JSON = re.compile(r"\{.*\}", re.S)
-
-
-def _parsear(contenido: str, esquema: type[BaseModel]) -> BaseModel:
-    """El primer objeto JSON de la respuesta, validado. Lanza ValueError o ValidationError."""
-    hallado = _JSON.search(contenido or "")
-    if hallado is None:
-        raise ValueError("la respuesta no trae un objeto JSON")
-    return esquema.model_validate(json.loads(hallado.group(0)))
-
-
 def _entrada(negocio: Negocio, agente: Agente, forma: FormaDeDatos) -> str:
     return json.dumps(
         {
@@ -388,48 +375,6 @@ def _entrada(negocio: Negocio, agente: Agente, forma: FormaDeDatos) -> str:
     )
 
 
-async def _registrar_consumo(
-    tenant_id: uuid.UUID,
-    proveedor: Any,
-    respuesta: Any,
-    agente: Agente,
-    modulo: str | None = None,
-) -> None:
-    from core.billing.tarifario import TARIFARIO_VIGENTE, creditos_por_evento, trm_vigente
-
-    # Medir nunca rompe la generación: un proveedor sin tarifas (el fake de DEMO_MODE) cuenta 0.
-    try:
-        uso = respuesta.usage
-        estimar = getattr(proveedor, "estimate_cost_usd", None)
-        costo = Decimal(str(estimar(uso.input_tokens, uso.output_tokens))) if estimar else Decimal("0")
-        trm = trm_vigente()
-        async with get_session() as session:
-            session.add(
-                UsageLedger(
-                    tenant_id=tenant_id,
-                    conversation_id=None,
-                    turn_id=None,
-                    kind="generacion",
-                    model=respuesta.model or getattr(proveedor, "model", ""),
-                    input_tokens=uso.input_tokens,
-                    output_tokens=uso.output_tokens,
-                    latency_ms=respuesta.latency_ms,
-                    cost_usd=costo,
-                    result=(
-                        {"proposito": "datos_de_prueba", "agent_id": str(agente.id)}
-                        if modulo is None
-                        else {"proposito": "datos_de_prueba", "modulo": modulo}
-                    ),
-                    credits=creditos_por_evento(costo, "llm_turn", "platform", trm),
-                    key_mode="platform",
-                    tarifario_version=TARIFARIO_VIGENTE.version,
-                    trm_cop=trm,
-                )
-            )
-    except Exception as exc:
-        log.warning("usage_ledger_generacion_write_failed", error=type(exc).__name__)
-
-
 def _proveedor() -> Any:
     from core.llm import resolve_provider
 
@@ -443,30 +388,35 @@ async def _generar(
     forma: FormaDeDatos,
     modulo: str | None = None,
 ) -> Generado:
-    from core.agents.playbooks import load_core_playbook
-    from core.llm.types import LLMMessage
+    from core.ia.estructurado import ErrorFormato, ErrorProveedor, generar_estructurado
 
     respaldo = forma.esquema.model_validate(dict(forma.respaldo))
     try:
-        proveedor = _proveedor()
-        respuesta = await asyncio.wait_for(
-            proveedor.generate(
-                system_blocks=[load_core_playbook(PLAYBOOK)],
-                messages=[LLMMessage(role="user", content=_entrada(negocio, agente, forma))],
-                max_tokens=MAX_TOKENS,
-                temperature=TEMPERATURA,
+        generado = await generar_estructurado(
+            tenant_id,
+            playbook=PLAYBOOK,
+            esquema=forma.esquema,
+            entrada=_entrada(negocio, agente, forma),
+            kind="generacion",
+            result=(
+                {"proposito": "datos_de_prueba", "agent_id": str(agente.id)}
+                if modulo is None
+                else {"proposito": "datos_de_prueba", "modulo": modulo}
             ),
-            timeout=TIMEOUT_LLM_S,
+            # Créditos de plataforma: generar datos de prueba es de test, no usa la llave del negocio.
+            proveedor=_proveedor,
+            key_mode="platform",
+            max_tokens=MAX_TOKENS,
+            temperatura=TEMPERATURA,
+            timeout_s=TIMEOUT_LLM_S,
         )
-    except Exception as exc:  # proveedor caído, sin saldo, timeout: igual quedan datos
-        log.warning("datos_de_prueba_llm_fallo", error=type(exc).__name__, modo=forma.modo)
+    except ErrorProveedor as exc:  # proveedor caído, sin saldo, timeout: igual quedan datos
+        log.warning("datos_de_prueba_llm_fallo", error=exc.causa, modo=forma.modo)
         return Generado(datos=respaldo, origen="plantilla", motivo="proveedor")
-    await _registrar_consumo(tenant_id, proveedor, respuesta, agente, modulo)
-    try:
-        return Generado(datos=_parsear(respuesta.content, forma.esquema), origen="llm")
-    except (ValueError, ValidationError) as exc:
-        log.warning("datos_de_prueba_salida_invalida", error=type(exc).__name__, modo=forma.modo)
+    except ErrorFormato as exc:
+        log.warning("datos_de_prueba_salida_invalida", error=exc.causa, modo=forma.modo)
         return Generado(datos=respaldo, origen="plantilla", motivo="formato")
+    return Generado(datos=generado.datos, origen="llm")
 
 
 # ------------------------------------------------------------------ siembra y retiro
