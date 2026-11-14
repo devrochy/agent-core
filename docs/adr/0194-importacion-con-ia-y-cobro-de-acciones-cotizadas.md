@@ -31,8 +31,8 @@ su catálogo desde una hoja con columnas propias o desde fotos, y cada foto cues
 ## Decisión
 
 **El core hace el archivo o la imagen, la llamada a la IA, el ledger y la cotización; el pack pone el esquema y
-escribe con `importar_filas`.** Un solo lector, un solo paso de mapeo y una sola escritura. Sin tablas nuevas
-ni migración.
+escribe con `importar_filas`.** Un solo lector, un solo paso de mapeo y una sola escritura. Sin tablas nuevas;
+la única migración amplía el CHECK de `usage_ledger.kind` para admitir `'vision'` (HU-BILL-16).
 
 ### 1. Helper de IA estructurada en el core
 
