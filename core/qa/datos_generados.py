@@ -25,7 +25,7 @@ import json
 import re
 import uuid
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -40,6 +40,7 @@ from core.qa.contrato_datos import (
     ContextoDeNegocio,
     FormaDeDatos,
     PlanParaPrueba,
+    RegistroDescrito,
     RegistroSembrado,
 )
 from core.shared.logger import get_logger
@@ -52,6 +53,8 @@ ORIGEN_IMPORTACION = "importacion"
 TIMEOUT_LLM_S = 90
 MAX_TOKENS = 4000
 TEMPERATURA = 0.4
+# Filas de «Lo cargado» (HU-QA-16): un lote generado trae decenas; lo importado puede traer cientos.
+TOPE_REGISTROS = 200
 
 
 class ErrorDatosDePrueba(Exception):
@@ -356,6 +359,86 @@ async def estado(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> dict[str, Any]:
         "falta_descripcion": negocio.falta_descripcion,
         "forma": {"modo": eleccion.forma.modo, "titulo": eleccion.forma.titulo} if disponible else None,
         "lote": _lote(await _registros_vivos(tenant_id, agent_id)),
+    }
+
+
+# ------------------------------------------------------------------ lo cargado (HU-QA-16)
+def _seccion(registro: TestDataRecord) -> str:
+    modulo = MODULOS.get(registro.modulo or "")
+    return modulo.seccion if modulo is not None else registro.pack_id
+
+
+async def registros(
+    tenant_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    *,
+    puede_ver: Callable[[str], Awaitable[bool]] | None = None,
+) -> dict[str, Any]:
+    """Lo que el agente tiene cargado para probarlo: el último lote generado más lo importado (vivo),
+    en palabras de cada pack (`describir_registros`), por lote en el orden en que se cargó y, dentro
+    de cada lote, por tipo y nombre.
+
+    - `puede_ver(seccion)`: lo de un módulo cuya sección el usuario no ve no se describe (ni se cuenta).
+    - `sin_detalle`: registros de un pack que no se describe (sin el hook o desinstalado). Lo que un
+      pack elige no listar (variantes, cuotas, citas) no cuenta: va en el detalle de otra fila.
+    """
+    from core.plugin_manager import plugin_manager
+
+    await _agente(tenant_id, agent_id)  # 404 sin eco si no es de este negocio
+    async with get_session() as session:
+        vivos = list(
+            (
+                await session.execute(
+                    select(TestDataRecord)
+                    .where(
+                        TestDataRecord.tenant_id == tenant_id,
+                        TestDataRecord.agent_id == agent_id,
+                        TestDataRecord.deleted_at.is_(None),
+                    )
+                    .order_by(TestDataRecord.created_at, TestDataRecord.id)
+                )
+            ).scalars()
+        )
+    generados = [r for r in vivos if r.origen != ORIGEN_IMPORTACION]
+    lote = _lote(generados)
+    if lote is not None:  # generar retira los lotes anteriores; por si quedó alguno, solo el último
+        generados = [r for r in generados if r.lote_id == lote["lote_id"]]
+        lote["conteos"] = dict(Counter(r.kind for r in generados))
+    elegidos = generados + [r for r in vivos if r.origen == ORIGEN_IMPORTACION]
+    if puede_ver is not None:
+        permitidas = {s for s in {_seccion(r) for r in elegidos} if await puede_ver(s)}
+        elegidos = [r for r in elegidos if _seccion(r) in permitidas]
+        if generados and _seccion(generados[0]) not in permitidas:
+            lote = None  # ni sus conteos: el lote es de un módulo que no ve
+
+    por_pack: dict[str, list[TestDataRecord]] = {}
+    for r in elegidos:
+        por_pack.setdefault(r.pack_id, []).append(r)
+    descritos: dict[tuple[str, uuid.UUID], RegistroDescrito] = {}
+    sin_detalle = 0
+    for pack_id, filas in por_pack.items():
+        pack = plugin_manager.get(pack_id)
+        if pack is None or type(pack).describir_registros is BaseModule.describir_registros:
+            sin_detalle += len(filas)
+            continue
+        for d in await pack.describir_registros(
+            tenant_id, [RegistroSembrado(kind=r.kind, ref=r.record_ref) for r in filas]
+        ):
+            descritos[(d.kind, d.ref)] = d
+
+    # Un lote comparte `created_at`: dentro de él, por tipo y nombre (orden estable para el panel).
+    filas: list[tuple[Any, str, str, dict[str, Any]]] = []
+    for r in elegidos:
+        d = descritos.pop((r.kind, r.record_ref), None)
+        if d is not None:
+            fila = {"tipo": d.kind, "nombre": d.nombre, "detalle": d.detalle, "origen": r.origen}
+            filas.append((r.created_at, d.kind, d.nombre.casefold(), fila))
+    salida = [f[3] for f in sorted(filas, key=lambda f: f[:3])]
+    return {
+        "lote": lote,
+        "registros": salida[:TOPE_REGISTROS],
+        "total": len(salida),
+        "sin_detalle": sin_detalle,
     }
 
 

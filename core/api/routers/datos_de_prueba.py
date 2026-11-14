@@ -6,6 +6,8 @@
   el lote anterior del agente y siembra el nuevo. 409 `en_curso` con otra generación del mismo
   agente; 409 `sin_datos` si el agente no tiene forma; 422 `descripcion_requerida`.
 - `DELETE …` — retira los datos de prueba del agente (borrado lógico en el pack).
+- `GET …/datos-de-prueba/registros` — lo cargado en palabras (HU-QA-16): el último lote generado y lo
+  importado, con nombre y detalle corto de cada pack (`describir_registros`), para probar el agente.
 - `GET …/importar-datos` (+ `/plantilla.csv`), `POST …/importar-datos/validar`, `POST …/importar-datos` y
   `DELETE …/importar-datos` — importar datos existentes desde un CSV (HU-QA-12, ADR-0180). Escribir
   exige además escritura en la sección del pack del agente. La vista previa no escribe nada.
@@ -66,6 +68,24 @@ class DatosRetirados(BaseModel):
     retirados: int
 
 
+class RegistroDePrueba(BaseModel):
+    tipo: str = Field(description="`kind` del registro en su pack (`producto`, `tipo`, `cliente`…).")
+    nombre: str
+    detalle: str | None = Field(default=None, description="Corto: precio y categoría, duración, cartera y deuda.")
+    origen: Literal["llm", "plantilla", "importacion"]
+
+
+class RegistrosDePrueba(BaseModel):
+    lote: LoteDePrueba | None = Field(description="El último lote generado; `null` si no hay (puede haber importado).")
+    registros: list[RegistroDePrueba] = Field(
+        description="Lo generado y lo importado, por lote en el orden en que se cargó y dentro del lote por tipo y nombre. Hasta 200; el total está en `total`."
+    )
+    total: int
+    sin_detalle: int = Field(
+        description="Registros de una habilidad que no se describe: existen pero no salen en la lista."
+    )
+
+
 class EstadoDatosDePruebaModulo(BaseModel):
     modulo: str
     titulo: str
@@ -103,6 +123,26 @@ async def estado_datos_de_prueba(
     _habilitado()
     try:
         return await svc.estado(_tenant(principal), agent_id)
+    except svc.ErrorDatosDePrueba as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/{agent_id}/datos-de-prueba/registros", response_model=RegistrosDePrueba)
+async def registros_de_prueba(
+    agent_id: uuid.UUID, principal: Annotated[Principal, Depends(require("agents"))]
+) -> dict[str, object]:
+    """Lo que el agente tiene cargado para probarlo (último lote generado e importado), en palabras.
+    Lo de un módulo cuya sección el usuario no puede ver no sale."""
+    from core.qa import datos_generados as svc
+
+    _habilitado()
+    tenant_id = _tenant(principal)
+
+    async def puede_ver(seccion: str) -> bool:
+        return await effective_access(principal.admin, seccion, tenant_id) is not None
+
+    try:
+        return await svc.registros(tenant_id, agent_id, puede_ver=puede_ver)
     except svc.ErrorDatosDePrueba as exc:
         raise _error(exc) from exc
 
