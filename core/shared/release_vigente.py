@@ -122,6 +122,10 @@ class ArtefactosDeRelease:
     # HU-AOS-35: `ReleaseCongelada.compilado` (async, recibe el foco): lo compilado del agente por
     # versión, o None si no se pudo. None aquí = sin compilador (tests o una ranura armada a mano).
     compilar: Any = None
+    # HU-AOS-72: release armada en memoria desde un borrador para la prueba del panel
+    # (`core.releases.efimera`). Sus ids de release, instancia y versión no existen en la base:
+    # ninguna escritura del turno los usa como FK (`efimera()`).
+    efimera: bool = False
 
 
 @dataclass(frozen=True)
@@ -222,6 +226,13 @@ def vigente() -> ArtefactosDeRelease | None:
     if actual is None or actual != ranura.valor.tenant_id:
         return None
     return ranura.valor
+
+
+def efimera() -> bool:
+    """¿El turno corre la release efímera de un borrador (HU-AOS-72)? Entonces `release_id`,
+    `instance_id` y `version_id` de la ranura no existen en la base: quien escribe pone NULL."""
+    actual = vigente()
+    return actual is not None and actual.efimera
 
 
 def exige_concesion() -> bool:
@@ -332,6 +343,7 @@ __all__ = [
     "agente_del_turno",
     "cerrar",
     "con_valores_de_release",
+    "efimera",
     "fijar",
     "fijar_inicio",
     "idle_minutes",
