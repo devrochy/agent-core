@@ -83,6 +83,7 @@ async def compilar(
     playbooks: Mapping[str, str],
     flow_tenant: Any,
     app_settings: Mapping[str, str | None],
+    flow_agente: Any = None,
 ) -> Compilado:
     """Compila el agente `foco` de una release. Lanza `ErrorDeCompilacion` si no se puede de forma
     determinista."""
@@ -103,7 +104,12 @@ async def compilar(
         raise ErrorDeCompilacion("vista inválida") from exc
     try:
         flujo = await resolve_flow(
-            spec, slug="", available=herramientas_estaticas(spec), flow_tenant=flow_tenant, estricto=True
+            spec,
+            slug="",
+            available=herramientas_estaticas(spec),
+            flow_tenant=flow_tenant,
+            flow_agente=flow_agente,
+            estricto=True,
         )
         flow_summary = render_flow(flujo) if flujo is not None else ""
         # Los mismos valores que el loop pone en `PromptContext` con release (`con_valores_de_release`).

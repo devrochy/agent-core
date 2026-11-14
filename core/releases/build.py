@@ -119,6 +119,8 @@ async def _conexion_conversacional(tenant_id: uuid.UUID, connection_id: uuid.UUI
 class _Instancia:
     componente: man.Componente
     contenido: dict[str, Any]
+    # ADR-0195: flujo propio del agente congelado en su versión (None = release anterior).
+    flow: dict[str, Any] | None = None
 
 
 async def _componentes(
@@ -165,7 +167,8 @@ async def _componentes(
             version = (
                 await session.execute(
                     text(
-                        "SELECT id, version, content_hash, contract, content FROM agent_versions "
+                        "SELECT id, version, content_hash, contract, content, flow, flow_hash "
+                        "FROM agent_versions "
                         "WHERE tenant_id = :t AND agent_id = :a "
                         "AND (cast(:v AS uuid) IS NULL OR id = cast(:v AS uuid)) "
                         "ORDER BY version DESC LIMIT 1"
@@ -177,7 +180,7 @@ async def _componentes(
                 raise ErrorDelBuild(
                     "agente_sin_version", f"El agente '{key}' no tiene versión publicada."
                 )
-            vid, numero, huella, contrato, contenido = version
+            vid, numero, huella, contrato, contenido, flujo, huella_flujo = version
             for issue in revisar_spec(contenido, catalogo, contrato):
                 problemas.append(f"{key}: {issue.path} ({issue.code})")
             salida.append(
@@ -195,8 +198,11 @@ async def _componentes(
                         skills=(
                             tuple(habilidades_por_agente[aid]) if aid in habilidades_por_agente and rol != "core" else None
                         ),
+                        flow=flujo,
+                        flow_hash=huella_flujo,
                     ),
                     contenido,
+                    flujo,
                 )
             )
     if problemas:
@@ -322,7 +328,12 @@ async def _habilidades(
 
 
 def _resolver_componentes(
-    instancias: list[_Instancia], *, derivados: set[str], publicados: list[Any], habilidades: set[str]
+    instancias: list[_Instancia],
+    *,
+    derivados: set[str],
+    publicados: list[Any],
+    habilidades: set[str],
+    derivados_por_agente: Mapping[str, set[str]] | None = None,
 ) -> list[man.Componente]:
     """Los componentes con sus `ProcedureRef` resueltos a versión exacta (fail-closed)."""
     from core.releases.procedimientos import publicados_por_id, resolver_refs
@@ -335,7 +346,8 @@ def _resolver_componentes(
         if inst.componente.contract != "agentspec/3" or not isinstance(refs, list):
             salida.append(inst.componente)  # el KernelSpec tiene `procedures` de otra forma
             continue
-        resueltos, problemas = resolver_refs(refs, abiertos=derivados, publicados=por_id, habilidades=habilidades)
+        abiertos = (derivados_por_agente or {}).get(inst.componente.agent_key, derivados)
+        resueltos, problemas = resolver_refs(refs, abiertos=abiertos, publicados=por_id, habilidades=habilidades)
         faltan.extend(f"{inst.componente.agent_key}: {p}" for p in problemas)
         salida.append(
             dataclasses.replace(inst.componente, procedures=tuple((r.id, r.version) for r in resueltos))
@@ -543,12 +555,21 @@ async def armar_con_instancias(
         flujo = read_tenant_flow_raw(slug) if slug else None
     except ValueError as exc:
         raise ErrorDelBuild("flujo_invalido", str(exc)) from None
-    derivados = set(derivar_procedimientos([h.pack_id for h in habilidades], flujo))
+    skills = [h.pack_id for h in habilidades]
+    derivados = set(derivar_procedimientos(skills, flujo))
+    # ADR-0195: cada agente deriva sus procedimientos abiertos de su propio flujo; los que no
+    # tienen flujo (versiones anteriores) siguen con los del negocio.
+    derivados_por_agente = {
+        inst.componente.agent_key: set(derivar_procedimientos(skills, inst.flow))
+        for inst in instancias
+        if inst.flow is not None
+    }
     componentes = _resolver_componentes(
         instancias,
         derivados=derivados,
         publicados=publicados,
         habilidades={h.pack_id for h in habilidades} | set(plugins_del_negocio),
+        derivados_por_agente=derivados_por_agente,
     )
     ruteo = revisar_ruteo(instancias, componentes)
     if ruteo:

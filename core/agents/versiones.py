@@ -443,15 +443,17 @@ async def publicar(
         from core.agents import habilidades_del_agente as hda
         from core.agents.editor import habilitados_del_negocio
 
-        packs = await hda.packs_del_agente(tenant_id, agent_id, await habilitados_del_negocio(tenant_id))
-        acciones = hda.acciones(normalizado, packs)
-        permitidas = fa.acciones_permitidas(acciones)
         if flujo is None:
-            flujo = fa.semilla(packs, permitidas)
-        issues = fa.validar_acciones(flujo, permitidas)
-        if issues:
-            raise ErroresDeContrato(issues)
-        huella_flujo = fa.flow_hash(flujo)
+            # Sin flujo propio se sigue leyendo `flow_tenant` (conducta anterior y evals). El
+            # panel guarda la semilla cuando el dueño la confirma; publicar solo no la crea.
+            huella_flujo = None
+        else:
+            packs = await hda.packs_del_agente(tenant_id, agent_id, await habilitados_del_negocio(tenant_id))
+            acciones = hda.acciones(normalizado, packs)
+            issues = fa.validar_acciones(flujo, fa.acciones_permitidas(acciones))
+            if issues:
+                raise ErroresDeContrato(issues)
+            huella_flujo = fa.flow_hash(flujo)
     else:
         flujo = None
         huella_flujo = None
