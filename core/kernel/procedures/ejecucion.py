@@ -2482,7 +2482,10 @@ def _agente_del_turno_id() -> uuid.UUID | None:
     from core.shared import release_vigente
 
     agente = release_vigente.agente_del_turno()
-    return agente.instance_id if agente is not None else None
+    if agente is None or release_vigente.efimera():
+        # HU-AOS-72: la instancia de la prueba de un borrador no existe en la base (tarea sin dueño).
+        return None
+    return agente.instance_id
 
 
 async def contexto_del_motor(

@@ -616,6 +616,11 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar
     from core.kernel.banderas import banderas_del_negocio
     from core.kernel.decisions import anotar_release, anotar_ruta
 
+    borrador = _borrador_en_prueba(conversation)
+    if borrador is not None and connection_id is not None:
+        # HU-AOS-72 (adenda de ADR-0191): la prueba del panel de un borrador corre con una release
+        # efímera, sin asignar release, sin router y sin anotarla en `core_decisions`.
+        return await _fijar_borrador(tenant_id, borrador, connection_id)
     async with get_session() as session:
         banderas = await banderas_del_negocio(session, tenant_id)
         if connection_id is None:
@@ -655,6 +660,39 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar
         if asignacion.modo_ruteo == "active" and (ruta.start is not None or ruta.pila):
             release_vigente.fijar_inicio(tenant_id, ruta.start, pila=ruta.pila, max_stack=ruta.max_stack)
     return asignacion
+
+
+def _borrador_en_prueba(conversation: Any) -> uuid.UUID | None:
+    """El agente cuyo borrador prueba esta conversación (HU-AOS-72), o None. Solo la prueba del panel
+    (canal `test` con el marcador `panel`, sandbox de HU-ARCH-14) puede correr un borrador; el `state`
+    es un dato (invariante 7): el agente se revalida en la base en cada turno."""
+    from core.releases.efimera import CLAVE_BORRADOR
+    from core.shared.test_mode import is_panel_test
+
+    if not is_panel_test(conversation):
+        return None
+    valor = (getattr(conversation, "state", None) or {}).get(CLAVE_BORRADOR)
+    try:
+        return uuid.UUID(str(valor)) if valor else None
+    except ValueError:
+        return None
+
+
+async def _fijar_borrador(tenant_id: uuid.UUID, agent_id: uuid.UUID, connection_id: uuid.UUID) -> None:
+    """Fija la release efímera del borrador. Si el agente ya no es un especialista activo del negocio
+    con borrador (o el borrador no arma), el turno falla cerrado como sin release."""
+    from core.releases.build import ErrorDelBuild
+    from core.releases.efimera import BorradorNoEncontrado, artefactos_efimeros, release_de_borrador
+
+    try:
+        release, foco = await release_de_borrador(tenant_id, agent_id, connection_id)
+    except (BorradorNoEncontrado, ErrorDelBuild) as exc:
+        log.warning("borrador_sin_release", motivo=getattr(exc, "codigo", "no_encontrado"))
+        release_vigente.marcar_v3_sin_release(tenant_id)
+        return None
+    release_vigente.fijar(artefactos_efimeros(release, foco))
+    log.info("borrador_en_prueba", agent_key=foco.key)
+    return None
 
 
 __all__ = [
