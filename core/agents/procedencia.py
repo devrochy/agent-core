@@ -69,7 +69,8 @@ async def registrar(tool: MCPTool | None, resultado: Any, conversation_id: uuid.
     if isinstance(resultado, dict) and resultado.get("simulado"):
         return
     release = release_vigente.vigente()
-    if release is None:
+    if release is None or release.efimera:
+        # HU-AOS-72: la prueba de un borrador no atribuye registros (su instancia no existe).
         return
     referencia = referencia_creada(tool.crea_registro, resultado)
     if referencia is None:

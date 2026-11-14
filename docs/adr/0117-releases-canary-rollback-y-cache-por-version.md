@@ -727,3 +727,10 @@ La métrica tampoco sirve para medir la meta (≥ 50 % de los tokens de entrada 
 - **La meta del 50 %** se mide en test con una semana de tráfico; no es una condición para el merge.
 - **El texto de cabecera del flujo** sigue en código (invariante 3) para no cambiar las grabaciones. Se propone una HU propia para moverlo a un playbook del kernel junto con la regrabación.
 - **Lo que §7 ya dejó fuera:** caché de resultados de acciones, *epochs* y warm-up.
+
+## Nota (2026-11-14): release efímera del borrador (HU-AOS-72)
+
+La prueba del panel de un borrador corre con una release armada en memoria que no se persiste ni entra a
+la caché de §7, y cuyo turno no se atribuye a ninguna release (`release_id` NULL en el ledger y en
+`core_decisions`). Es la única excepción a «cada turno atribuido a su release»; el detalle está en la
+adenda HU-AOS-72 de ADR-0191.
