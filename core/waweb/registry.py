@@ -207,10 +207,12 @@ class DbSessionRegistry:
                 row.updated_at = utcnow()
 
     async def tenants_with_jid(self, jid: str) -> list[uuid.UUID]:
-        """Tenants que tienen una sesión con ese `jid` (para detectar duplicados).
+        """Tenants con una sesión VIVA vinculada a ese `jid` (duplicados).
 
-        Cross-tenant bajo RLS: itera `tenants` y scopea cada consulta, igual que
-        `active_sessions`.
+        Una sesión `logged_out` ya no compite por el número: si se cuenta, el
+        conector alerta «número en más de un negocio» en cada reinicio por una
+        fila que ya no tiene credenciales. Cross-tenant bajo RLS: itera
+        `tenants` y scopea cada consulta, igual que `active_sessions`.
         """
         if not jid:
             return []
@@ -228,6 +230,7 @@ class DbSessionRegistry:
                                 WaWebSession.tenant_id == tenant_id,
                                 WaWebSession.jid == jid,
                                 WaWebSession.deleted_at.is_(None),
+                                WaWebSession.status != status.LOGGED_OUT,
                             )
                         )
                     ).scalars().first()
