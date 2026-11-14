@@ -41178,6 +41178,185 @@
         }
       }
     },
+    "/api/v1/admin/agents/{agent_id}/importar-datos/fotos/cotizacion": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Cotizar Fotos",
+        "description": "Cuánto cuesta reconocer `fotos` fotos y si el crédito del mes alcanza. No escribe nada.",
+        "operationId": "cotizar_fotos_api_v1_admin_agents__agent_id__importar_datos_fotos_cotizacion_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "fotos",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 1,
+              "title": "Fotos"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CotizacionFotos"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/importar-datos/fotos": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Importar Foto",
+        "description": "Una foto → una fila propuesta para la precarga. Cotiza y verifica el crédito antes de llamar a\nla visión (409 `plan_limit_creditos` si no alcanza, sin cobrar); la misma foto otra vez se\nresponde sin cobrar. La fila se confirma con el resto en `…/importar-datos/filas`.",
+        "operationId": "importar_foto_api_v1_admin_agents__agent_id__importar_datos_fotos_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_importar_foto_api_v1_admin_agents__agent_id__importar_datos_fotos_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FilaDeFoto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_creditos`, `error.details = {metric, used, limit}`; no se escribió nada."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/leads/{lead_id}/avatar": {
       "post": {
         "tags": [
@@ -48050,6 +48229,73 @@
           "by_conversation"
         ],
         "title": "CostsResponse"
+      },
+      "CotizacionFotos": {
+        "properties": {
+          "fotos": {
+            "type": "integer",
+            "title": "Fotos"
+          },
+          "creditos": {
+            "type": "integer",
+            "title": "Creditos",
+            "description": "Créditos que cuestan todas las fotos (redondeado hacia arriba)."
+          },
+          "por_foto": {
+            "type": "integer",
+            "title": "Por Foto"
+          },
+          "llave_propia": {
+            "type": "boolean",
+            "title": "Llave Propia",
+            "description": "El negocio usa su propia llave de visión: solo se cobra el fee."
+          },
+          "usado": {
+            "type": "integer",
+            "title": "Usado",
+            "description": "Créditos usados en el mes."
+          },
+          "limite": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limite",
+            "description": "Créditos del plan al mes; `null` = sin límite."
+          },
+          "disponible": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disponible"
+          },
+          "alcanza": {
+            "type": "boolean",
+            "title": "Alcanza",
+            "description": "Si el crédito del mes alcanza para todas las fotos."
+          }
+        },
+        "type": "object",
+        "required": [
+          "fotos",
+          "creditos",
+          "por_foto",
+          "llave_propia",
+          "usado",
+          "limite",
+          "disponible",
+          "alcanza"
+        ],
+        "title": "CotizacionFotos"
       },
       "CrearSuscripcionBody": {
         "properties": {
@@ -69622,6 +69868,52 @@
         ],
         "title": "FalsePositiveOut"
       },
+      "FilaDeFoto": {
+        "properties": {
+          "image_key": {
+            "type": "string",
+            "title": "Image Key"
+          },
+          "image_url": {
+            "type": "string",
+            "title": "Image Url"
+          },
+          "valores": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Valores",
+            "description": "Fila propuesta para la precarga (columna → texto)."
+          },
+          "creditos": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creditos",
+            "description": "Créditos cobrados por esta foto (0 si ya se había procesado)."
+          },
+          "repetida": {
+            "type": "boolean",
+            "title": "Repetida",
+            "description": "La misma foto ya se había procesado: se respondió sin cobrar otra vez."
+          }
+        },
+        "type": "object",
+        "required": [
+          "image_key",
+          "image_url",
+          "valores",
+          "creditos",
+          "repetida"
+        ],
+        "title": "FilaDeFoto"
+      },
       "FilaPrecarga": {
         "properties": {
           "fila": {
@@ -76772,6 +77064,20 @@
         ],
         "title": "Body_importar_datos_api_v1_admin_agents__agent_id__importar_datos_post"
       },
+      "Body_importar_foto_api_v1_admin_agents__agent_id__importar_datos_fotos_post": {
+        "properties": {
+          "archivo": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Archivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "archivo"
+        ],
+        "title": "Body_importar_foto_api_v1_admin_agents__agent_id__importar_datos_fotos_post"
+      },
       "Body_mapear_importacion_api_v1_admin_agents__agent_id__importar_datos_mapear_post": {
         "properties": {
           "archivo": {
@@ -77014,6 +77320,11 @@
             "type": "boolean",
             "title": "En Produccion",
             "description": "La plantilla también se importa fuera de test (ADR-0194)."
+          },
+          "importa_fotos": {
+            "type": "boolean",
+            "title": "Importa Fotos",
+            "description": "Se puede cargar desde fotos, una foto por fila (ADR-0194)."
           }
         },
         "type": "object",
@@ -77025,7 +77336,8 @@
           "columnas",
           "tope_filas",
           "tope_bytes",
-          "en_produccion"
+          "en_produccion",
+          "importa_fotos"
         ],
         "title": "PlantillaImportacionOut"
       },

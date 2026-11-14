@@ -301,3 +301,31 @@ async def test_otro_negocio_en_el_contexto_no_se_cobra_a_ciegas(ledger) -> None:
         salida = await _texto(ProveedorFalso('{"nombre": "Café", "precio": 1}'))
     assert ledger == []
     assert salida.consumo.credits is None
+
+
+async def test_imagen_guarda_la_salida_en_el_ledger_si_se_pide(ledger, monkeypatch) -> None:
+    _vision(monkeypatch, '{"nombre": "Bolso", "precio": 5}')
+    await reconocer_imagen(
+        TENANT,
+        playbook=PLAYBOOK,
+        esquema=Producto,
+        imagen=Imagen(contenido=b"\x89PNG", mime_type="image/png"),
+        result={"image_key": "t/a.png"},
+        max_tokens=50,
+        config=_config(),
+        guardar_salida=True,
+    )
+    assert ledger[0].result == {"image_key": "t/a.png", "salida": {"nombre": "Bolso", "precio": 5}}
+    _vision(monkeypatch, "nada")
+    with pytest.raises(ErrorFormato):
+        await reconocer_imagen(
+            TENANT,
+            playbook=PLAYBOOK,
+            esquema=Producto,
+            imagen=Imagen(contenido=b"\x89PNG", mime_type="image/png"),
+            result={"image_key": "t/b.png"},
+            max_tokens=50,
+            config=_config(),
+            guardar_salida=True,
+        )
+    assert ledger[1].result == {"image_key": "t/b.png"}  # sin salida: no validó

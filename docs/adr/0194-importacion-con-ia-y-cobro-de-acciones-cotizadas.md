@@ -49,7 +49,7 @@ del turno:
 - Errores con motivo estable: `ErrorProveedor` (sin respuesta, sin fila) y `ErrorFormato` (con fila). Quien
   llama decide el respaldo.
 
-Los playbooks del kernel nuevos (`mapear_columnas`, `reconocer_producto`) no nombran comercio (invariante 3):
+Los playbooks del kernel nuevos (`mapear_columnas`, `reconocer_foto`) no nombran comercio (invariante 3):
 el dominio llega desde la `PlantillaDeImportacion` del pack (sinónimos de cabecera, esquema de la foto).
 `core/qa/datos_generados.py` pasa a usar el helper sin cambiar comportamiento.
 
@@ -143,7 +143,7 @@ por crédito ya no es uniforme (solo para lo cotizado).
 ## Impacto en el código
 
 - `core/ia/estructurado.py` (nuevo) y `core/qa/datos_generados.py` (usa el helper).
-- `core/playbooks/kernel/` (`mapear_columnas.md`, `reconocer_producto.md`).
+- `core/playbooks/kernel/` (`mapear_columnas.md`, `reconocer_foto.md`).
 - `core/billing/` (`cotizar`, `alcanza`, desglose por `kind` en `medir_creditos`) y `core/api/plan_limits.py`.
 - `core/qa/importar_datos.py`, `core/qa/contrato_importacion.py` y `core/api/routers/datos_de_prueba.py`
   (mapear, confirmar con filas en JSON, foto, cotización, registros).
