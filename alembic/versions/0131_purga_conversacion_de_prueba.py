@@ -16,16 +16,16 @@ borra; si un pack todavía lo referencia, se conserva para no dejar registros hu
 dura la función (se restaura al salir, por la cláusula SET). El dueño de la función necesita
 `GRANT SET ON PARAMETER session_replication_role`, el mismo permiso que ya usa `purge_tenant`.
 
-Revision ID: 0129
-Revises: 0128
+Revision ID: 0131
+Revises: 0130
 """
 
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0129"
-down_revision = "0128"
+revision = "0131"
+down_revision = "0130"
 branch_labels = None
 depends_on = None
 

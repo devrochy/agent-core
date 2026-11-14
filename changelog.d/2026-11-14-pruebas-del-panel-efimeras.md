@@ -8,4 +8,4 @@
   cerrar o reiniciar la prueba no quedan conversación, cliente, mensajes, tareas, ledger,
   decisiones, auditoría ni memoria. Tarea horaria para pruebas huérfanas.
 - Auditoría de CI: toda tool declara `solo_lectura` o `side_effects` + simulador.
-- Panel y APK cierran la prueba al salir y muestran «Acción simulada». ADR-0194.
+- Panel y APK cierran la prueba al salir y muestran «Acción simulada». ADR-0195.

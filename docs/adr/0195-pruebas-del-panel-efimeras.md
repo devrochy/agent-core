@@ -1,4 +1,4 @@
-# ADR-0194 — Las pruebas del panel son efímeras: simulan acciones y se purgan al cerrar
+# ADR-0195 — Las pruebas del panel son efímeras: simulan acciones y se purgan al cerrar
 
 - **Estado:** aceptado (2026-11-14, por decisión del dueño).
 - **Fecha:** 2026-11-14
