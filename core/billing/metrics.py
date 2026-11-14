@@ -32,7 +32,7 @@ from core.db.models import (
 )
 from core.db.session import get_session
 from core.shared.tenant import tenant_scope
-from core.shared.test_mode import TEST_CHANNEL
+from core.shared.test_mode import TEST_CHANNEL, no_es_prueba
 
 MetricScope = Literal["period", "lifetime"]
 
@@ -343,6 +343,7 @@ async def _count_media(session, tenant_id: uuid.UUID, prefix: str, period_start:
         Message.direction == "inbound",
         Message.media_type.like(prefix),
         Message.deleted_at.is_(None),
+        no_es_prueba(tenant_id, Message.conversation_id),
     )
     if period_start is not None:
         query = query.where(Message.created_at >= period_start)

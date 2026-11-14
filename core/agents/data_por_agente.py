@@ -44,7 +44,7 @@ from core.db.models import (
 )
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
-from core.shared.test_mode import TEST_CHANNEL
+from core.shared.test_mode import TEST_CHANNEL, no_es_prueba
 
 VENTANA_POR_DEFECTO = timedelta(days=30)
 VENTANA_MAXIMA = timedelta(days=366)
@@ -212,6 +212,7 @@ async def resumen(tenant_id: uuid.UUID, *, ahora: datetime | None = None) -> dic
                     # La ingesta del conocimiento y los datos de prueba no son actividad de un agente
                     # (ADR-0145 §3, ADR-0146).
                     UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
+                    no_es_prueba(tenant_id, UsageLedger.conversation_id),
                 )
                 .group_by(UsageLedger.agent_instance_id)
             )
@@ -598,6 +599,7 @@ async def consumo(alcance: Alcance, filtros: Filtros) -> dict[str, Any]:
         # Sin agente, la ingesta del conocimiento y los datos de prueba caerían en el General
         # (ADR-0140): no son turnos (ADR-0145, ADR-0146).
         UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
+        no_es_prueba(alcance.tenant_id, UsageLedger.conversation_id),
     ]
     if filtros.connection_id is not None:
         condiciones.append(UsageLedger.connection_id == filtros.connection_id)

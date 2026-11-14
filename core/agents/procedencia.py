@@ -65,6 +65,9 @@ async def registrar(tool: MCPTool | None, resultado: Any, conversation_id: uuid.
     nuevo. Best-effort."""
     if tool is None or tool.crea_registro is None:
         return
+    # HU-ARCH-14: un resultado simulado no crea un registro del negocio.
+    if isinstance(resultado, dict) and resultado.get("simulado"):
+        return
     release = release_vigente.vigente()
     if release is None:
         return

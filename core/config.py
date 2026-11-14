@@ -190,6 +190,9 @@ class Settings(BaseSettings):
     eval_redis_db: int = Field(default=15, ge=1, le=15, alias="EVAL_REDIS_DB")
     # Retención de la memoria semántica en días (ADR-0053). 0 = sin purga automática.
     memory_retention_days: int = Field(default=0, alias="MEMORY_RETENTION_DAYS")
+    # Huérfanas de la prueba del panel (HU-ARCH-14): se purgan las conversaciones `test`
+    # sin actividad en las últimas N horas. 0 = desactivado (solo se purga al cerrar).
+    playground_retention_hours: int = Field(default=6, ge=0, alias="PLAYGROUND_RETENTION_HOURS")
 
     # --- WhatsApp (Meta Cloud API) ---
     whatsapp_verify_token: str = Field(default="", alias="WHATSAPP_VERIFY_TOKEN")

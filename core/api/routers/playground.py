@@ -2,14 +2,14 @@
 
 Migrado del panel clásico (`/admin/asistente/probar`). Reutiliza
 `core.admin.playground`, que corre el MISMO loop del runtime sobre una
-conversación sintética (canal `test`): no toca Meta/waweb, no persiste mensajes
-ni consume métricas.
+conversación sintética (canal `test`): no toca Meta/waweb, las tools con efectos se
+simulan (HU-ARCH-14) y la prueba se purga al cerrarla. No consume métricas.
 
 Opciones directas (SPEC-40, ADR-0172): `POST /options` envía una plantilla con opciones a la conversación de
 prueba y `POST /tap` simula el toque de un botón, sin Meta. El payload firmado se valida igual que en
 producción (firma por negocio y conversación, `option_sends`, vigencia, una sola ejecución): ningún camino se
-salta el resolver. **La tool se ejecuta DE VERDAD contra los datos del negocio**: usar un agente con datos de
-prueba (SPEC-32). Permisos como el editor de plantillas con opciones (dueño o master, escritura en
+salta el resolver. **En el canal `test` la tool se simula**: no crea pedidos, citas, cobros ni links reales.
+Al cerrar la prueba (`POST /close`) se purga todo lo que dejó. Permisos como el editor de plantillas con opciones (dueño o master, escritura en
 `connections`) y con la bandera `opciones_directas.habilitada` encendida (si no, 404).
 """
 
@@ -49,6 +49,10 @@ class TurnOut(BaseModel):
     text: str
     image_url: str | None = None
     escalated: bool = False
+    simulado: bool = Field(
+        default=False,
+        description="El turno ejecutó tools en modo simulado (HU-ARCH-14): no se creó data real.",
+    )
 
 
 class HistoryOut(BaseModel):
@@ -149,7 +153,26 @@ async def playground_message(
         # Solo cuenta si el agente contestó: un turno que escaló por falla del modelo no prueba nada.
         if payload.connection_id is not None and not turn.escalated:
             await _marcar_prueba_del_onboarding(principal.tenant_id, payload.connection_id)
-    return TurnOut(text=turn.text, image_url=turn.image_url, escalated=turn.escalated)
+    return TurnOut(
+        text=turn.text,
+        image_url=turn.image_url,
+        escalated=turn.escalated,
+        simulado=turn.simulado,
+    )
+
+
+@router.post("/close", status_code=204)
+async def playground_close(
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+    connection_id: Annotated[uuid.UUID | None, Query(description="Cierra la prueba de esa conexión.")] = None,
+) -> Response:
+    """Cierra la prueba y purga su data (conversación `test`, cliente sintético, mensajes,
+    tareas, memoria, ledger y decisiones). Sin `connection_id`, cierra todas las del negocio."""
+    from core.admin import playground
+
+    async with tenant_scope(principal.tenant_id):
+        await playground.close_test_conversation(principal.tenant_id, connection_id)
+    return Response(status_code=204)
 
 
 @router.post("/reset", status_code=204)
@@ -157,7 +180,7 @@ async def playground_reset(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
     connection_id: Annotated[uuid.UUID | None, Query(description="Reinicia la prueba de esa conexión.")] = None,
 ) -> Response:
-    """Cierra la prueba actual y arranca una nueva desde cero."""
+    """Purga la prueba actual y arranca una nueva desde cero."""
     from core.admin import playground
     from core.gateway.conexion_pruebas import ConexionNoValida
 

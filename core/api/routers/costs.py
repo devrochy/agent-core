@@ -24,6 +24,7 @@ from core.api.deps import Principal, require
 from core.billing.tipos_de_uso import EVAL, NO_ES_ACTIVIDAD, NO_SON_TURNOS
 from core.db.models import AgentInstanceRecord, AgentRecord, UsageLedger
 from core.db.session import get_session
+from core.shared.test_mode import no_es_prueba
 
 router = APIRouter(prefix="/admin/costs", tags=["admin · costos"])
 
@@ -103,26 +104,27 @@ async def get_costs(
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month_ago = now - timedelta(days=30)
     by_tenant = UsageLedger.tenant_id == principal.tenant_id
+    sin_prueba = no_es_prueba(principal.tenant_id, UsageLedger.conversation_id)
 
     async with get_session() as session:
         today_cost = (
             await session.execute(
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
-                    by_tenant, UsageLedger.created_at >= today_start, UsageLedger.kind != EVAL
+                    by_tenant, UsageLedger.created_at >= today_start, UsageLedger.kind != EVAL, sin_prueba
                 )
             )
         ).scalar() or 0
         month_cost = (
             await session.execute(
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
-                    by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind != EVAL
+                    by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind != EVAL, sin_prueba
                 )
             )
         ).scalar() or 0
         # Las filas `embedding` (ingesta del pack de conocimiento, ADR-0145 §3) no son turnos.
         total_turns = (
             await session.execute(
-                select(func.count(UsageLedger.id)).where(by_tenant, UsageLedger.kind.not_in(NO_SON_TURNOS))
+                select(func.count(UsageLedger.id)).where(by_tenant, UsageLedger.kind.not_in(NO_SON_TURNOS), sin_prueba)
             )
         ).scalar() or 0
         by_model_rows = (
@@ -135,7 +137,7 @@ async def get_costs(
                     func.avg(UsageLedger.latency_ms),
                     func.sum(UsageLedger.cost_usd),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind != EVAL)
+                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind != EVAL, sin_prueba)
                 .group_by(UsageLedger.model)
             )
         ).all()
@@ -147,7 +149,13 @@ async def get_costs(
                     func.sum(UsageLedger.cost_usd),
                     func.max(UsageLedger.created_at),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind.not_in(NO_ES_ACTIVIDAD))
+                .where(
+                    by_tenant,
+                    UsageLedger.created_at >= month_ago,
+                    UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
+                    sin_prueba,
+                    UsageLedger.conversation_id.is_not(None),
+                )
                 .group_by(UsageLedger.conversation_id)
                 .order_by(func.sum(UsageLedger.cost_usd).desc())
                 .limit(20)
@@ -183,7 +191,7 @@ async def get_costs(
                         AgentRecord.id == AgentInstanceRecord.agent_id,
                     ),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind.not_in(NO_ES_ACTIVIDAD))
+                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind.not_in(NO_ES_ACTIVIDAD), sin_prueba)
                 .group_by(AgentRecord.id, AgentRecord.name)
                 .order_by(func.sum(UsageLedger.cost_usd).desc())
                 .limit(50)

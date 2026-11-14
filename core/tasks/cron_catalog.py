@@ -138,6 +138,8 @@ CATALOGO: dict[str, CronMeta] = dict(
            "Convierte los datos de las tareas cerradas en hechos de memoria.", "30 3 * * *"),
         _m("core.memory_retention", "Memoria e IA", "Retención de la memoria",
            "Purga la memoria semántica vencida (no hace nada si la retención está en 0).", "45 3 * * *"),
+        _m("core.playground_cleanup", "Memoria e IA", "Purga de pruebas del panel",
+           "Borra las conversaciones de prueba huérfanas del panel (HU-ARCH-14).", "10 * * * *"),
         # ---- Releases y canary
         _m("core.canary_senal_dura", "Releases y canary", "Canary: señal dura",
            "Vigila las versiones en canary y retira la habilidad que falla.", "*/5 * * * *"),

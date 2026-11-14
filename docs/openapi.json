@@ -4158,6 +4158,59 @@
         }
       }
     },
+    "/api/v1/admin/playground/close": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · playground"
+        ],
+        "summary": "Playground Close",
+        "description": "Cierra la prueba y purga su data (conversación `test`, cliente sintético, mensajes, tareas, memoria, ledger y decisiones). Sin `connection_id`, cierra todas las del negocio.",
+        "operationId": "playground_close_api_v1_admin_playground_close_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Cierra la prueba de esa conexión.",
+              "title": "Connection Id"
+            },
+            "description": "Cierra la prueba de esa conexión."
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        }
+      }
+    },
     "/api/v1/admin/playground/reset": {
       "post": {
         "tags": [
@@ -60180,6 +60233,12 @@
           "escalated": {
             "type": "boolean",
             "title": "Escalated",
+            "default": false
+          },
+          "simulado": {
+            "type": "boolean",
+            "title": "Simulado",
+            "description": "El turno ejecutó tools en modo simulado (HU-ARCH-14): no se creó data real.",
             "default": false
           }
         },

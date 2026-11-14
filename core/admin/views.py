@@ -150,7 +150,7 @@ from core.plugin_manager import plugin_manager
 from core.shared.crypto import get_secret_box
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, negocios_de_cuenta, tenant_scope
-from core.shared.test_mode import TEST_CHANNEL
+from core.shared.test_mode import TEST_CHANNEL, no_es_prueba
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -1255,6 +1255,7 @@ async def dashboard(request: Request):
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
                     UsageLedger.tenant_id == my_tenant,
                     UsageLedger.created_at >= month_ago,
+                    no_es_prueba(my_tenant, UsageLedger.conversation_id),
                 )
             )
         ).scalar() or 0
@@ -2426,26 +2427,29 @@ async def costs_page(request: Request):
     tenant_id = get_current_tenant_id()
     # Filtro explícito por tenant (además de RLS): el panel es multi-tenant.
     by_tenant = UsageLedger.tenant_id == tenant_id
+    sin_prueba = no_es_prueba(tenant_id, UsageLedger.conversation_id)
 
     async with get_session() as session:
         today_cost = (
             await session.execute(
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
-                    by_tenant, UsageLedger.created_at >= today_start
+                    by_tenant, UsageLedger.created_at >= today_start, sin_prueba
                 )
             )
         ).scalar() or 0
         month_cost = (
             await session.execute(
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
-                    by_tenant, UsageLedger.created_at >= month_ago
+                    by_tenant, UsageLedger.created_at >= month_ago, sin_prueba
                 )
             )
         ).scalar() or 0
         # Las filas `embedding` (ingesta del pack de conocimiento, ADR-0145 §3) no son turnos.
         total_turns = (
             await session.execute(
-                select(func.count(UsageLedger.id)).where(by_tenant, UsageLedger.kind.not_in(NO_SON_TURNOS))
+                select(func.count(UsageLedger.id)).where(
+                    by_tenant, UsageLedger.kind.not_in(NO_SON_TURNOS), sin_prueba
+                )
             )
         ).scalar() or 0
         by_model_rows = (
@@ -2458,7 +2462,7 @@ async def costs_page(request: Request):
                     func.avg(UsageLedger.latency_ms),
                     func.sum(UsageLedger.cost_usd),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago)
+                .where(by_tenant, UsageLedger.created_at >= month_ago, sin_prueba)
                 .group_by(UsageLedger.model)
             )
         ).all()
@@ -2470,7 +2474,13 @@ async def costs_page(request: Request):
                     func.sum(UsageLedger.cost_usd),
                     func.max(UsageLedger.created_at),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind.not_in(NO_ES_ACTIVIDAD))
+                .where(
+                    by_tenant,
+                    UsageLedger.created_at >= month_ago,
+                    UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
+                    sin_prueba,
+                    UsageLedger.conversation_id.is_not(None),
+                )
                 .group_by(UsageLedger.conversation_id)
                 .order_by(func.sum(UsageLedger.cost_usd).desc())
                 .limit(20)
