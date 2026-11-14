@@ -2,6 +2,7 @@
 
 - **Catálogo:** el lote generado sale con nombre, precio y categoría; lo importado se suma con su
   origen; regenerar cambia solo lo generado y borrar lo importado lo saca de la lista.
+- **Suscripciones:** los planes con precio, periodicidad y prueba; las suscripciones con cliente, plan y estado.
 - **Agenda y cartera:** los servicios con su duración y los clientes con su cartera y deuda; las
   variantes, citas, cuotas y pagos no salen como filas.
 - **Aislamiento:** agente de otro negocio → 404 sin eco; el hook del pack con el negocio equivocado no
@@ -18,7 +19,7 @@ import os
 import re
 
 import pytest
-from _api_helpers import api_headers
+from _api_helpers import api_headers, uniq
 from _ayudas_sql import _sql
 from test_fiabilidad_api import PASSWORD, _colaborador
 from test_qa_datos_generados import (
@@ -177,3 +178,56 @@ async def test_aislamiento_permiso_y_bandera(app_client, monkeypatch, qa_on) -> 
 
     monkeypatch.setattr(get_settings(), "qa_testers_enabled", False)
     assert (await app_client.get(f"{_BASE}/{mio_ventas}/datos-de-prueba/registros", headers=h)).status_code == 404
+
+
+# ---------------------------------------------------------------- suscripciones
+async def test_planes_y_suscripciones(app_client, monkeypatch, qa_on) -> None:  # noqa: F811
+    from core.alta_negocio import onboard_tenant
+    from core.plugin_manager import plugin_manager
+    from core.qa.contrato_datos import RegistroSembrado
+
+    slug = uniq("qa16s")
+    tid, _ = await onboard_tenant(
+        name=f"QA16 {slug}",
+        slug=slug,
+        business_description="Gimnasio de barrio con planes mensuales y anuales.",
+        packs=["pack_commerce", "pack_subscriptions"],
+        admin_email="admin@local",
+        sembrar_ejemplos=False,
+    )
+    agente = await _agente(tid, "suscripciones", ["pack_subscriptions.cambiar_plan"])
+    h = await api_headers(app_client, tid)
+    planes = {
+        "planes": [
+            {"name": "Plan libre", "price": 0, "periodicidad": "mensual", "trial_dias": 7},
+            {"name": "Plan anual", "price": 900000, "periodicidad": "anual"},
+        ]
+    }
+    _proveedor(monkeypatch, ProveedorGuionado(json.dumps(planes)))
+    assert (await app_client.post(f"{_BASE}/{agente}/datos-de-prueba", headers=h)).status_code == 201
+    cuerpo = await _registros(app_client, h, agente)
+    assert _filas(cuerpo) == [
+        ("plan", "Plan anual", "$900.000 anual", "llm"),
+        ("plan", "Plan libre", "$0 mensual · 7 días de prueba", "llm"),
+    ]
+    assert cuerpo["sin_detalle"] == 0
+
+    # Las suscripciones las siembra el módulo (sin agente): se prueban con el hook del pack.
+    _proveedor(monkeypatch, ProveedorGuionado(error=TimeoutError()))
+    r = await app_client.post("/api/v1/admin/datos-de-prueba/suscripciones", headers=h)
+    assert r.status_code == 201, r.text
+    filas = await _sql(
+        tid,
+        "select kind, record_ref from test_data_records where tenant_id = :t and modulo = 'suscripciones' "
+        "and deleted_at is null",
+        t=tid,
+    )
+    refs = [RegistroSembrado(kind=k, ref=ref) for k, ref in filas]
+    pack = plugin_manager.get("pack_subscriptions")
+    descritos = await pack.describir_registros(tid, refs)
+    subs = [d for d in descritos if d.kind == "suscripcion"]
+    assert len(subs) == sum(1 for k, _ in filas if k == "suscripcion") > 0
+    assert all(d.nombre and d.nombre != "Cliente" and d.detalle and " · " in d.detalle for d in subs), subs
+    assert {d.kind for d in descritos} <= {"plan", "suscripcion"}
+    otro = await _negocio()
+    assert await pack.describir_registros(otro, refs) == []

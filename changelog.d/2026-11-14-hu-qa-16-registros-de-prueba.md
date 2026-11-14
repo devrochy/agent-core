@@ -9,7 +9,8 @@ probar el agente. Hasta ahora la API solo devolvía conteos.
   - `pack_commerce`: productos con precio (el menor de sus variantes activas, «desde» si varían) y categoría.
   - `pack_calendar`: servicios (tipos de cita) con su duración. Citas y bloqueos no salen como filas.
   - `pack_cobranza`: clientes con su cartera, valor y saldo de sus préstamos vivos.
-  - `pack_subscriptions` no lo implementa: sus registros cuentan en `sin_detalle`.
+  - `pack_subscriptions`: planes con precio, periodicidad y días de prueba; suscripciones con el nombre del
+    cliente, su plan y su estado. Clientes y cargos no salen como filas.
 - **API (aditiva):** `GET /api/v1/admin/agents/{agent_id}/datos-de-prueba/registros` →
   `RegistrosDePrueba` (`lote`, `registros[]` con `tipo`/`nombre`/`detalle`/`origen`, `total`,
   `sin_detalle`). Solo con `QA_TESTERS_ENABLED` (404 sin ella) y sección `agents`, como el `GET` del
