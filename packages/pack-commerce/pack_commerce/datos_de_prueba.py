@@ -24,7 +24,12 @@ from sqlalchemy import Text, case, cast, func, select, update
 
 from core.db.models import utcnow
 from core.db.session import get_session
-from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
+from core.qa.contrato_datos import (
+    ContextoDeNegocio,
+    FormaDeDatos,
+    RegistroDescrito,
+    RegistroSembrado,
+)
 from core.shared.tenant import tenant_scope
 from pack_commerce.models import Category, Product, ProductVariant
 
@@ -164,3 +169,56 @@ async def retirar(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> in
                 )
                 total += res.rowcount or 0  # type: ignore[attr-defined]
     return total
+
+
+
+def _pesos(valor: Any) -> str:
+    return f"${float(valor or 0):,.0f}".replace(",", ".")
+
+
+async def describir(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> list[RegistroDescrito]:
+    """Los productos del lote con su precio (el menor de sus variantes activas) y su categoría
+    (HU-QA-16). Las variantes y las categorías no salen como filas: van en el detalle del producto."""
+    ids = [r.ref for r in registros if r.kind == "producto"]
+    if not ids:
+        return []
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            productos = (
+                await session.execute(
+                    select(Product.id, Product.name, Category.name)
+                    .outerjoin(
+                        Category,
+                        (Category.tenant_id == Product.tenant_id)
+                        & (Category.id == Product.category_id)
+                        & Category.deleted_at.is_(None),
+                    )
+                    .where(Product.tenant_id == tenant_id, Product.id.in_(ids), Product.deleted_at.is_(None))
+                )
+            ).all()
+            precios = {
+                fila[0]: (fila[1], fila[2])
+                for fila in (
+                    await session.execute(
+                        select(ProductVariant.product_id, func.min(ProductVariant.price), func.max(ProductVariant.price))
+                        .where(
+                            ProductVariant.tenant_id == tenant_id,
+                            ProductVariant.product_id.in_(ids),
+                            ProductVariant.active.is_(True),
+                        )
+                        .group_by(ProductVariant.product_id)
+                    )
+                ).all()
+            }
+    salida: list[RegistroDescrito] = []
+    for producto_id, nombre, categoria in productos:
+        partes: list[str] = []
+        if producto_id in precios:
+            minimo, maximo = precios[producto_id]
+            partes.append(_pesos(minimo) if minimo == maximo else f"desde {_pesos(minimo)}")
+        if categoria:
+            partes.append(categoria)
+        salida.append(
+            RegistroDescrito(kind="producto", ref=producto_id, nombre=nombre, detalle=" · ".join(partes) or None)
+        )
+    return salida

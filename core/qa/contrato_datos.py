@@ -4,7 +4,9 @@ Un pack que sabe sembrar datos de prueba declara una o más `FormaDeDatos` (cat�
 agenda, cartera): el esquema que valida lo que genera el LLM, los datos de respaldo cuando no
 hay LLM y la habilidad del agente que los usa. El core elige la forma según las habilidades del
 agente, genera, valida y le pide al pack que siembre (`sembrar_datos_de_prueba`) y que retire
-lo sembrado (`retirar_datos_de_prueba`, sin borrado físico: invariante 8).
+lo sembrado (`retirar_datos_de_prueba`, sin borrado físico: invariante 8). Con
+`describir_registros` (HU-QA-16, ADR-0194) el pack pone en palabras lo sembrado o importado, para que
+el dueño sepa qué hay al probar el agente.
 
 Los escenarios de datos de prueba (HU-QA-13, adenda de ADR-0135) usan además
 `sembrar_escenario`: el core crea clientes y conversaciones y le pide al pack la actividad de sus
@@ -80,6 +82,21 @@ class RegistroSembrado:
     metadata: Mapping[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class RegistroDescrito:
+    """Un registro de prueba en palabras, para la lista «Lo cargado» del asistente (HU-QA-16).
+
+    - `kind`: el mismo de `RegistroSembrado` (`producto`, `tipo`, `cliente`…).
+    - `nombre`: como lo ve el dueño en el panel y como lo nombraría al probar el agente.
+    - `detalle`: corto y opcional (precio y categoría, duración, cartera y valor).
+    """
+
+    kind: str
+    ref: uuid.UUID
+    nombre: str
+    detalle: str | None = None
+
+
 class EscenarioNoDisponible(Exception):
     """El pack no sabe crear ese escenario (o le falta algo); el mensaje es el motivo que ve el tester."""
 
@@ -136,6 +153,7 @@ __all__ = [
     "FormaDeDatos",
     "PlanDeEscenario",
     "PlanParaPrueba",
+    "RegistroDescrito",
     "RegistroSembrado",
     "ResumenDeEscenario",
 ]

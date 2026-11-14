@@ -1,4 +1,4 @@
-"""Importar productos que el dueño ya tiene desde un CSV (HU-QA-12, ADR-0180).
+"""Importar productos que el dueño ya tiene desde un CSV (HU-QA-12, ADR-0180; en producción, ADR-0194).
 
 Una plantilla sobre el catálogo:
 - `productos` (forma `catalogo`): SKU, nombre, precio, categoría, descripción y stock.
@@ -113,6 +113,16 @@ def plantillas() -> list[PlantillaDeImportacion]:
             columna_clave="sku",
             clave=lambda fila: fila.sku,
             ayuda="Un producto por fila, con una sola presentación. Si el SKU ya existe en tu catálogo, esa fila se omite.",
+            sinonimos={
+                "sku": ("codigo", "cod", "referencia", "ref", "codigo_de_barras", "ean", "id_producto", "item"),
+                "nombre": ("producto", "nombre_del_producto", "articulo", "titulo", "name", "product", "item_name"),
+                "precio": ("valor", "precio_de_venta", "precio_venta", "pvp", "price", "costo_venta", "valor_unitario"),
+                "categoria": ("linea", "familia", "grupo", "tipo", "category", "departamento"),
+                "descripcion": ("detalle", "descripcion_del_producto", "observaciones", "description", "notas"),
+                "stock": ("cantidad", "existencias", "inventario", "unidades", "disponible", "qty", "quantity"),
+            },
+            # El catálogo es lo único que el dueño importa en producción (ADR-0194 §2).
+            en_produccion=True,
         ),
     ]
 

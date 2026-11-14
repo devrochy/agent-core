@@ -19,14 +19,19 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select, update
 
 from core.db.models import Customer, utcnow
 from core.db.session import get_session
-from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
+from core.qa.contrato_datos import (
+    ContextoDeNegocio,
+    FormaDeDatos,
+    RegistroDescrito,
+    RegistroSembrado,
+)
 from core.shared.tenant import tenant_scope
 from pack_subscriptions import planes as catalogo
 from pack_subscriptions.models import Plan, Subscription, SubscriptionCharge
@@ -271,3 +276,53 @@ async def retirar(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> in
 
 
 __all__ = ["PlanesDePrueba", "SuscripcionesDePrueba", "formas", "retirar", "sembrar"]
+
+
+def _pesos(valor: Any) -> str:
+    return f"${float(valor or 0):,.0f}".replace(",", ".")
+
+
+async def describir(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> list[RegistroDescrito]:
+    """Los planes del lote con precio, periodicidad y días de prueba, y las suscripciones con el nombre del
+    cliente, su plan y su estado (HU-QA-16). Los clientes y los cargos no salen como filas: van en el
+    detalle de la suscripción."""
+    planes = [r.ref for r in registros if r.kind == "plan"]
+    suscripciones = [r.ref for r in registros if r.kind == "suscripcion"]
+    salida: list[RegistroDescrito] = []
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            if planes:
+                filas = (
+                    await session.execute(
+                        select(Plan.id, Plan.nombre, Plan.precio, Plan.periodicidad, Plan.trial_dias).where(
+                            Plan.tenant_id == tenant_id, Plan.id.in_(planes), Plan.deleted_at.is_(None)
+                        )
+                    )
+                ).all()
+                for plan_id, nombre, precio, periodicidad, trial in filas:
+                    detalle = f"{_pesos(precio)} {periodicidad}"
+                    if trial:
+                        detalle += f" · {trial} días de prueba"
+                    salida.append(RegistroDescrito(kind="plan", ref=plan_id, nombre=nombre, detalle=detalle))
+            if suscripciones:
+                filas = (
+                    await session.execute(
+                        select(Subscription.id, Customer.name, Plan.nombre, Subscription.estado)
+                        .outerjoin(
+                            Customer,
+                            (Customer.tenant_id == Subscription.tenant_id) & (Customer.id == Subscription.customer_id),
+                        )
+                        .outerjoin(Plan, (Plan.tenant_id == Subscription.tenant_id) & (Plan.id == Subscription.plan_id))
+                        .where(
+                            Subscription.tenant_id == tenant_id,
+                            Subscription.id.in_(suscripciones),
+                            Subscription.deleted_at.is_(None),
+                        )
+                    )
+                ).all()
+                for sub_id, cliente, plan, estado in filas:
+                    detalle = " · ".join(p for p in (plan, estado.replace("_", " ")) if p)
+                    salida.append(
+                        RegistroDescrito(kind="suscripcion", ref=sub_id, nombre=cliente or "Cliente", detalle=detalle)
+                    )
+    return salida

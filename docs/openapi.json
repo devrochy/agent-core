@@ -33751,6 +33751,83 @@
         }
       }
     },
+    "/api/v1/admin/agents/{agent_id}/datos-de-prueba/registros": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Registros De Prueba",
+        "description": "Lo que el agente tiene cargado para probarlo (último lote generado e importado), en palabras.\nLo de un módulo cuya sección el usuario no puede ver no sale.",
+        "operationId": "registros_de_prueba_api_v1_admin_agents__agent_id__datos_de_prueba_registros_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrosDePrueba"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/leads/export.csv": {
       "get": {
         "tags": [
@@ -40840,6 +40917,267 @@
         }
       }
     },
+    "/api/v1/admin/agents/{agent_id}/importar-datos/mapear": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Mapear Importacion",
+        "description": "Propone a qué columna de la plantilla va cada cabecera (sinónimos del pack y, para las que no\nreconoce, una llamada a la IA medida en el ledger) y devuelve las filas normalizadas con su vista\nprevia. No escribe datos: el cliente edita la precarga y la confirma con `…/importar-datos/filas`.",
+        "operationId": "mapear_importacion_api_v1_admin_agents__agent_id__importar_datos_mapear_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_mapear_importacion_api_v1_admin_agents__agent_id__importar_datos_mapear_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MapeoPropuesto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/importar-datos/filas/validar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Validar Precarga",
+        "description": "Vista previa de la precarga editada. No escribe.",
+        "operationId": "validar_precarga_api_v1_admin_agents__agent_id__importar_datos_filas_validar_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrecargaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VistaPreviaImportacion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/importar-datos/filas": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Importar Precarga",
+        "description": "Importa la precarga editada: se vuelve a validar contra el esquema del pack. Con errores en\nalguna fila responde 422 `archivo_con_errores` salvo `solo_validas`. Idempotente por clave natural.",
+        "operationId": "importar_precarga_api_v1_admin_agents__agent_id__importar_datos_filas_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrecargaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportacionHecha"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/leads/{lead_id}/avatar": {
       "post": {
         "tags": [
@@ -44445,6 +44783,43 @@
         ],
         "title": "ApprovedTemplate",
         "description": "Plantilla aprobada de la conexión de la conversación (HU-ARCH-13)."
+      },
+      "AsignacionOut": {
+        "properties": {
+          "cabecera": {
+            "type": "string",
+            "title": "Cabecera",
+            "description": "Cabecera tal como viene en el archivo."
+          },
+          "columna": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Columna",
+            "description": "Columna de la plantilla; `null` = se ignora."
+          },
+          "origen": {
+            "type": "string",
+            "enum": [
+              "heuristica",
+              "ia",
+              "ninguno"
+            ],
+            "title": "Origen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cabecera",
+          "columna",
+          "origen"
+        ],
+        "title": "AsignacionOut"
       },
       "AsistenciaIn": {
         "properties": {
@@ -49263,6 +49638,36 @@
         ],
         "title": "HistoryOut"
       },
+      "IAMapeoOut": {
+        "properties": {
+          "usada": {
+            "type": "boolean",
+            "title": "Usada",
+            "description": "La IA asignó al menos una columna."
+          },
+          "motivo_fallo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "proveedor",
+                  "formato"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Fallo",
+            "description": "Si se llamó a la IA y no ayudó; esas cabeceras quedan sin asignar."
+          }
+        },
+        "type": "object",
+        "required": [
+          "usada"
+        ],
+        "title": "IAMapeoOut"
+      },
       "IdentitySettings": {
         "properties": {
           "assistant_name": {
@@ -50900,6 +51305,51 @@
           "values"
         ],
         "title": "ManualSaveRequest"
+      },
+      "MapeoPropuesto": {
+        "properties": {
+          "plantilla": {
+            "$ref": "#/components/schemas/PlantillaImportacionOut"
+          },
+          "mapeo": {
+            "items": {
+              "$ref": "#/components/schemas/AsignacionOut"
+            },
+            "type": "array",
+            "title": "Mapeo"
+          },
+          "columnas_faltantes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Columnas Faltantes",
+            "description": "Obligatorias sin cabecera: el cliente debe completarlas."
+          },
+          "ia": {
+            "$ref": "#/components/schemas/IAMapeoOut"
+          },
+          "filas": {
+            "items": {
+              "$ref": "#/components/schemas/FilaPrecarga"
+            },
+            "type": "array",
+            "title": "Filas"
+          },
+          "vista_previa": {
+            "$ref": "#/components/schemas/VistaPreviaImportacion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "plantilla",
+          "mapeo",
+          "columnas_faltantes",
+          "ia",
+          "filas",
+          "vista_previa"
+        ],
+        "title": "MapeoPropuesto"
       },
       "MePlanSummary": {
         "properties": {
@@ -54950,6 +55400,29 @@
           "lng"
         ],
         "title": "PositionIn"
+      },
+      "PrecargaIn": {
+        "properties": {
+          "filas": {
+            "items": {
+              "$ref": "#/components/schemas/FilaPrecarga"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Filas"
+          },
+          "solo_validas": {
+            "type": "boolean",
+            "title": "Solo Validas",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "filas"
+        ],
+        "title": "PrecargaIn"
       },
       "PreflightOut": {
         "properties": {
@@ -69149,6 +69622,39 @@
         ],
         "title": "FalsePositiveOut"
       },
+      "FilaPrecarga": {
+        "properties": {
+          "fila": {
+            "type": "integer",
+            "maximum": 1000000.0,
+            "minimum": 1.0,
+            "title": "Fila",
+            "description": "Número de fila en el archivo original (la cabecera es la 1)."
+          },
+          "valores": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "maxProperties": 50,
+            "title": "Valores",
+            "description": "Columna de la plantilla → texto, como en el CSV. Lo demás se ignora."
+          }
+        },
+        "type": "object",
+        "required": [
+          "fila",
+          "valores"
+        ],
+        "title": "FilaPrecarga"
+      },
       "PlantillaDeEnvio": {
         "properties": {
           "id": {
@@ -76266,6 +76772,20 @@
         ],
         "title": "Body_importar_datos_api_v1_admin_agents__agent_id__importar_datos_post"
       },
+      "Body_mapear_importacion_api_v1_admin_agents__agent_id__importar_datos_mapear_post": {
+        "properties": {
+          "archivo": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Archivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "archivo"
+        ],
+        "title": "Body_mapear_importacion_api_v1_admin_agents__agent_id__importar_datos_mapear_post"
+      },
       "Body_validar_importacion_api_v1_admin_agents__agent_id__importar_datos_validar_post": {
         "properties": {
           "archivo": {
@@ -76489,6 +77009,11 @@
           "tope_bytes": {
             "type": "integer",
             "title": "Tope Bytes"
+          },
+          "en_produccion": {
+            "type": "boolean",
+            "title": "En Produccion",
+            "description": "La plantilla también se importa fuera de test (ADR-0194)."
           }
         },
         "type": "object",
@@ -76499,7 +77024,8 @@
           "columna_clave",
           "columnas",
           "tope_filas",
-          "tope_bytes"
+          "tope_bytes",
+          "en_produccion"
         ],
         "title": "PlantillaImportacionOut"
       },
@@ -78141,6 +78667,87 @@
           "allowed"
         ],
         "title": "AgentCreationQuota"
+      },
+      "RegistroDePrueba": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "title": "Tipo",
+            "description": "`kind` del registro en su pack (`producto`, `tipo`, `cliente`…)."
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "detalle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detalle",
+            "description": "Corto: precio y categoría, duración, cartera y deuda."
+          },
+          "origen": {
+            "type": "string",
+            "enum": [
+              "llm",
+              "plantilla",
+              "importacion"
+            ],
+            "title": "Origen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "nombre",
+          "origen"
+        ],
+        "title": "RegistroDePrueba"
+      },
+      "RegistrosDePrueba": {
+        "properties": {
+          "lote": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoteDePrueba"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "El último lote generado; `null` si no hay (puede haber importado)."
+          },
+          "registros": {
+            "items": {
+              "$ref": "#/components/schemas/RegistroDePrueba"
+            },
+            "type": "array",
+            "title": "Registros",
+            "description": "Lo generado y lo importado, por lote en el orden en que se cargó y dentro del lote por tipo y nombre. Hasta 200; el total está en `total`."
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "sin_detalle": {
+            "type": "integer",
+            "title": "Sin Detalle",
+            "description": "Registros de una habilidad que no se describe: existen pero no salen en la lista."
+          }
+        },
+        "type": "object",
+        "required": [
+          "lote",
+          "registros",
+          "total",
+          "sin_detalle"
+        ],
+        "title": "RegistrosDePrueba"
       }
     }
   }

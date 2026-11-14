@@ -15,11 +15,16 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from core.db.models import utcnow
 from core.db.session import get_session
-from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
+from core.qa.contrato_datos import (
+    ContextoDeNegocio,
+    FormaDeDatos,
+    RegistroDescrito,
+    RegistroSembrado,
+)
 from core.shared.tenant import tenant_scope
 from pack_cobranza.models import Cartera, Cliente, Cuota, Pago, Prestamo
 
@@ -126,3 +131,58 @@ async def retirar(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> in
                 res = await session.execute(update(modelo).where(*condiciones).values(deleted_at=utcnow()))
                 total += res.rowcount or 0  # type: ignore[attr-defined]
     return total
+
+
+def _pesos(valor: Any) -> str:
+    return f"${float(valor or 0):,.0f}".replace(",", ".")
+
+
+async def describir(tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> list[RegistroDescrito]:
+    """Los clientes del lote con su cartera y lo que deben (valor y saldo de sus préstamos vivos) (HU-QA-16).
+    Carteras, préstamos, cuotas y pagos no salen como filas: van en el detalle del cliente."""
+    ids = [r.ref for r in registros if r.kind == "cliente"]
+    if not ids:
+        return []
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            clientes = (
+                await session.execute(
+                    select(Cliente.id, Cliente.nombre, Cliente.apellido, Cartera.nombre)
+                    .outerjoin(
+                        Cartera,
+                        (Cartera.tenant_id == Cliente.tenant_id)
+                        & (Cartera.id == Cliente.cartera_id)
+                        & Cartera.deleted_at.is_(None),
+                    )
+                    .where(Cliente.tenant_id == tenant_id, Cliente.id.in_(ids), Cliente.deleted_at.is_(None))
+                )
+            ).all()
+            deudas = {
+                fila[0]: (fila[1], fila[2])
+                for fila in (
+                    await session.execute(
+                        select(Prestamo.cliente_id, func.sum(Prestamo.valor), func.sum(Prestamo.saldo))
+                        .where(
+                            Prestamo.tenant_id == tenant_id,
+                            Prestamo.cliente_id.in_(ids),
+                            Prestamo.deleted_at.is_(None),
+                        )
+                        .group_by(Prestamo.cliente_id)
+                    )
+                ).all()
+            }
+    salida: list[RegistroDescrito] = []
+    for cliente_id, nombre, apellido, cartera in clientes:
+        partes = [cartera] if cartera else []
+        if cliente_id in deudas:
+            valor, saldo = deudas[cliente_id]
+            partes.append(f"préstamo {_pesos(valor)}, saldo {_pesos(saldo)}")
+        salida.append(
+            RegistroDescrito(
+                kind="cliente",
+                ref=cliente_id,
+                nombre=" ".join(p for p in (nombre, apellido) if p),
+                detalle=" · ".join(partes) or None,
+            )
+        )
+    return salida

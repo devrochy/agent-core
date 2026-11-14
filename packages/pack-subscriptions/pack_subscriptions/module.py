@@ -138,6 +138,12 @@ class SubscriptionsModule(BaseModule):
 
         return await retirar(tenant_id, registros)
 
+    async def describir_registros(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> list[Any]:
+        """Lo sembrado en palabras, para «Lo cargado» del asistente (HU-QA-16)."""
+        from pack_subscriptions.datos_de_prueba import describir
+
+        return await describir(tenant_id, registros)
+
     def admin_api_routes(self) -> list[Any]:
         """API admin de suscripciones (ADR-0079), montada en `/api/v1`."""
         return [subscriptions_admin_api_router]
