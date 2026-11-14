@@ -90,7 +90,8 @@ jobs:
             # b) la base tocó algo sensible para cualquier PR
             while IFS= read -r re; do
               [ -z "$re" ] && continue
-              f=$(grep -E -m1 "$re" "$tmp/base" || true)
+              # Cambiar este mismo check no obliga a actualizar: corre con la versión de la base.
+              f=$(grep -v '^\.github/workflows/base-segura\.yml$' "$tmp/base" | grep -E -m1 "$re" || true)
               [ -n "$f" ] && cruces="${cruces:+$cruces; }base: $f"
             done <<<"$SENSIBLES_BASE"
 
