@@ -69889,8 +69889,7 @@
           "creditos": {
             "anyOf": [
               {
-                "type": "string",
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+                "type": "number"
               },
               {
                 "type": "null"
