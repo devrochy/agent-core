@@ -76,6 +76,14 @@ async def test_pedido_simulado_no_toca_order_ni_consecutivo(tenant_setup) -> Non
                     {"t": t1},
                 )
             ).scalar()
+            # El tenant es compartido con otras suites que crean pedidos: se compara la
+            # diferencia, no el total (con xdist el total depende del orden de los tests).
+            pedidos_antes = (
+                await session.execute(
+                    text("select count(*) from pack_commerce_orders where tenant_id = :t"),
+                    {"t": t1},
+                )
+            ).scalar()
             resultado = await ejecutar_tool(
                 tool,
                 {
@@ -94,14 +102,14 @@ async def test_pedido_simulado_no_toca_order_ni_consecutivo(tenant_setup) -> Non
                     {"t": t1},
                 )
             ).scalar()
-            pedidos = (
+            pedidos_despues = (
                 await session.execute(
                     text("select count(*) from pack_commerce_orders where tenant_id = :t"),
                     {"t": t1},
                 )
             ).scalar()
         assert (antes, despues) == (antes, antes)
-        assert pedidos == 0
+        assert pedidos_despues == pedidos_antes
 
 
 async def test_cerrar_prueba_purga_conversacion_y_cliente(tenant_setup) -> None:
