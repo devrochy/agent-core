@@ -7,6 +7,9 @@
 - `contenido_base(spec)`: la base `agentspec/3` de un especialista nuevo, sacada de la configuración
   del negocio (persona, modelo, playbooks que no son de un pack, memoria y políticas). Sin tools ni
   procedimientos: los pone la plantilla del agente (`core.presets.agentes.derivar_contenido`).
+- `sembrar_voz_del_negocio(tenant_id)`: publica una versión nueva del Coordinador cuando la voz de
+  Configuración cambió desde la última siembra. Así el próximo build de release congela el tono, la
+  calidez y los emojis elegidos (adenda 2026-11-14 de ADR-0191).
 
 Reemplazan al lector tolerante (`core/agents/tolerante.py`) en el alta y en los presets.
 """
@@ -14,7 +17,7 @@ Reemplazan al lector tolerante (`core/agents/tolerante.py`) en el alta y en los 
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from agentcore_contracts import AgentSpec, AgentSpecV3, KernelSpec
@@ -169,6 +172,76 @@ async def asegurar_coordinador(tenant_id: uuid.UUID, *, modules: Iterable[Any] |
     return agent_id
 
 
+async def sembrar_voz_del_negocio(
+    tenant_id: uuid.UUID, *, catalogo: Mapping[str, Any] | None = None
+) -> bool:
+    """Siembra la voz de Configuración en el Coordinador antes de construir una release.
+
+    La voz del turno sale del `KernelSpec` congelado en la release (ADR-0113 §4), y ese KernelSpec
+    se creó en el alta con la persona de ese momento. Cuando el negocio elige otra voz en el
+    onboarding o en Configuración, hay que publicar una versión nueva del Coordinador para que el
+    próximo build la congele (adenda 2026-11-14 de ADR-0191). Idempotente: si la voz no cambió,
+    `versiones.publicar` devuelve la versión existente y esto no escribe nada.
+    """
+    from agentcore_contracts.kernelspec import Voice
+    from pydantic import ValidationError
+
+    from core.agents import versiones
+    from core.agents.spec import leer_spec_activo
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.plugin_manager import plugin_manager
+
+    if get_current_tenant_id() != tenant_id:
+        raise PermissionError("sembrar_voz_del_negocio: fuera del tenant_scope del negocio")
+    if catalogo is None:
+        catalogo = catalogo_de_acciones(list(plugin_manager.list_modules()))
+    async with get_session() as session:
+        agent_id = (
+            await session.execute(
+                select(AgentRecord.id).where(
+                    AgentRecord.tenant_id == tenant_id,
+                    AgentRecord.key == KEY_COORDINADOR,
+                    AgentRecord.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+    if agent_id is None:
+        return False
+    leido = await leer_spec_activo(tenant_id)
+    if leido is None:
+        return False
+    persona = leido[1].persona
+    publicadas = await versiones.listar_versiones(tenant_id, agent_id)
+    if not publicadas:
+        return False
+    try:
+        kernel = KernelSpec.model_validate(publicadas[0].content)
+    except ValidationError:
+        # Una versión vieja o inválida del Coordinador no debe impedir publicar un especialista:
+        # el build seguirá con la voz que ya tenía.
+        log.warning("coordinador_kernelspec_invalido", tenant_id=str(tenant_id), agent_id=str(agent_id))
+        return False
+    voz: dict[str, Any] = {"tone": persona.tone, "warmth": persona.warmth, "emojis": persona.emojis}
+    rol = persona.role.strip()[:200]
+    if rol:
+        voz["role"] = rol
+    nueva = Voice.model_validate(voz)
+    if kernel.voice == nueva:
+        return False
+    actualizado = kernel.model_copy(update={"voice": nueva})
+    _, creada = await versiones.publicar(
+        tenant_id,
+        agent_id,
+        catalogo=catalogo,
+        contenido=actualizado.model_dump(mode="json", by_alias=True),
+        label="voz",
+        notes="Voz del negocio aplicada al publicar (adenda 2026-11-14 de ADR-0191).",
+    )
+    if creada:
+        log.info("coordinador_voz_sembrada", tenant_id=str(tenant_id), agent_id=str(agent_id))
+    return creada
+
+
 async def asegurar_base_del_negocio(tenant_id: uuid.UUID, *, modules: Iterable[Any] | None = None) -> None:
     """El Coordinador del negocio y sus instancias en las conexiones conversacionales que ya existen
     (con el especialista por defecto del negocio si lo hay; si no, cada conexión pide el suyo por
@@ -195,4 +268,10 @@ async def asegurar_base_del_negocio(tenant_id: uuid.UUID, *, modules: Iterable[A
         await session.commit()
 
 
-__all__ = ["asegurar_base_del_negocio", "asegurar_coordinador", "contenido_base", "kernel_del_negocio"]
+__all__ = [
+    "asegurar_base_del_negocio",
+    "asegurar_coordinador",
+    "contenido_base",
+    "kernel_del_negocio",
+    "sembrar_voz_del_negocio",
+]

@@ -740,6 +740,19 @@ async def publicar_en_conexiones(
         if not decision.allowed and decision.limit is not None:
             raise QuotaExceeded("agentes", decision.used, decision.limit)
 
+    # ADR-0191 (adenda 2026-11-14): la voz de Configuración se siembra en el Coordinador antes de
+    # construir la release, para que el agente nuevo herede el tono, la calidez y los emojis elegidos.
+    from core.agents.base import sembrar_voz_del_negocio
+
+    try:
+        await sembrar_voz_del_negocio(tenant_id, catalogo=catalogo)
+    except PermissionError:
+        raise
+    except Exception:
+        # La siembra es una mejora, no un requisito para publicar: si falla, la release sale con
+        # la voz que ya tenía el Coordinador y queda el rastro para reintentar.
+        log.warning("voz_del_negocio_no_sembrada", tenant_id=str(tenant_id), exc_info=True)
+
     version, creada = await versiones.publicar(
         tenant_id,
         agent_id,

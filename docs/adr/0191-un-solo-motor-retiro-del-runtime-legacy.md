@@ -82,3 +82,32 @@ Estado de ADR anteriores (nota, no edición): ADR-0113 (el lector tolerante «ha
 aquí), ADR-0117 §2 «Migración» y la adenda HU-AOS-15 (release 1 desde el tolerante y `release_missing`
 legacy), ADR-0112 (orden de banderas: queda sin `runtime`), ADR-0139 §3 (sin la bandera global) y
 ADR-0075 (el Centro de pruebas prueba por una conexión real).
+
+## Adenda (2026-11-14): la voz de Configuración se siembra al publicar
+
+**Caso.** En el onboarding el dueño elige tono, calidez y emojis antes de crear su primer agente, pero
+la release nacía con la voz que el Coordinador tenía del alta (los valores por defecto). El agente
+quedaba creado con otra voz y el cambio no se evidenciaba; además, `tono.md` no interpolaba `{tone}`,
+`{warmth}` ni `{emojis}`, así que esas tres opciones no llegaban al prompt.
+
+**Decisión.**
+- El playbook `core/playbooks/tono.md` usa las variables de persona y explica cada nivel (tono, calidez
+  0–5 y emojis). La voz deja de ser texto fijo.
+- `core/agents/base.py::sembrar_voz_del_negocio(tenant_id)` compara la persona viva de `agent_specs` con
+  el `voice` del último `KernelSpec` del Coordinador y, si difiere, publica una versión nueva del
+  Coordinador (idempotente por hash, conserva routing/procedimientos/políticas).
+- Se llama antes de construir la release en `core/agents/editor.py::publicar_en_conexiones` (onboarding,
+  alta normal y publicación de agentes) y en `core/api/routers/connection_releases.py::build_release`
+  (build manual). No se llama en `release_uno.py` ni en `reconstruir` de referencias retiradas: esos
+  caminos reproducen releases históricas.
+- Una release ya activa no cambia en caliente: la voz nueva entra en la próxima versión publicada, como
+  el resto de la configuración congelada. La UI de Configuración › Voz y estilo lo dice.
+
+**Consecuencias.** El primer agente del onboarding hereda la voz elegida; editar la voz después no toca
+lo que ya está atendiendo hasta publicar una versión nueva. Cambiar `tono.md` invalida las grabaciones
+del gate y obliga a regrabarlas (aprobado por el dueño el 2026-11-14).
+
+**Código:** `core/playbooks/tono.md`, `core/llm/prompt_builder.py`,
+`core/agents/base.py`, `core/agents/editor.py`, `core/api/routers/connection_releases.py`,
+`tests/test_prompt_fecha_actual.py` y `tests/test_voz_del_negocio.py`. En el panel y la APK, la calidez
+pasa a 0–5 con seis etiquetas y el preview distingue cada nivel.

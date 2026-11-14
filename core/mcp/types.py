@@ -43,6 +43,7 @@ if TYPE_CHECKING:
         ContextoDeNegocio,
         EntradaDeEscenario,
         FormaDeDatos,
+        RegistroDescrito,
         RegistroSembrado,
         ResumenDeEscenario,
     )
@@ -702,6 +703,18 @@ class BaseModule(ABC):
     async def retirar_datos_de_prueba(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> int:
         """Retira lo sembrado (borrado lógico o desactivación, nunca físico). Devuelve cuántos."""
         raise NotImplementedError
+
+    async def describir_registros(
+        self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]
+    ) -> list[RegistroDescrito]:
+        """Hook opcional (HU-QA-16, ADR-0194): pone en palabras lo que este pack sembró o importó
+        (`registros`, de `test_data_records`) para la lista «Lo cargado» del asistente de agentes.
+
+        Es POR LOTE (una consulta por `kind`, nunca una por registro), de solo lectura, bajo el
+        `tenant_scope` del negocio y filtrando además por `tenant_id`. El pack elige qué `kind` describe
+        (el producto sí; la variante, la cuota o el pago no) y omite lo retirado o lo que no reconoce.
+        Default: `[]` (lo de este pack sale solo en el conteo `sin_detalle`)."""
+        return []
 
     def plantillas_de_importacion(self) -> list[PlantillaDeImportacion]:
         """Hook opcional (HU-QA-12, ADR-0180): las plantillas CSV con las que el dueño importa sus

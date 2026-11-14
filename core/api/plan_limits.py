@@ -28,6 +28,10 @@ _MENSAJES = {
         "Tu plan permite {limit} MB de documentos de conocimiento y ya usas {used} MB. "
         "Borra alguno o mejora tu plan para subir este archivo."
     ),
+    "creditos": (
+        "Tu plan incluye {limit} créditos al mes y ya usaste {used}; no alcanzan para esta acción. "
+        "Mejora tu plan o espera al próximo mes. No se cobró nada."
+    ),
 }
 
 

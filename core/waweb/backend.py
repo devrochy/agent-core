@@ -30,6 +30,23 @@ class InboundEvent:
     media: list[dict[str, str]] = field(default_factory=list)
 
 
+@dataclass
+class DeviceIdentity:
+    """Datos del dispositivo vinculado, tal como los entrega WhatsApp.
+
+    `jid` es la identidad completa (<numero>@s.whatsapp.net); `phone` son solo
+    dígitos. `push_name` es el nombre de perfil y `business_name` el del negocio
+    (WhatsApp Business). `platform` es el tipo de dispositivo (android, iphone,
+    web…). Cualquiera puede faltar según el evento y la versión de WhatsApp.
+    """
+
+    jid: str | None = None
+    phone: str | None = None
+    push_name: str | None = None
+    business_name: str | None = None
+    platform: str | None = None
+
+
 class WaWebSocket(Protocol):
     """Socket de WhatsApp Web: conectar, enviar, escuchar, cerrar."""
 
@@ -57,6 +74,14 @@ class WaWebSocket(Protocol):
         interno falla sin emitir `DisconnectedEv`, `closed` nunca se marca y el
         socket queda sordo. Ante la duda (backend ocupado o sin respuesta)
         devuelve True: solo un False es evidencia de socket muerto.
+        """
+        ...
+
+    async def identity(self) -> DeviceIdentity | None:
+        """Identidad del dispositivo vinculado, si el backend ya la conoce.
+
+        No debe hacer llamadas de red ni al puente Go: es una lectura del cache
+        que el socket llenó con `PairStatusEv`/`Device`.
         """
         ...
 
