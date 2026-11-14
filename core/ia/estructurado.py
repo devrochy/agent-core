@@ -292,9 +292,14 @@ async def reconocer_imagen[M: BaseModel](
     result: Mapping[str, Any],
     max_tokens: int,
     config: Any | None = None,
+    guardar_salida: bool = False,
 ) -> Estructurado[M]:
     """Imagen → objeto validado, con el proveedor de visión del negocio. Mide con el concepto
     `vision` y el `key_mode` de su configuración (BYOK si el negocio puso su llave).
+
+    `guardar_salida`: la fila del ledger guarda además el objeto validado en `result.salida`
+    (sin él si no validó). Así un reintento de la misma imagen se responde desde el ledger, sin
+    volver a llamar ni a cobrar (idempotencia de ADR-0194 §3).
 
     `config`: un `VisionConfig` ya resuelto; sin él, se resuelve con `resolve_vision_config`.
     No mira `vision_enabled` ni `vision_mode`: esos gobiernan la ingesta de WhatsApp, no una
@@ -323,6 +328,16 @@ async def reconocer_imagen[M: BaseModel](
         )
     except (MediaConfigError, MediaProviderError) as exc:
         raise ErrorProveedor(getattr(exc, "code", type(exc).__name__)) from exc
+    latencia = int((time.monotonic() - inicio) * 1000)
+    datos: M | None = None
+    fallo: Exception | None = None
+    try:
+        datos = extraer_objeto(respuesta.text, esquema)
+    except (ValueError, ValidationError) as exc:
+        fallo = exc
+    resultado = dict(result)
+    if guardar_salida and datos is not None:
+        resultado["salida"] = datos.model_dump(mode="json")
     consumo = await _medir(
         tenant_id,
         kind=kind,
@@ -331,11 +346,13 @@ async def reconocer_imagen[M: BaseModel](
         model=respuesta.model,
         input_tokens=respuesta.input_tokens,
         output_tokens=respuesta.output_tokens,
-        latency_ms=int((time.monotonic() - inicio) * 1000),
+        latency_ms=latencia,
         cost_usd=Decimal(str(respuesta.cost_usd)),
-        result=result,
+        result=resultado,
     )
-    return _validar(respuesta.text, esquema, consumo)
+    if datos is None:
+        raise ErrorFormato(type(fallo).__name__, consumo) from fallo
+    return Estructurado(datos=datos, consumo=consumo)
 
 
 __all__ = [
