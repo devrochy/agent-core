@@ -67,7 +67,7 @@ async def _instancias(tenant_id: uuid.UUID, agent_id: uuid.UUID, catalogo: Any) 
                     "SELECT a.id, a.key, v.id, v.version, v.content_hash, v.content FROM agents a "
                     "LEFT JOIN LATERAL (SELECT id, version, content_hash, content FROM agent_versions "
                     "  WHERE tenant_id = a.tenant_id AND agent_id = a.id ORDER BY version DESC LIMIT 1) v ON true "
-                    "WHERE a.tenant_id = :t AND a.kind = 'core' AND a.deleted_at IS NULL LIMIT 1"
+                    "WHERE a.tenant_id = :t AND a.kind = 'core' AND a.deleted_at IS NULL ORDER BY a.created_at LIMIT 1"
                 ),
                 {"t": tenant_id},
             )

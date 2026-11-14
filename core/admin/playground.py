@@ -216,6 +216,8 @@ async def close_test_conversation(
                 filtros.append(Conversation.state[CLAVE_BORRADOR].astext == str(agent_id))
             elif connection_id is not None:
                 filtros.append(Conversation.connection_id == connection_id)
+                # La de la conexión, no las de los borradores (que también van por la interna).
+                filtros.append(Conversation.state[CLAVE_BORRADOR].astext.is_(None))
             ids = list(
                 (
                     await session.execute(select(Conversation.id).where(*filtros))
