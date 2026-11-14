@@ -14,8 +14,9 @@ las MISMAS funciones de la operación (sin duplicar su lógica):
    Nunca toca agentes que ya existan (los que creó el tester en el editor, p. ej. Cobranza).
 4. **Release activa** en cada conexión conversacional (`construir` + `promover`, que pasa el
    gate): el tester es el dueño de su negocio de prueba y pulsar el botón es su decisión.
-5. **`aos_procedures = true` y `aos_routing = 'active'`** con `aos_fijar_banderas` y el rol
-   dueño, en la misma transacción que comprueba el slug `qa-` del tester.
+
+El motor de procedimientos y el enrutamiento ya no son banderas (ADR-0191, HU-AOS-69): corren en
+todo negocio, así que no hay nada que encender.
 
 Solo con `QA_TESTERS_ENABLED`, y solo en el negocio de la fila del
 tester. Idempotente: cada paso lo es. Si un paso falla, se guarda el motivo
@@ -174,41 +175,6 @@ async def _activar_releases(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
                 await promover(tenant_id, cid, build.release_id, actor=ACTOR, motivo="qa_datos", exencion="qa_datos")
 
 
-async def _banderas(tenant_id: uuid.UUID, slug: str) -> None:
-    """`aos_procedures` y `aos_routing = 'active'` con el rol dueño (`aos_fijar_banderas` sin
-    admin solo acepta esa sesión, migración 0097). En la misma transacción se bloquea la fila y se
-    exige el slug `qa-` del tester."""
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.kernel.banderas import BanderasAOS, BanderasRechazadas, fijar_banderas
-
-    url = get_settings().migrations_database_url
-    if not url:
-        raise FalloAgentOS("falta MIGRATIONS_DATABASE_URL (rol dueño) para escribir las banderas")
-    engine = create_async_engine(url)
-    try:
-        async with engine.begin() as conn:
-            fila = (
-                await conn.execute(
-                    text(
-                        "SELECT 1 FROM tenants WHERE id = :t AND slug = :s AND slug LIKE 'qa-%' "
-                        "AND deleted_at IS NULL FOR UPDATE"
-                    ),
-                    {"t": tenant_id, "s": slug},
-                )
-            ).first()
-            if fila is None:
-                raise FalloAgentOS("no se pudieron encender los procedimientos y el enrutamiento")
-            try:
-                await fijar_banderas(
-                    conn, tenant_id, BanderasAOS(procedimientos=True, ruteo="active"), actor=ACTOR
-                )
-            except BanderasRechazadas as exc:
-                raise FalloAgentOS(f"no se pudieron encender los procedimientos y el enrutamiento: {exc}") from None
-    finally:
-        await engine.dispose()
-
-
 # ------------------------------------------------------------------ entrada
 async def preparar(tenant_id: uuid.UUID, slug: str) -> str | None:
     """Deja el negocio de prueba listo para el Agent OS. Devuelve None si quedó listo o el motivo
@@ -223,7 +189,7 @@ async def preparar(tenant_id: uuid.UUID, slug: str) -> str | None:
     async with get_session() as candado:
         from core.kernel.banderas import CANDADO_SQL
 
-        # El mismo candado que el panel del master (HU-AOS-15): no se intercalan builds.
+        # El mismo candado que los escenarios (HU-QA-13): no se intercalan builds.
         tomado = (await candado.execute(text(CANDADO_SQL), {"t": str(tenant_id)})).scalar_one()
         if not tomado:
             raise QaError("conflicto", "Tu negocio de prueba se está preparando para el Agent OS. Espera un momento.")
@@ -234,7 +200,6 @@ async def preparar(tenant_id: uuid.UUID, slug: str) -> str | None:
             await _coordinador(tenant_id, modulos)
             await _preset(tenant_id, modulos)
             await _activar_releases(tenant_id, modulos)
-            await _banderas(tenant_id, slug)
         except Exception as exc:  # frontera: el motivo queda para el tester y el reintento
             motivo = _motivo(exc)
             log.warning(
@@ -256,7 +221,7 @@ async def resumen(tenant_id: uuid.UUID, motivo: str | None) -> dict[str, Any]:
     async with get_session() as session:
         fila = (
             await session.execute(
-                text("SELECT aos_procedures, aos_routing FROM tenants WHERE id = :t AND deleted_at IS NULL"),
+                text("SELECT 1 FROM tenants WHERE id = :t AND deleted_at IS NULL"),
                 {"t": tenant_id},
             )
         ).first()
@@ -288,12 +253,7 @@ async def resumen(tenant_id: uuid.UUID, motivo: str | None) -> dict[str, Any]:
                         {"key": f[0], "nombre": f[1], "rol": NOMBRE_ROL.get(str(f[2]), str(f[2])), "por_defecto": bool(f[3])}
                         for f in filas
                     ]
-    listo = (
-        fila is not None
-        and (bool(fila[0]), fila[1]) == (True, "active")
-        and chat is not None
-        and chat["activo"]
-    )
+    listo = fila is not None and chat is not None and chat["activo"]
     return {
         "estado": "listo" if listo and not motivo else ("error" if motivo else "pendiente"),
         "motivo": motivo,

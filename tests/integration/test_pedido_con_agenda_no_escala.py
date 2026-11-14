@@ -72,7 +72,7 @@ class _Guion:
 
 @pytest.fixture(scope="module")
 async def negocio() -> AsyncIterator[tuple[uuid.UUID, Any]]:
-    """El negocio del set `procedimientos` (commerce + payments + calendar), sin el motor."""
+    """El negocio del set `procedimientos` (commerce + payments + calendar)."""
     import pack_payments.payments as capacidad
 
     from core.tenants import deactivate_tenant, purge_tenant
@@ -82,7 +82,7 @@ async def negocio() -> AsyncIterator[tuple[uuid.UUID, Any]]:
     definicion, _rutas = journeys.rutas_del_set("procedimientos", [""])
     pagos = journeys.PagoSimulado(monto_minimo=150000)
     slug = f"pedagenda-{uuid.uuid4().hex[:8]}"
-    tid = await journeys.preparar_negocio(definicion, pagos, slug=slug, motor=False)
+    tid = await journeys.preparar_negocio(definicion, pagos, slug=slug)
     await journeys.encender_runtime_v3(tid)  # todo turno corre sobre la release de su conexión (ADR-0191)
     yield tid, pagos
     capacidad.build_provider = original
@@ -127,8 +127,3 @@ async def test_disponibilidad_con_dato_de_agenda_sigue_bloqueando_y_deja_el_moti
     motivo = await journeys.motivo_del_relevo(ctx, inicio)
     assert motivo == "guardrail=calendar_completion_check (disponibilidad)", motivo
     assert "jueves" not in motivo  # solo el identificador del guardrail, nunca el borrador
-
-
-async def test_el_reporte_lee_el_runtime_efectivo(negocio) -> None:  # type: ignore[no-untyped-def]
-    tid, _pagos = negocio
-    assert await journeys.runtime_efectivo(tid) == {"aos_procedures": False}

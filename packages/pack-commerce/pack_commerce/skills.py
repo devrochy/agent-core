@@ -1249,7 +1249,7 @@ class OrderSkill(BaseSkill):
             ),
             # Solo la ofrece el motor de procedimientos, en la etapa `esperar_pago` de
             # `tomar_pedido` (HU-AOS-07, cierre por pago): ninguna sección de
-            # flow.json la nombra y su predicado la apaga sin `tenants.aos_procedures`.
+            # flow.json la nombra y su predicado la apaga fuera de un turno con negocio.
             MCPTool(
                 name="verificar_pago_pedido",
                 description=(

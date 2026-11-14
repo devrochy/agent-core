@@ -5,8 +5,7 @@ agente (el barato, sin *thinking*); solo una etapa que declara `risk: high` camb
 que dice `KernelSpec.modelPolicy.highRiskStage` (`thinking`, y `model` si se declara uno distinto).
 Después de un fallo del verificador, el reintento usa el respaldo del agente (`model.fallback`).
 
-Todo esto rige solo con el motor activo (`tenants.aos_procedures`): con la bandera apagada el loop
-no llama a nada de este módulo y el turno es el de siempre.
+Todo esto rige con el motor de procedimientos, que corre en todo turno con negocio (ADR-0191).
 
 Puro: sin base, red ni reloj. El loop resuelve los proveedores y registra el uso.
 """

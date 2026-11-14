@@ -102,7 +102,7 @@ class Turno:
     # Agente que atiende y tarea en foco (HU-AOS-15): NULL con `legacy` o sin motor activo.
     active_instance_id: uuid.UUID | None = None
     focus_task_id: uuid.UUID | None = None
-    # Enrutamiento (HU-AOS-17): con `aos_routing` ≠ off. `route_source` es lo que pasó de verdad
+    # Enrutamiento (HU-AOS-17). `route_source` es lo que pasó de verdad
     # (en sombra, `default`); `shadow_route`, lo que el router habría hecho. Solo en turnos `routed`.
     route_source: str | None = None
     rule_id: str | None = None
@@ -314,8 +314,8 @@ async def decidir(
 
 
 async def enrutar(conversation: Any) -> None:
-    """El turno va al hilo del agente. Sin router (legacy, o `aos_routing = off`): `default`; con
-    él, la fuente que anotó `anotar_ruta` (HU-AOS-17)."""
+    """El turno va al hilo del agente. Sin ruta (un turno que no enrutó): `default`; con ella, la
+    fuente que anotó `anotar_ruta` (HU-AOS-17)."""
     turno = turno_actual()
     fuente = turno.route_source if turno is not None and turno.route_source else "default"
     await decidir(conversation, "routed", route_source=fuente)

@@ -11,8 +11,6 @@ Gherkin de la HU:
   (y no toca otro negocio ni otro pedido).
 - **Datos sin LLM:** botón de lista (con candidatos), imagen; un botón tras un episodio vencido no
   resucita la tarea.
-- **Modo sombra:** con `aos_procedures` apagada, el prompt, las acciones y la
-  respuesta son idénticos y quedan las diferencias en `audit_log`.
 
 Modelo guionado (sin LLM real). Los procedimientos son de un pack de prueba registrado en el
 host del proceso.
@@ -92,15 +90,6 @@ async def _owner() -> AsyncIterator[Any]:
             yield conn
     finally:
         await engine.dispose()
-
-
-async def _banderas(tid: uuid.UUID, procedimientos: bool) -> None:
-    async with _owner() as conn:
-        await conn.execute(text("update tenants set aos_procedures = false where id = :t"), {"t": tid})
-        await conn.execute(
-            text("update tenants set aos_procedures = :p where id = :t"),
-            {"t": tid, "p": procedimientos},
-        )
 
 
 # ---------------------------------------------------------------- pack de prueba
@@ -330,14 +319,10 @@ def _resultado_de_tool(guion: _Guion, llamada: int) -> str:
 
 async def test_accion_fuera_de_etapa_no_se_ofrece_y_se_deniega(negocios: dict[str, uuid.UUID], monkeypatch) -> None:  # type: ignore[no-untyped-def]
     a = negocios["a"]
-    await _banderas(a, True)
-    try:
-        conv = await _conversacion(a, "quiero comprar")
-        task = await _tarea(conv)
-        guion = _Guion([("crear_pedido_m", {}), "Primero necesito tu correo."])
-        resultado = await _turno(conv, guion, monkeypatch, "quiero comprar")
-    finally:
-        await _banderas(a, False)
+    conv = await _conversacion(a, "quiero comprar")
+    task = await _tarea(conv)
+    guion = _Guion([("crear_pedido_m", {}), "Primero necesito tu correo."])
+    resultado = await _turno(conv, guion, monkeypatch, "quiero comprar")
     assert "crear_pedido_m" not in guion.tools[0] and "ver_opciones_m" in guion.tools[0]
     assert "no corresponde a la etapa actual (datos)" in _resultado_de_tool(guion, 1)
     assert "crear_pedido_m" not in LLAMADAS  # nunca se ejecutó
@@ -355,21 +340,17 @@ async def test_accion_fuera_de_etapa_no_se_ofrece_y_se_deniega(negocios: dict[st
 
 async def test_resolver_rechaza_el_plan_inexistente_y_no_guarda(negocios: dict[str, uuid.UUID]) -> None:
     a = negocios["a"]
-    await _banderas(a, True)
-    try:
-        conv = await _conversacion(a, "el premium, mi correo es Ana@Correo.co")
-        task = await _tarea(conv)
-        motor = await _motor(conv)
-        r = await _comando(conv, motor, "actualizar_tarea", {"slots": {"plan": "oro", "correo": "ana@correo.co"}})
-        assert not r.ok and r.errores == ["plan: Ese plan no existe: los planes son básico y premium."]
-        r2 = await _comando(conv, motor, "actualizar_tarea", {"slots": {"correo": "no-es-correo", "reference": "X"}})
-        assert not r2.ok and len(r2.errores) == 2 and any("lo fija el sistema" in e for e in r2.errores)
-        assert await _tipos(conv, task) == ["started"]  # todo o nada: nada se guardó
+    conv = await _conversacion(a, "el premium, mi correo es Ana@Correo.co")
+    task = await _tarea(conv)
+    motor = await _motor(conv)
+    r = await _comando(conv, motor, "actualizar_tarea", {"slots": {"plan": "oro", "correo": "ana@correo.co"}})
+    assert not r.ok and r.errores == ["plan: Ese plan no existe: los planes son básico y premium."]
+    r2 = await _comando(conv, motor, "actualizar_tarea", {"slots": {"correo": "no-es-correo", "reference": "X"}})
+    assert not r2.ok and len(r2.errores) == 2 and any("lo fija el sistema" in e for e in r2.errores)
+    assert await _tipos(conv, task) == ["started"]  # todo o nada: nada se guardó
 
-        r3 = await _comando(conv, motor, "actualizar_tarea", {"slots": {"plan": "premium", "correo": "Ana@Correo.co"}})
-        assert r3.ok
-    finally:
-        await _banderas(a, False)
+    r3 = await _comando(conv, motor, "actualizar_tarea", {"slots": {"plan": "premium", "correo": "Ana@Correo.co"}})
+    assert r3.ok
     p = await _proyeccion(conv, task)
     assert p.slots["plan"]["value"] == "var-premium"  # el valor normalizado del resolver
     assert p.slots["correo"]["value"] == "ana@correo.co"
@@ -395,32 +376,28 @@ async def test_lo_ambiguo_no_confirma_y_el_si_escrito_solo_contesta_la_peticion_
     """Un dato acepta un asentimiento ("dale", adenda 2026-10-12 de ADR-0113), pero una pregunta
     no lo confirma, ni un sí del mismo turno de la petición."""
     a = negocios["a"]
-    await _banderas(a, True)
-    try:
-        conv = await _conversacion(a, "mi correo es a@b.co", datetime.now(UTC) - timedelta(minutes=5))
-        task = await _tarea(conv, plan=("var-basico", "llm", False))
-        motor = await _motor(conv, "mi correo es a@b.co")
-        assert (await _comando(conv, motor, "actualizar_tarea", {"slots": {"correo": "a@b.co"}})).ok
+    conv = await _conversacion(a, "mi correo es a@b.co", datetime.now(UTC) - timedelta(minutes=5))
+    task = await _tarea(conv, plan=("var-basico", "llm", False))
+    motor = await _motor(conv, "mi correo es a@b.co")
+    assert (await _comando(conv, motor, "actualizar_tarea", {"slots": {"correo": "a@b.co"}})).ok
 
-        # Mismo turno en que se pidió: ni un "sí, confirmo" sirve (la evidencia es anterior a la petición).
-        motor.texto_cliente = "sí, confirmo"
-        assert not (await _comando(conv, motor, "confirmar_tarea", {})).ok
-        await _mensaje(conv, "outbound", "¿Confirmas que tu correo es a@b.co?", datetime.now(UTC))
-        await _mensaje(conv, "inbound", "¿para qué lo necesitan?", datetime.now(UTC))
-        # Turno siguiente, una pregunta: no confirma y se vuelve a pedir.
-        r = await _comando(conv, motor := await _motor(conv, "¿para qué lo necesitan?"), "confirmar_tarea", {})
-        assert not r.ok and "Falta la confirmación explícita" in r.errores[0]
-        assert "confirmed" not in await _tipos(conv, task)
+    # Mismo turno en que se pidió: ni un "sí, confirmo" sirve (la evidencia es anterior a la petición).
+    motor.texto_cliente = "sí, confirmo"
+    assert not (await _comando(conv, motor, "confirmar_tarea", {})).ok
+    await _mensaje(conv, "outbound", "¿Confirmas que tu correo es a@b.co?", datetime.now(UTC))
+    await _mensaje(conv, "inbound", "¿para qué lo necesitan?", datetime.now(UTC))
+    # Turno siguiente, una pregunta: no confirma y se vuelve a pedir.
+    r = await _comando(conv, motor := await _motor(conv, "¿para qué lo necesitan?"), "confirmar_tarea", {})
+    assert not r.ok and "Falta la confirmación explícita" in r.errores[0]
+    assert "confirmed" not in await _tipos(conv, task)
 
-        # Un botón vencido no confirma y su título tampoco cuenta como un sí escrito.
-        await _entrada(conv, {"interactive_id": await _boton(conv, task, seq_extra=9)})
-        assert not (await _comando(conv, await _motor(conv, "Sí, confirmo"), "confirmar_tarea", {})).ok
-        assert "confirmed" not in await _tipos(conv, task)
+    # Un botón vencido no confirma y su título tampoco cuenta como un sí escrito.
+    await _entrada(conv, {"interactive_id": await _boton(conv, task, seq_extra=9)})
+    assert not (await _comando(conv, await _motor(conv, "Sí, confirmo"), "confirmar_tarea", {})).ok
+    assert "confirmed" not in await _tipos(conv, task)
 
-        # Un sí explícito que contesta la petición del turno anterior sí confirma.
-        r = await _comando(conv, await _motor(conv, "Sí, confirmo"), "confirmar_tarea", {})
-    finally:
-        await _banderas(a, False)
+    # Un sí explícito que contesta la petición del turno anterior sí confirma.
+    r = await _comando(conv, await _motor(conv, "Sí, confirmo"), "confirmar_tarea", {})
     assert r.ok, r.errores
     p = await _proyeccion(conv, task)
     assert p.slots["correo"]["confirmed"] is True and p.pending_confirmation is None
@@ -430,20 +407,16 @@ async def test_el_boton_firmado_confirma_sin_llm_y_uno_falso_no(negocios: dict[s
     from core.kernel.procedures.motor import PREFIJO_CONFIRMAR
 
     a = negocios["a"]
-    await _banderas(a, True)
-    try:
-        conv = await _conversacion(a, "a@b.co")
-        task = await _tarea(conv, plan=("var-basico", "llm", False))
-        motor = await _motor(conv)
-        assert (await _comando(conv, motor, "actualizar_tarea", {"slots": {"correo": "a@b.co"}})).ok
-        bueno = await _boton(conv, task)
-        falso = bueno.rsplit(":", 1)[0] + ":" + "0" * 16
-        assert falso.startswith(PREFIJO_CONFIRMAR)
-        await _entrada(conv, {"interactive_id": falso})  # misma petición, firma fabricada
-        assert "confirmed" not in await _tipos(conv, task)
-        await _entrada(conv, {"interactive_id": bueno})
-    finally:
-        await _banderas(a, False)
+    conv = await _conversacion(a, "a@b.co")
+    task = await _tarea(conv, plan=("var-basico", "llm", False))
+    motor = await _motor(conv)
+    assert (await _comando(conv, motor, "actualizar_tarea", {"slots": {"correo": "a@b.co"}})).ok
+    bueno = await _boton(conv, task)
+    falso = bueno.rsplit(":", 1)[0] + ":" + "0" * 16
+    assert falso.startswith(PREFIJO_CONFIRMAR)
+    await _entrada(conv, {"interactive_id": falso})  # misma petición, firma fabricada
+    assert "confirmed" not in await _tipos(conv, task)
+    await _entrada(conv, {"interactive_id": bueno})
     p = await _proyeccion(conv, task)
     assert p.slots["correo"]["confirmed"] is True and p.pending_confirmation is None
     assert p.stage == "datos"  # el consumer no transiciona: avanza el turno siguiente
@@ -451,20 +424,16 @@ async def test_el_boton_firmado_confirma_sin_llm_y_uno_falso_no(negocios: dict[s
 
 async def test_confirmacion_de_accion_atada_a_sus_argumentos_y_avance(negocios: dict[str, uuid.UUID], monkeypatch) -> None:  # type: ignore[no-untyped-def]
     a = negocios["a"]
-    await _banderas(a, True)
-    try:
-        conv = await _conversacion(a)
-        task = await _tarea(conv, "confirmar")
-        guion = _Guion([("aceptar_m", {"cotizacion": "A"}), "¿Confirmas la cotización A?"])
-        await _turno(conv, guion, monkeypatch)
-        assert "aceptar_m" not in LLAMADAS and "confirmation_required" in _resultado_de_tool(guion, 1)
-        await _entrada(conv, {"interactive_id": await _boton(conv, task)})
+    conv = await _conversacion(a)
+    task = await _tarea(conv, "confirmar")
+    guion = _Guion([("aceptar_m", {"cotizacion": "A"}), "¿Confirmas la cotización A?"])
+    await _turno(conv, guion, monkeypatch)
+    assert "aceptar_m" not in LLAMADAS and "confirmation_required" in _resultado_de_tool(guion, 1)
+    await _entrada(conv, {"interactive_id": await _boton(conv, task)})
 
-        # Confirmó A; el modelo intenta B → vuelve a pedir confirmación. Luego A → se ejecuta y avanza.
-        guion = _Guion([("aceptar_m", {"cotizacion": "B"}), ("aceptar_m", {"cotizacion": "A"}), ("crear_pedido_m", {}), "Listo."])
-        await _turno(conv, guion, monkeypatch)
-    finally:
-        await _banderas(a, False)
+    # Confirmó A; el modelo intenta B → vuelve a pedir confirmación. Luego A → se ejecuta y avanza.
+    guion = _Guion([("aceptar_m", {"cotizacion": "B"}), ("aceptar_m", {"cotizacion": "A"}), ("crear_pedido_m", {}), "Listo."])
+    await _turno(conv, guion, monkeypatch)
     assert "confirmation_required" in _resultado_de_tool(guion, 1)
     assert LLAMADAS == ["aceptar_m", "crear_pedido_m"]
     assert "crear_pedido_m" not in guion.tools[0] and "crear_pedido_m" in guion.tools[2]  # acciones de la etapa nueva
@@ -480,23 +449,18 @@ async def test_cierre_por_evento_del_outbox_solo_del_pedido_de_la_tarea(negocios
     a, b = negocios["a"], negocios["b"]
     tareas: dict[str, tuple[Any, uuid.UUID]] = {}
     for nombre, tid, ref in (("a", a, "REF-77"), ("otro_pedido", a, "REF-78"), ("b", b, "REF-77")):
-        await _banderas(tid, True)
         conv = await _conversacion(tid)
         tareas[nombre] = (conv, await _tarea(conv, "pagar", reference=(ref, "action:crear_pedido_m", False)))
     conv_cliente = await _conversacion(a)
     tarea_cliente = await _tarea(conv_cliente, "pagar", reference=("REF-77", "llm", False))  # la escribió el modelo
-    try:
-        async with _scope(a) as s:
-            await emit_domain(s, tenant_id=a, topic="payment.confirmed", dedupe_key=f"t:{uuid.uuid4()}",
-                              payload={"reference": "REF-77", "provider": "x", "provider_reference": "p", "amount": 1})
-        async with _scope(a) as s:
-            evento = (await s.execute(text(
-                "select id from domain_events where tenant_id = :t and topic = 'payment.confirmed' and status = 'pendiente'"
-            ), {"t": a})).scalar_one()
-        assert await entregar_evento(evento, a, datetime.now(UTC))
-    finally:
-        await _banderas(a, False)
-        await _banderas(b, False)
+    async with _scope(a) as s:
+        await emit_domain(s, tenant_id=a, topic="payment.confirmed", dedupe_key=f"t:{uuid.uuid4()}",
+                          payload={"reference": "REF-77", "provider": "x", "provider_reference": "p", "amount": 1})
+    async with _scope(a) as s:
+        evento = (await s.execute(text(
+            "select id from domain_events where tenant_id = :t and topic = 'payment.confirmed' and status = 'pendiente'"
+        ), {"t": a})).scalar_one()
+    assert await entregar_evento(evento, a, datetime.now(UTC))
     conv, task = tareas["a"]
     p = await _proyeccion(conv, task)
     assert p.status == "completed" and p.completed_at is not None
@@ -509,19 +473,15 @@ async def test_cierre_por_evento_del_outbox_solo_del_pedido_de_la_tarea(negocios
 
 async def test_datos_sin_llm_boton_de_lista_e_imagen(negocios: dict[str, uuid.UUID], monkeypatch) -> None:  # type: ignore[no-untyped-def]
     a = negocios["a"]
-    await _banderas(a, True)
-    try:
-        conv = await _conversacion(a)
-        task = await _tarea(conv)
-        await _entrada(conv, {"interactive_id": "opcion:a"})  # aún no se ofreció nada
-        assert "opcion" not in (await _proyeccion(conv, task)).slots
-        await _turno(conv, _Guion([("ver_opciones_m", {}), "Elige una opción."]), monkeypatch)
-        await _entrada(conv, {"interactive_id": "opcion:z"})  # no estaba entre las ofrecidas
-        assert "opcion" not in (await _proyeccion(conv, task)).slots
-        await _entrada(conv, {"interactive_id": "opcion:b",
-                                     "media": json.dumps([{"type": "image/jpeg", "id": "wamid-1", "url": ""}])})
-    finally:
-        await _banderas(a, False)
+    conv = await _conversacion(a)
+    task = await _tarea(conv)
+    await _entrada(conv, {"interactive_id": "opcion:a"})  # aún no se ofreció nada
+    assert "opcion" not in (await _proyeccion(conv, task)).slots
+    await _turno(conv, _Guion([("ver_opciones_m", {}), "Elige una opción."]), monkeypatch)
+    await _entrada(conv, {"interactive_id": "opcion:z"})  # no estaba entre las ofrecidas
+    assert "opcion" not in (await _proyeccion(conv, task)).slots
+    await _entrada(conv, {"interactive_id": "opcion:b",
+                                 "media": json.dumps([{"type": "image/jpeg", "id": "wamid-1", "url": ""}])})
     p = await _proyeccion(conv, task)
     assert p.slots["opcion"]["value"] == "b" and p.slots["opcion"]["source"] == "interactive:opcion:"
     assert p.slots["foto"]["value"] == {"media_id": "wamid-1", "mime": "image/jpeg"}
@@ -542,44 +502,15 @@ async def test_boton_tras_un_episodio_vencido_no_resucita_la_tarea(negocios: dic
             await contexto_del_motor(conv.id, customer_id=conv.customer_id, channel="whatsapp", enabled={"core", PACK},
                                      disabled=set(), herramientas_base=[], candidatas=[], texto_cliente="hola")
 
-    await _banderas(a, True)
-    try:
-        conv = await _conversacion(a, "hola", t1)
-        await turno(conv)  # episodio 1
-        task = await _tarea(conv, now=t1 + timedelta(seconds=2))
-        await _mensaje(conv, "outbound", "¿Qué plan quieres?", t1 + timedelta(seconds=5))
-        await _mensaje(conv, "inbound", "sigo aquí", t2)
-        await turno(conv)  # episodio 2: la tarea tuvo actividad en el 1, sigue abierta
-        assert (await _proyeccion(conv, task)).status == "active"
-        await _mensaje(conv, "outbound", "Te escucho", t2 + timedelta(seconds=5))
-        await _mensaje(conv, "inbound", "Opción B", datetime.now(UTC))
-        await _entrada(conv, {"interactive_id": "opcion:b"})  # episodio 3 empieza con un botón
-    finally:
-        await _banderas(a, False)
+    conv = await _conversacion(a, "hola", t1)
+    await turno(conv)  # episodio 1
+    task = await _tarea(conv, now=t1 + timedelta(seconds=2))
+    await _mensaje(conv, "outbound", "¿Qué plan quieres?", t1 + timedelta(seconds=5))
+    await _mensaje(conv, "inbound", "sigo aquí", t2)
+    await turno(conv)  # episodio 2: la tarea tuvo actividad en el 1, sigue abierta
+    assert (await _proyeccion(conv, task)).status == "active"
+    await _mensaje(conv, "outbound", "Te escucho", t2 + timedelta(seconds=5))
+    await _mensaje(conv, "inbound", "Opción B", datetime.now(UTC))
+    await _entrada(conv, {"interactive_id": "opcion:b"})  # episodio 3 empieza con un botón
     p = await _proyeccion(conv, task)
     assert p.status == "cancelled" and p.status_reason == "episode_expired" and "opcion" not in p.slots
-
-
-async def test_modo_sombra_no_cambia_nada_y_registra_diferencias(negocios: dict[str, uuid.UUID], monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    b = negocios["b"]
-    await _banderas(b, False)
-    sombra_conv = await _conversacion(b, "quiero comprar")
-    sombra = _Guion([("ver_opciones_m", {"correo": "no-es-correo"}), ("crear_pedido_m", {}), "Hecho."])
-    antes = LLAMADAS.count("crear_pedido_m")
-    r = await _turno(sombra_conv, sombra, monkeypatch, "quiero comprar")
-    assert r is not None and r.text == "Hecho."
-    assert all("Estado de la conversación" not in blq[-1] for blq in sombra.system)  # sin tarjeta
-    assert LLAMADAS.count("crear_pedido_m") == antes + 1  # en sombra la acción corre igual
-    async with _scope(b) as s:
-        filas = (await s.execute(text(
-            "select input from audit_log where conversation_id = :c and actor = 'core:motor_sombra'"
-        ), {"c": sombra_conv.id})).scalars().all()
-        tareas = (await s.execute(text("select count(*) from conversation_tasks where conversation_id = :c"),
-                                  {"c": sombra_conv.id})).scalar_one()
-    codigos: dict[str, int] = {}
-    for fila in filas:
-        for k, v in fila["codigos"].items():
-            codigos[k] = codigos.get(k, 0) + v
-    assert codigos.get("inicio") == 1 and codigos.get("dato_invalido") == 1 and codigos.get("accion_fuera_de_etapa") == 1
-    assert "no-es-correo" not in json.dumps(filas)
-    assert tareas == 0  # la sombra no escribe tareas

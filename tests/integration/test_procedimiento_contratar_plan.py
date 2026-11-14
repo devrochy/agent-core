@@ -14,7 +14,6 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 from test_procedimientos_agenda_subs_cobranza import (
-    _banderas,
     _conversacion,
     _Guion,
     _negocio,
@@ -60,111 +59,87 @@ async def test_contratar_plan_con_codigo_muestra_el_total_del_servidor_y_no_insc
     packs_registrados, monkeypatch  # noqa: F811
 ) -> None:
     tid = await _negocio(["pack_subscriptions"])
-    await _banderas(tid, True)
-    try:
-        await _plan(tid, "PREMIUM", "100000")
-        await _promo(tid, CODIGO, "20")
-        conv = await _conversacion(tid)
-        guion = _Guion(
-            [
-                ("iniciar_procedimiento", {"procedure_id": PROC}),
-                ("actualizar_tarea", {"slots": {"plan_code": "premium", "codigo_promocion": CODIGO}}),
-                ("sub_cotizar_inscripcion", {"plan_code": "PREMIUM", "codigo_promocion": CODIGO}),
-                "Te cuesta $1 el primer mes, ¿te inscribo?",
-            ]
-        )
-        resultado = await _turno(conv, guion, monkeypatch, "quiero el plan premium, tengo un código")
-        tarea, _ = await _tarea(conv, PROC)
-        assert (tarea.slots.get("plan_code") or {}).get("value") == "PREMIUM", tarea.slots
-        assert float((tarea.slots.get("monto_a_pagar") or {}).get("value")) == 80000.0, tarea.slots
-        assert all("sub_inscribir" not in t for t in guion.tools[:1])  # aún no se ofrece la inscripción
-        assert await _inscripciones(tid, conv.customer_id) == []  # nada se crea antes de confirmar
-        assert resultado is not None
-    finally:
-        await _banderas(tid, False)
+    await _plan(tid, "PREMIUM", "100000")
+    await _promo(tid, CODIGO, "20")
+    conv = await _conversacion(tid)
+    guion = _Guion(
+        [
+            ("iniciar_procedimiento", {"procedure_id": PROC}),
+            ("actualizar_tarea", {"slots": {"plan_code": "premium", "codigo_promocion": CODIGO}}),
+            ("sub_cotizar_inscripcion", {"plan_code": "PREMIUM", "codigo_promocion": CODIGO}),
+            "Te cuesta $1 el primer mes, ¿te inscribo?",
+        ]
+    )
+    resultado = await _turno(conv, guion, monkeypatch, "quiero el plan premium, tengo un código")
+    tarea, _ = await _tarea(conv, PROC)
+    assert (tarea.slots.get("plan_code") or {}).get("value") == "PREMIUM", tarea.slots
+    assert float((tarea.slots.get("monto_a_pagar") or {}).get("value")) == 80000.0, tarea.slots
+    assert all("sub_inscribir" not in t for t in guion.tools[:1])  # aún no se ofrece la inscripción
+    assert await _inscripciones(tid, conv.customer_id) == []  # nada se crea antes de confirmar
+    assert resultado is not None
 
 
 async def test_recorrido_completo_cotiza_pide_datos_confirma_con_boton_e_inscribe(
     packs_registrados, monkeypatch  # noqa: F811
 ) -> None:
     tid = await _negocio(["pack_subscriptions"])
-    await _banderas(tid, True)
-    try:
-        await _plan(tid, "PREMIUM", "100000")
-        await _promo(tid, CODIGO, "20")
-        conv = await _conversacion(tid)
-        guion = _Guion(
-            [
-                ("iniciar_procedimiento", {"procedure_id": PROC}),
-                ("actualizar_tarea", {"slots": {"plan_code": "premium", "codigo_promocion": CODIGO}}),
-                ("sub_cotizar_inscripcion", {"plan_code": "PREMIUM", "codigo_promocion": CODIGO}),
-                "Te cuesta $1, ¿me das tus datos?",
-            ]
-        )
-        await _turno(conv, guion, monkeypatch, "quiero el plan premium, tengo un código")
-        tarea, _ = await _tarea(conv, PROC)
-        pedidos = {k[5:] for k, v in tarea.slots.items() if k.startswith("pide_") and (v or {}).get("value") is True}
-        datos = {
-            "nombre": "Ana Gómez", "documento": "10203040", "email": "ana@ejemplo.co", "telefono": "+573001112233",
-            "negocio": "Taller Ana", "vertical": "servicios",
-        }
-        guion = _Guion(
-            [
-                ("actualizar_tarea", {"slots": {**{k: v for k, v in datos.items() if k in pedidos}, "payment_method": "transferencia"}}),  # sin pasarela en el stack: el resolver solo acepta transferencia
-                ("sub_confirmar_inscripcion", {"plan_code": "PREMIUM", "codigo_promocion": CODIGO, "monto_a_pagar": 80000}),
-                "Resumen listo.",
-            ]
-        )
-        resultado = await _turno(conv, guion, monkeypatch, "mis datos: " + ", ".join(f"{k} {v}" for k, v in datos.items()))
-        assert resultado is not None and resultado.confirmacion is not None
-        assert "80.000" in resultado.text and "$1," not in resultado.text, resultado.text  # el total es el del servidor
-        assert await _inscripciones(tid, conv.customer_id) == []  # nada se crea antes del botón
-
-        await _tocar_boton(conv, resultado)
-        guion = _Guion(
-            [
-                ("sub_confirmar_inscripcion", {"plan_code": "PREMIUM", "codigo_promocion": CODIGO, "monto_a_pagar": 80000}),
-                # Otro plan con el total confirmado: el motor ata los argumentos a la tarea y lo niega.
-                ("sub_inscribir", {"plan_code": "OTRO", "codigo_promocion": CODIGO, "monto_a_pagar": 80000, "customer_data": {}}),
-                ("sub_inscribir", {"plan_code": "PREMIUM", "codigo_promocion": CODIGO, "monto_a_pagar": 80000, "customer_data": {}}),
-                "Listo, quedaste inscrito.",
-            ]
-        )
-        await _turno(conv, guion, monkeypatch, "Confirmar")
-        assert "El valor de plan_code no coincide con el dato vigente" in guion.vistos[-1]
-        [sub] = await _inscripciones(tid, conv.customer_id)
-        assert sub.estado == "pendiente_pago" and sub.customer_id == conv.customer_id
-        tarea, _ = await _tarea(conv, PROC)
-        assert (tarea.slots.get("subscription_id") or {}).get("value") == str(sub.id), tarea.slots
-    finally:
-        await _banderas(tid, False)
-
-
-async def test_las_tools_de_inscripcion_solo_se_ofrecen_con_el_motor_activo(packs_registrados, monkeypatch) -> None:  # noqa: F811
-    tid = await _negocio(["pack_subscriptions"])
     await _plan(tid, "PREMIUM", "100000")
+    await _promo(tid, CODIGO, "20")
     conv = await _conversacion(tid)
-    guion = _Guion(["Hola"])
-    await _turno(conv, guion, monkeypatch, "quiero un plan")
-    assert not any(
-        {"sub_inscribir", "sub_cotizar_inscripcion", "sub_confirmar_inscripcion", "sub_listar_planes"} & t
-        for t in guion.tools
+    guion = _Guion(
+        [
+            ("iniciar_procedimiento", {"procedure_id": PROC}),
+            ("actualizar_tarea", {"slots": {"plan_code": "premium", "codigo_promocion": CODIGO}}),
+            ("sub_cotizar_inscripcion", {"plan_code": "PREMIUM", "codigo_promocion": CODIGO}),
+            "Te cuesta $1, ¿me das tus datos?",
+        ]
     )
+    await _turno(conv, guion, monkeypatch, "quiero el plan premium, tengo un código")
+    tarea, _ = await _tarea(conv, PROC)
+    pedidos = {k[5:] for k, v in tarea.slots.items() if k.startswith("pide_") and (v or {}).get("value") is True}
+    datos = {
+        "nombre": "Ana Gómez", "documento": "10203040", "email": "ana@ejemplo.co", "telefono": "+573001112233",
+        "negocio": "Taller Ana", "vertical": "servicios",
+    }
+    guion = _Guion(
+        [
+            ("actualizar_tarea", {"slots": {**{k: v for k, v in datos.items() if k in pedidos}, "payment_method": "transferencia"}}),  # sin pasarela en el stack: el resolver solo acepta transferencia
+            ("sub_confirmar_inscripcion", {"plan_code": "PREMIUM", "codigo_promocion": CODIGO, "monto_a_pagar": 80000}),
+            "Resumen listo.",
+        ]
+    )
+    resultado = await _turno(conv, guion, monkeypatch, "mis datos: " + ", ".join(f"{k} {v}" for k, v in datos.items()))
+    assert resultado is not None and resultado.confirmacion is not None
+    assert "80.000" in resultado.text and "$1," not in resultado.text, resultado.text  # el total es el del servidor
+    assert await _inscripciones(tid, conv.customer_id) == []  # nada se crea antes del botón
+
+    await _tocar_boton(conv, resultado)
+    guion = _Guion(
+        [
+            ("sub_confirmar_inscripcion", {"plan_code": "PREMIUM", "codigo_promocion": CODIGO, "monto_a_pagar": 80000}),
+            # Otro plan con el total confirmado: el motor ata los argumentos a la tarea y lo niega.
+            ("sub_inscribir", {"plan_code": "OTRO", "codigo_promocion": CODIGO, "monto_a_pagar": 80000, "customer_data": {}}),
+            ("sub_inscribir", {"plan_code": "PREMIUM", "codigo_promocion": CODIGO, "monto_a_pagar": 80000, "customer_data": {}}),
+            "Listo, quedaste inscrito.",
+        ]
+    )
+    await _turno(conv, guion, monkeypatch, "Confirmar")
+    assert "El valor de plan_code no coincide con el dato vigente" in guion.vistos[-1]
+    [sub] = await _inscripciones(tid, conv.customer_id)
+    assert sub.estado == "pendiente_pago" and sub.customer_id == conv.customer_id
+    tarea, _ = await _tarea(conv, PROC)
+    assert (tarea.slots.get("subscription_id") or {}).get("value") == str(sub.id), tarea.slots
 
 
 async def test_sub_inscribir_sin_recorrido_en_foco_no_inscribe(packs_registrados, monkeypatch) -> None:  # noqa: F811
     tid = await _negocio(["pack_subscriptions"])
-    await _banderas(tid, True)
-    try:
-        await _plan(tid, "PREMIUM", "100000")
-        conv = await _conversacion(tid)
-        guion = _Guion(
-            [
-                ("sub_inscribir", {"plan_code": "PREMIUM", "monto_a_pagar": 100000, "customer_data": {"nombre": "Ana"}}),
-                "No pude inscribirte todavía.",
-            ]
-        )
-        await _turno(conv, guion, monkeypatch, "inscríbeme al premium")
-        assert await _inscripciones(tid, conv.customer_id) == []
-    finally:
-        await _banderas(tid, False)
+    await _plan(tid, "PREMIUM", "100000")
+    conv = await _conversacion(tid)
+    guion = _Guion(
+        [
+            ("sub_inscribir", {"plan_code": "PREMIUM", "monto_a_pagar": 100000, "customer_data": {"nombre": "Ana"}}),
+            "No pude inscribirte todavía.",
+        ]
+    )
+    await _turno(conv, guion, monkeypatch, "inscríbeme al premium")
+    assert await _inscripciones(tid, conv.customer_id) == []

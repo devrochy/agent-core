@@ -164,7 +164,7 @@ async def _escenario(*, clases: list[str], gobernadas: list[str] | None = None) 
         packs=frozenset({"pack_commerce", "pack_calendar"}),
     )
     motor = ContextoMotor(
-        modo="activo", tenant_id=tid, conversation_id=conv, customer_id=cliente, channel="instagram",
+        tenant_id=tid, conversation_id=conv, customer_id=cliente, channel="instagram",
         procedimientos={}, herramientas_base=[], candidatas=[], foco=foco, permitidos=permitidos, a2a=ctx,
     )
     llamadas: list[tuple[str, str, dict[str, Any], str]] = []

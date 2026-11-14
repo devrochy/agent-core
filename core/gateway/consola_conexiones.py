@@ -27,7 +27,6 @@ from sqlalchemy import bindparam, text
 
 from core.db.models import utcnow
 from core.db.session import get_session
-from core.kernel.banderas import banderas_del_negocio
 from core.shared.tenant import get_current_tenant_id
 
 VENTANA_CONSUMO = timedelta(days=7)
@@ -120,7 +119,6 @@ class Consistencia:
 class Consola:
     items: list[ConexionFila]
     total: int
-    routing: str
     consistency: Consistencia | None
     unassigned_agents: list[AgenteSinConexion]
 
@@ -163,7 +161,6 @@ def _exigir_scope(tenant_id: uuid.UUID) -> None:
 async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
     _exigir_scope(tenant_id)
     async with get_session() as session:
-        banderas = await banderas_del_negocio(session, tenant_id)
         total = int(
             (
                 await session.execute(
@@ -242,7 +239,6 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
     return Consola(
         items=items,
         total=total,
-        routing=banderas.ruteo,
         consistency=consistencia,
         unassigned_agents=sin_conexion,
     )

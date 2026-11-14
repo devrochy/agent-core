@@ -395,17 +395,11 @@ async def test_el_toque_no_corre_el_router_ni_consume_el_payload_de_boton_del_tu
     conv_id, cliente = await _conversacion_v3(tid, cid)
     conv, cust = await _objetos(tid, conv_id, cliente)
     envio = await crear_envio(tid, conv_id)
-    from _api_helpers import banderas_como_dueno
-
-    await banderas_como_dueno(tid, aos_routing="shadow")
-    try:
-        async with tenant_scope(tid):
-            await guardar_payload(tid, conv_id, "proc:pagar")  # lo espera el turno diferido del botón de un procedimiento
-        outcome, _ = await tocar_real(envio, envio.payload(), conv, cust)
-        async with tenant_scope(tid):
-            restante = await tomar_payload(tid, conv_id)
-    finally:
-        await banderas_como_dueno(tid, aos_routing="off")
+    async with tenant_scope(tid):
+        await guardar_payload(tid, conv_id, "proc:pagar")  # lo espera el turno diferido del botón de un procedimiento
+    outcome, _ = await tocar_real(envio, envio.payload(), conv, cust)
+    async with tenant_scope(tid):
+        restante = await tomar_payload(tid, conv_id)
 
     assert outcome == "ok"
     assert restante == "proc:pagar", "el toque no consume (GETDEL) el payload de ruteo del turno que espera"

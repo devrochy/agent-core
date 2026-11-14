@@ -8,7 +8,6 @@
     "pack_subscriptions"
   ],
   "plan": "premium",
-  "motor_de_procedimientos": true,
   "pagos_simulados": {
     "monto_minimo": 150000
   },

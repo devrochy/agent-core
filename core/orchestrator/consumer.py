@@ -542,7 +542,7 @@ async def _handle_inbound_scoped(fields: dict[str, str], *, opciones_habilitada:
         return
 
     # ---------------- datos sin LLM (HU-AOS-05): botón, fila de lista o contenido que llena un
-    # dato de la tarea en foco. Solo con `aos_procedures`; sin botón ni media no consulta nada.
+    # dato de la tarea en foco. Sin botón ni media no consulta nada.
     await entrada_sin_llm(conversation, fields)
 
     # ---------------- velocidad de respuesta

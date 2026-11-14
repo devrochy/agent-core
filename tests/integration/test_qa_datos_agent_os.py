@@ -2,13 +2,14 @@
 
 Con `QA_TESTERS_ENABLED` (monkeypatch), sin LLM real:
 
-- **Negocio nuevo:** chat web activo con clave y origen de la landing,
-  `aos_procedures`, `aos_routing = active`, Ventas (por defecto) + Agenda en el chat web (Cobranza la crea el tester en el editor y no se toca)
+- **Negocio nuevo:** chat web activo con clave y origen de la landing (el motor y el ruteo ya no son
+  banderas, ADR-0191), Ventas (por defecto) + Agenda en el chat web (Cobranza la crea el tester en el
+  editor y no se toca)
   con las reglas `preset_*` del Coordinador y la release activa; la respuesta trae la clave, el
   enlace y los agentes. Volver a pulsar responde 200 sin contraseñas y no duplica nada.
 - **Fallo a medias:** si la promoción falla después del preset, el reintento completa y las
   reglas del Coordinador siguen.
-- **Aislamiento:** no toca otro negocio; un slug que no es del tester no recibe banderas.
+- **Aislamiento:** no toca otro negocio; un slug que no es del tester no recibe nada.
 - **Ruteo activo:** «quiero agendar una demo» por el chat web lo atiende Agenda (modelo guionado).
 """
 
@@ -88,13 +89,6 @@ async def _tester(app_client: Any, t1: uuid.UUID) -> dict[str, str]:
     return await api_headers(app_client, t1, email=email, password=PASSWORD)
 
 
-async def _banderas(tid: uuid.UUID) -> tuple[bool, str]:
-    ((procedimientos, ruteo),) = await _sql(
-        None, "select aos_procedures, aos_routing from tenants where id = :t", t=tid
-    )
-    return bool(procedimientos), str(ruteo)
-
-
 async def _foto(tid: uuid.UUID) -> dict[str, Any]:
     """Conteos que no deben crecer al volver a preparar."""
     consultas = {
@@ -112,7 +106,6 @@ async def _foto(tid: uuid.UUID) -> dict[str, Any]:
         except Exception:  # tabla de un pack con otro nombre: no se cuenta
             continue
         foto[clave] = n
-    foto["banderas"] = await _banderas(tid)
     foto["activas"] = sorted(
         str(r) for (r,) in await _sql(tid, "select active_release_id from channel_connections where tenant_id = :t and deleted_at is null", t=tid)
     )
@@ -145,7 +138,6 @@ def _verificar_listo(datos: dict[str, Any]) -> None:
 
 
 async def _verificar_negocio(tid: uuid.UUID, clave: str) -> None:
-    assert await _banderas(tid) == (True, "active")
     ((cid, activa, origenes),) = await _sql(
         tid,
         "select id, active, settings->'allowed_origins' from channel_connections "
@@ -225,8 +217,6 @@ async def test_un_fallo_a_medias_se_reintenta_sin_perder_las_reglas(app_client: 
     datos = r.json()
     tid = uuid.UUID(datos["negocio"]["id"])
     assert datos["agent_os"]["estado"] == "error" and "promoción caída" in datos["agent_os"]["motivo"]
-    # Nace en v3 (ADR-0191); el ruteo no se encendió.
-    assert await _banderas(tid) == (False, "off")
     assert "preset_agenda_palabras" in await _reglas(tid)
 
     entorno.setattr(datos_aos, "_activar_releases", original)
@@ -256,7 +246,7 @@ async def test_no_toca_otro_negocio(app_client: Any, tenant_setup: Any, entorno:
         assert await _foto(t) == fotos[t]
         assert await _sql(t, "select web_chat_config from app_settings where tenant_id = :t and deleted_at is null", t=t) == chats[t]
 
-    # Un id o un slug que no son del negocio de prueba: ni chat web, ni agentes, ni banderas.
+    # Un id o un slug que no son del negocio de prueba: ni chat web ni agentes.
     ((slug_t1,),) = await _sql(None, "select slug from tenants where id = :t", t=t1)
     for tid, slug in ((t1, slug_t1), (t1, f"qa-{uuid.uuid4().hex[:12]}"), (t2, r.json()["negocio"]["slug"])):
         motivo = await datos_aos.preparar(tid, slug)

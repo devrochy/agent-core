@@ -1,7 +1,7 @@
 """HU-AOS-16 (parte 1) · procedimientos por agente con el loop real y un modelo guionado (sin LLM).
 
-Negocio con el motor de procedimientos (`aos_procedures`), `pack_commerce` y
-`pack_calendar`, y `AOS_CONNECTION_ROUTING` encendida (la ranura de la release solo se llena así):
+Negocio con el motor de procedimientos (en todo negocio, ADR-0191), `pack_commerce` y
+`pack_calendar`:
 
 - **El especialista por defecto ve lo mismo que sin release** (B3 del arquitecto): con la release del especialista por
   defecto, las tools ofrecidas (incluidas las puertas) y el enum de `iniciar_procedimiento` son
@@ -58,24 +58,6 @@ async def _sql(tid: uuid.UUID | None, sql: str, **params: Any) -> list[Any]:
             return list(resultado.all()) if getattr(resultado, "returns_rows", False) else []
 
 
-async def _banderas(tid: uuid.UUID, procedimientos: bool) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("update tenants set aos_procedures = false where id = :t"), {"t": tid})
-            await conn.execute(
-                text("update tenants set aos_procedures = :p where id = :t"),
-                {"t": tid, "p": procedimientos},
-            )
-    finally:
-        await engine.dispose()
-
-
 @pytest.fixture(scope="module", autouse=True)
 async def _proceso() -> None:
     """Packs registrados en `pack_versions` y activos en el proceso, y las tools del core."""
@@ -117,7 +99,6 @@ async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:
     )
     reporte = await release_inicial(tid, _modules())
     assert not reporte.fallo, reporte.errores
-    await _banderas(tid, True)
     return tid, cid
 
 
@@ -266,7 +247,6 @@ async def _tareas(tid: uuid.UUID, conv: uuid.UUID) -> list[Any]:
 @pytest.fixture
 def _ruteo(monkeypatch: Any) -> None:
     pass
-
 
 
 # ---------------------------------------------------------------- el especialista por defecto: lo mismo que sin release

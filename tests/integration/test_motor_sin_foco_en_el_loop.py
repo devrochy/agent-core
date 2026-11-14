@@ -1,14 +1,13 @@
 """Adenda 2026-10-12 de ADR-0113 · sin foco no hay camino de siempre, contra el loop real, sin LLM.
 
-Reproduce el hallazgo de la prueba real en test (2026-10-12): negocio con `aos_procedures`, sin
-tarea en foco, el modelo intenta cerrar la venta con `confirmar_cotizacion` sin iniciar el
-procedimiento. Ahora la acción no se ofrece, se niega con la pista de qué recorrido iniciar, el
-modelo llama `iniciar_procedimiento(pack_commerce.contratar_plan)` y sigue el procedimiento.
+Reproduce el hallazgo de la prueba real en test (2026-10-12): sin tarea en foco, el modelo intenta
+cerrar la venta con `confirmar_cotizacion` sin iniciar el procedimiento. Ahora la acción no se
+ofrece, se niega con la pista de qué recorrido iniciar, el modelo llama `iniciar_procedimiento(pack_commerce.contratar_plan)` y sigue el procedimiento.
 
 Modelo guionado (`resolve_provider`), loop real (`process_conversation` por el runner de journeys),
 tools reales de pack-commerce y la base de prueba. Más: un lote `iniciar` + `confirmar_cotizacion`
-cae en `fuera_de_etapa`, `confirmar_pago_pedido` sigue disponible sin foco y el aislamiento entre un
-negocio con la bandera y otro sin ella.
+cae en `fuera_de_etapa`, `confirmar_pago_pedido` sigue disponible sin foco y la pista y la negación son del negocio del
+turno.
 """
 
 from __future__ import annotations
@@ -56,25 +55,7 @@ CATALOGO = {
 }
 
 
-async def _banderas(tid: uuid.UUID, encendidas: bool) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from core.config import get_settings
-
-    settings = get_settings()
-    engine = create_async_engine(settings.migrations_database_url or settings.database_url)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("update tenants set aos_procedures = false where id = :t"), {"t": tid})
-            await conn.execute(
-                text("update tenants set aos_procedures = :p where id = :t"),
-                {"t": tid, "p": encendidas},
-            )
-    finally:
-        await engine.dispose()
-
-
-async def _alta(pagos: Any, prefijo: str, encendidas: bool) -> tuple[uuid.UUID, str]:
+async def _alta(pagos: Any, prefijo: str) -> tuple[uuid.UUID, str]:
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 
@@ -94,12 +75,11 @@ async def _alta(pagos: Any, prefijo: str, encendidas: bool) -> tuple[uuid.UUID, 
     async with tenant_scope(tid):
         await plugin_manager.save_config("pack_commerce", {"checkout_fields": CHECKOUT})
     await journeys.encender_runtime_v3(tid)  # todo turno corre sobre la release de su conexión (ADR-0191)
-    await _banderas(tid, encendidas)
     return tid, slug
 
 
 async def _alta_agenda(pagos: Any) -> tuple[uuid.UUID, str]:
-    """C: solo agenda, con la bandera. Sus procedimientos y puertas son otros que los de A."""
+    """C: solo agenda. Sus procedimientos y puertas son otros que los de A."""
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 
@@ -112,13 +92,12 @@ async def _alta_agenda(pagos: Any) -> tuple[uuid.UUID, str]:
             "event_duration_minutes": 60,
         })
     await journeys.encender_runtime_v3(tid)
-    await _banderas(tid, True)
     return tid, slug
 
 
 @pytest.fixture(scope="module")
-async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID, Any]]:
-    """Dos negocios con los mismos packs: A con `aos_procedures`, B sin la bandera."""
+async def negocios() -> AsyncIterator[tuple[uuid.UUID, Any]]:
+    """El negocio de comercio A (el motor corre en todo negocio, ADR-0191)."""
     import pack_payments.payments as capacidad
 
     from core.tenants import deactivate_tenant, purge_tenant
@@ -126,13 +105,11 @@ async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID, Any]]:
     original = capacidad.build_provider
     await journeys._preparar_proceso()
     pagos = journeys.PagoSimulado(monto_minimo=150000)
-    tid_a, slug_a = await _alta(pagos, "sinfoco-a", True)
-    tid_b, slug_b = await _alta(pagos, "sinfoco-b", False)
-    yield tid_a, tid_b, pagos
+    tid_a, slug_a = await _alta(pagos, "sinfoco-a")
+    yield tid_a, pagos
     capacidad.build_provider = original
-    for tid, slug in ((tid_a, slug_a), (tid_b, slug_b)):
-        await deactivate_tenant(str(tid))
-        await purge_tenant(str(tid), f"ELIMINAR {slug}")
+    await deactivate_tenant(str(tid_a))
+    await purge_tenant(str(tid_a), f"ELIMINAR {slug_a}")
 
 
 class _Guion:
@@ -209,7 +186,7 @@ def _pista() -> tuple[str, str]:
 
 
 async def test_sin_foco_confirmar_se_niega_y_el_modelo_inicia_el_procedimiento(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    tid_a, _, pagos = negocios
+    tid_a, pagos = negocios
     ctx = await _cliente(tid_a, pagos)
     quote_ajena = str(uuid.uuid4())
     _, guion = await _turno(ctx, monkeypatch, "Quiero comprar dos hamburguesas", [
@@ -244,7 +221,7 @@ async def test_sin_foco_confirmar_se_niega_y_el_modelo_inicia_el_procedimiento(n
 
 
 async def test_iniciar_y_confirmar_en_el_mismo_lote_cae_en_la_etapa(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    tid_a, _, pagos = negocios
+    tid_a, pagos = negocios
     ctx = await _cliente(tid_a, pagos)
     _, guion = await _turno(ctx, monkeypatch, "Quiero hamburguesas", [
         ("iniciar_procedimiento", {"procedure_id": PEDIDO}),
@@ -258,7 +235,7 @@ async def test_iniciar_y_confirmar_en_el_mismo_lote_cae_en_la_etapa(negocios, mo
 async def test_sin_foco_el_link_de_un_pedido_se_sigue_pidiendo(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """`confirmar_pago_pedido` no es puerta: el cliente que vuelve después de que la tarea venció
     puede pedir otra vez el link de su pedido."""
-    tid_a, _, pagos = negocios
+    tid_a, pagos = negocios
     ctx = await _cliente(tid_a, pagos)
     _, guion = await _turno(ctx, monkeypatch, "Mándame el link de pago otra vez", [
         ("confirmar_pago_pedido", {"order_id": str(uuid.uuid4())}),
@@ -272,41 +249,13 @@ async def test_sin_foco_el_link_de_un_pedido_se_sigue_pidiendo(negocios, monkeyp
 # ---------------------------------------------------------------- aislamiento
 
 
-async def test_el_otro_negocio_sin_la_bandera_no_cambia(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    tid_a, tid_b, pagos = negocios
-    sin_foco, _ = _pista()
-    ctx_b = await _cliente(tid_b, pagos)
-    _, guion_b = await _turno(ctx_b, monkeypatch, "Quiero comprar hamburguesas", [
-        ("confirmar_cotizacion", {"quote_id": str(uuid.uuid4())}),
-        "Te ayudo.",
-    ])
-    ofrecidas_b = set(guion_b.tools[0])
-    assert "confirmar_cotizacion" in ofrecidas_b and "crear_pedido" in ofrecidas_b
-    assert not ofrecidas_b & {"iniciar_procedimiento", "actualizar_tarea", "confirmar_tarea", "cancelar_tarea"}
-    assert sin_foco not in guion_b.sistema[0]
-    assert NEGADA not in guion_b.resultados[0]  # la tool corrió como siempre (la cotización no existe)
-    assert await _tareas(ctx_b) == []
-    negadas_b = await _filas(ctx_b, "select action from audit_log where tenant_id = :t and conversation_id = :c "
-                                    "and actor = 'tool:confirmar_cotizacion' and action = 'denied'")
-    assert negadas_b == []
-
-    # Intercalado: el negocio con la bandera sigue negando en el mismo proceso.
-    ctx_a = await _cliente(tid_a, pagos)
-    _, guion_a = await _turno(ctx_a, monkeypatch, "Confirmo la cotización", [
-        ("confirmar_cotizacion", {"quote_id": str(uuid.uuid4())}),
-        "Primero armemos tu pedido.",
-    ])
-    assert "confirmar_cotizacion" not in guion_a.tools[0] and sin_foco in guion_a.sistema[0]
-    assert NEGADA in guion_a.resultados[0]
-
-
 async def test_la_pista_y_la_negacion_son_del_negocio_del_turno(negocios, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Un negocio C con otros packs (solo agenda) y la bandera: su negación y su pista nombran sus
+    """Un negocio C con otros packs (solo agenda): su negación y su pista nombran sus
     procedimientos y puertas, nunca los de comercio de A; y A no ve los de C. Una tarea en foco en
     otra conversación de A no cambia la decisión de esta."""
     from core.tenants import deactivate_tenant, purge_tenant
 
-    tid_a, _, pagos = negocios
+    tid_a, pagos = negocios
     tid_c, slug_c = await _alta_agenda(pagos)
     try:
         ctx_c = await _cliente(tid_c, pagos)

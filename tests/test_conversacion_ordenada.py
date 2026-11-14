@@ -5,7 +5,7 @@ en el orden del procedimiento (o solo lo que falta), el resumen único lleva los
 y los documentos que acepta sin recortarlos, la pregunta del kernel cuando el turno agota sus
 vueltas, el append con un link que el texto ya trae, el tipo de negocio por sinónimos y los rótulos
 de la habilidad. La reproducción de la transcripción con el loop real está en
-`tests/integration/test_conversacion_ordenada_motor.py`.
+`tests/integration/test_motor_contratar_plan.py`.
 """
 
 from __future__ import annotations

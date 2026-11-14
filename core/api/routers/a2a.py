@@ -88,7 +88,7 @@ class RouteCandidate(BaseModel):
 
 
 class RoutePreview(BaseModel):
-    mode: str = Field(description="`off`, `shadow` o `active`: si hoy el router decide en esta conexión.")
+    mode: str = Field(description="`active`, o `shadow` si la release de la conexión pide sombra (`routing.shadowMode`).")
     source: str = Field(description="`rule`, `trigger` o `default`.")
     agent_key: str
     agent_id: uuid.UUID

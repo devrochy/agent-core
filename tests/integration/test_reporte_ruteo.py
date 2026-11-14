@@ -1,7 +1,7 @@
 """HU-AOS-17 · el reporte del enrutamiento con el loop real y un modelo guionado (sin LLM).
 
-- **Sombra:** una predicción que el agente por defecto no inicia queda **sin verdad** (no es una
-  precisión de 0); la que inicia, acierta. El origen es `sombra`.
+- **Sombra** (la pide la release, `routing.shadowMode`): una predicción que el agente por defecto
+  no inicia queda **sin verdad** (no es una precisión de 0); la que inicia, acierta. El origen es `sombra`.
 - **Activo:** no se escribe `shadow_route`, y aun así el reporte mide el disparador (primer candidato)
   contra lo que inicia el especialista; el origen es `activo`.
 - **Golden:** la verdad por escenario contra la release activa de la conexión, sin tráfico ni inicios.
@@ -22,9 +22,9 @@ from test_enrutamiento_especialistas import (
     _con_dos_especialistas,
     _conversacion,
     _decision,
-    _modo,
     _negocio,
     _proceso,  # noqa: F401  (fixture de módulo, autouse: registra los packs en el proceso)
+    _sombra_de_la_release,
     _turno,
 )
 
@@ -59,7 +59,7 @@ def _por(reporte: Any) -> dict[str, Any]:
 
 
 async def test_sombra_sin_inicio_queda_sin_verdad_y_activo_mide_el_disparador(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, _inst = await _con_dos_especialistas("shadow")
+    tid, cid, _inst = await _con_dos_especialistas(sombra=True)
 
     # Sombra: el router predice el plan y Ventas (por defecto) lo inicia → acierto.
     c1 = await _conversacion(tid, cid)
@@ -76,7 +76,7 @@ async def test_sombra_sin_inicio_queda_sin_verdad_y_activo_mide_el_disparador(_r
     assert (por[CITA].predichos, por[CITA].reales, por[CITA].sin_verdad, por[CITA].precision) == (1, 0, 1, None)
 
     # Activo: no hay shadow_route de ruta, el reporte sigue midiendo (por `candidates`).
-    await _modo(tid, "active")
+    await _sombra_de_la_release(tid, cid, False)
     c3 = await _conversacion(tid, cid)
     await _turno(tid, c3, monkeypatch, [("iniciar_procedimiento", {"procedure_id": CITA}), "¿Qué día?"], texto=DEMO)
     d = await _decision(tid, c3)
@@ -89,19 +89,11 @@ async def test_sombra_sin_inicio_queda_sin_verdad_y_activo_mide_el_disparador(_r
     assert por[CITA].precision == 1.0 and por[CITA].recall == 1.0
 
 
-async def test_con_el_ruteo_apagado_no_hay_predicciones(_ruteo: None, monkeypatch: Any) -> None:
-    tid, cid, _inst = await _con_dos_especialistas("off")
-    conv = await _conversacion(tid, cid)
-    await _turno(tid, conv, monkeypatch, [("iniciar_procedimiento", {"procedure_id": PLAN}), "¿Qué plan?"], texto=PREMIUM)
-    r = await _reporte(tid)
-    assert (r.turnos, r.por_origen, r.metricas) == (0, {}, [])  # sin `candidates`: ni sombra ni activo
-
-
 async def test_el_golden_se_mide_contra_la_release_activa_sin_trafico(_ruteo: None) -> None:
     from core.kernel.ruteo_sombra import CasoGolden, reporte_de_golden
     from core.shared.tenant import tenant_scope
 
-    tid, cid, _inst = await _con_dos_especialistas("off")
+    tid, cid, _inst = await _con_dos_especialistas()
     casos = [CasoGolden(DEMO, CITA, "c"), CasoGolden(PREMIUM, PLAN, "c"), CasoGolden("quiero un pedido", "pack_commerce.x", "c")]
     async with tenant_scope(tid):
         por_conexion = await reporte_de_golden(tid, casos)
@@ -117,7 +109,7 @@ async def test_aislamiento_del_reporte(_ruteo: None, monkeypatch: Any) -> None:
     from core.kernel.ruteo_sombra import CasoGolden, reporte_de_golden, reporte_de_sombra
     from core.shared.tenant import tenant_scope
 
-    tid, cid, _inst = await _con_dos_especialistas("shadow")
+    tid, cid, _inst = await _con_dos_especialistas(sombra=True)
     conv = await _conversacion(tid, cid)
     await _turno(tid, conv, monkeypatch, ["Claro."], texto=DEMO)
     otro, _ = await _negocio()

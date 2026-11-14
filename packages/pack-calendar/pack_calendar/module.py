@@ -464,8 +464,7 @@ class GoogleCalendarModule(BaseModule):
         from core.shared.events import ON_APPOINTMENT_CHANGED
 
         host.subscribe(ON_APPOINTMENT_CHANGED, _on_cita_cambiada)
-        # HU-AOS-08: procedimiento `agendar_cita` y sus resolvers (solo los usa el motor, detrás
-        # de `tenants.aos_procedures`).
+        # HU-AOS-08: procedimiento `agendar_cita` y sus resolvers (solo los usa el motor).
         from pack_calendar.procedimientos import registrar
 
         registrar(host, PLUGIN_ID)

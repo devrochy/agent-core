@@ -4,13 +4,13 @@ Se componen con el `connection_predicate` de una tool (lo evalúa el loop por tu
 las candidatas del motor):
 
 - `sin_motor_activo`: la tool de siempre que el procedimiento reemplaza (`sub_cambiar_plan`,
-  `cob_registrar_promesa_pago`) no se ofrece con `tenants.aos_procedures` encendida: el modelo no
-  puede saltarse el botón con ella. Si la bandera no se puede leer, se ofrece como siempre (con la
-  bandera apagada nada cambia; adenda HU-AOS-08 de ADR-0113).
-- `solo_con_motor_activo`: una acción que solo existe para un procedimiento no se ofrece sin la
-  bandera, aunque un flujo del negocio la nombre. Si la bandera no se puede leer, no se ofrece.
+  `cob_registrar_promesa_pago`) no se ofrece en un turno con negocio: el modelo no puede saltarse
+  el botón con ella (adenda HU-AOS-08 de ADR-0113).
+- `solo_con_motor_activo`: una acción que solo existe para un procedimiento se ofrece solo en un
+  turno con negocio, aunque un flujo la nombre fuera de él.
 
-Leen la bandera del negocio del contexto (`get_current_tenant_id()`) en cada evaluación.
+El motor de procedimientos ya no es bandera por negocio (ADR-0191, HU-AOS-69): está encendido en
+todo turno con negocio en contexto (`get_current_tenant_id()`).
 
 HU-AOS-16 (fail-closed por agente y por scope, ADR-0118 §2 y §3): con una release en el turno y
 el motor activo, `ofrecidas_para_el_agente` deja pasar solo las acciones de las habilidades de
@@ -37,21 +37,11 @@ async def _siempre(_tipos: set[str]) -> bool:
 
 
 async def motor_activo() -> bool | None:
-    """¿El negocio del contexto tiene `aos_procedures`? None si no se pudo leer o no hay negocio."""
+    """¿Corre el motor en este contexto? True con negocio (ADR-0191: el motor ya no es bandera);
+    None sin negocio. Sin lectura de base."""
     from core.shared.tenant import get_current_tenant_id
 
-    tenant_id = get_current_tenant_id()
-    if tenant_id is None:
-        return None
-    try:
-        from core.db.session import get_session
-        from core.kernel.banderas import banderas_del_negocio
-
-        async with get_session() as session:
-            return (await banderas_del_negocio(session, tenant_id)).procedimientos
-    except Exception:
-        log.warning("oferta_bandera_ilegible", exc_info=True)
-        return None
+    return True if get_current_tenant_id() is not None else None
 
 
 CORE_OWNER = "core"

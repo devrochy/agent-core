@@ -138,20 +138,14 @@ def test_la_leyenda_explica_el_cero_en_sombra() -> None:
     r = metricas([(CITA, None)] * 7)  # 7 predicciones, ninguna conversación inició nada
     por = r.metricas[0]
     assert (por.predichos, por.reales, por.sin_verdad, por.precision) == (7, 0, 7, None)
-    notas = " ".join(leyenda_trafico("shadow", True, r))
+    notas = " ".join(leyenda_trafico(r))
     assert "sin verdad" in notas.lower() and "golden" in notas and "no es una precisión de 0" in notas
 
 
 def test_la_leyenda_en_activo_dice_por_que_no_hay_sombra_y_que_las_reglas_no_se_miden() -> None:
     r = Reporte(reglas_activas=3)
-    notas = " ".join(leyenda_trafico("active", True, r))
+    notas = " ".join(leyenda_trafico(r))
     assert "no escribe shadow_route" in notas and "3 en la ventana" in notas and "Sin turnos medibles" in notas
-
-
-def test_la_leyenda_avisa_si_no_hay_procedimientos_o_el_ruteo_esta_apagado() -> None:
-    r = metricas([(CITA, None)])
-    assert "aos_procedures está apagada" in " ".join(leyenda_trafico("shadow", False, r))
-    assert "apagado" in " ".join(leyenda_trafico("off", True, Reporte()))
 
 
 def test_el_cli_rechaza_una_fuente_o_un_golden_invalidos(tmp_path: Path) -> None:

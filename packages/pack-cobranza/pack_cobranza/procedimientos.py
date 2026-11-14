@@ -198,8 +198,7 @@ async def resumen_de_promesa(args: dict[str, Any], ctx: ToolContext) -> list[Dat
 
 def registrar(host: Any, plugin_id: str) -> None:
     """Publica el procedimiento, su resolver y el resumen de la confirmación (lo llama
-    `on_activate`). Sin banderas encendidas nadie los usa: el motor solo actúa con
-    `tenants.aos_procedures` (o en sombra sin ella)."""
+    `on_activate`); los usa el motor del core."""
     from core.kernel.procedures import de_pack
 
     host.register_resolver(f"{plugin_id}.fecha_de_promesa", validar=fecha_de_promesa)
