@@ -274,3 +274,30 @@ async def test_imagen_con_proveedor_caido_no_mide(ledger, monkeypatch) -> None:
         await _imagen(_config())
     assert error.value.causa == "vision_timeout"
     assert ledger == []
+
+
+async def test_mide_dentro_del_scope_del_negocio(monkeypatch) -> None:
+    from core.shared.tenant import get_current_tenant_id
+
+    vistos: list[Any] = []
+
+    class Sesion:
+        def add(self, fila: Any) -> None:
+            vistos.append(get_current_tenant_id())
+
+    @asynccontextmanager
+    async def sesion(*_a: Any, **_k: Any):
+        yield Sesion()
+
+    monkeypatch.setattr("core.db.session.get_session", sesion)
+    await _texto(ProveedorFalso('{"nombre": "Café", "precio": 1}'))
+    assert vistos == [TENANT]  # sin scope previo, el helper abre el del negocio
+
+
+async def test_otro_negocio_en_el_contexto_no_se_cobra_a_ciegas(ledger) -> None:
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(uuid.uuid4()):
+        salida = await _texto(ProveedorFalso('{"nombre": "Café", "precio": 1}'))
+    assert ledger == []
+    assert salida.consumo.credits is None

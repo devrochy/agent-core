@@ -101,13 +101,25 @@ def extraer_objeto[M: BaseModel](contenido: str | None, esquema: type[M]) -> M:
     return esquema.model_validate(json.loads(hallado.group(0)))
 
 
+def _scope(tenant_id: uuid.UUID) -> Any:
+    """`tenant_scope` del negocio (RLS de la sesión). Lo abre el helper para que un llamador sin
+    scope (cron, tarea) no pierda la llave propia ni la fila del ledger en silencio; si ya hay
+    otro negocio en el contexto, es un error de quien llama y falla cerrado."""
+    from core.shared.tenant import get_current_tenant_id, tenant_scope
+
+    actual = get_current_tenant_id()
+    if actual is not None and actual != tenant_id:
+        raise ValueError("el tenant_id no coincide con el negocio del contexto")
+    return tenant_scope(tenant_id)
+
+
 async def _app_settings(tenant_id: uuid.UUID) -> Any:
     from sqlalchemy import select
 
     from core.db.models import AppSettings
     from core.db.session import get_session
 
-    async with get_session() as session:
+    async with _scope(tenant_id), get_session() as session:
         return (
             await session.execute(select(AppSettings).where(AppSettings.tenant_id == tenant_id))
         ).scalar_one_or_none()
@@ -161,7 +173,7 @@ async def _medir(
     try:
         trm = trm_vigente()
         calculados = creditos_por_evento(cost_usd, concepto, key_mode, trm)  # type: ignore[arg-type]
-        async with get_session() as session:
+        async with _scope(tenant_id), get_session() as session:
             session.add(
                 UsageLedger(
                     tenant_id=tenant_id,
@@ -182,7 +194,12 @@ async def _medir(
             )
         credits = calculados
     except Exception as exc:
-        log.warning("usage_ledger_ia_estructurada_write_failed", kind=kind, error=type(exc).__name__)
+        log.warning(
+            "usage_ledger_ia_estructurada_write_failed",
+            tenant_id=str(tenant_id),
+            kind=kind,
+            error=type(exc).__name__,
+        )
     return Consumo(
         model=model,
         input_tokens=input_tokens,
