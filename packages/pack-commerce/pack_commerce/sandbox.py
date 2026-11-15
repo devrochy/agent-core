@@ -101,7 +101,7 @@ async def _calcular_cotizacion(arguments: dict[str, Any]) -> tuple[dict[str, Any
         data = await _get_variant_with_stock(variant_ref)
         if data is None or not data["variant"].active:
             return {"error": "Uno de los productos solicitados no está disponible."}
-        if not data["sin_inventario"] and data["stock"] < quantity:
+        if data["stock"] < quantity:
             return {
                 "error": f"No hay stock suficiente de {data['product'].name} "
                 f"(disponible: {data['stock']})."
@@ -265,7 +265,7 @@ async def simular_agregar_item_pedido(arguments: dict[str, Any], context: ToolCo
         data = await _get_variant_with_stock(variant_ref)
         if data is None or not data["variant"].active:
             return {"error": "Uno de los productos no está disponible."}
-        if not data["sin_inventario"] and data["stock"] < quantity:
+        if data["stock"] < quantity:
             return {"error": f"No hay stock suficiente de {data['product'].name}."}
         additions.append((data["variant"].sku, quantity, data["price"]))
         add_total += data["price"] * quantity
