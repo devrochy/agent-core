@@ -138,7 +138,7 @@ async def _escenario(*, clases: list[str], gobernadas: list[str] | None = None) 
     async with tenant_scope(tid):
         async with get_session() as s:
             await state.iniciar(
-                s, tenant_id=tid, conversation_id=conv, procedure_id=PLAN, procedure_version="2.0.0",
+                s, tenant_id=tid, conversation_id=conv, procedure_id=PLAN, procedure_version="2.0.1",
                 stage="elegir_plan", actor="kernel", owner_instance_id=inst["ventas"],
             )
         async with get_session() as s:

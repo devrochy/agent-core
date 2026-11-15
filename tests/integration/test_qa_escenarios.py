@@ -233,7 +233,7 @@ async def test_escalacion_en_curso(app_client: Any, preparado: dict[str, Any]) -
     pedido = tareas["pack_commerce.tomar_pedido"]
     assert pedido["status"] == "escalated" and pedido["last_action"]["ok"] is False, pedido
     versiones = dict(await _sql(p["tid"], "select procedure_id, procedure_version from conversation_tasks where conversation_id = :c", c=conv))
-    assert versiones["pack_subscriptions.contratar_plan"] == "2.0.0"
+    assert versiones["pack_subscriptions.contratar_plan"] == "2.0.1"
     esc = await app_client.get("/api/v1/admin/escalations", headers=p["panel"])
     assert conv in esc.text, esc.text
 

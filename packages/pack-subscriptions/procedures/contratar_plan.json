@@ -1,7 +1,7 @@
 {
   "contract": "procedure/1",
   "id": "pack_subscriptions.contratar_plan",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "title": "Contratar un plan",
   "triggers": {
     "description": "El cliente quiere comprar, contratar o pagar un plan o suscripción del negocio.",
@@ -140,7 +140,7 @@
   "stages": [
     {
       "id": "elegir_plan",
-      "goal": "Que el cliente elija un plan con precios reales del catálogo.",
+      "goal": "Que el cliente elija un plan con precios reales del catálogo. Si ya nombró el plan, fija plan_code con sus palabras (el sistema encuentra el plan); si no, pregúntale cuál plan quiere por su nombre, nunca por su código o SKU.",
       "actions": [
         "sub_listar_planes"
       ],
@@ -195,7 +195,7 @@
     },
     {
       "id": "pagar",
-      "goal": "Inscribir al cliente y, si paga en línea, enviar el link de pago.",
+      "goal": "Inscribir al cliente y, si paga en línea, enviar el link de pago. Al terminar dile el número de su suscripción y su estado; no ofrezcas enviarle una confirmación por correo: lo que le llegue por correo lo envía el sistema.",
       "risk": "high",
       "actions": [
         "sub_inscribir",

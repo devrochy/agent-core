@@ -433,11 +433,15 @@ class SubscriptionSkill(BaseSkill):
         codigo = str(arguments.get("plan_code") or "").strip()
         if codigo:
             plan = await cap.plan_por_codigo(codigo)
-            if plan is None:
-                raise SubscriptionError("Ese plan no existe o no está disponible.", code="plan_no_encontrado")
-            return {"encontrado": True, "plan": _plan_para_el_modelo(plan)}
+            if plan is not None:
+                return {"encontrado": True, "plan": _plan_para_el_modelo(plan)}
         planes = await cap.listar_planes(solo_activos=True)
-        return {"encontrado": bool(planes), "planes": [_plan_para_el_modelo(p) for p in planes]}
+        resultado = {"encontrado": bool(planes), "planes": [_plan_para_el_modelo(p) for p in planes]}
+        if codigo:
+            # Un código adivinado (p. ej. «free» por «PLAN-FREE») no corta la vuelta: va el catálogo y el
+            # modelo elige con el plan_code real, sin otra llamada.
+            resultado["codigo_no_encontrado"] = codigo[:100]
+        return resultado
 
     async def cotizar_inscripcion(self, arguments: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         return await cotizacion_de_inscripcion(ctx, str(arguments.get("plan_code") or ""), arguments.get("codigo_promocion"))
