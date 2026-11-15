@@ -105,7 +105,7 @@ from core.shared.exceptions import BusinessError, LLMProviderError, PluginError
 from core.shared.logger import get_logger
 from core.shared.release_vigente import AgenteCongelado, con_valores_de_release
 from core.shared.tenant import get_current_tenant_id
-from core.shared.test_mode import consumir_simulado, reset_simulado
+from core.shared.test_mode import consumir_simulado, is_test_channel, reset_simulado
 from core.tools.core_skill import conversation_spent
 
 log = get_logger(__name__)
@@ -1330,7 +1330,11 @@ async def _execute_tool_safely(
         result = exc.as_result()
     except PluginError as exc:
         # Las tools del CORE ("core") no se auto-desactivan: el core no se apaga a sí mismo.
-        if exc.plugin_id != "core":
+        if exc.plugin_id != "core" and is_test_channel(conversation.channel):
+            # Una prueba (panel o evals) no apaga el pack del negocio: el fallo se registra y la
+            # conversación real sigue con el pack habilitado. El turno responde igual con el error.
+            log.warning("plugin_error_en_prueba", plugin=exc.plugin_id, tool=tool_call.name, error=str(exc))
+        elif exc.plugin_id != "core":
             # Acotado al tenant de ESTA conversación (ADR-0024): no apaga el
             # plugin para los demás tenants que nunca tuvieron el problema.
             await plugin_manager.auto_disable_for_tenant(get_current_tenant_id(), exc.plugin_id, str(exc))

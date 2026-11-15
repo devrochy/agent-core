@@ -1239,6 +1239,12 @@ async def dashboard(request: Request):
                 select(func.count(Message.id)).where(
                     Message.tenant_id == my_tenant,
                     Message.created_at >= week_ago,
+                    # Sin los del playground, como `conversations_7d` (y `api/routers/dashboard.py`).
+                    ~Message.conversation_id.in_(
+                        select(Conversation.id).where(
+                            Conversation.tenant_id == my_tenant, Conversation.channel == TEST_CHANNEL
+                        )
+                    ),
                 )
             )
         ).scalar() or 0
