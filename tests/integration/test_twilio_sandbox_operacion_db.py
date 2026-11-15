@@ -1,6 +1,6 @@
 """HU-CONN-20 (adenda del ADR-0186) · operación del Sandbox de Twilio contra Postgres y Redis reales.
 
-- Webhook: el primer entrante o estado con firma válida confirma las URL pegadas en la consola (una sola vez, también
+- Webhook: el primer entrante con firma válida confirma las URL pegadas en la consola (una sola vez, también
   en paralelo) y pasa la conexión de `pending` a `connected`. Firma inválida o `AccountSid` ajeno: 403 y no confirma.
   Con el gate apagado: 200 sin procesar.
 - Salud: solo la cuenta y la confirmación; nunca la Senders API.
@@ -227,12 +227,77 @@ async def test_el_primer_entrante_firmado_confirma_una_sola_vez(
     assert await _estado(negocio, hecha.connection_id) == ("connected", confirmado)
 
 
-async def test_un_estado_firmado_tambien_confirma(negocio, app_client, gate, twilio) -> None:
+async def test_un_estado_firmado_no_confirma(negocio, app_client, gate, twilio) -> None:
+    """El estado llega por el `StatusCallback` de cada envío aunque la consola no tenga las URL: no prueba nada."""
     tw, hecha = await _sandbox(negocio, twilio)
     r, _ = await _post(app_client, hecha, tw, "status")
     assert r.status_code == 200, r.text
-    status, confirmado = await _estado(negocio, hecha.connection_id)
-    assert status == "connected" and confirmado is not None
+    assert await _estado(negocio, hecha.connection_id) == ("pending", None)
+
+
+async def test_dos_negocios_con_el_mismo_numero_no_se_cruzan(app_client, gate, twilio) -> None:
+    from core.alta_negocio import onboard_tenant
+    from core.gateway.twilio import bandera
+    from core.shared.tenant import tenant_scope
+    from core.tenants import deactivate_tenant, purge_tenant
+
+    creados = []
+    for _ in range(2):
+        slug = f"tsx-{uuid.uuid4().hex[:8]}"
+        tid, _ = await onboard_tenant(name=slug, slug=slug, packs=[], sembrar_ejemplos=False)
+        async with tenant_scope(tid):
+            await bandera.fijar(tid, "whatsapp_twilio", True, actor="test")
+        creados.append((tid, slug))
+    try:
+        (tid_a, _), (tid_b, _) = creados
+        tw_a, de_a = await _sandbox(tid_a, twilio)
+        tw_b, de_b = await _sandbox(tid_b, twilio)
+
+        # B firma con su token y su cuenta contra el `public_id` de A: 403 y A sigue sin confirmar.
+        public_a = de_a.webhook_inbound_url.rstrip("/").split("/")[-2]
+        params = [
+            ("MessageSid", "SM" + uuid.uuid4().hex),
+            ("AccountSid", tw_b.ac),
+            ("From", "whatsapp:+573001234567"),
+            ("To", f"whatsapp:{SANDBOX}"),
+            ("Body", "hola"),
+        ]
+        r = await app_client.post(
+            f"/webhooks/twilio/{public_a}/inbound",
+            content=urlencode(params),
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "X-Twilio-Signature": compute_signature(TOKEN, de_a.webhook_inbound_url, params),
+            },
+        )
+        assert r.status_code == 403
+        assert await _estado(tid_a, de_a.connection_id) == ("pending", None)
+
+        # Cada entrante legítimo, al mismo `To`, queda en su negocio y con su conexión.
+        from core.gateway.webhooks import INBOUND_STREAM
+        from core.memory.working import get_redis
+
+        r, sid_a = await _post(app_client, de_a, tw_a, "inbound")
+        assert r.status_code == 200
+        r, sid_b = await _post(app_client, de_b, tw_b, "inbound")
+        assert r.status_code == 200
+        filas = {
+            campos["external_message_id"]: campos
+            for _id, campos in await get_redis().xrevrange(INBOUND_STREAM, count=500)
+        }
+        assert (filas[sid_a]["tenant_id"], filas[sid_a]["connection_id"]) == (
+            str(tid_a),
+            str(de_a.connection_id),
+        )
+        assert (filas[sid_b]["tenant_id"], filas[sid_b]["connection_id"]) == (
+            str(tid_b),
+            str(de_b.connection_id),
+        )
+    finally:
+        for tid, slug in creados:
+            async with tenant_scope(tid):
+                await deactivate_tenant(str(tid))
+            await purge_tenant(str(tid), f"ELIMINAR {slug}")
 
 
 async def test_con_el_gate_apagado_el_webhook_no_procesa_y_el_envio_cierra(

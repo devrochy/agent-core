@@ -123,7 +123,7 @@ async def _conexion(
 
 
 async def _confirmar_webhook(tenant_id: uuid.UUID, fila_id: uuid.UUID, kind: str) -> None:
-    """Primer entrante o estado con firma válida de un sandbox: las URL pegadas en la consola de Twilio quedaron bien
+    """Primer entrante con firma válida de un sandbox: las URL pegadas en la consola de Twilio quedaron bien
     (HU-CONN-20). Un solo UPDATE condicionado, así que dos webhooks simultáneos confirman una vez; pasa a `connected`
     solo desde `pending` (una conexión `revoked` o `error` la decide la salud)."""
     async with get_session() as session:
@@ -214,7 +214,13 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
             await _alert_on_invalid_signature(f"twilio:{twilio.account_sid}")
             return Response(status_code=403)
 
-        if twilio.modo == sandbox.MODO_SANDBOX and twilio.webhook_confirmado_at is None:
+        if (
+            kind == "inbound"
+            and twilio.modo == sandbox.MODO_SANDBOX
+            and twilio.webhook_confirmado_at is None
+        ):
+            # Solo un ENTRANTE confirma: el estado de cada mensaje llega a nuestra URL porque la mandamos en el
+            # `StatusCallback` del envío, así que no prueba que las URL estén pegadas en la consola de Twilio.
             await _confirmar_webhook(tenant_id, twilio.id, kind)
 
         if not connection.active and kind == "inbound":
