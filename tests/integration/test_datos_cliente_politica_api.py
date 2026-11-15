@@ -66,8 +66,9 @@ async def _crear_agentes(tid) -> None:
 async def _agente(tid, key: str = "ventas") -> uuid.UUID:
     from core.db.models import AgentRecord
     from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
 
-    async with get_session() as session:
+    async with tenant_scope(tid), get_session() as session:
         fila = (
             await session.execute(
                 select(AgentRecord).where(
