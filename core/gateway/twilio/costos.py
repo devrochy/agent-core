@@ -85,6 +85,13 @@ async def registrar_costo(
     # Una conexión borrada después del envío igual tiene su costo: se lee con sus credenciales guardadas.
     if connection is None or not connection.credentials_encrypted:
         return "sin_conexion"
+    from core.gateway.twilio import sandbox
+
+    if (connection.external_id or "").startswith("sandbox:") and sandbox.inerte(
+        sandbox.MODO_SANDBOX
+    ):
+        # Sandbox en un ambiente que no lo permite (HU-CONN-20): no se le habla a Twilio.
+        return "sin_conexion"
     creds = get_secret_box().decrypt_json(connection.credentials_encrypted)
     try:
         client = TwilioClient(

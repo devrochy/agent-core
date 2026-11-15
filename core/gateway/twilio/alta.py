@@ -667,9 +667,11 @@ async def credenciales_de_envio(
 ) -> dict[str, str]:
     """Credenciales que espera el adaptador de Twilio a partir de las guardadas en la conexión: agrega `from`
     (`whatsapp:+E164`) y `status_callback_url` (la URL registrada, de `twilio_connections`)."""
+    from core.gateway.twilio import sandbox
+
     fila = (
         await session.execute(
-            select(TwilioConnection.webhook_status_url).where(
+            select(TwilioConnection.webhook_status_url, TwilioConnection.modo).where(
                 TwilioConnection.tenant_id == connection.tenant_id,
                 TwilioConnection.channel_connection_id == connection.id,
                 TwilioConnection.deleted_at.is_(None),
@@ -678,6 +680,10 @@ async def credenciales_de_envio(
     ).first()
     if fila is None:
         # Sin su fila viva (desconectada o a medio crear) la conexión no envía (ADR-0186): sin respaldo.
+        return {}
+    if sandbox.inerte(fila[1]):
+        # Un sandbox donde el ambiente no lo permite no envía (HU-CONN-20): falla cerrado, sin respaldo.
+        log.info("twilio_sandbox_gate_apagado", connection_id=str(connection.id), via="envio")
         return {}
     salida = {
         "account_sid": creds.get("account_sid", ""),

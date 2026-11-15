@@ -392,6 +392,11 @@ class TwilioDesconectarIn(BaseModel):
 
 class TwilioDesconectarOut(BaseModel):
     webhooks_restaurados: bool
+    requiere_limpiar_consola: bool = Field(
+        default=False,
+        description="Sandbox: hay que borrar a mano las URL de la consola de Twilio (Sandbox settings). Mientras "
+        "tanto Twilio recibe 404, sin efecto.",
+    )
 
 
 class TwilioCostoMoneda(BaseModel):
@@ -461,7 +466,15 @@ async def refrescar(
 
 
 @router.post(
-    "/{connection_id}/webhooks", response_model=ConexionTwilioOut, responses={404: _ERRORES[404]}
+    "/{connection_id}/webhooks",
+    response_model=ConexionTwilioOut,
+    responses={
+        404: _ERRORES[404],
+        409: {
+            "description": "`sandbox_webhook_manual`: en el Sandbox las URL se pegan en la consola de Twilio "
+            "(`details.webhook_inbound_url` y `details.webhook_status_url`)."
+        },
+    },
 )
 async def reregistrar(
     connection_id: uuid.UUID,
@@ -485,7 +498,10 @@ async def reregistrar(
     responses={
         404: _ERRORES[404],
         409: {"description": "`fuera_de_ventana` o `conexion_pausada`."},
-        422: {"description": "`numero_invalido`."},
+        422: {
+            "description": "`numero_invalido`, o `participante_no_unido` (Sandbox: el número no mandó `join <código>` "
+            "o su unión venció; `details.join` y `details.sandbox_e164`)."
+        },
         429: {"description": "`too_many_tests` (1 cada 30 s) o `daily_limit` (10 al día)."},
     },
 )
@@ -566,6 +582,7 @@ async def desconectar(
     # Sin exigir la bandera: si se le quita a un negocio, igual tiene que poder desconectar lo que ya tiene.
     tid = await _escritura(principal, bandera_requerida=False)
     await confirmar_password(principal, payload.password, proposito="connection_delete")
+    actual = await svc.obtener(tid, connection_id)
     try:
         restaurados = await operacion.desconectar(
             tid,
@@ -576,7 +593,10 @@ async def desconectar(
     except svc.AltaError as exc:
         raise _api_error(exc) from None
     await _auditar(principal, "twilio.disconnected", connection_id)
-    return TwilioDesconectarOut(webhooks_restaurados=restaurados)
+    return TwilioDesconectarOut(
+        webhooks_restaurados=restaurados,
+        requiere_limpiar_consola=actual is not None and actual.modo == sandbox.MODO_SANDBOX,
+    )
 
 
 @router.get(
@@ -644,7 +664,10 @@ class TwilioPlantillaOut(BaseModel):
 
 _ERRORES_PLANTILLAS = {
     404: _ERRORES[404],
-    409: {"description": "`nombre_en_uso` o `plantilla_sin_crear`."},
+    409: {
+        "description": "`nombre_en_uso`, `plantilla_sin_crear` o `no_aplica_sandbox` (en el Sandbox solo sirven las "
+        "plantillas preaprobadas de Twilio: crear, enviar a aprobación y borrar no aplican)."
+    },
     422: {
         "description": "`nombre_invalido`, `idioma_invalido`, `categoria_invalida`, `cuerpo_invalido` o `variables_invalidas`."
     },

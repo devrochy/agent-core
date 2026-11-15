@@ -165,11 +165,26 @@ def validar(
 
 
 async def _conexion(
-    tenant_id: uuid.UUID, connection_id: uuid.UUID, transport: httpx.AsyncBaseTransport | None
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    transport: httpx.AsyncBaseTransport | None,
+    *,
+    en_sandbox: bool = True,
 ):
+    """Cliente de Twilio de la conexión. `en_sandbox=False` para lo que no aplica al Sandbox (crear, enviar a
+    aprobación y borrar): ahí solo sirven las 3 plantillas preaprobadas de Twilio (HU-CONN-20)."""
+    from core.gateway.twilio import sandbox
+
     c = await operacion._cargar(tenant_id, connection_id)
-    if c is None:
+    if c is None or sandbox.inerte(c.fila.modo):
         raise alta.AltaError(404, "not_found", "Conexión no encontrada.")
+    if not en_sandbox and c.fila.modo == sandbox.MODO_SANDBOX:
+        raise alta.AltaError(
+            409,
+            "no_aplica_sandbox",
+            "En el Sandbox de Twilio solo sirven sus plantillas preaprobadas: no se pueden crear, enviar a aprobación "
+            "ni borrar. Usa Sincronizar para traerlas.",
+        )
     return operacion._cliente_de(c, transport)
 
 
@@ -222,7 +237,7 @@ async def crear(
 ) -> Plantilla:
     categoria = categoria.upper()
     validar(nombre, idioma, categoria, cuerpo, ejemplos)
-    client = await _conexion(tenant_id, connection_id, transport)
+    client = await _conexion(tenant_id, connection_id, transport, en_sandbox=False)
     tipos = {"twilio/text": {"body": cuerpo}}
 
     # Paso 1: la fila local, o la que quedó a medias de un intento anterior con el mismo nombre.
@@ -333,7 +348,7 @@ async def enviar_a_aprobacion(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> Plantilla:
     """Pide la aprobación de WhatsApp. Idempotente: si Twilio ya tiene la solicitud, solo trae su estado."""
-    client = await _conexion(tenant_id, connection_id, transport)
+    client = await _conexion(tenant_id, connection_id, transport, en_sandbox=False)
     async with get_session() as session:
         fila = await _fila(session, tenant_id, plantilla_id)
         if fila.channel_connection_id != connection_id:
@@ -598,7 +613,7 @@ async def borrar(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> None:
     """Borra la plantilla aquí (lógico) y el Content en Twilio (best-effort: si falla, queda en la cuenta)."""
-    client = await _conexion(tenant_id, connection_id, transport)
+    client = await _conexion(tenant_id, connection_id, transport, en_sandbox=False)
     async with get_session() as session:
         fila = await _fila(session, tenant_id, plantilla_id, bloquear=True)
         if fila.channel_connection_id != connection_id:

@@ -13152,6 +13152,9 @@
           "404": {
             "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
           },
+          "409": {
+            "description": "`sandbox_webhook_manual`: en el Sandbox las URL se pegan en la consola de Twilio (`details.webhook_inbound_url` y `details.webhook_status_url`)."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -13246,7 +13249,7 @@
             "description": "`fuera_de_ventana` o `conexion_pausada`."
           },
           "422": {
-            "description": "`numero_invalido`."
+            "description": "`numero_invalido`, o `participante_no_unido` (Sandbox: el número no mandó `join <código>` o su unión venció; `details.join` y `details.sandbox_e164`)."
           },
           "429": {
             "description": "`too_many_tests` (1 cada 30 s) o `daily_limit` (10 al día)."
@@ -13701,7 +13704,7 @@
             "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
           },
           "409": {
-            "description": "`nombre_en_uso` o `plantilla_sin_crear`."
+            "description": "`nombre_en_uso`, `plantilla_sin_crear` o `no_aplica_sandbox` (en el Sandbox solo sirven las plantillas preaprobadas de Twilio: crear, enviar a aprobación y borrar no aplican)."
           },
           "422": {
             "description": "`nombre_invalido`, `idioma_invalido`, `categoria_invalida`, `cuerpo_invalido` o `variables_invalidas`."
@@ -13787,7 +13790,7 @@
             "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
           },
           "409": {
-            "description": "`nombre_en_uso` o `plantilla_sin_crear`."
+            "description": "`nombre_en_uso`, `plantilla_sin_crear` o `no_aplica_sandbox` (en el Sandbox solo sirven las plantillas preaprobadas de Twilio: crear, enviar a aprobación y borrar no aplican)."
           },
           "422": {
             "description": "`nombre_invalido`, `idioma_invalido`, `categoria_invalida`, `cuerpo_invalido` o `variables_invalidas`."
@@ -13879,7 +13882,7 @@
             "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
           },
           "409": {
-            "description": "`nombre_en_uso` o `plantilla_sin_crear`."
+            "description": "`nombre_en_uso`, `plantilla_sin_crear` o `no_aplica_sandbox` (en el Sandbox solo sirven las plantillas preaprobadas de Twilio: crear, enviar a aprobación y borrar no aplican)."
           },
           "422": {
             "description": "`nombre_invalido`, `idioma_invalido`, `categoria_invalida`, `cuerpo_invalido` o `variables_invalidas`."
@@ -13971,7 +13974,7 @@
             "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
           },
           "409": {
-            "description": "`nombre_en_uso` o `plantilla_sin_crear`."
+            "description": "`nombre_en_uso`, `plantilla_sin_crear` o `no_aplica_sandbox` (en el Sandbox solo sirven las plantillas preaprobadas de Twilio: crear, enviar a aprobación y borrar no aplican)."
           },
           "422": {
             "description": "`nombre_invalido`, `idioma_invalido`, `categoria_invalida`, `cuerpo_invalido` o `variables_invalidas`."
@@ -78140,6 +78143,12 @@
           "webhooks_restaurados": {
             "type": "boolean",
             "title": "Webhooks Restaurados"
+          },
+          "requiere_limpiar_consola": {
+            "type": "boolean",
+            "title": "Requiere Limpiar Consola",
+            "description": "Sandbox: hay que borrar a mano las URL de la consola de Twilio (Sandbox settings). Mientras tanto Twilio recibe 404, sin efecto.",
+            "default": false
           }
         },
         "type": "object",
