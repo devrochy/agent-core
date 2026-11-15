@@ -32,6 +32,7 @@ from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.db.session import get_session
 from core.shared.logger import get_logger
+from core.shared.test_mode import sql_no_es_prueba
 
 log = get_logger(__name__)
 
@@ -207,6 +208,7 @@ async def list_calls(
                     "  FROM a2a_events e JOIN a2a_conversations c "
                     "    ON c.tenant_id = e.tenant_id AND c.id = e.a2a_conversation_id "
                     "  WHERE e.tenant_id = :t AND c.connection_id = :c "
+                    f"    AND {sql_no_es_prueba('c.conversation_id')} "
                     "  GROUP BY e.call_id, c.connection_id, c.conversation_id"
                     ") SELECT * FROM llamadas WHERE (cast(:antes AS timestamptz) IS NULL OR started_at < :antes) "
                     "ORDER BY started_at DESC LIMIT :n"

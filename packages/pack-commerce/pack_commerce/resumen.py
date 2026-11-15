@@ -19,6 +19,7 @@ from core.admin.resumen_registry import (
 )
 from core.db.models import Customer
 from core.db.session import get_session
+from core.shared.test_mode import TEST_CHANNEL
 from pack_commerce.models import Order
 
 PLUGIN_ID = "pack_commerce"
@@ -68,6 +69,8 @@ async def kpis(tenant_id: uuid.UUID, p: PeriodoResumen) -> list[Kpi]:
                         Customer.deleted_at.is_(None),
                         Customer.created_at >= desde,
                         Customer.created_at < hasta,
+                        # El cliente sintético de la prueba del panel no es un cliente nuevo.
+                        Customer.channel != TEST_CHANNEL,
                     )
                 )
             ).scalar()
