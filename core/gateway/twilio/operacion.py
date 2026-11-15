@@ -309,7 +309,6 @@ async def revisar_todas() -> int:
             log.exception(
                 "twilio_salud_fallo", tenant_id=str(tenant_id), connection_id=str(connection_id)
             )
-    sandbox.registrar_sin_confirmar(sin_confirmar)
     log.info(
         "twilio_salud_ronda",
         revisadas=revisadas,
@@ -470,6 +469,7 @@ async def rotar_credenciales(
             auth_token=auth_token,
             label=c.connection.label,
             transport=transport,
+            origen="rotacion",
         )
     return await alta.conectar(
         tenant_id,

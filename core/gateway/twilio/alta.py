@@ -384,6 +384,7 @@ async def conectar_sandbox(
     join_code: str | None = None,
     label: str = "",
     transport: httpx.AsyncBaseTransport | None = None,
+    origen: str = "alta",
 ) -> ConexionTwilio:
     """Conecta el Sandbox de WhatsApp de la cuenta (HU-CONN-20, solo donde `sandbox.permitido()`).
 
@@ -515,7 +516,9 @@ async def conectar_sandbox(
         raise AltaError(
             409, "conflicto", "No se pudo guardar la conexión. Intenta de nuevo."
         ) from None
-    sandbox.contar("alta_creada" if created else "alta_repetida")
+    if origen == "alta":
+        # La rotación de credenciales reutiliza el alta: no cuenta como alta.
+        sandbox.contar("alta_creada" if created else "alta_repetida")
     log.info(
         "twilio_sandbox_alta",
         tenant_id=str(tenant_id),

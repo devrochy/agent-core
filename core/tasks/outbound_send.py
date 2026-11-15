@@ -512,14 +512,19 @@ async def _mark_failed(
 def _medir_sandbox(exc: ProviderError, credentials: dict[str, str], tenant_id: uuid.UUID) -> None:
     """Sandbox de Twilio (HU-CONN-20): cuenta los 63015 (destinatario sin unir) y los reintentos por ritmo (un mensaje
     cada 3 s). Si se pierden mensajes de un turno, una HU posterior agrega un limitador por conexión."""
-    from core.gateway.twilio import sandbox
+    try:
+        from core.gateway.twilio import sandbox
 
-    if exc.code == sandbox.CODIGO_NO_UNIDO:
-        log.info("twilio_sandbox_no_unido", tenant_id=str(tenant_id), via="envio")
-        sandbox.contar("no_unido")
-    elif exc.category == "RATE_LIMIT" and sandbox.es_from_del_sandbox(credentials):
-        log.info("twilio_sandbox_reintento_ritmo", tenant_id=str(tenant_id), code=exc.code)
-        sandbox.contar("reintento_ritmo")
+        if not sandbox.es_from_del_sandbox(credentials):
+            return
+        if exc.code == sandbox.CODIGO_NO_UNIDO:
+            log.info("twilio_sandbox_no_unido", tenant_id=str(tenant_id), via="envio")
+            sandbox.contar("no_unido")
+        elif exc.category == "RATE_LIMIT":
+            log.info("twilio_sandbox_reintento_ritmo", tenant_id=str(tenant_id), code=exc.code)
+            sandbox.contar("reintento_ritmo")
+    except Exception as fallo:  # medir nunca cambia el error que ya se clasificó
+        log.warning("metrica_fallo", error_type=type(fallo).__name__)
 
 
 async def _baja_por_proveedor(

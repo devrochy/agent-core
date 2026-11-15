@@ -98,7 +98,9 @@ def forma_y_variables(interactive: dict[str, Any]) -> tuple[str, dict[str, Any],
         for k, b in enumerate(botones, start=1):
             variables[str(2 * k)] = _titulo(b.get("title"), MAX_TITULO_BOTON)
             variables[str(2 * k + 1)] = _id(b.get("id"))
-            acciones.append({"type": "QUICK_REPLY", "title": f"{{{{{2 * k}}}}}", "id": f"{{{{{2 * k + 1}}}}}"})
+            acciones.append(
+                {"type": "QUICK_REPLY", "title": f"{{{{{2 * k}}}}}", "id": f"{{{{{2 * k + 1}}}}}"}
+            )
         tipos = {"twilio/quick-reply": {"body": "{{1}}", "actions": acciones}}
         return f"quick_reply:{len(botones)}", tipos, variables
     if tipo == "list":
@@ -110,9 +112,15 @@ def forma_y_variables(interactive: dict[str, Any]) -> tuple[str, dict[str, Any],
         for k, f in enumerate(filas, start=1):
             variables[str(3 * k)] = _titulo(f.get("title"), MAX_TITULO_FILA)
             variables[str(3 * k + 1)] = _id(f.get("id"))
-            variables[str(3 * k + 2)] = _linea(f.get("description"), MAX_DESCRIPCION) or _SIN_DESCRIPCION
+            variables[str(3 * k + 2)] = (
+                _linea(f.get("description"), MAX_DESCRIPCION) or _SIN_DESCRIPCION
+            )
             items.append(
-                {"item": f"{{{{{3 * k}}}}}", "id": f"{{{{{3 * k + 1}}}}}", "description": f"{{{{{3 * k + 2}}}}}"}
+                {
+                    "item": f"{{{{{3 * k}}}}}",
+                    "id": f"{{{{{3 * k + 1}}}}}",
+                    "description": f"{{{{{3 * k + 2}}}}}",
+                }
             )
         tipos = {"twilio/list-picker": {"body": "{{1}}", "button": "{{2}}", "items": items}}
         return f"list:{len(filas)}", tipos, variables
@@ -137,7 +145,9 @@ async def _content_de(
     variables: dict[str, str],
 ) -> str:
     async with get_session() as session:
-        fila = (await session.execute(_de_la_forma(tenant_id, connection_id, forma))).scalar_one_or_none()
+        fila = (
+            await session.execute(_de_la_forma(tenant_id, connection_id, forma))
+        ).scalar_one_or_none()
         if fila is not None and fila.account_sid == client.account_sid:
             fila.last_used_at = utcnow()
             return fila.content_sid
@@ -154,7 +164,9 @@ async def _content_de(
         variables=ejemplos,
     )
     if not _SID_HX.fullmatch(content.sid):
-        raise ProviderError("Twilio no devolvió el ContentSid", provider="twilio", category="AMBIGUOUS")
+        raise ProviderError(
+            "Twilio no devolvió el ContentSid", provider="twilio", category="AMBIGUOUS"
+        )
     async with get_session() as session:
         await session.execute(
             pg_insert(TwilioInteractiveContent)
@@ -173,14 +185,18 @@ async def _content_de(
             )
         )
         # Si otro envío ganó la carrera, se usa el suyo (el recién creado queda sin usar en la cuenta).
-        ganadora = (await session.execute(_de_la_forma(tenant_id, connection_id, forma))).scalar_one_or_none()
+        ganadora = (
+            await session.execute(_de_la_forma(tenant_id, connection_id, forma))
+        ).scalar_one_or_none()
     log.info("twilio_interactivo_creado", tenant_id=str(tenant_id), forma=forma)
     if ganadora is not None and ganadora.account_sid == client.account_sid:
         return ganadora.content_sid
     return content.sid
 
 
-async def _olvidar(tenant_id: uuid.UUID, connection_id: uuid.UUID, forma: str, content_sid: str) -> None:
+async def _olvidar(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID, forma: str, content_sid: str
+) -> None:
     """Da de baja la fila de ESE Content: si otro envío ya lo recreó, la fila nueva no se toca."""
     async with get_session() as session:
         await session.execute(
@@ -222,8 +238,15 @@ async def enviar(
             # Solo «no existe» recrea: un CONTENT por otra causa (variables) fallaría igual con uno nuevo. El código
             # real de un ContentSid borrado se confirma en test con el número (ADR-0186, adenda).
             if intento == 1 and (exc.http_status == 404 or exc.code == 20404):
-                log.warning("twilio_interactivo_recreado", tenant_id=str(tenant_id), forma=forma, code=exc.code)
+                log.warning(
+                    "twilio_interactivo_recreado",
+                    tenant_id=str(tenant_id),
+                    forma=forma,
+                    code=exc.code,
+                )
                 await _olvidar(tenant_id, connection_id, forma, sid)
                 continue
             raise
-    raise ChannelError("No se pudo enviar el interactivo")  # pragma: no cover - el bucle siempre retorna o lanza
+    raise ChannelError(
+        "No se pudo enviar el interactivo"
+    )  # pragma: no cover - el bucle siempre retorna o lanza

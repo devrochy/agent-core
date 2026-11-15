@@ -13,6 +13,7 @@ proveedor lo fija `core.observability.metricas.configure_metrics()`.
 | `agentcore_celery_task_duration_seconds` | — (sin `task`: cada tarea multiplicaría los buckets) | `task_postrun` |
 | `agentcore_graph_api_errors_total` | `category` (rate_limit, auth, transient…) | `graph_fetch` |
 | `agentcore_http_server_duration_seconds` | `route_group` (webhooks, api, admin, other), `status_class` | middleware de la API |
+| `agentcore_twilio_sandbox_events_total` | `evento` (conjunto cerrado de `core/gateway/twilio/sandbox.py`) | alta, webhook, envío y operación del Sandbox de Twilio (HU-CONN-20) |
 
 **Etiquetas prohibidas** (cada valor es una serie y el plan gratis da 10k): `tenant_id`,
 `agent_id`, `conversation_id`, teléfonos, correos y rutas sin agrupar. Las etiquetas son conjuntos

@@ -40,10 +40,8 @@ _eventos = _meter.create_counter(
     "agentcore_twilio_sandbox_events_total",
     description="Eventos del Sandbox de WhatsApp de Twilio (HU-CONN-20), por evento",
 )
-_sin_confirmar = _meter.create_gauge(
-    "agentcore_twilio_sandbox_unconfirmed",
-    description="Conexiones sandbox vivas sin webhook confirmado en la última ronda de salud",
-)
+# Las conexiones sin confirmar van en el log `twilio_salud_ronda` (`sandbox_sin_confirmar`), no en un gauge: con el
+# worker en prefork cada hijo exportaría el último valor que fijó y la serie nunca bajaría.
 
 MODO_SENDER = "sender"
 MODO_SANDBOX = "sandbox"
@@ -80,13 +78,6 @@ def contar(evento: str) -> None:
     """Suma un evento del sandbox. Nunca rompe el camino que lo registra."""
     try:
         _eventos.add(1, {"evento": evento if evento in EVENTOS else "otro"})
-    except Exception as exc:
-        log.warning("metrica_fallo", error_type=type(exc).__name__)
-
-
-def registrar_sin_confirmar(cantidad: int) -> None:
-    try:
-        _sin_confirmar.set(cantidad)
     except Exception as exc:
         log.warning("metrica_fallo", error_type=type(exc).__name__)
 

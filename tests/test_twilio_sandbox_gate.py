@@ -107,9 +107,7 @@ def test_una_metrica_rota_no_rompe_el_camino(monkeypatch):
         set = add
 
     monkeypatch.setattr(sandbox, "_eventos", _Rota())
-    monkeypatch.setattr(sandbox, "_sin_confirmar", _Rota())
     sandbox.contar("no_unido")
-    sandbox.registrar_sin_confirmar(3)
 
 
 def test_medir_el_envio_del_sandbox(eventos):
@@ -122,6 +120,10 @@ def test_medir_el_envio_del_sandbox(eventos):
     propio = {"from": "whatsapp:+15550001111"}
     tid = uuid.uuid4()
     _medir_sandbox(
+        ProviderError("x", provider="twilio", code=63015, category="PERMANENT"), del_sandbox, tid
+    )
+    # Desde un número propio no se mide nada: ni el 63015 ni el ritmo son del sandbox.
+    _medir_sandbox(
         ProviderError("x", provider="twilio", code=63015, category="PERMANENT"), propio, tid
     )
     _medir_sandbox(
@@ -131,3 +133,19 @@ def test_medir_el_envio_del_sandbox(eventos):
         ProviderError("x", provider="twilio", code=63018, category="RATE_LIMIT"), propio, tid
     )
     assert [p[1]["evento"] for p in eventos.puntos] == ["no_unido", "reintento_ritmo"]
+
+
+def test_medir_nunca_cambia_el_error(monkeypatch):
+    import uuid
+
+    from core.gateway.channels.base import ProviderError
+    from core.gateway.twilio import sandbox
+    from core.tasks.outbound_send import _medir_sandbox
+
+    def _rompe(_c):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(sandbox, "es_from_del_sandbox", _rompe)
+    _medir_sandbox(
+        ProviderError("x", provider="twilio", code=63018, category="RATE_LIMIT"), {}, uuid.uuid4()
+    )
