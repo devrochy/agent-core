@@ -46331,6 +46331,17 @@
             "type": "string",
             "title": "Key"
           },
+          "source_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Template"
+          },
           "name": {
             "type": "string",
             "title": "Name"
