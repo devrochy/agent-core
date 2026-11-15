@@ -78,9 +78,9 @@ async def test_existe_y_username_disponible(app_client) -> None:
     h = await _headers(app_client, owner, tid)
 
     existe = (await app_client.get(f"{COLABS}/existe", params={"email": owner}, headers=h)).json()
-    assert existe == {"existe": True}
+    assert existe == {"existe": True, "eliminada": False}
     libre = (await app_client.get(f"{COLABS}/existe", params={"email": f"nuevo-{s}@p0.test"}, headers=h)).json()
-    assert libre == {"existe": False}
+    assert libre == {"existe": False, "eliminada": False}
 
     disp = (await app_client.get(f"{COLABS}/username-disponible", params={"username": f"u-{s}"}, headers=h)).json()
     assert disp == {"disponible": True}
