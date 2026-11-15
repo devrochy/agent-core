@@ -105,7 +105,7 @@ async def _escenario() -> dict[str, Any]:
     # La tarea que el motor cerró como `escalated` justo antes de escalar.
     pedido = await _iniciar(tid, conv, PEDIDO, "1.1.0", "armar")
     await _registrar(tid, conv, pedido, "escalated", reason="action_error")
-    plan = await _iniciar(tid, conv, PLAN, "2.0.0", "elegir_plan")
+    plan = await _iniciar(tid, conv, PLAN, "2.0.1", "elegir_plan")
     await _registrar(tid, conv, plan, "slot_set", actor="llm", slot="nombre", value="Ana Pérez", source="llm", data_class="pii")
     await _registrar(tid, conv, plan, "slot_set", actor="llm", slot="email", value="ana@correo.co", source="llm", data_class="pii")
     await _registrar(tid, conv, plan, "slot_set", actor="kernel", slot="link", value="WOMPI-REF-4821", source="llm", data_class="payment")
