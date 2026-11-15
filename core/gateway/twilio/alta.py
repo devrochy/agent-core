@@ -418,7 +418,7 @@ def _resultado(fila: TwilioConnection, label: str, active: bool, created: bool) 
         connection_id=fila.channel_connection_id,
         label=label,
         sender_e164=fila.sender_e164,
-        sender_sid=fila.sender_sid,
+        sender_sid=fila.sender_sid or "",
         sender_status=fila.sender_status,
         display_name=fila.display_name,
         status=fila.status,

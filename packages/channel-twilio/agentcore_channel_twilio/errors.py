@@ -61,6 +61,9 @@ CODE_CATEGORIES: dict[int, ErrorCategory] = {
     # Meta decidió no entregar un mensaje de marketing. No es una baja del cliente: no se registra
     # como OPT_OUT, solo no se reintenta.
     63049: "PERMANENT",
+    # Sandbox: el destinatario no se unió (o su unión de 3 días venció). Tiene que volver a mandar `join <código>`;
+    # no se reintenta y no es una baja del cliente (HU-CONN-20).
+    63015: "PERMANENT",
     30004: "PERMANENT",
     20404: "PERMANENT",
 }

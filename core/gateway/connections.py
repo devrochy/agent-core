@@ -287,9 +287,13 @@ async def save_connection_in(
     credentials: dict[str, Any],
     connection_id: uuid.UUID | None = None,
     type_id: str = WHATSAPP_META,
+    external_id_override: str | None = None,
 ) -> tuple[ChannelConnection, bool]:
     """`save_connection` dentro de la sesión de quien llama, para que el alta guarde también lo propio del
-    proveedor en la misma transacción (Twilio, ADR-0186). Mismas reglas; no hace commit."""
+    proveedor en la misma transacción (Twilio, ADR-0186). Mismas reglas; no hace commit.
+
+    `external_id_override` reemplaza el `external_id` que sale de las credenciales: el sandbox de Twilio usa un número
+    compartido por todas las cuentas y se identifica como `sandbox:<AccountSid>` (HU-CONN-20)."""
     ctype = get_connection_type(type_id)
     if ctype is None:
         raise ValueError(f"Tipo de conexión desconocido: {type_id}")
@@ -318,7 +322,21 @@ async def save_connection_in(
         previous = _decrypt_raw(connection)
 
     clean = normalize_credentials(ctype, credentials, previous)
-    external_id = external_id_for(ctype, clean)
+    if external_id_override is not None and (
+        type_id != WHATSAPP_TWILIO
+        or external_id_override != f"sandbox:{clean.get('account_sid', '')}"
+    ):
+        # Solo el sandbox de Twilio, y con la MISMA cuenta de las credenciales: un override libre permitiría ocupar
+        # en el índice global el `sandbox:` de la cuenta de otro negocio.
+        raise ValueError("external_id_override solo vale para el sandbox de Twilio de esa cuenta.")
+    external_id = external_id_override or external_id_for(ctype, clean)
+    if (
+        connection is not None
+        and external_id_override is None
+        and (connection.external_id or "").startswith("sandbox:")
+    ):
+        # Editar un sandbox sin el override no lo convierte en el número compartido (lo ocuparía para todos).
+        external_id = connection.external_id or ""
     encrypted = box.encrypt_json(clean)
 
     if type_id == WHATSAPP_META and external_id:
