@@ -430,6 +430,22 @@ async def conectar_sandbox(
                     "cuenta_en_otro_negocio",
                     "Esta cuenta de Twilio ya está conectada en otro negocio. Usa una cuenta propia para este.",
                 )
+            pausada = (
+                await session.execute(
+                    select(ChannelConnection.id).where(
+                        ChannelConnection.tenant_id == tenant_id,
+                        ChannelConnection.provider == "twilio",
+                        ChannelConnection.external_id == sandbox.external_id(client.account_sid),
+                        ChannelConnection.deleted_at.is_(None),
+                        ChannelConnection.active.is_(False),
+                    )
+                )
+            ).first()
+            if pausada is not None:
+                # Repetir el alta reactivaría la conexión (como la rotación, no se reactiva sin que se pida).
+                raise AltaError(
+                    409, "conexion_pausada", "Reanuda la conexión antes de volver a conectarla."
+                )
             connection, created = await save_connection_in(
                 session,
                 label.strip() or "WhatsApp Sandbox de Twilio",

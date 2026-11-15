@@ -277,7 +277,7 @@ async def capacidades(
         404: {
             "description": "Twilio no está habilitado para el negocio o el sandbox no está en este ambiente."
         },
-        409: {"description": "`cuenta_en_otro_negocio`, `twilio_account_suspended` o `conflicto`."},
+        409: {"description": "`cuenta_en_otro_negocio`, `conexion_pausada`, `twilio_account_suspended` o `conflicto`."},
         422: {"description": "`twilio_credentials_invalid` o `join_code_invalido`."},
         502: _ERRORES[502],
         200: {

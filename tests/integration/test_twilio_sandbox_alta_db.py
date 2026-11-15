@@ -381,3 +381,39 @@ async def test_patch_sobre_un_sender_es_409(negocios, gate) -> None:
         with pytest.raises(AltaError) as exc:
             await alta.fijar_join_code(tid, sender.connection_id, "algo")
     assert (exc.value.http_status, exc.value.code) == (409, "no_es_sandbox")
+
+
+async def test_patch_con_el_id_de_otro_negocio_es_404(negocios, app_client, gate) -> None:
+    tid_a, tid_b = negocios
+    de_b = await _sandbox(tid_b, CuentaFalsa(_cuenta()), join_code="codigo-de-b")
+    await _bandera(tid_a, True)
+    try:
+        h = await api_headers(app_client, tid_a)
+        r = await app_client.patch(
+            f"{BASE}/{de_b.connection_id}/sandbox", headers=h, json={"join_code": "robado"}
+        )
+        assert r.status_code == 404, r.text
+    finally:
+        await _bandera(tid_a, False)
+    assert await _sql(
+        tid_b,
+        "select sandbox_join_code from twilio_connections where channel_connection_id = :c",
+        c=de_b.connection_id,
+    ) == [("codigo-de-b",)]
+
+
+async def test_repetir_el_alta_no_reactiva_una_conexion_pausada(negocios, gate) -> None:
+    from core.gateway.twilio.alta import AltaError
+
+    tid, _ = negocios
+    cuenta = CuentaFalsa(_cuenta())
+    hecha = await _sandbox(tid, cuenta)
+    await _sql(
+        tid, "update channel_connections set active = false where id = :c", c=hecha.connection_id
+    )
+    with pytest.raises(AltaError) as exc:
+        await _sandbox(tid, cuenta)
+    assert (exc.value.http_status, exc.value.code) == (409, "conexion_pausada")
+    assert await _sql(
+        tid, "select active from channel_connections where id = :c", c=hecha.connection_id
+    ) == [(False,)]
