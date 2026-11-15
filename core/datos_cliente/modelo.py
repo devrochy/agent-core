@@ -46,6 +46,13 @@ class AccionDatos:
     etiqueta: str
     campos: tuple[CampoPolitica, ...]
     base: BaseDelNegocio | None = None
+    # Tools del agente que ejecutan esta acción. El editor del agente solo muestra las
+    # operaciones de sus acciones. Vacío = se filtra por `pack` (compatibilidad).
+    tools: tuple[str, ...] = ()
 
     def campo(self, clave: str) -> CampoPolitica | None:
         return next((c for c in self.campos if c.clave == clave), None)
+
+    def aplica_a(self, tools: set[str]) -> bool:
+        """¿La acción la ejecuta alguna de las `tools` del agente? Sin `tools`, aplica por pack."""
+        return not self.tools or bool(set(self.tools) & tools)

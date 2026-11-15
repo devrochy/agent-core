@@ -1,10 +1,10 @@
-"""Ajustes del negocio sobre la política de datos (HU-CRM-13, ADR-0179 decisión 1).
+"""Política de datos del cliente de cada agente (HU-CRM-28, enmienda de ADR-0179).
 
-Viven en `AppSettings.behavior_config["datos_cliente"]["politica"]` como
-`{accion_id: {clave: nivel}}`. Solo se guarda lo que difiere del valor por defecto del módulo;
-cualquier clave, acción o nivel desconocido se descarta al leer y al escribir (dato del dueño,
-nunca instrucción: invariante 7). Es el único módulo, junto con el router de settings, que toca
-esa clave de la configuración.
+La política vive en `agents.data_policy` como `{politica: {accion_id: {clave: nivel}},
+herramientas: bool}`. Solo se guarda lo que difiere del valor por defecto del módulo; cualquier
+clave, acción o nivel desconocido se descarta al leer y al escribir (dato del dueño, nunca
+instrucción: invariante 7). El aviso de tratamiento de datos sigue siendo del negocio y vive en
+`AppSettings.behavior_config["datos_cliente"]["aviso"]`.
 """
 
 from __future__ import annotations
@@ -16,11 +16,15 @@ from sqlalchemy import select
 
 from core.datos_cliente.modelo import AccionDatos, Nivel
 from core.datos_cliente.registro import registro_datos
-from core.db.models import AppSettings
+from core.db.models import AgentRecord
 from core.db.session import get_session
+from core.shared.tenant import get_current_tenant_id
 
 CLAVE = "datos_cliente"
 _NIVELES = {n.value for n in Nivel}
+# Métodos de entrega que un agente de Comercio puede ofrecer (HU-CRM-28). Es una preferencia
+# operativa del agente, no un dato del cliente: vive en `data_policy` para no crear otra columna.
+METODOS_DE_ENTREGA = ("domicilio", "recoger_en_tienda")
 
 
 def limpiar(crudo: Any, acciones: list[AccionDatos] | None = None) -> dict[str, dict[str, str]]:
@@ -44,78 +48,99 @@ def limpiar(crudo: Any, acciones: list[AccionDatos] | None = None) -> dict[str, 
     return salida
 
 
-def politica_de(behavior: dict[str, Any] | None) -> dict[str, dict[str, str]]:
-    """Ajustes guardados en el `behavior_config` del negocio, saneados."""
-    bloque = (behavior or {}).get(CLAVE)
-    return limpiar(bloque.get("politica") if isinstance(bloque, dict) else None)
+def politica_de(data_policy: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+    """Ajustes guardados en la política del agente, saneados."""
+    bloque = (data_policy or {}).get("politica")
+    return limpiar(bloque)
 
 
-def con_politica(behavior: dict[str, Any] | None, politica: dict[str, dict[str, str]]) -> dict[str, Any]:
-    """Copia del `behavior_config` con la política reemplazada (vacía = se quita el bloque)."""
-    nuevo = dict(behavior or {})
-    bloque = dict(nuevo.get(CLAVE) or {}) if isinstance(nuevo.get(CLAVE), dict) else {}
+def con_politica(
+    data_policy: dict[str, Any] | None, politica: dict[str, dict[str, str]]
+) -> dict[str, Any]:
+    """Copia de `data_policy` con la política reemplazada (vacía = se quita)."""
+    nuevo = dict(data_policy or {})
     if politica:
-        bloque["politica"] = politica
+        nuevo["politica"] = politica
     else:
-        bloque.pop("politica", None)
-    if bloque:
-        nuevo[CLAVE] = bloque
-    else:
-        nuevo.pop(CLAVE, None)
+        nuevo.pop("politica", None)
     return nuevo
 
 
-async def cargar_ajustes(tenant_id: uuid.UUID) -> dict[str, dict[str, str]]:
-    async with get_session() as session:
-        behavior = (
-            await session.execute(
-                select(AppSettings.behavior_config).where(
-                    AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
-                )
-            )
-        ).scalar_one_or_none()
-    return politica_de(behavior)
+def herramientas_de(data_policy: dict[str, Any] | None) -> bool:
+    """¿El agente puede consultar los datos del cliente (tools y ficha)? Apagado por defecto."""
+    return bool((data_policy or {}).get("herramientas"))
 
 
-def herramientas_de(behavior: dict[str, Any] | None) -> bool:
-    """¿El negocio dejó que el agente use los datos del cliente (tools y ficha)? Apagado por defecto."""
-    bloque = (behavior or {}).get(CLAVE)
-    return bool(bloque.get("herramientas")) if isinstance(bloque, dict) else False
+def metodos_entrega_de(data_policy: dict[str, Any] | None) -> list[str]:
+    """Métodos de entrega habilitados del agente, saneados. Sin dato = ambos (compatibilidad)."""
+    crudo = (data_policy or {}).get("metodos_entrega")
+    if not isinstance(crudo, list):
+        return list(METODOS_DE_ENTREGA)
+    elegidos = {str(m) for m in crudo}
+    validos = [m for m in METODOS_DE_ENTREGA if m in elegidos]
+    return validos or list(METODOS_DE_ENTREGA)
 
 
-def con_herramientas(behavior: dict[str, Any] | None, activas: bool) -> dict[str, Any]:
-    """Copia del `behavior_config` con la bandera de las herramientas del agente puesta o quitada."""
-    nuevo = dict(behavior or {})
-    bloque = dict(nuevo.get(CLAVE) or {}) if isinstance(nuevo.get(CLAVE), dict) else {}
+def con_metodos_entrega(data_policy: dict[str, Any] | None, metodos: list[str]) -> dict[str, Any]:
+    """Copia de `data_policy` con los métodos de entrega. Ambos es el valor por defecto: no se guarda."""
+    nuevo = dict(data_policy or {})
+    elegidos = {str(m) for m in metodos}
+    validos = [m for m in METODOS_DE_ENTREGA if m in elegidos]
+    if validos and validos != list(METODOS_DE_ENTREGA):
+        nuevo["metodos_entrega"] = validos
+    else:
+        nuevo.pop("metodos_entrega", None)
+    return nuevo
+
+
+def con_herramientas(data_policy: dict[str, Any] | None, activas: bool) -> dict[str, Any]:
+    """Copia de `data_policy` con la bandera de las herramientas del agente puesta o quitada."""
+    nuevo = dict(data_policy or {})
     if activas:
-        bloque["herramientas"] = True
+        nuevo["herramientas"] = True
     else:
-        bloque.pop("herramientas", None)
-    if bloque:
-        nuevo[CLAVE] = bloque
-    else:
-        nuevo.pop(CLAVE, None)
+        nuevo.pop("herramientas", None)
     return nuevo
 
 
-async def herramientas_activas(tenant_id: uuid.UUID | None) -> bool:
-    if tenant_id is None:
-        return False
+async def cargar_data_policy(agent_id: uuid.UUID | None) -> dict[str, Any]:
+    """Política del agente del negocio activo; `{}` si no hay agente o no existe."""
+    tenant_id = get_current_tenant_id()
+    if agent_id is None or tenant_id is None:
+        return {}
     async with get_session() as session:
-        behavior = (
+        crudo = (
             await session.execute(
-                select(AppSettings.behavior_config).where(
-                    AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
+                select(AgentRecord.data_policy).where(
+                    AgentRecord.tenant_id == tenant_id,
+                    AgentRecord.id == agent_id,
+                    AgentRecord.deleted_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
-    return herramientas_de(behavior)
+    return crudo if isinstance(crudo, dict) else {}
+
+
+async def cargar_ajustes(agent_id: uuid.UUID | None) -> dict[str, dict[str, str]]:
+    return politica_de(await cargar_data_policy(agent_id))
+
+
+async def herramientas_activas(agent_id: uuid.UUID | None) -> bool:
+    return herramientas_de(await cargar_data_policy(agent_id))
+
+
+async def metodos_entrega_del_agente(agent_id: uuid.UUID | None) -> list[str]:
+    return metodos_entrega_de(await cargar_data_policy(agent_id))
+
+
+def _bloque_del_negocio(behavior: dict[str, Any] | None) -> dict[str, Any]:
+    bloque = (behavior or {}).get(CLAVE)
+    return bloque if isinstance(bloque, dict) else {}
 
 
 def aviso_de(behavior: dict[str, Any] | None) -> dict[str, Any]:
     """Aviso de tratamiento de datos guardado: `{activo: bool, texto: str}` (texto vacío = el borrador)."""
-    bloque = (behavior or {}).get(CLAVE)
-    crudo = bloque.get("aviso") if isinstance(bloque, dict) else None
+    crudo = _bloque_del_negocio(behavior).get("aviso")
     if not isinstance(crudo, dict):
         return {"activo": False, "texto": ""}
     return {"activo": bool(crudo.get("activo")), "texto": str(crudo.get("texto") or "")[:1000]}

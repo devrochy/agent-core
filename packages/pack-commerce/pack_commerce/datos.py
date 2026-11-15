@@ -56,6 +56,7 @@ registro_datos.registrar(
         etiqueta="Pedido a domicilio",
         campos=_campos(name=R, id_document=R, phone=R, address=R, municipio=R, email=NO),
         base=_base_de("domicilio"),
+        tools=("crear_pedido",),
     )
 )
 registro_datos.registrar(
@@ -66,5 +67,6 @@ registro_datos.registrar(
         etiqueta="Pedido para recoger en tienda",
         campos=_campos(name=R, id_document=R, phone=R, email=NO, address=NO, municipio=NO),
         base=_base_de("recoger_en_tienda"),
+        tools=("crear_pedido",),
     )
 )

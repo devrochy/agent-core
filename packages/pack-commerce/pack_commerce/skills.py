@@ -67,6 +67,18 @@ QUOTE_STATUS_VIGENTE = ("draft", "aceptada")
 
 PAYMENT_METHODS = ("efectivo_contraentrega", "transferencia", "pago_en_linea")
 DELIVERY_METHODS = ("domicilio", "recoger_en_tienda")
+_ETIQUETA_ENTREGA = {"domicilio": "domicilio", "recoger_en_tienda": "recoger en tienda"}
+
+
+def _etiqueta_metodo_entrega(metodo: str) -> str:
+    return _ETIQUETA_ENTREGA.get(metodo, metodo)
+
+
+async def _metodos_entrega(context: ToolContext) -> list[str]:
+    """Métodos que ESTE agente puede ofrecer (HU-CRM-28). Sin ajuste del dueño: ambos."""
+    from core.datos_cliente.ajustes import cargar_data_policy, metodos_entrega_de
+
+    return metodos_entrega_de(await cargar_data_policy(context.agent_id))
 
 
 # ------------------------------------------------------------------ helpers
@@ -562,11 +574,16 @@ def _accion_de_datos(delivery_method: str) -> str:
 
 
 async def _sobre_faltan_datos(
-    accion: str, customer_data: dict[str, Any], requeridos_del_modulo: list[str]
+    accion: str,
+    customer_data: dict[str, Any],
+    requeridos_del_modulo: list[str],
+    agent_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
     """Sobre unificado `faltan_datos` (aditivo: no sustituye `missing_fields`). Nunca rompe la tool."""
     try:
-        evaluacion = await evaluar_accion(accion, customer_data, base=base_desde_lista(requeridos_del_modulo))
+        evaluacion = await evaluar_accion(
+            accion, customer_data, base=base_desde_lista(requeridos_del_modulo), agent_id=agent_id
+        )
     except Exception:
         log.warning("ventas_sobre_faltan_datos_fallo", exc_info=True)
         return None
@@ -817,7 +834,9 @@ class LeadSkill(BaseSkill):
         telefono = _ESPACIOS.sub(" ", str(arguments.get("phone") or "")).strip()[:40]
         if telefono:
             perfil["phone"] = telefono
-        await guardar_datos(context.customer_id, perfil, operativos=OPERATIVOS_DE_LEAD, source="tool")
+        await guardar_datos(
+            context.customer_id, perfil, operativos=OPERATIVOS_DE_LEAD, source="tool", agent_id=context.agent_id
+        )
         return {"lead_id": lead_id, "status": "created"}
 
     async def calificar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
@@ -882,7 +901,9 @@ class LeadSkill(BaseSkill):
         }
         contacto = {k: v for k, v in contacto.items() if v}
         if contacto:
-            await guardar_datos(context.customer_id, contacto, operativos=OPERATIVOS_DE_LEAD, source="tool")
+            await guardar_datos(
+                context.customer_id, contacto, operativos=OPERATIVOS_DE_LEAD, source="tool", agent_id=context.agent_id
+            )
         return {"lead_id": str(lead.id), "status": "actualizado"}
 
 
@@ -1640,6 +1661,15 @@ class OrderSkill(BaseSkill):
             }
         if delivery_method and delivery_method not in DELIVERY_METHODS:
             return {"error": "Método de entrega no válido. Usa 'domicilio' o 'recoger_en_tienda'."}
+        metodos = await _metodos_entrega(context)
+        if delivery_method and delivery_method not in metodos:
+            return {
+                "error": "Ese método de entrega no está habilitado.",
+                "metodos_disponibles": metodos,
+                "hint": "Ofrecele uno de estos: "
+                + ", ".join(_etiqueta_metodo_entrega(m) for m in metodos)
+                + ".",
+            }
         if _parse_uuid(quote_id) is None:
             return await _cotizacion_no_encontrada(
                 context, _sin_cotizacion_vigente()
@@ -1689,7 +1719,13 @@ class OrderSkill(BaseSkill):
                 return {"error": "La cotización no tiene productos."}
 
             if not delivery_method:
-                return {"error": "Falta el método de entrega: 'domicilio' o 'recoger_en_tienda'."}
+                return {
+                    "error": "Falta el método de entrega.",
+                    "metodos_disponibles": metodos,
+                    "hint": "Preguntale cuál prefiere entre: "
+                    + ", ".join(_etiqueta_metodo_entrega(m) for m in metodos)
+                    + ".",
+                }
             threshold = _monto_alto_threshold(config)
             if _float(quote.total) > threshold:
                 return {
@@ -1728,7 +1764,9 @@ class OrderSkill(BaseSkill):
         accion_datos = _accion_de_datos(delivery_method)
         requeridos_del_modulo = list(requeridos)
         try:
-            requeridos = await requeridos_efectivos(accion_datos, requeridos, A_LEGADO)
+            requeridos = await requeridos_efectivos(
+                accion_datos, requeridos, A_LEGADO, agent_id=context.agent_id
+            )
         except Exception:
             log.warning("ventas_politica_datos_no_aplicada", exc_info=True)
         complete, missing = _validar_checkout(requeridos, customer_data)
@@ -1740,7 +1778,9 @@ class OrderSkill(BaseSkill):
                 "existing_data": {k: v for k, v in customer_data.items() if str(v or "").strip()},
                 "hint": "Pide los datos que faltan uno a uno, sin repetir los que ya tenés.",
             }
-            sobre = await _sobre_faltan_datos(accion_datos, customer_data, requeridos_del_modulo)
+            sobre = await _sobre_faltan_datos(
+                accion_datos, customer_data, requeridos_del_modulo, context.agent_id
+            )
             if sobre is not None:
                 faltan["faltan_datos"] = sobre
             return faltan

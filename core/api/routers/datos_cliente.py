@@ -1,31 +1,46 @@
-"""Política de datos del cliente por módulo (HU-CRM-13, ADR-0179 decisión 1).
+"""Datos del cliente por agente (HU-CRM-28, enmienda de ADR-0179).
 
-`GET /api/v1/admin/datos-cliente/politica` lista las acciones de los módulos habilitados del
-negocio con el nivel efectivo de cada dato (requerido, recomendado, no pedir) y el que trae el
-módulo por defecto. `PUT` guarda solo lo que difiere del módulo. Requiere la sección `settings`;
-cada cambio deja una fila de auditoría con el antes y el después.
+`GET /api/v1/admin/agents/{id}/datos-cliente` lista las operaciones que ESE agente puede ejecutar,
+con el nivel efectivo de cada dato (requerido, recomendado, no pedir), el que trae el módulo por
+defecto y los datos obligatorios de sus superpoderes (solo lectura). `PUT` guarda en
+`agents.data_policy` solo lo que difiere del módulo. Requiere la sección `settings`; cada cambio
+deja una fila de auditoría con el antes y el después.
+
+El aviso de tratamiento de datos sigue siendo del negocio (`/admin/datos-cliente/aviso`).
 """
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from core.agents.spec import enabled_packs, load_active_spec
+from core.agents.editor import habilitados_del_negocio
+from core.agents.habilidades_del_agente import packs_del_agente
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.datos_cliente import AccionDatos, Nivel, niveles_efectivos, registro_datos
-from core.datos_cliente.ajustes import con_herramientas, con_politica, herramientas_de, politica_de
+from core.datos_cliente.ajustes import (
+    METODOS_DE_ENTREGA,
+    con_herramientas,
+    con_metodos_entrega,
+    con_politica,
+    herramientas_de,
+    metodos_entrega_de,
+    politica_de,
+)
 from core.datos_cliente.servicio import base_de
-from core.db.models import AppSettings, AuditLog
+from core.db.models import AgentRecord, AppSettings, AuditLog
 from core.db.session import get_session
 
 router = APIRouter(prefix="/admin/datos-cliente", tags=["admin · datos del cliente"])
+router_agente = APIRouter(prefix="/admin/agents", tags=["admin · datos del cliente"])
 
 NivelOut = Literal["requerido", "recomendado", "no_pedir"]
+MetodoEntregaOut = Literal["domicilio", "recoger_en_tienda"]
 
 
 class CampoPoliticaOut(BaseModel):
@@ -44,20 +59,37 @@ class AccionPoliticaOut(BaseModel):
     campos: list[CampoPoliticaOut]
 
 
-class PoliticaDatosOut(BaseModel):
+class ProcedimientoDatoOut(BaseModel):
+    clave: str
+    etiqueta: str
+    obligatorio: bool = True
+    condicion: str | None = None
+    tipo: str | None = None
+
+
+class ProcedimientoDatosOut(BaseModel):
+    id: str
+    titulo: str
+    datos: list[ProcedimientoDatoOut]
+
+
+class AgenteDatosOut(BaseModel):
+    agente_id: str
     niveles: list[NivelOut]
     acciones: list[AccionPoliticaOut]
-    # Si el asistente puede consultar los datos del cliente con sus herramientas (apagado por defecto).
+    # Datos que exigen los superpoderes del agente: solo lectura, no se ajustan aquí.
+    procedimientos: list[ProcedimientoDatosOut] = []
     herramientas_del_agente: bool = False
+    metodos_entrega: list[MetodoEntregaOut] = Field(default_factory=lambda: list(METODOS_DE_ENTREGA))
 
 
-class PoliticaDatosUpdate(BaseModel):
+class AgenteDatosUpdate(BaseModel):
     """`{accion_id: {clave: nivel}}`. Lo que no viene para una acción vuelve al valor del módulo.
     Sin `politica` (None) no se tocan los ajustes: sirve para cambiar solo la bandera."""
 
     politica: dict[str, dict[str, NivelOut]] | None = Field(default=None, max_length=50)
-    # None = no cambia. True/False enciende o apaga las herramientas de datos del cliente del asistente.
     herramientas_del_agente: bool | None = None
+    metodos_entrega: list[MetodoEntregaOut] | None = Field(default=None, max_length=2)
 
 
 def _exigir_negocio(principal: Principal) -> None:
@@ -65,16 +97,138 @@ def _exigir_negocio(principal: Principal) -> None:
         raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
 
 
-async def _habilitadas() -> list[AccionDatos]:
+_ETIQUETAS = {
+    "name": "Nombre completo",
+    "full_name": "Nombre completo",
+    "phone": "Teléfono",
+    "email": "Correo",
+    "address": "Dirección",
+    "municipality": "Municipio o ciudad",
+    "municipio": "Municipio o ciudad",
+    "delivery_method": "Método de entrega",
+    "payment_method": "Método de pago",
+    "id_document": "Documento",
+}
+
+
+def _etiqueta(clave: str) -> str:
+    if clave in _ETIQUETAS:
+        return _ETIQUETAS[clave]
+    limpio = clave.replace("_", " ").strip()
+    return limpio[0].upper() + limpio[1:] if limpio else clave
+
+
+async def _agente(principal: Principal, agent_id: uuid.UUID) -> AgentRecord:
+    _exigir_negocio(principal)
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                select(AgentRecord).where(
+                    AgentRecord.tenant_id == principal.tenant_id,
+                    AgentRecord.id == agent_id,
+                    AgentRecord.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+    if fila is None:
+        raise ApiError.not_found("Agente no encontrado.")
+    if fila.kind != "specialist":
+        raise ApiError(
+            422,
+            "agente_no_especialista",
+            "Solo un agente especialista tiene datos del cliente.",
+            fields={"agente_id": "Solo un agente especialista tiene datos del cliente."},
+        )
+    return fila
+
+
+async def _contenido(principal: Principal, agent_id: uuid.UUID) -> dict:
+    """El borrador del agente; si no tiene, la última versión publicada; si tampoco, vacío."""
+    from core.agents import versiones
+
     try:
-        habilitados = enabled_packs(await load_active_spec())
+        borrador = await versiones.obtener_borrador(principal.tenant_id, agent_id)
+        return borrador.content if isinstance(borrador.content, dict) else {}
     except Exception:
-        habilitados = set()
-    return registro_datos.de_packs(habilitados)
+        versiones_lista = await versiones.listar_versiones(principal.tenant_id, agent_id)
+        if versiones_lista and isinstance(versiones_lista[0].content, dict):
+            return versiones_lista[0].content
+        return {}
 
 
-async def _leer(behavior: dict | None, acciones: list[AccionDatos]) -> PoliticaDatosOut:
-    ajustes = politica_de(behavior)
+def _procedimientos_del_agente(contenido: dict, packs: set[str]) -> dict[str, object]:
+    """Procedimientos declarados por el agente, resueltos con la versión más alta ofrecible."""
+    from core.kernel.procedures.de_pack import cargar
+    from core.releases.procedimientos import ofrecible, parsear_version
+
+    por_id: dict[str, object] = {}
+    for pack_id in sorted(packs):
+        try:
+            procedimientos = cargar(pack_id)
+        except Exception:
+            continue
+        for proc in procedimientos:
+            if not ofrecible(proc, packs):
+                continue
+            actual = por_id.get(proc.id)
+            if actual is None or parsear_version(proc.version) > parsear_version(actual.version):
+                por_id[proc.id] = proc
+    refs = [
+        str(p.get("id"))
+        for p in contenido.get("procedures") or []
+        if isinstance(p, dict) and p.get("id")
+    ]
+    return {pid: por_id[pid] for pid in refs if pid in por_id}
+
+
+async def _acciones_del_agente(
+    principal: Principal, agente: AgentRecord
+) -> tuple[list[AccionDatos], set[str], dict]:
+    """Acciones de datos que el agente puede ejecutar, sus packs y el borrador que las declara."""
+    contenido = await _contenido(principal, agente.id)
+    packs = await packs_del_agente(
+        principal.tenant_id, agente.id, await habilitados_del_negocio(principal.tenant_id)
+    )
+    vinculadas = {
+        str(b.get("tool"))
+        for b in contenido.get("tools") or []
+        if isinstance(b, dict) and b.get("tool") and b.get("enabled", True)
+    }
+    for proc in _procedimientos_del_agente(contenido, packs).values():
+        for stage in proc.stages:  # type: ignore[attr-defined]
+            vinculadas.update(stage.actions)
+    datos = [a for a in registro_datos.de_packs(packs) if a.aplica_a(vinculadas)]
+    return datos, packs, contenido
+
+
+def _procedimientos(contenido: dict, packs: set[str]) -> list[ProcedimientoDatosOut]:
+    """Datos obligatorios de los superpoderes del agente, en solo lectura."""
+    salida: list[ProcedimientoDatosOut] = []
+    for proc in _procedimientos_del_agente(contenido, packs).values():
+        datos: list[ProcedimientoDatoOut] = []
+        for nombre, slot in (proc.slots or {}).items():  # type: ignore[attr-defined]
+            if slot.setBy is not None or not (slot.required or slot.requiredWhen is not None):
+                continue
+            condicion = None
+            if slot.requiredWhen is not None:
+                condicion = f"{slot.requiredWhen.slot} = {slot.requiredWhen.equals}"
+            datos.append(
+                ProcedimientoDatoOut(
+                    clave=nombre,
+                    etiqueta=_etiqueta(nombre),
+                    obligatorio=bool(slot.required),
+                    condicion=condicion,
+                    tipo=slot.type,
+                )
+            )
+        if datos:
+            salida.append(ProcedimientoDatosOut(id=proc.id, titulo=proc.title, datos=datos))  # type: ignore[attr-defined]
+    return salida
+
+
+async def _leer(principal: Principal, agente: AgentRecord) -> AgenteDatosOut:
+    acciones, packs, contenido = await _acciones_del_agente(principal, agente)
+    ajustes = politica_de(agente.data_policy)
     salida: list[AccionPoliticaOut] = []
     for accion in acciones:
         base = await base_de(accion)
@@ -98,50 +252,56 @@ async def _leer(behavior: dict | None, acciones: list[AccionDatos]) -> PoliticaD
                 ],
             )
         )
-    return PoliticaDatosOut(
-        niveles=[n.value for n in Nivel], acciones=salida, herramientas_del_agente=herramientas_de(behavior)
+    return AgenteDatosOut(
+        agente_id=str(agente.id),
+        niveles=[n.value for n in Nivel],
+        acciones=salida,
+        procedimientos=_procedimientos(contenido, packs),
+        herramientas_del_agente=herramientas_de(agente.data_policy),
+        metodos_entrega=metodos_entrega_de(agente.data_policy),
     )
 
 
-async def _behavior_de(tenant_id) -> dict | None:
-    async with get_session() as session:
-        return (
-            await session.execute(
-                select(AppSettings.behavior_config).where(
-                    AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
-                )
-            )
-        ).scalar_one_or_none()
-
-
-@router.get("/politica", response_model=PoliticaDatosOut)
-async def get_politica(
+@router_agente.get("/{agent_id}/datos-cliente", response_model=AgenteDatosOut)
+async def get_datos_cliente(
+    agent_id: uuid.UUID,
     principal: Annotated[Principal, Depends(require("settings"))],
-) -> PoliticaDatosOut:
-    _exigir_negocio(principal)
-    return await _leer(await _behavior_de(principal.tenant_id), await _habilitadas())
+) -> AgenteDatosOut:
+    return await _leer(principal, await _agente(principal, agent_id))
 
 
-@router.put("/politica", response_model=PoliticaDatosOut)
-async def save_politica(
-    payload: PoliticaDatosUpdate,
+@router_agente.put("/{agent_id}/datos-cliente", response_model=AgenteDatosOut)
+async def save_datos_cliente(
+    agent_id: uuid.UUID,
+    payload: AgenteDatosUpdate,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
-) -> PoliticaDatosOut:
-    """Reemplaza los ajustes de las acciones habilitadas. Rechaza acciones o datos que el negocio
+) -> AgenteDatosOut:
+    """Reemplaza los ajustes de las operaciones del agente. Rechaza acciones o datos que ese agente
     no tiene y los pisos técnicos; guarda solo lo que difiere del valor del módulo."""
-    _exigir_negocio(principal)
-    acciones = {a.id: a for a in await _habilitadas()}
+    agente = await _agente(principal, agent_id)
+    acciones_lista, _, _ = await _acciones_del_agente(principal, agente)
+    acciones = {a.id: a for a in acciones_lista}
     nuevos: dict[str, dict[str, str]] = {}
     for accion_id, claves in (payload.politica or {}).items():
         accion = acciones.get(accion_id)
         if accion is None:
-            raise ApiError(422, "accion_desconocida", "Esa acción no existe en este negocio.", fields={"politica": "Esa acción no existe en este negocio."})
+            raise ApiError(
+                422,
+                "accion_desconocida",
+                "Esa operación no existe en este agente.",
+                fields={"politica": "Esa operación no existe en este agente."},
+            )
         defecto = niveles_efectivos(accion, None, await base_de(accion))
         elegidos: dict[str, str] = {}
         for clave, nivel in claves.items():
             campo = accion.campo(clave)
             if campo is None:
-                raise ApiError(422, "dato_desconocido", "Ese dato no existe en la acción.", fields={"politica": "Ese dato no existe en la acción."})
+                raise ApiError(
+                    422,
+                    "dato_desconocido",
+                    "Ese dato no existe en la operación.",
+                    fields={"politica": "Ese dato no existe en la operación."},
+                )
             if not campo.ajustable:
                 raise ApiError(
                     422,
@@ -155,47 +315,202 @@ async def save_politica(
             nuevos[accion_id] = elegidos
 
     async with get_session() as session:
-        app_settings = (
+        fila = (
             await session.execute(
-                select(AppSettings)
-                .where(AppSettings.tenant_id == principal.tenant_id, AppSettings.deleted_at.is_(None))
+                select(AgentRecord)
+                .where(
+                    AgentRecord.tenant_id == principal.tenant_id,
+                    AgentRecord.id == agent_id,
+                    AgentRecord.deleted_at.is_(None),
+                )
                 .with_for_update()
             )
         ).scalar_one_or_none()
-        if app_settings is None:
-            app_settings = AppSettings(tenant_id=principal.tenant_id)
-            session.add(app_settings)
-        actual = politica_de(app_settings.behavior_config)
-        # Las acciones de módulos que hoy no están habilitados conservan su ajuste.
+        if fila is None:
+            raise ApiError.not_found("Agente no encontrado.")
+        actual = politica_de(fila.data_policy)
+        # Las operaciones que hoy no están habilitadas conservan su ajuste.
         if payload.politica is None:
             resultado = actual
         else:
             resultado = {k: v for k, v in actual.items() if k not in acciones}
             resultado.update(nuevos)
-        if resultado != actual:
-            antes = {k: v for k, v in actual.items() if k in acciones}
-            app_settings.behavior_config = con_politica(app_settings.behavior_config, resultado)
+        nuevo_policy = con_politica(fila.data_policy, resultado)
+        if payload.herramientas_del_agente is not None:
+            nuevo_policy = con_herramientas(nuevo_policy, payload.herramientas_del_agente)
+        if payload.metodos_entrega is not None:
+            metodos = list(dict.fromkeys(payload.metodos_entrega))
+            if not metodos:
+                raise ApiError(
+                    422,
+                    "metodos_entrega_vacios",
+                    "Elige al menos un método de entrega.",
+                    fields={"metodos_entrega": "Elige al menos un método de entrega."},
+                )
+            nuevo_policy = con_metodos_entrega(nuevo_policy, metodos)
+        if nuevo_policy != (fila.data_policy or {}):
+            antes = {
+                "politica": {k: v for k, v in actual.items() if k in acciones},
+                "herramientas": herramientas_de(fila.data_policy),
+                "metodos_entrega": metodos_entrega_de(fila.data_policy),
+            }
+            fila.data_policy = nuevo_policy
+            session.add(
+                AuditLog(
+                    tenant_id=principal.tenant_id,
+                    actor=f"admin:{principal.admin.email}",
+                    action="agent.datos_cliente",
+                    input={
+                        "agente_id": str(agent_id),
+                        "antes": antes,
+                        "despues": {
+                            "politica": nuevos,
+                            "herramientas": herramientas_de(nuevo_policy),
+                            "metodos_entrega": metodos_entrega_de(nuevo_policy),
+                        },
+                    },
+                )
+            )
+    return await _leer(principal, await _agente(principal, agent_id))
+
+
+# ------------------------------------------------------------------ compatibilidad (HU-CRM-28)
+
+
+class PoliticaDatosOut(BaseModel):
+    """Contrato legado de la política global; se conserva un release, deprecado."""
+
+    niveles: list[NivelOut]
+    acciones: list[AccionPoliticaOut]
+    herramientas_del_agente: bool = False
+
+
+class PoliticaDatosUpdate(BaseModel):
+    """Cuerpo legado. Se aplica al especialista por defecto del negocio; lo que no tenga se ignora."""
+
+    politica: dict[str, dict[str, NivelOut]] | None = Field(default=None, max_length=50)
+    herramientas_del_agente: bool | None = None
+
+
+async def _agente_de_compatibilidad(principal: Principal) -> AgentRecord | None:
+    """Especialista por defecto o, si no hay publicación, el primer especialista activo."""
+    from core.agents.instancias import especialista_por_defecto
+
+    async with get_session() as session:
+        agent_id = await especialista_por_defecto(session, principal.tenant_id)
+        if agent_id is not None:
+            fila = (
+                await session.execute(
+                    select(AgentRecord).where(
+                        AgentRecord.tenant_id == principal.tenant_id,
+                        AgentRecord.id == agent_id,
+                        AgentRecord.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if fila is not None:
+                return fila
+        return (
+            await session.execute(
+                select(AgentRecord)
+                .where(
+                    AgentRecord.tenant_id == principal.tenant_id,
+                    AgentRecord.kind == "specialist",
+                    AgentRecord.status == "active",
+                    AgentRecord.deleted_at.is_(None),
+                )
+                .order_by(AgentRecord.created_at, AgentRecord.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+
+def _politica_legada(datos: AgenteDatosOut) -> PoliticaDatosOut:
+    return PoliticaDatosOut(
+        niveles=datos.niveles,
+        acciones=datos.acciones,
+        herramientas_del_agente=datos.herramientas_del_agente,
+    )
+
+
+@router.get("/politica", deprecated=True, response_model=PoliticaDatosOut)
+async def get_politica_deprecada(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> PoliticaDatosOut:
+    """Deprecado: la política es de cada agente. Devuelve la del especialista por defecto."""
+    _exigir_negocio(principal)
+    agente = await _agente_de_compatibilidad(principal)
+    if agente is None:
+        return PoliticaDatosOut(niveles=[n.value for n in Nivel], acciones=[], herramientas_del_agente=False)
+    return _politica_legada(await _leer(principal, agente))
+
+
+@router.put("/politica", deprecated=True, response_model=PoliticaDatosOut)
+async def save_politica_deprecado(
+    payload: PoliticaDatosUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> PoliticaDatosOut:
+    """Deprecado: aplica el cuerpo al especialista por defecto, ignorando lo que ese agente no tenga."""
+    _exigir_negocio(principal)
+    agente = await _agente_de_compatibilidad(principal)
+    if agente is None:
+        return PoliticaDatosOut(niveles=[n.value for n in Nivel], acciones=[], herramientas_del_agente=False)
+
+    acciones_lista, _, _ = await _acciones_del_agente(principal, agente)
+    acciones = {a.id: a for a in acciones_lista}
+    nuevos: dict[str, dict[str, str]] = {}
+    for accion_id, claves in (payload.politica or {}).items():
+        accion = acciones.get(accion_id)
+        if accion is None:
+            continue  # legado del negocio que este especialista no ejecuta
+        defecto = niveles_efectivos(accion, None, await base_de(accion))
+        elegidos: dict[str, str] = {}
+        for clave, nivel in claves.items():
+            campo = accion.campo(clave)
+            if campo is None or not campo.ajustable:
+                continue
+            if nivel != defecto[clave].value:
+                elegidos[clave] = nivel
+        if elegidos:
+            nuevos[accion_id] = elegidos
+
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                select(AgentRecord)
+                .where(
+                    AgentRecord.tenant_id == principal.tenant_id,
+                    AgentRecord.id == agente.id,
+                    AgentRecord.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if fila is None:
+            raise ApiError.not_found("Agente no encontrado.")
+        actual = politica_de(fila.data_policy)
+        resultado = {k: v for k, v in actual.items() if k not in acciones}
+        resultado.update(nuevos)
+        nuevo_policy = con_politica(fila.data_policy, resultado)
+        if payload.herramientas_del_agente is not None:
+            nuevo_policy = con_herramientas(nuevo_policy, payload.herramientas_del_agente)
+        if nuevo_policy != (fila.data_policy or {}):
+            fila.data_policy = nuevo_policy
             session.add(
                 AuditLog(
                     tenant_id=principal.tenant_id,
                     actor=f"admin:{principal.admin.email}",
                     action="settings.datos_cliente",
-                    input={"antes": antes, "despues": nuevos},
+                    input={
+                        "agente_id": str(fila.id),
+                        "origen": "legacy",
+                        "antes": actual,
+                        "despues": nuevos,
+                        "herramientas": herramientas_de(nuevo_policy),
+                    },
                 )
             )
-        if payload.herramientas_del_agente is not None and payload.herramientas_del_agente != herramientas_de(
-            app_settings.behavior_config
-        ):
-            app_settings.behavior_config = con_herramientas(app_settings.behavior_config, payload.herramientas_del_agente)
-            session.add(
-                AuditLog(
-                    tenant_id=principal.tenant_id,
-                    actor=f"admin:{principal.admin.email}",
-                    action="settings.datos_cliente_herramientas",
-                    input={"despues": payload.herramientas_del_agente},
-                )
-            )
-    return await _leer(await _behavior_de(principal.tenant_id), list(acciones.values()))
+    return _politica_legada(await _leer(principal, await _agente(principal, agente.id)))
 
 
 # ------------------------------------------------------------------ aviso de tratamiento de datos (HU-CRM-16)
@@ -228,6 +543,17 @@ def _aviso_out(behavior: dict | None) -> AvisoDatosOut:
         es_borrador=aviso.es_borrador,
         version=aviso.version,
     )
+
+
+async def _behavior_de(tenant_id) -> dict | None:
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(AppSettings.behavior_config).where(
+                    AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
+                )
+            )
+        ).scalar_one_or_none()
 
 
 @router.get("/aviso", response_model=AvisoDatosOut)

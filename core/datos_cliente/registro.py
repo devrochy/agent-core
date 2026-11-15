@@ -1,8 +1,8 @@
 """Registro de acciones que piden datos del cliente (HU-CRM-13, ADR-0179 decisión 1).
 
 Los packs se registran desde su módulo `datos.py` (cargado por su `on_activate`), igual que el
-`lead_registry`: el core nunca importa un pack (invariante 5). La política efectiva de un negocio
-es: ajuste del dueño > configuración del módulo (`base`) > valor por defecto de la acción.
+`lead_registry`: el core nunca importa un pack (invariante 5). La política efectiva de un agente
+es: ajuste del agente > configuración del módulo (`base`) > valor por defecto de la acción.
 """
 
 from __future__ import annotations

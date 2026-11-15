@@ -255,12 +255,17 @@ async def cotizar(
 
 
 async def _evaluar_datos(
-    datos_alta: dict[str, Any] | None, requeridos_del_modulo: list[str]
+    datos_alta: dict[str, Any] | None,
+    requeridos_del_modulo: list[str],
+    agent_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
     """Sobre unificado `faltan_datos` (aditivo: no sustituye `faltan`). Nunca rompe la tool."""
     try:
         evaluacion = await evaluar_accion(
-            ACCION_INSCRIBIRSE, datos_alta, base=base_desde_lista(requeridos_del_modulo)
+            ACCION_INSCRIBIRSE,
+            datos_alta,
+            base=base_desde_lista(requeridos_del_modulo),
+            agent_id=agent_id,
         )
     except Exception:
         log.warning("subs_sobre_faltan_datos_fallo", exc_info=True)
@@ -313,14 +318,18 @@ async def inscribir(
     precio = Decimal(plan.precio or 0)
     requeridos = list(config.campos_de_inscripcion)
     try:  # política de datos del cliente (HU-CRM-13): sin ajustes del dueño la lista no cambia
-        requeridos = await requeridos_efectivos(ACCION_INSCRIBIRSE, requeridos, A_LEGADO)
+        requeridos = await requeridos_efectivos(
+            ACCION_INSCRIBIRSE, requeridos, A_LEGADO, agent_id=_agente_del_turno()
+        )
     except Exception:
         log.warning("subs_politica_datos_no_aplicada", exc_info=True)
     try:
         datos, documento = validar_datos(requeridos, datos_alta, origen=origen)
     except SubscriptionError as error:
         if error.code == "faltan_datos":
-            evaluacion = await _evaluar_datos(datos_alta, list(config.campos_de_inscripcion))
+            evaluacion = await _evaluar_datos(
+                datos_alta, list(config.campos_de_inscripcion), _agente_del_turno()
+            )
             if evaluacion is not None:
                 error.data["faltan_datos"] = evaluacion
         raise

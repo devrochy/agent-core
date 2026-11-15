@@ -6,6 +6,7 @@ El correo es un piso técnico (`ajustable=False`): sin correo no hay confirmaci�
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from core.datos_cliente import AccionDatos, CampoPolitica, Nivel, registro_datos
@@ -27,14 +28,17 @@ registro_datos.registrar(
             CampoPolitica("name", "Nombre completo", Nivel.RECOMENDADO),
             CampoPolitica("phone", "Teléfono", Nivel.NO_PEDIR),
         ),
+        tools=("create_calendar_event",),
     )
 )
 
 
-async def sobre_faltan_datos(conocidos: dict[str, Any]) -> dict[str, Any] | None:
+async def sobre_faltan_datos(
+    conocidos: dict[str, Any], agent_id: uuid.UUID | None = None
+) -> dict[str, Any] | None:
     """Sobre unificado `faltan_datos` para el `needs_data` de agendar. Nunca rompe la tool."""
     try:
-        evaluacion = await evaluar_accion(ACCION_AGENDAR, conocidos)
+        evaluacion = await evaluar_accion(ACCION_AGENDAR, conocidos, agent_id=agent_id)
     except Exception:
         log.warning("agenda_sobre_faltan_datos_fallo", exc_info=True)
         return None

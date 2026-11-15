@@ -39,5 +39,6 @@ registro_datos.registrar(
             CampoPolitica("vertical", "Tipo de negocio", NO),
         ),
         base=_base,
+        tools=("sub_inscribir",),
     )
 )

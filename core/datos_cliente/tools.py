@@ -25,20 +25,57 @@ log = get_logger(__name__)
 MAX_ACCIONES = 12
 
 
-async def _habilitadas() -> list[AccionDatos]:
-    from core.agents.spec import enabled_packs, load_active_spec
-
+def _agente():
+    """El especialista en foco de la release del turno; None fuera de una release."""
     try:
-        return registro_datos.de_packs(enabled_packs(await load_active_spec()))
+        from core.shared.release_vigente import agente_del_turno
+
+        return agente_del_turno()
     except Exception:
-        return []
+        return None
+
+
+async def _packs_del_agente() -> set[str]:
+    agente = _agente()
+    if agente is not None and agente.packs is not None:
+        return set(agente.packs)
+    try:
+        from core.agents.spec import enabled_business_packs, leer_spec_activo
+
+        leido = await leer_spec_activo(get_current_tenant_id())
+        return set(enabled_business_packs(leido[1])) if leido is not None else set()
+    except Exception:
+        return set()
+
+
+def _tools_del_agente(agente) -> set[str]:
+    """Tools con binding del agente más las que conceden sus superpoderes en las etapas."""
+    tools = set(agente.tools)
+    try:
+        from core.shared.release_vigente import procedimientos_del_agente
+
+        for proc in (procedimientos_del_agente() or {}).values():
+            for stage in proc.stages:
+                tools.update(stage.actions)
+    except Exception:
+        pass
+    return tools
+
+
+async def _habilitadas() -> list[AccionDatos]:
+    acciones = registro_datos.de_packs(await _packs_del_agente())
+    agente = _agente()
+    if agente is not None:
+        acciones = [a for a in acciones if a.aplica_a(_tools_del_agente(agente))]
+    return acciones
 
 
 async def _hay_acciones(_connection_types: set[str]) -> bool:
-    """La tool se ofrece solo si el negocio activó las herramientas de datos del cliente (apagado por
-    defecto: ofrecer una tool nueva cambia lo que ve el modelo en todos los turnos) y hay acciones."""
+    """La tool se ofrece solo si el agente activó sus herramientas de datos (apagado por defecto:
+    ofrecer una tool nueva cambia lo que ve el modelo en todos los turnos) y tiene acciones."""
     try:
-        if not await herramientas_activas(get_current_tenant_id()):
+        agente = _agente()
+        if not await herramientas_activas(agente.agent_id if agente is not None else None):
             return False
     except Exception:
         return False
@@ -99,7 +136,9 @@ class DatosClienteSkill(BaseSkill):
             perfil = {}
         salida: list[dict[str, Any]] = []
         for accion in acciones[:MAX_ACCIONES]:
-            ev = evaluar(accion, perfil, await ajustes_de(accion.id), await base_de(accion))
+            ev = evaluar(
+                accion, perfil, await ajustes_de(accion.id, ctx.agent_id), await base_de(accion)
+            )
             salida.append({"etiqueta": accion.etiqueta, **ev.como_sobre()})
         return {
             "status": "ok",

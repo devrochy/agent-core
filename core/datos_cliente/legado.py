@@ -7,6 +7,7 @@ sin tocar nada si no ajustó nada: la lista que sale es la misma que entró.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping
 
 from core.datos_cliente.evaluar import niveles_efectivos
@@ -39,12 +40,18 @@ def base_desde_lista(legado: list[str]) -> dict[str, Nivel]:
 
 
 async def requeridos_efectivos(
-    accion_id: str, legado: list[str], a_legado: Mapping[str, str] | None = None
+    accion_id: str,
+    legado: list[str],
+    a_legado: Mapping[str, str] | None = None,
+    *,
+    agent_id: uuid.UUID | None = None,
 ) -> list[str]:
-    """`legado` con el ajuste del dueño aplicado. La base es la propia lista: no se relee la
+    """`legado` con el ajuste del agente aplicado. La base es la propia lista: no se relee la
     configuración del módulo, así que lo que el módulo ya decidió para este turno no se contradice."""
     accion = registro_datos.obtener(accion_id)
     if accion is None:
         return list(legado)
-    niveles = niveles_efectivos(accion, await ajustes_de(accion_id), base_desde_lista(legado))
+    niveles = niveles_efectivos(
+        accion, await ajustes_de(accion_id, agent_id), base_desde_lista(legado)
+    )
     return aplicar_niveles(list(legado), niveles, a_legado)

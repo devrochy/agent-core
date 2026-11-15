@@ -33252,147 +33252,6 @@
         }
       }
     },
-    "/api/v1/admin/datos-cliente/politica": {
-      "get": {
-        "tags": [
-          "api",
-          "admin · datos del cliente"
-        ],
-        "summary": "Get Politica",
-        "operationId": "get_politica_api_v1_admin_datos_cliente_politica_get",
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PoliticaDatosOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "api",
-          "admin · datos del cliente"
-        ],
-        "summary": "Save Politica",
-        "description": "Reemplaza los ajustes de las acciones habilitadas. Rechaza acciones o datos que el negocio\nno tiene y los pisos técnicos; guarda solo lo que difiere del valor del módulo.",
-        "operationId": "save_politica_api_v1_admin_datos_cliente_politica_put",
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PoliticaDatosUpdate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PoliticaDatosOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/admin/datos-cliente/aviso": {
       "get": {
         "tags": [
@@ -44233,6 +44092,311 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/datos-cliente": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · datos del cliente"
+        ],
+        "summary": "Get Datos Cliente",
+        "operationId": "get_datos_cliente_api_v1_admin_agents__agent_id__datos_cliente_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgenteDatosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · datos del cliente"
+        ],
+        "summary": "Save Datos Cliente",
+        "description": "Reemplaza los ajustes de las operaciones del agente. Rechaza acciones o datos que ese agente\nno tiene y los pisos técnicos; guarda solo lo que difiere del valor del módulo.",
+        "operationId": "save_datos_cliente_api_v1_admin_agents__agent_id__datos_cliente_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgenteDatosUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgenteDatosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/datos-cliente/politica": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · datos del cliente"
+        ],
+        "summary": "Get Politica Deprecada",
+        "description": "Deprecado: la política es de cada agente. Devuelve la del especialista por defecto.",
+        "operationId": "get_politica_deprecada_api_v1_admin_datos_cliente_politica_get",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoliticaDatosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · datos del cliente"
+        ],
+        "summary": "Save Politica Deprecado",
+        "description": "Deprecado: aplica el cuerpo al especialista por defecto, ignorando lo que ese agente no tenga.",
+        "operationId": "save_politica_deprecado_api_v1_admin_datos_cliente_politica_put",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PoliticaDatosUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoliticaDatosOut"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -67733,81 +67897,6 @@
         ],
         "title": "PluginSummary"
       },
-      "PoliticaDatosOut": {
-        "properties": {
-          "niveles": {
-            "items": {
-              "type": "string",
-              "enum": [
-                "requerido",
-                "recomendado",
-                "no_pedir"
-              ]
-            },
-            "type": "array",
-            "title": "Niveles"
-          },
-          "acciones": {
-            "items": {
-              "$ref": "#/components/schemas/AccionPoliticaOut"
-            },
-            "type": "array",
-            "title": "Acciones"
-          },
-          "herramientas_del_agente": {
-            "type": "boolean",
-            "title": "Herramientas Del Agente",
-            "default": false
-          }
-        },
-        "type": "object",
-        "required": [
-          "niveles",
-          "acciones"
-        ],
-        "title": "PoliticaDatosOut"
-      },
-      "PoliticaDatosUpdate": {
-        "properties": {
-          "politica": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "additionalProperties": {
-                    "type": "string",
-                    "enum": [
-                      "requerido",
-                      "recomendado",
-                      "no_pedir"
-                    ]
-                  },
-                  "type": "object"
-                },
-                "type": "object",
-                "maxProperties": 50
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Politica"
-          },
-          "herramientas_del_agente": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Herramientas Del Agente"
-          }
-        },
-        "type": "object",
-        "title": "PoliticaDatosUpdate",
-        "description": "`{accion_id: {clave: nivel}}`. Lo que no viene para una acción vuelve al valor del módulo.\nSin `politica` (None) no se tocan los ajustes: sirve para cambiar solo la bandera."
-      },
       "Portfolio": {
         "properties": {
           "id": {
@@ -79818,6 +79907,271 @@
           "fecha_hora"
         ],
         "title": "Payment"
+      },
+      "AgenteDatosOut": {
+        "properties": {
+          "agente_id": {
+            "type": "string",
+            "title": "Agente Id"
+          },
+          "niveles": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "requerido",
+                "recomendado",
+                "no_pedir"
+              ]
+            },
+            "type": "array",
+            "title": "Niveles"
+          },
+          "acciones": {
+            "items": {
+              "$ref": "#/components/schemas/AccionPoliticaOut"
+            },
+            "type": "array",
+            "title": "Acciones"
+          },
+          "procedimientos": {
+            "items": {
+              "$ref": "#/components/schemas/ProcedimientoDatosOut"
+            },
+            "type": "array",
+            "title": "Procedimientos",
+            "default": []
+          },
+          "herramientas_del_agente": {
+            "type": "boolean",
+            "title": "Herramientas Del Agente",
+            "default": false
+          },
+          "metodos_entrega": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "domicilio",
+                "recoger_en_tienda"
+              ]
+            },
+            "type": "array",
+            "title": "Metodos Entrega"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agente_id",
+          "niveles",
+          "acciones"
+        ],
+        "title": "AgenteDatosOut"
+      },
+      "AgenteDatosUpdate": {
+        "properties": {
+          "politica": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "type": "string",
+                    "enum": [
+                      "requerido",
+                      "recomendado",
+                      "no_pedir"
+                    ]
+                  },
+                  "type": "object"
+                },
+                "type": "object",
+                "maxProperties": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Politica"
+          },
+          "herramientas_del_agente": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Herramientas Del Agente"
+          },
+          "metodos_entrega": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "domicilio",
+                    "recoger_en_tienda"
+                  ]
+                },
+                "type": "array",
+                "maxItems": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metodos Entrega"
+          }
+        },
+        "type": "object",
+        "title": "AgenteDatosUpdate",
+        "description": "`{accion_id: {clave: nivel}}`. Lo que no viene para una acción vuelve al valor del módulo.\nSin `politica` (None) no se tocan los ajustes: sirve para cambiar solo la bandera."
+      },
+      "ProcedimientoDatoOut": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "etiqueta": {
+            "type": "string",
+            "title": "Etiqueta"
+          },
+          "obligatorio": {
+            "type": "boolean",
+            "title": "Obligatorio",
+            "default": true
+          },
+          "condicion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Condicion"
+          },
+          "tipo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tipo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "etiqueta"
+        ],
+        "title": "ProcedimientoDatoOut"
+      },
+      "ProcedimientoDatosOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "datos": {
+            "items": {
+              "$ref": "#/components/schemas/ProcedimientoDatoOut"
+            },
+            "type": "array",
+            "title": "Datos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "titulo",
+          "datos"
+        ],
+        "title": "ProcedimientoDatosOut"
+      },
+      "PoliticaDatosOut": {
+        "properties": {
+          "niveles": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "requerido",
+                "recomendado",
+                "no_pedir"
+              ]
+            },
+            "type": "array",
+            "title": "Niveles"
+          },
+          "acciones": {
+            "items": {
+              "$ref": "#/components/schemas/AccionPoliticaOut"
+            },
+            "type": "array",
+            "title": "Acciones"
+          },
+          "herramientas_del_agente": {
+            "type": "boolean",
+            "title": "Herramientas Del Agente",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "niveles",
+          "acciones"
+        ],
+        "title": "PoliticaDatosOut",
+        "description": "Contrato legado de la política global; se conserva un release, deprecado."
+      },
+      "PoliticaDatosUpdate": {
+        "properties": {
+          "politica": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "type": "string",
+                    "enum": [
+                      "requerido",
+                      "recomendado",
+                      "no_pedir"
+                    ]
+                  },
+                  "type": "object"
+                },
+                "type": "object",
+                "maxProperties": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Politica"
+          },
+          "herramientas_del_agente": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Herramientas Del Agente"
+          }
+        },
+        "type": "object",
+        "title": "PoliticaDatosUpdate",
+        "description": "Cuerpo legado. Se aplica al especialista por defecto del negocio; lo que no tenga se ignora."
       }
     }
   }
