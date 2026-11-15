@@ -34,8 +34,7 @@ tipo no pueden pedir datos distintos, y el dueño no encuentra la configuración
    `herramientas_activas()` y los métodos de entrega reciben el `agent_id` del `ToolContext`; sin
    él usan el especialista en foco de la release. Fuera de una conversación se usan los defaults
    del módulo. `crear_pedido` y el resolver `pack_commerce.metodo_de_entrega` rechazan un método
-   que el agente no tenga habilitado y devuelven los disponibles; el procedimiento ofrece solo esos
-   como candidatos.
+   que el agente no tenga habilitado y devuelven los disponibles.
 5. **API y panel.** `GET/PUT /admin/agents/{id}/datos-cliente` con permiso `settings` (escritura) y
    auditoría `agent.datos_cliente`. El editor del agente gana el paso «Datos del cliente», después
    de Acciones, con la matriz editable, el interruptor de herramientas y los datos obligatorios de
@@ -77,8 +76,8 @@ tipo no pueden pedir datos distintos, y el dueño no encuentra la configuración
 - `core/db/models.py` (`AgentRecord.data_policy`) y migración `0134`.
 - `core/datos_cliente/` (`modelo.py` con `AccionDatos.tools`, `ajustes.py` con los métodos de
   entrega, `servicio.py`, `legado.py`, `guardar.py`, `tools.py`) y los `datos.py` de commerce,
-  calendar y subscriptions. `pack_commerce` sube a 3.3.0: `crear_pedido` valida los métodos y el
-  procedimiento `tomar_pedido` 1.2.0 usa el resolver y los candidatos dinámicos.
+  calendar y subscriptions. `pack_commerce` sube a 3.3.1: `crear_pedido` valida los métodos y el
+  procedimiento `tomar_pedido` 1.2.0 usa el resolver de validación.
 - `core/orchestrator/loop.py`, `core/memory/historial_tool.py`, `core/tools/core_skill.py`.
 - `core/api/routers/datos_cliente.py` y `core/api/__init__.py`.
 - `scripts/migrar_datos_cliente_agentes.py`.

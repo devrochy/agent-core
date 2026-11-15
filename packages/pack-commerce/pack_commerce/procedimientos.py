@@ -46,11 +46,7 @@ def registrar(host: MCPHost) -> None:
 
     host.register_procedures(de_pack.cargar(PLUGIN_ID))
     host.register_resolver(f"{PLUGIN_ID}.metodo_de_pago", validar=metodo_de_pago)
-    host.register_resolver(
-        f"{PLUGIN_ID}.metodo_de_entrega",
-        validar=metodo_de_entrega,
-        candidatos=metodos_de_entrega_candidatos,
-    )
+    host.register_resolver(f"{PLUGIN_ID}.metodo_de_entrega", validar=metodo_de_entrega)
     host.register_resumen("confirmar_cotizacion", resumen_de_cotizacion)
     host.register_rotulos(rotulos_de_datos())
 
@@ -100,11 +96,6 @@ async def metodo_de_entrega(valor: Any, ctx: ToolContext, datos: dict[str, Any])
         ok=False,
         error=f"Ese método de entrega no está habilitado. Ofrece: {disponibles}.",
     )
-
-
-async def metodos_de_entrega_candidatos(ctx: ToolContext, datos: dict[str, Any]) -> list[str]:
-    """Opciones de entrega que el cliente puede elegir: solo las habilitadas por el agente."""
-    return await _metodos_entrega_de(ctx)
 
 
 # ------------------------------------------------------------------ resumen de la confirmación

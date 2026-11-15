@@ -23,11 +23,7 @@
         "recoger_en_tienda"
       ],
       "required": true,
-      "resolver": "pack_commerce.metodo_de_entrega",
-      "candidates": {
-        "source": "resolver:pack_commerce.metodo_de_entrega",
-        "max": 2
-      }
+      "resolver": "pack_commerce.metodo_de_entrega"
     },
     "address": {
       "type": "string",
