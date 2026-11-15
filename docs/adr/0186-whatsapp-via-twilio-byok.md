@@ -271,7 +271,7 @@ Según la documentación oficial (docs/whatsapp/sandbox, quickstart y try-out-wh
    - `PATCH /{id}/sandbox` recibe `{join_code}`.
    - `ConexionTwilioOut` suma `modo`, `sandbox_join_code`, `webhook_confirmado_at` y `requiere_accion_manual`. En sandbox, `sender_sid` va como `""`.
    - Las rutas nuevas se declaran antes de `/{connection_id}`.
-6. **Confirmación del webhook.** El alta deja la conexión en `pending`. El primer entrante o estado con firma válida y `AccountSid` correcto marca `webhook_confirmado_at` (un `UPDATE … WHERE webhook_confirmado_at IS NULL`) y la pasa a `connected`. La firma no cambia: sigue fail-closed y no hay modo permisivo.
+6. **Confirmación del webhook.** El alta deja la conexión en `pending`. Solo el primer **mensaje entrante** con firma válida y `AccountSid` correcto marca `webhook_confirmado_at` (un `UPDATE … WHERE webhook_confirmado_at IS NULL`) y la pasa a `connected`. La firma no cambia: sigue fail-closed y no hay modo permisivo.
 7. **Bifurcación por modo.**
    - La salud solo revisa la cuenta (`GET /Accounts`) y la confirmación; nunca llama a `get_sender`.
    - Registrar los webhooks de nuevo responde 409 `sandbox_webhook_manual`, con las URL.
@@ -280,6 +280,11 @@ Según la documentación oficial (docs/whatsapp/sandbox, quickstart y try-out-wh
    - Crear, enviar a aprobación o borrar plantillas responde 409 `no_aplica_sandbox`. Sincronizar sigue permitido.
 8. **63015** entra en la tabla de channel-twilio como `PERMANENT`: no se reintenta y no da de baja al cliente. El mensaje de prueba responde 422 `participante_no_unido`, con el texto para volver a unirse.
 9. **Sin limitador propio en v1.** El ritmo de un mensaje cada 3 s lo cubren los reintentos por `RATE_LIMIT` que ya existen. Si en test se pierden mensajes de un mismo turno, una HU posterior agrega un limitador por conexión en Redis.
+
+### Ajustes al implementar (2026-11-15, agent-core #788 a #791)
+
+- **Un estado no confirma la conexión.** El `StatusCallback` de cada envío llega a nuestra URL aunque la consola no la tenga, así que un estado no prueba que el dueño pegó las URL. Si contara, un mensaje de prueba dejaría la conexión `connected` sin que entre nada. Por eso confirma solo un mensaje entrante firmado (punto 6).
+- **Sin gauge de conexiones sin confirmar.** Con el worker en prefork, cada proceso exportaría su último valor y la cifra nunca bajaría. El conteo va como `sandbox_sin_confirmar` en el log `twilio_salud_ronda`. Los eventos del sandbox se cuentan en `agentcore_twilio_sandbox_events_total`, con etiquetas cerradas.
 
 ### Pendiente de verificar en test con el sandbox
 
