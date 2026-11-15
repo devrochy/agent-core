@@ -82,7 +82,7 @@ METRICS: tuple[Metric, ...] = (
         scope="lifetime",
         description=(
             "Agentes del negocio con al menos una instancia en una conexión (D-35). "
-            "El General cuenta; el Coordinador no."
+            "El Coordinador no cuenta."
         ),
     ),
     Metric(

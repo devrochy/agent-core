@@ -271,8 +271,8 @@ async def actualizar_agente(
         if status == "archived" and agente.status != "archived":
             if agente.key in KEYS_RESERVADAS:
                 raise Conflicto(
-                    "El General y el Coordinador vienen con el negocio y no se archivan. Para que el General "
-                    "no atienda en una conexión, pon otro agente como principal y quítalo de ella.",
+                    "El Coordinador viene con el negocio y no se archiva. Para que otro agente no "
+                    "atienda en una conexión, ponlo como principal y quita al Coordinador de ella.",
                     codigo="agent_reserved",
                 )
             instanciado = (
