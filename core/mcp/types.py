@@ -72,6 +72,38 @@ CandidatosFn = Callable[["ToolContext", dict[str, Any]], Awaitable[list[str]]]
 ResumenFn = Callable[[dict[str, Any], "ToolContext"], Awaitable["list[DatoDeResumen] | None"]]
 
 
+@dataclass(frozen=True, slots=True)
+class VoicePlan:
+    """Lo que pide la política para ESTE turno (ADR-0197).
+
+    `include_text` viene de la configuración del negocio: si es True, el texto se
+    envía primero y la nota de voz después. `plugin_id` lo completa el host.
+    """
+
+    include_text: bool = True
+    plugin_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceSynthesis:
+    """Audio listo para enviar como nota de voz (pack-voice, ADR-0197).
+
+    `audio_url` es la URL firmada del archivo guardado con el controlador único
+    (ADR-0085); el adaptador del canal la usa para enviar la nota.
+    """
+
+    audio_key: str
+    audio_url: str
+    mimetype: str = "audio/ogg"
+    duration_s: float = 0.0
+
+
+# La política decide si ESTE turno va con voz; el sintetizador produce el audio.
+# Ambos se registran por plugin en `MCPHost` (ADR-0197).
+VoicePolicyFn = Callable[[uuid.UUID, str], Awaitable[VoicePlan | bool | None]]
+VoiceSynthesizerFn = Callable[[uuid.UUID, str], Awaitable[VoiceSynthesis | None]]
+
+
 @dataclass
 class ToolContext:
     """Contexto inyectado por el core al ejecutar una tool.
@@ -707,7 +739,7 @@ class BaseModule(ABC):
     async def describir_registros(
         self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]
     ) -> list[RegistroDescrito]:
-        """Hook opcional (HU-QA-16, ADR-0194): pone en palabras lo que este pack sembró o importó
+        """Hook opcional (HU-QA-16, ADR-0196): pone en palabras lo que este pack sembró o importó
         (`registros`, de `test_data_records`) para la lista «Lo cargado» del asistente de agentes.
 
         Es POR LOTE (una consulta por `kind`, nunca una por registro), de solo lectura, bajo el

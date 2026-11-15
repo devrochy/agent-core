@@ -77,7 +77,7 @@ class FlowSection:
 @dataclass
 class ResolvedFlow:
     sections: list[FlowSection]
-    source: str  # "tenant" | "pack"
+    source: str  # "tenant" | "pack" | "agente"
     unknown_tools: list[str] = field(default_factory=list)
 
     @property
@@ -366,14 +366,17 @@ async def resolve_flow(
     slug: str | None = None,
     available: set[str] | None = None,
     flow_tenant: Any = _DE_LA_RANURA,
+    flow_agente: Any = None,
     estricto: bool = False,
 ) -> ResolvedFlow | None:
     """Resuelve el flujo del tenant. None si no hay flujo declarado.
 
     `flow_tenant` (compilador de HU-AOS-35): las secciones crudas del negocio congeladas en una
     release, pasadas por parámetro (None = sin secciones propias). Con él no se lee la ranura del
-    turno ni el disco del negocio. `estricto`: un `flow.json` del core o de un pack que existe y
-    no se puede leer lanza en vez de omitirse.
+    turno ni el disco del negocio. `flow_agente` (ADR-0195): el flujo propio del agente en foco;
+    si se pasa, manda sobre `flow_tenant` y no se componen los defaults de sus packs (el agente
+    ya los tiene copiados en su flujo). `estricto`: un `flow.json` del core o de un pack que
+    existe y no se puede leer lanza en vez de omitirse.
 
     `available`: si se pasa, filtra las tools a las realmente disponibles para el
     tenant (packs habilitados + declarativas) y registra el resto en
@@ -382,6 +385,12 @@ async def resolve_flow(
     from core.agents.spec import enabled_business_packs
     from core.shared import release_vigente
 
+    if flow_agente is not None:
+        # Flujo propio del agente (ADR-0195): core + sus secciones, sin defaults de packs.
+        agente_sections = [replace(s, pack=TENANT) for s in parse_sections(flow_agente)]
+        extra = {"estricto": True} if estricto else {}
+        sections = compose_flow(load_core_flow(**extra), [], agente_sections)
+        return _resolver_secciones(sections, available=available, source="agente")
     if flow_tenant is not _DE_LA_RANURA:
         tenant_sections = parse_sections(flow_tenant) if flow_tenant is not None else []
     elif (congelada := release_vigente.vigente()) is not None:
@@ -402,9 +411,15 @@ async def resolve_flow(
     )
     # `source` informa si el negocio aporta algo propio (secciones u overrides).
     source = "tenant" if tenant_sections else "pack"
+    return _resolver_secciones(sections, available=available, source=source)
+
+
+def _resolver_secciones(
+    sections: list[FlowSection], *, available: set[str] | None, source: str
+) -> ResolvedFlow | None:
+    """Filtra tools no disponibles y arma el `ResolvedFlow`; None si no queda ninguna sección."""
     if not sections:
         return None
-
     unknown: list[str] = []
     resolved: list[FlowSection] = []
     for section in sections:
@@ -426,7 +441,7 @@ async def resolve_flow(
 
 
 def render_flow(flow: ResolvedFlow) -> str:
-    """Texto del flujo para el bloque del system prompt (estable por tenant)."""
+    """Texto del flujo para el bloque del system prompt (estable por agente o tenant)."""
     lines: list[str] = []
     for index, section in enumerate(flow.sections, start=1):
         lines.append(f"{index}. {section.label}")

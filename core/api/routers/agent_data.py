@@ -68,6 +68,9 @@ class AgentOverviewItem(Activity):
     id: uuid.UUID | None
     ref: str
     key: str
+    # Plantilla de origen (`ventas`, `agenda`…), para habilitar módulos por tipo y no por key
+    # (HU-AOS-68): dos agentes del mismo tipo pueden tener keys distintas.
+    source_template: str | None = None
     name: str
     kind: str
     status: str

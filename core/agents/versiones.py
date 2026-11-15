@@ -271,8 +271,8 @@ async def actualizar_agente(
         if status == "archived" and agente.status != "archived":
             if agente.key in KEYS_RESERVADAS:
                 raise Conflicto(
-                    "El General y el Coordinador vienen con el negocio y no se archivan. Para que el General "
-                    "no atienda en una conexión, pon otro agente como principal y quítalo de ella.",
+                    "El Coordinador viene con el negocio y no se archiva. Para que otro agente no "
+                    "atienda en una conexión, ponlo como principal y quita al Coordinador de ella.",
                     codigo="agent_reserved",
                 )
             instanciado = (
@@ -345,6 +345,70 @@ async def guardar_borrador(
     return await obtener_borrador(tenant_id, agent_id)
 
 
+async def guardar_flujo(
+    tenant_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    flow: Any,
+    lock_version: int,
+    *,
+    acciones: list[Any],
+    actor: uuid.UUID | None = None,
+) -> AgentDraftRecord:
+    """Valida y guarda el flujo de atención del agente (ADR-0195) con el mismo `lock_version`.
+
+    `acciones` son las del agente (`hda.acciones`): una sección que nombra una acción que el
+    agente no puede ejecutar no se guarda, para no dejar un flujo que falle al publicar.
+    """
+    agente = await obtener_agente(tenant_id, agent_id)
+    if agente.status != "active":
+        raise Conflicto("El agente está archivado.")
+    from core.agents.flujo_agente import (
+        FlowInvalido,
+        acciones_permitidas,
+        normalizar,
+        validar_acciones,
+    )
+
+    try:
+        normalizado = normalizar(flow)
+    except FlowInvalido as exc:
+        raise ErroresDeContrato(exc.issues) from None
+    issues = validar_acciones(normalizado, acciones_permitidas(acciones))
+    if issues:
+        raise ErroresDeContrato(issues)
+    async with get_session() as session:
+        nuevo = (
+            await session.execute(
+                update(AgentDraftRecord)
+                .where(
+                    AgentDraftRecord.tenant_id == tenant_id,
+                    AgentDraftRecord.agent_id == agent_id,
+                    AgentDraftRecord.lock_version == lock_version,
+                    AgentDraftRecord.deleted_at.is_(None),
+                    select(AgentRecord.id)
+                    .where(
+                        AgentRecord.tenant_id == tenant_id,
+                        AgentRecord.id == agent_id,
+                        AgentRecord.status == "active",
+                        AgentRecord.deleted_at.is_(None),
+                    )
+                    .exists(),
+                )
+                .values(
+                    flow=normalizado,
+                    lock_version=AgentDraftRecord.lock_version + 1,
+                    updated_by=actor,
+                    updated_at=func.now(),
+                )
+                .returning(AgentDraftRecord.lock_version)
+            )
+        ).scalar_one_or_none()
+    if nuevo is None:
+        actual = await obtener_borrador(tenant_id, agent_id)
+        raise Conflicto("Otra persona guardó este borrador antes: recárgalo.", actual.lock_version)
+    return await obtener_borrador(tenant_id, agent_id)
+
+
 async def publicar(
     tenant_id: uuid.UUID,
     agent_id: uuid.UUID,
@@ -362,14 +426,37 @@ async def publicar(
     agente = await obtener_agente(tenant_id, agent_id)
     if agente.status != "active":
         raise Conflicto("El agente está archivado.")
+    flujo: dict[str, Any] | None = None
     if contenido is None:
         borrador = await obtener_borrador(tenant_id, agent_id)
         if lock_version is not None and borrador.lock_version != lock_version:
             raise Conflicto("El borrador cambió desde que lo abriste: recárgalo antes de publicar.")
         contenido = borrador.content
+        flujo = borrador.flow
     contrato = CONTRATO_POR_KIND[agente.kind]
     normalizado = await _validar(tenant_id, contenido, contrato, catalogo)
     huella = content_hash(normalizado)
+    # Flujo de atención (ADR-0195): se congela con la versión. Un agente sin flujo propio
+    # nace con la semilla de sus packs; un KernelSpec no lleva flujo.
+    if contrato == "agentspec/3":
+        from core.agents import flujo_agente as fa
+        from core.agents import habilidades_del_agente as hda
+        from core.agents.editor import habilitados_del_negocio
+
+        if flujo is None:
+            # Sin flujo propio se sigue leyendo `flow_tenant` (conducta anterior y evals). El
+            # panel guarda la semilla cuando el dueño la confirma; publicar solo no la crea.
+            huella_flujo = None
+        else:
+            packs = await hda.packs_del_agente(tenant_id, agent_id, await habilitados_del_negocio(tenant_id))
+            acciones = hda.acciones(normalizado, packs)
+            issues = fa.validar_acciones(flujo, fa.acciones_permitidas(acciones))
+            if issues:
+                raise ErroresDeContrato(issues)
+            huella_flujo = fa.flow_hash(flujo)
+    else:
+        flujo = None
+        huella_flujo = None
     async with get_session() as session:
         # Serializa las publicaciones del agente (el número es max + 1) y vuelve a mirar el
         # estado bajo el lock: un archivado en paralelo no deja publicar.
@@ -394,6 +481,7 @@ async def publicar(
                     AgentVersionRecord.tenant_id == tenant_id,
                     AgentVersionRecord.agent_id == agent_id,
                     AgentVersionRecord.content_hash == huella,
+                    AgentVersionRecord.flow_hash == huella_flujo,
                 )
             )
         ).scalar_one_or_none()
@@ -416,6 +504,8 @@ async def publicar(
             contract=contrato,
             content=normalizado,
             content_hash=huella,
+            flow=flujo,
+            flow_hash=huella_flujo,
             legacy_agent_spec_id=legacy_agent_spec_id,
             notes=notes[:2000],
             created_by=actor,
@@ -441,6 +531,7 @@ __all__ = [
     "content_hash",
     "crear_agente",
     "guardar_borrador",
+    "guardar_flujo",
     "listar_agentes",
     "listar_versiones",
     "obtener_agente",

@@ -43,9 +43,24 @@ class WaWebOutbound(OutboundAdapter):
     ) -> str:
         return await self._send(credentials, to_external_id, caption, image_url=image_url)
 
+    async def send_audio(
+        self,
+        credentials: dict[str, str],
+        to_external_id: str,
+        audio_url: str,
+        caption: str = "",
+    ) -> str:
+        return await self._send(
+            credentials, to_external_id, caption, image_url=None, audio_url=audio_url
+        )
+
     @staticmethod
     async def _send(
-        credentials: dict[str, str], to_external_id: str, text: str, image_url: str | None
+        credentials: dict[str, str],
+        to_external_id: str,
+        text: str,
+        image_url: str | None,
+        audio_url: str | None = None,
     ) -> str:
         tenant_id = get_current_tenant_id()
         if tenant_id is None:
@@ -57,4 +72,5 @@ class WaWebOutbound(OutboundAdapter):
             to=to,
             text=text,
             image_url=image_url,
+            audio_url=audio_url,
         )

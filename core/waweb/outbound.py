@@ -30,6 +30,10 @@ class SendBackend(Protocol):
 
     async def send(self, *, to: str, text: str, image_url: str | None = None) -> str: ...
 
+    async def send_image(self, *, to: str, image_url: str, caption: str = "") -> str: ...
+
+    async def send_audio(self, *, to: str, audio_url: str, ptt: bool = True) -> str: ...
+
 
 async def process_job(
     job: dict[str, Any],
@@ -58,11 +62,25 @@ async def process_job(
             delay_ms = random.randint(policy.send_min_delay_ms, policy.send_max_delay_ms)
             if delay_ms > 0:
                 await sleep(delay_ms / 1000)
-            wamid = await backend.send(
-                to=str(job.get("to", "")),
-                text=str(job.get("text", "")),
-                image_url=str(job.get("image_url") or "") or None,
-            )
+            to = str(job.get("to", ""))
+            if job.get("kind") == "audio" and job.get("audio_url"):
+                wamid = await backend.send_audio(
+                    to=to,
+                    audio_url=str(job.get("audio_url")),
+                    ptt=True,
+                )
+            elif job.get("kind") == "image" and job.get("image_url"):
+                wamid = await backend.send_image(
+                    to=to,
+                    image_url=str(job.get("image_url")),
+                    caption=str(job.get("text", "")),
+                )
+            else:
+                wamid = await backend.send(
+                    to=to,
+                    text=str(job.get("text", "")),
+                    image_url=str(job.get("image_url") or "") or None,
+                )
             if on_sent is not None:
                 await on_sent()
             reply = {"ok": True, "wamid": wamid}

@@ -33,6 +33,7 @@ from core.media.meta_media import descargar_media
 from core.media.prompts import prompt_de_media, respuesta_de_media
 from core.media.stt import transcribir_audio
 from core.media.vision import describir_imagen
+from core.media.waweb_media import descargar_media_waweb
 from core.memory.working import get_redis
 from core.shared.logger import get_logger
 from core.shared.tenant import current_tenant_slug, get_current_tenant_id
@@ -489,8 +490,9 @@ async def procesar_media_entrante(
     external_id = fields.get("external_message_id", "")
     if tenant_id is None:
         return MediaOutcome.skipped()
-    # Meta Cloud (ADR-0151) y WhatsApp vía Twilio (ADR-0186): waweb y web conservan su camino.
-    if fields.get("provider") not in ("meta", "twilio") or fields.get("channel") != "whatsapp":
+    # Meta Cloud (ADR-0151), WhatsApp vía Twilio (ADR-0186) y WhatsApp Web (ADR-0196).
+    # Los demás canales conservan su camino actual.
+    if fields.get("provider") not in ("meta", "twilio", "waweb") or fields.get("channel") != "whatsapp":
         log.info(
             "media_canal_no_soportado",
             provider=fields.get("provider"),
@@ -505,80 +507,109 @@ async def procesar_media_entrante(
             log.info("media_cache_hit", conversation_id=str(conversation.id), kind=mime_type)
             return cacheado
 
-    # Credenciales de la conexión de la conversación (Meta o Twilio).
-    from core.gateway.sender import resolve_credentials
-
-    try:
-        provider, creds = await resolve_credentials(
-            getattr(conversation, "connection_id", None),
-            getattr(conversation, "meta_connection_id", None),
-            tenant_id,
-        )
-    except Exception:
-        log.warning("media_credenciales_failed", conversation_id=str(conversation.id), exc_info=True)
-        return MediaOutcome.skipped()
-    con_credenciales = (provider == "meta" and creds.get("access_token")) or (
-        provider == "twilio" and creds.get("account_sid") and creds.get("auth_token")
-    )
-    if provider != fields.get("provider") or not con_credenciales:
-        log.warning(
-            "media_sin_credenciales",
-            conversation_id=str(conversation.id),
-            provider=provider,
-        )
-        outcome = await _outcome_fijo(
-            "media_download_failed",
-            content=fields.get("content", "") or "[Archivo adjunto]",
-            media_type=mime_type,
-            media_key=None,
-            media_transcription=None,
-            decision="media_sin_credenciales",
-        )
-        if clave:
-            await _cache_set(clave, outcome)
-        return outcome
-    media_url = str(item.get("url") or "")
-    if (provider == "meta" and not media_id) or (provider == "twilio" and not media_url):
-        outcome = await _outcome_fijo(
-            "media_download_failed",
-            content=fields.get("content", "") or "[Archivo adjunto]",
-            media_type=mime_type,
-            media_key=None,
-            media_transcription=None,
-            decision="media_sin_id",
-        )
-        if clave:
-            await _cache_set(clave, outcome)
-        return outcome
-
-    try:
-        if provider == "twilio":
-            from core.media.twilio_media import descargar_media_twilio
-
-            media = await descargar_media_twilio(
-                media_url, str(creds.get("account_sid") or ""), str(creds.get("auth_token") or ""), mime_esperado=mime_type
+    provider_esperado = fields.get("provider", "")
+    if provider_esperado == "waweb":
+        # El connector ya descargó el archivo y lo dejó en Redis: no hay
+        # credenciales de Meta/Twilio que resolver.
+        try:
+            media = await descargar_media_waweb(item, tenant_id=tenant_id)
+        except MediaProviderError as exc:
+            if exc.transient:
+                raise
+            log.warning(
+                "media_descarga_error",
+                conversation_id=str(conversation.id),
+                code=exc.code,
             )
-        else:
-            media = await descargar_media(media_id, str(creds.get("access_token") or ""))
-    except MediaProviderError as exc:
-        if exc.transient:
-            raise
-        log.warning(
-            "media_descarga_error",
-            conversation_id=str(conversation.id),
-            code=exc.code,
+            outcome = await _outcome_fijo(
+                "media_download_failed",
+                content=fields.get("content", "") or "[Archivo adjunto]",
+                media_type=mime_type,
+                media_key=None,
+                media_transcription=None,
+                decision="media_descarga_fallida",
+            )
+            if clave:
+                await _cache_set(clave, outcome)
+            return outcome
+    else:
+        # Credenciales de la conexión de la conversación (Meta o Twilio).
+        from core.gateway.sender import resolve_credentials
+
+        try:
+            provider, creds = await resolve_credentials(
+                getattr(conversation, "connection_id", None),
+                getattr(conversation, "meta_connection_id", None),
+                tenant_id,
+            )
+        except Exception:
+            log.warning("media_credenciales_failed", conversation_id=str(conversation.id), exc_info=True)
+            return MediaOutcome.skipped()
+        con_credenciales = (provider == "meta" and creds.get("access_token")) or (
+            provider == "twilio" and creds.get("account_sid") and creds.get("auth_token")
         )
-        outcome = await _outcome_fijo(
-            "media_download_failed",
-            content=fields.get("content", "") or "[Archivo adjunto]",
-            media_type=mime_type,
-            media_key=None,
-            media_transcription=None,
-            decision="media_descarga_fallida",
-        )
-        if clave:
-            await _cache_set(clave, outcome)
-        return outcome
+        if provider != provider_esperado or not con_credenciales:
+            log.warning(
+                "media_sin_credenciales",
+                conversation_id=str(conversation.id),
+                provider=provider,
+            )
+            outcome = await _outcome_fijo(
+                "media_download_failed",
+                content=fields.get("content", "") or "[Archivo adjunto]",
+                media_type=mime_type,
+                media_key=None,
+                media_transcription=None,
+                decision="media_sin_credenciales",
+            )
+            if clave:
+                await _cache_set(clave, outcome)
+            return outcome
+        media_url = str(item.get("url") or "")
+        if (provider == "meta" and not media_id) or (provider == "twilio" and not media_url):
+            outcome = await _outcome_fijo(
+                "media_download_failed",
+                content=fields.get("content", "") or "[Archivo adjunto]",
+                media_type=mime_type,
+                media_key=None,
+                media_transcription=None,
+                decision="media_sin_id",
+            )
+            if clave:
+                await _cache_set(clave, outcome)
+            return outcome
+
+        try:
+            if provider == "twilio":
+                from core.media.twilio_media import descargar_media_twilio
+
+                media = await descargar_media_twilio(
+                    media_url,
+                    str(creds.get("account_sid") or ""),
+                    str(creds.get("auth_token") or ""),
+                    mime_esperado=mime_type,
+                )
+            else:
+                media = await descargar_media(media_id, str(creds.get("access_token") or ""))
+        except MediaProviderError as exc:
+            if exc.transient:
+                raise
+            log.warning(
+                "media_descarga_error",
+                conversation_id=str(conversation.id),
+                code=exc.code,
+            )
+            outcome = await _outcome_fijo(
+                "media_download_failed",
+                content=fields.get("content", "") or "[Archivo adjunto]",
+                media_type=mime_type,
+                media_key=None,
+                media_transcription=None,
+                decision="media_descarga_fallida",
+            )
+            if clave:
+                await _cache_set(clave, outcome)
+            return outcome
 
     media_key = await _guardar(media.contenido, media.mime_type, external_id)
     caption = fields.get("content", "")

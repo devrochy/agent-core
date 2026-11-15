@@ -138,3 +138,102 @@ async def test_adapter_quita_prefijo_whatsapp(monkeypatch: pytest.MonkeyPatch) -
 
     job = json.loads(fake.outbox[f"waweb:outbox:{tenant}"][0])
     assert job["to"] == "573001112233"
+
+
+@pytest.mark.asyncio
+async def test_request_send_audio_encola_kind_audio(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeRedis(reply={"ok": True, "wamid": "WA-AUDIO"})
+    fake.kv["waweb:ready:t1"] = "1"
+    monkeypatch.setattr(handoff, "_redis", lambda: fake)
+
+    wamid = await handoff.request_send(
+        tenant_id="t1",
+        connection_id="c1",
+        to="573001112233",
+        text="",
+        audio_url="https://api/files/audio.ogg",
+    )
+
+    assert wamid == "WA-AUDIO"
+    job = json.loads(fake.outbox["waweb:outbox:t1"][0])
+    assert job["kind"] == "audio"
+    assert job["audio_url"] == "https://api/files/audio.ogg"
+    assert job["text"] == ""
+
+
+@pytest.mark.asyncio
+async def test_process_job_audio_usa_send_audio(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.waweb import outbound as outbound_mod
+    from core.waweb.policy import WaWebPolicy
+
+    fake = FakeRedis()
+    monkeypatch.setattr(outbound_mod.handoff, "get_redis", lambda: fake)
+
+    class Backend:
+        enviado: tuple[str, str, bool] | None = None
+
+        async def send(self, **_k: object) -> str:
+            raise AssertionError("un audio no puede salir como texto")
+
+        async def send_audio(self, *, to: str, audio_url: str, ptt: bool = True) -> str:
+            self.enviado = (to, audio_url, ptt)
+            return "WA-AUDIO"
+
+    async def _sleep(_s: float) -> None:
+        return None
+
+    backend = Backend()
+    await outbound_mod.process_job(
+        {
+            "request_id": "r1",
+            "to": "573001112233",
+            "kind": "audio",
+            "audio_url": "https://api/files/audio.ogg",
+        },
+        backend,
+        WaWebPolicy(send_min_delay_ms=0, send_max_delay_ms=0),
+        sleep=_sleep,
+    )
+
+    assert backend.enviado == ("573001112233", "https://api/files/audio.ogg", True)
+    respuesta = json.loads(fake.outbox["waweb:reply:r1"][0])
+    assert respuesta == {"ok": True, "wamid": "WA-AUDIO"}
+
+
+@pytest.mark.asyncio
+async def test_process_job_imagen_usa_send_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.waweb import outbound as outbound_mod
+    from core.waweb.policy import WaWebPolicy
+
+    fake = FakeRedis()
+    monkeypatch.setattr(outbound_mod.handoff, "get_redis", lambda: fake)
+
+    class Backend:
+        enviado: tuple[str, str, str] | None = None
+
+        async def send(self, **_k: object) -> str:
+            raise AssertionError("una imagen no puede salir como texto")
+
+        async def send_image(self, *, to: str, image_url: str, caption: str = "") -> str:
+            self.enviado = (to, image_url, caption)
+            return "WA-IMAGE"
+
+    async def _sleep(_s: float) -> None:
+        return None
+
+    backend = Backend()
+    await outbound_mod.process_job(
+        {
+            "request_id": "r2",
+            "to": "573001112233",
+            "kind": "image",
+            "image_url": "https://api/files/foto.jpg",
+            "text": "mirá",
+        },
+        backend,
+        WaWebPolicy(send_min_delay_ms=0, send_max_delay_ms=0),
+        sleep=_sleep,
+    )
+
+    assert backend.enviado == ("573001112233", "https://api/files/foto.jpg", "mirá")
+    assert json.loads(fake.outbox["waweb:reply:r2"][0]) == {"ok": True, "wamid": "WA-IMAGE"}

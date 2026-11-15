@@ -11,7 +11,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 # Callbacks que el socket invoca hacia el manager.
 QrHandler = Callable[[str], Awaitable[None]]
@@ -21,13 +21,18 @@ MessageHandler = Callable[["InboundEvent"], Awaitable[None]]
 
 @dataclass
 class InboundEvent:
-    """Mensaje entrante normalizado desde el socket."""
+    """Mensaje entrante normalizado desde el socket.
+
+    `media` lleva `{"type": mime, "data": bytes, ...}` cuando el socket ya descargó el
+    archivo (audio o imagen). El manager lo publica por el mismo stream que el webhook
+    de Meta, pero los bytes viajan por Redis (ver `core/waweb/inbound.py`).
+    """
 
     sender: str  # solo dígitos, sin @s.whatsapp.net ni +
     text: str
     wamid: str
     customer_name: str | None = None
-    media: list[dict[str, str]] = field(default_factory=list)
+    media: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -65,6 +70,14 @@ class WaWebSocket(Protocol):
 
     async def send(self, *, to: str, text: str, image_url: str | None = None) -> str:
         """Envía un texto (o imagen con caption) y devuelve el wamid."""
+        ...
+
+    async def send_image(self, *, to: str, image_url: str, caption: str = "") -> str:
+        """Envía una imagen nativa (con caption opcional) y devuelve el wamid."""
+        ...
+
+    async def send_audio(self, *, to: str, audio_url: str, ptt: bool = True) -> str:
+        """Envía una nota de voz desde una URL/key y devuelve el wamid (ADR-0197)."""
         ...
 
     async def alive(self) -> bool:

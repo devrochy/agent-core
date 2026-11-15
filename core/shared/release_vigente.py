@@ -57,6 +57,9 @@ class AgenteCongelado:
     # ADR-0190 §5: habilidades instaladas en el agente, congeladas en el build. `None` = sin instalaciones
     # propias (hereda las de la release).
     packs: frozenset[str] | None = None
+    # ADR-0195: flujo propio del agente congelado (`{"sha256", "sections"}`); `None` = release
+    # anterior, se lee `flow_tenant`.
+    flow: Mapping[str, Any] | None = None
 
     @property
     def tools(self) -> frozenset[str]:
