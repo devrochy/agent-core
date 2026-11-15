@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pack-voice"
+version = "0.1.0"
+description = "Pack de respuestas por voz para agent-core: TTS de OpenAI y envío de notas de voz"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.entry-points."agent_core.plugins"]
+pack_voice = "pack_voice.module:VoiceModule"
+
+[tool.setuptools.packages.find]
+include = ["pack_voice*"]
+
+[tool.agent_core.plugin]
+# Solo el endpoint de síntesis de OpenAI.
+network = ["api.openai.com"]

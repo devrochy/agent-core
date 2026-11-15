@@ -17,7 +17,7 @@ from core.kernel.decisions import marcar_escalado
 async def entregar(conversation_id: uuid.UUID, result: Any) -> None:
     # Imports en la llamada: los tests parchean `core.gateway.sender.send_to_conversation`
     # y `core.orchestrator.escalation.escalate`.
-    from core.gateway.sender import send_to_conversation
+    from core.gateway.sender import send_to_conversation, send_voice_to_conversation
     from core.orchestrator.escalation import escalate
 
     if result is None or not result.text:
@@ -28,7 +28,23 @@ async def entregar(conversation_id: uuid.UUID, result: Any) -> None:
         # texto). Con botón solo si la etapa lo pide; el sender decide si el canal lo soporta.
         delivered = await _entregar_confirmacion(conversation_id, result.text, confirmacion)
     else:
-        delivered = await send_to_conversation(conversation_id, result.text, image_url=result.image_url)
+        delivered = False
+        # Respuestas por voz (ADR-0197): una política registrada por un pack decide. No se
+        # convierte una confirmación (ya resuelta arriba) ni una respuesta con imagen.
+        if result.image_url is None:
+            from core.mcp.host import mcp_host
+
+            plan = await mcp_host.resolve_voice(conversation_id, result.text)
+            if plan is not None:
+                delivered = await send_voice_to_conversation(
+                    conversation_id,
+                    result.text,
+                    include_text=plan.include_text,
+                )
+        if not delivered:
+            delivered = await send_to_conversation(
+                conversation_id, result.text, image_url=result.image_url
+            )
     if not delivered and not result.escalated:
         # El turno se generó pero no llegó al canal: escalar a humano para no perder al
         # cliente (incidente de envío silencioso detectado en producción).

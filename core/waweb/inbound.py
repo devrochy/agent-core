@@ -11,18 +11,99 @@ encolar, igual que el webhook de Meta.
 
 from __future__ import annotations
 
+import base64
 import json
 import uuid
 from typing import Any
 
 from core.gateway.idempotency import claim_message_once
 from core.memory.working import get_redis
+from core.shared.logger import get_logger
+
+log = get_logger(__name__)
+
+# Los bytes del media viajan por Redis, no por el stream: el socket ya los
+# descargó y el consumer los lee al procesar el turno. 6 h cubre reintentos
+# normales del consumer sin dejar binarios colgados para siempre.
+_MEDIA_PREFIX = "waweb:media:"
+_MEDIA_TTL_S = 6 * 3600
 
 
 def _inbound_stream() -> str:
     from core.gateway.webhooks import INBOUND_STREAM
 
     return INBOUND_STREAM
+
+
+def _media_metric(items: list[dict[str, Any]]) -> str | None:
+    """Métrica de cuota que consume el mensaje (ADR-0045), como en el webhook."""
+    for item in items:
+        mime = str(item.get("type") or "")
+        if mime.startswith("audio/"):
+            return "conversaciones_audio"
+        if mime.startswith("image/"):
+            return "conversaciones_ocr"
+    return None
+
+
+def _descriptor(item: dict[str, Any]) -> dict[str, Any]:
+    """Descriptor serializable del media (sin los bytes)."""
+    entrada: dict[str, Any] = {
+        "type": str(item.get("type") or "").split(";", 1)[0].strip().lower(),
+    }
+    for clave in ("seconds", "ptt", "caption"):
+        if item.get(clave):
+            entrada[clave] = item[clave]
+    if item.get("error"):
+        entrada["error"] = str(item["error"])
+    return entrada
+
+
+async def _materializar_media(
+    tenant_id: uuid.UUID, wamid: str, items: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Guarda los bytes en Redis y devuelve los descriptores para el stream."""
+    descriptores: list[dict[str, Any]] = []
+    for indice, item in enumerate(items):
+        entrada = _descriptor(item)
+        datos = item.get("data")
+        if isinstance(datos, (bytes, bytearray)) and datos:
+            clave = f"{_MEDIA_PREFIX}{tenant_id}:{wamid}:{indice}"
+            try:
+                await get_redis().set(
+                    clave,
+                    base64.b64encode(bytes(datos)).decode("ascii"),
+                    ex=_MEDIA_TTL_S,
+                )
+            except Exception:
+                log.warning("waweb_media_store_failed", wamid=wamid, exc_info=True)
+                entrada["error"] = "store_failed"
+            else:
+                entrada["redis_key"] = clave
+                entrada["bytes"] = len(datos)
+        descriptores.append(entrada)
+    return descriptores
+
+
+async def _dentro_de_cuota(tenant_id: uuid.UUID, items: list[dict[str, Any]]) -> bool:
+    """Bloqueo duro de cuota de audio/OCR (ADR-0045). Si el chequeo falla, no se
+    pierde el mensaje: se deja pasar y se registra (mejor responder de más que
+    tirar el turno por una caída del servicio de facturación)."""
+    metric = _media_metric(items)
+    if metric is None:
+        return True
+    from core.billing.enforcement import check_metric
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            permitido = await check_metric(tenant_id, metric)
+    except Exception:
+        log.warning("waweb_media_quota_check_failed", tenant_id=str(tenant_id), metric=metric)
+        return True
+    if not permitido:
+        log.warning("waweb_media_quota_exceeded", tenant_id=str(tenant_id), metric=metric)
+    return permitido
 
 
 async def publish_inbound(
@@ -33,14 +114,25 @@ async def publish_inbound(
     text: str,
     wamid: str,
     customer_name: str | None = None,
-    media: list[dict[str, str]] | None = None,
+    media: list[dict[str, Any]] | None = None,
     media_context: str = "",
 ) -> bool:
-    """Encola un mensaje entrante. `False` si era duplicado o no había contenido."""
+    """Encola un mensaje entrante. `False` si era duplicado, no había contenido o
+    la cuota de audio/OCR está agotada.
+
+    Los bytes de `media` se guardan en Redis y en el stream viaja solo el
+    descriptor (`{type, redis_key, bytes}`); así una nota de voz o una foto no
+    infla el stream ni obliga a compartir el volumen de storage con el connector.
+    """
     if not wamid or not (text or media):
         return False
     if not await claim_message_once(tenant_id, "waweb", wamid):
         return False
+
+    items = media or []
+    if not await _dentro_de_cuota(tenant_id, [_descriptor(item) for item in items]):
+        return False
+    descriptores = await _materializar_media(tenant_id, wamid, items)
 
     fields: dict[str, Any] = {
         "tenant_id": str(tenant_id),
@@ -51,7 +143,7 @@ async def publish_inbound(
         "customer_name": customer_name or "",
         "content": text,
         "connection_external_id": connection_external_id,
-        "media": json.dumps(media or []),
+        "media": json.dumps(descriptores),
         "media_context": media_context,
     }
     await get_redis().xadd(_inbound_stream(), fields)

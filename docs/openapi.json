@@ -62228,6 +62228,42 @@
             ],
             "title": "Turn Id",
             "description": "Turno del agente que lo envió; null salvo en los mensajes del agente."
+          },
+          "media_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Type",
+            "description": "MIME del archivo (audio/ogg, image/jpeg…)."
+          },
+          "media_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Url",
+            "description": "URL firmada para descargar o reproducir el archivo."
+          },
+          "media_transcription": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Transcription",
+            "description": "Transcripción del audio o descripción de la imagen."
           }
         },
         "type": "object",

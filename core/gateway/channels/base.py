@@ -120,6 +120,12 @@ class OutboundAdapter(ABC):
         self, credentials: dict[str, str], to_external_id: str, image_url: str, caption: str = ""
     ) -> str: ...
 
+    async def send_audio(
+        self, credentials: dict[str, str], to_external_id: str, audio_url: str, caption: str = ""
+    ) -> str:
+        """Envía una nota de voz (ADR-0197). Solo los canales que la soportan la implementan."""
+        raise ChannelError(f"El canal {self.provider or '?'} no envía notas de voz")
+
     async def send_template(
         self,
         credentials: dict[str, str],
