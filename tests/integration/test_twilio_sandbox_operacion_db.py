@@ -464,3 +464,54 @@ async def test_plantillas_propias_no_aplican_al_sandbox(negocio, gate, twilio) -
         with pytest.raises(AltaError) as exc:
             await _en(negocio, llamada)
         assert (exc.value.http_status, exc.value.code) == (409, "no_aplica_sandbox")
+
+
+class _Registro:
+    def __init__(self) -> None:
+        self.puntos: list[tuple[float, dict[str, str]]] = []
+
+    def add(self, valor: float, atributos: dict[str, str] | None = None) -> None:
+        self.puntos.append((valor, dict(atributos or {})))
+
+    set = add
+
+
+async def test_eventos_y_ronda_de_salud(negocio, app_client, gate, twilio, monkeypatch) -> None:
+    from core.gateway.twilio import operacion, sandbox
+    from core.gateway.twilio.alta import AltaError
+
+    eventos, gauge = _Registro(), _Registro()
+    monkeypatch.setattr(sandbox, "_eventos", eventos)
+    monkeypatch.setattr(sandbox, "_sin_confirmar", gauge)
+
+    # El fixture `twilio` atiende con la última cuenta creada: la que se usa va al final.
+    _, sin_confirmar = await _sandbox(negocio, twilio)
+    tw, hecha = await _sandbox(negocio, twilio)
+    r, _ = await _post(app_client, hecha, tw, "inbound", token="otro")
+    assert r.status_code == 403
+    r, _ = await _post(app_client, hecha, tw, "inbound")
+    assert r.status_code == 200
+    tw.error_envio = 63015
+    with pytest.raises(AltaError) as exc:
+        await _en(negocio, operacion.enviar_prueba, negocio, hecha.connection_id, "+573001234567")
+    assert exc.value.code == "participante_no_unido"
+    r, _ = await _post(
+        app_client, hecha, tw, "status", MessageStatus="undelivered", ErrorCode="63015"
+    )
+    assert r.status_code == 200
+
+    nombres = [p[1]["evento"] for p in eventos.puntos]
+    assert nombres.count("alta_creada") == 2
+    assert {"firma_invalida", "webhook_confirmado"} <= set(nombres)
+    assert nombres.count("no_unido") == 2
+
+    # La ronda del cron cuenta los sandbox sin confirmar (el segundo, al menos; otros tests dejan más).
+    await operacion.revisar_todas()
+    [(cantidad, _)] = gauge.puntos
+    filas = await _sql(
+        negocio,
+        "select count(*) from twilio_connections where modo = 'sandbox' and deleted_at is null "
+        "and webhook_confirmado_at is null",
+    )
+    assert cantidad >= 1 and filas[0][0] >= 1
+    assert sin_confirmar.requiere_accion_manual is True

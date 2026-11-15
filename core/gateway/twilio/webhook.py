@@ -148,6 +148,7 @@ async def _confirmar_webhook(tenant_id: uuid.UUID, fila_id: uuid.UUID, kind: str
         ).first()
     if confirmada is not None:
         log.info("twilio_sandbox_webhook_confirmado", tenant_id=str(tenant_id), kind=kind)
+        sandbox.contar("webhook_confirmado")
 
 
 def _evento(kind: str, external_id: str, public_id: str, params: dict[str, str]) -> FlattenedEvent:
@@ -186,7 +187,10 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
         connection, twilio = par
         if sandbox.inerte(twilio.modo):
             # Sandbox en un ambiente que no lo permite (HU-CONN-20): inerte. 200 para que Twilio no reintente.
-            log.info("twilio_sandbox_gate_apagado", tenant_id=str(tenant_id), kind=kind)
+            log.info(
+                "twilio_sandbox_gate_apagado", tenant_id=str(tenant_id), kind=kind, via="webhook"
+            )
+            sandbox.contar("gate_apagado")
             return _twiml()
         creds: dict[str, Any] = (
             get_secret_box().decrypt_json(connection.credentials_encrypted)
@@ -211,6 +215,16 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
                 kind=kind,
                 account_ok=params.get("AccountSid") == twilio.account_sid,
             )
+            if twilio.modo == sandbox.MODO_SANDBOX:
+                # En el sandbox las URL se pegan a mano: una firma que no cuadra con el token correcto se investiga
+                # (verificación pendiente en test), nunca se relaja.
+                log.warning(
+                    "twilio_sandbox_firma_invalida",
+                    tenant_id=str(tenant_id),
+                    connection_id=str(connection_id),
+                    kind=kind,
+                )
+                sandbox.contar("firma_invalida")
             await _alert_on_invalid_signature(f"twilio:{twilio.account_sid}")
             return Response(status_code=403)
 
@@ -269,7 +283,11 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
                     tenant_id, message, connection_id=connection_id
                 )
             log.info(
-                "twilio_webhook_received", tenant_id=str(tenant_id), kind=kind, result=resultado
+                "twilio_webhook_received",
+                tenant_id=str(tenant_id),
+                kind=kind,
+                result=resultado,
+                modo=twilio.modo,
             )
         else:
             from core.gateway.meta_message_status import apply_status_update
@@ -287,11 +305,17 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
                 from core.tasks.twilio_costos import encolar_costo
 
                 encolar_costo(tenant_id, connection_id, message_sid)
+            if twilio.modo == sandbox.MODO_SANDBOX and str(params.get("ErrorCode") or "") == str(
+                sandbox.CODIGO_NO_UNIDO
+            ):
+                log.info("twilio_sandbox_no_unido", tenant_id=str(tenant_id), via="estado")
+                sandbox.contar("no_unido")
             log.info(
                 "twilio_webhook_received",
                 tenant_id=str(tenant_id),
                 kind=kind,
                 status=update["status"],
+                modo=twilio.modo,
             )
         await _mark_entry_processed(app_id, tenant_id, [evento])
     return _twiml()

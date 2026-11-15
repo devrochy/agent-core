@@ -67,3 +67,67 @@ def test_external_id():
     from core.gateway.twilio import sandbox
 
     assert sandbox.external_id("AC" + "1" * 32) == "sandbox:AC" + "1" * 32
+
+
+class _Registro:
+    def __init__(self) -> None:
+        self.puntos: list[tuple[float, dict[str, str]]] = []
+
+    def add(self, valor: float, atributos: dict[str, str] | None = None) -> None:
+        self.puntos.append((valor, dict(atributos or {})))
+
+    def set(self, valor: float, atributos: dict[str, str] | None = None) -> None:
+        self.puntos.append((valor, dict(atributos or {})))
+
+
+@pytest.fixture
+def eventos(monkeypatch):
+    from core.gateway.twilio import sandbox
+
+    registro = _Registro()
+    monkeypatch.setattr(sandbox, "_eventos", registro)
+    return registro
+
+
+def test_contar_usa_etiquetas_cerradas(eventos):
+    from core.gateway.twilio import sandbox
+
+    sandbox.contar("no_unido")
+    sandbox.contar("+573001234567")
+    assert eventos.puntos == [(1, {"evento": "no_unido"}), (1, {"evento": "otro"})]
+
+
+def test_una_metrica_rota_no_rompe_el_camino(monkeypatch):
+    from core.gateway.twilio import sandbox
+
+    class _Rota:
+        def add(self, *_a, **_k):
+            raise RuntimeError("x")
+
+        set = add
+
+    monkeypatch.setattr(sandbox, "_eventos", _Rota())
+    monkeypatch.setattr(sandbox, "_sin_confirmar", _Rota())
+    sandbox.contar("no_unido")
+    sandbox.registrar_sin_confirmar(3)
+
+
+def test_medir_el_envio_del_sandbox(eventos):
+    import uuid
+
+    from core.gateway.channels.base import ProviderError
+    from core.tasks.outbound_send import _medir_sandbox
+
+    del_sandbox = {"from": "whatsapp:+14155238886"}
+    propio = {"from": "whatsapp:+15550001111"}
+    tid = uuid.uuid4()
+    _medir_sandbox(
+        ProviderError("x", provider="twilio", code=63015, category="PERMANENT"), propio, tid
+    )
+    _medir_sandbox(
+        ProviderError("x", provider="twilio", code=63018, category="RATE_LIMIT"), del_sandbox, tid
+    )
+    _medir_sandbox(
+        ProviderError("x", provider="twilio", code=63018, category="RATE_LIMIT"), propio, tid
+    )
+    assert [p[1]["evento"] for p in eventos.puntos] == ["no_unido", "reintento_ritmo"]

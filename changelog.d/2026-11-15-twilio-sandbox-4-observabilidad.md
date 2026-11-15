@@ -1,0 +1,4 @@
+## HU-CONN-20 · Sandbox de Twilio, parte 4: logs y contadores (2026-11-15)
+
+- Logs: `twilio_sandbox_alta`, `twilio_sandbox_gate_apagado` (con `via`: alta, webhook, envío), `twilio_sandbox_webhook_confirmado`, `twilio_sandbox_no_unido` (63015 en la prueba, el envío o el callback de estado), `twilio_sandbox_firma_invalida`, `twilio_sandbox_reintento_ritmo`, `twilio_sandbox_desconectado`, y `modo` en `twilio_webhook_received`. La ronda de salud suma `sandbox_sin_confirmar`.
+- Métricas (OpenTelemetry, etiquetas cerradas): `agentcore_twilio_sandbox_events_total{evento}` (alta creada/repetida/rechazada, gate apagado, webhook confirmado, firma inválida, no unido, reintento por ritmo, desconectado) y el gauge `agentcore_twilio_sandbox_unconfirmed`. La latencia y los errores de `POST /sandbox` salen de `agentcore_http_server_duration_seconds`.
