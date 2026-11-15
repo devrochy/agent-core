@@ -238,3 +238,56 @@ La fase 1 quedó implementada en PRs apilados (#714, #716, #717, #718, #719, #72
 La baja por 21610 solo se registra cuando el error llega al crear el mensaje; si llegara por el status callback no se registra, igual que el 131050 de Meta por webhook.
 
 **Reemplaza un criterio de revisión de arriba:** «que más del 5 % de los envíos interactivos caiga a texto» ya no aplica, porque no hay caída a texto. Se revisa si Twilio rechaza una parte relevante de los interactivos.
+
+## Adenda (2026-11-15) · modo Sandbox solo en test (HU-CONN-20)
+
+Aprobada por el dueño el 2026-11-15. Sin código todavía. Permite conectar el **Sandbox de WhatsApp de Twilio** para probar sin un sender propio. No cambia nada del alta de senders.
+
+### Hechos de Twilio que la fundan
+
+Según la documentación oficial (docs/whatsapp/sandbox, quickstart y try-out-whatsapp):
+
+- **Número compartido:** todas las cuentas usan el mismo, `+14155238886`. Recibe solo quien mandó `join <código>` al sandbox de esa cuenta. La unión vence a los 3 días, y escribirle a alguien que no se unió da 63015.
+- **Webhooks:** «When a message comes in» y «Status callback URL» se configuran solo en la consola antigua. No hay una API documentada para leerlos ni escribirlos.
+- **Límites:** un mensaje cada 3 s. Fuera de la ventana de 24 h solo sirven las 3 plantillas preaprobadas de Twilio; las plantillas propias no.
+- **Costo:** se cobra a la tarifa normal.
+- **No documentado:** la firma de los webhooks del sandbox, si acepta interactivos y si aparece en la Senders API.
+
+### Decisiones
+
+1. **Solo en test.** La variable `TWILIO_SANDBOX_PERMITIDO` (`Settings.twilio_sandbox_permitido`, `False` por defecto) se lee en un único módulo, `core/gateway/twilio/sandbox.py`, y se enciende solo en las apps de test. Apagada, las rutas del sandbox responden 404, igual que la bandera. Las conexiones sandbox que ya existan quedan inertes: el webhook responde 200 sin procesar y no se envía nada. Se pueden leer y desconectar.
+2. **Autorización igual que en §12.** Propietario o master, con la bandera por negocio `canales.whatsapp_twilio`. No hay bandera nueva.
+3. **Esquema (migración 0136, aditiva).**
+   - `twilio_connections.modo` (`sender|sandbox`, `DEFAULT 'sender'`).
+   - `sender_sid` admite NULL, con un CHECK que lo exige en `sender` y lo prohíbe en `sandbox`.
+   - `sandbox_join_code`: dato visible, no secreto, con CHECK de formato y solo en modo sandbox.
+   - `webhook_confirmado_at`.
+   - Índice único parcial `(tenant_id, account_sid) WHERE modo='sandbox' AND deleted_at IS NULL`.
+   - La bajada falla si queda algún sandbox vivo (no hay borrado físico).
+4. **Número compartido.** `channel_connections.external_id = 'sandbox:<AccountSid>'`, mediante un `external_id_override` nuevo en `save_connection_in`. Así cabe en `uq_channel_connections_twilio_sender_viva` sin tocar el índice. Las credenciales conservan `sender_e164 = +14155238886` como `From`. El negocio sigue saliendo solo de `public_id`, y el consumer resuelve por `connection_id`.
+5. **API.**
+   - `GET /admin/connections/twilio/capabilities` devuelve `{sandbox_disponible, sandbox_e164}`.
+   - `POST /sandbox` recibe `{account_sid, auth_token, join_code?, label?}` y devuelve 201 o 200. Es idempotente por cuenta y usa el mismo candado advisory de cuenta que el alta.
+   - `PATCH /{id}/sandbox` recibe `{join_code}`.
+   - `ConexionTwilioOut` suma `modo`, `sandbox_join_code`, `webhook_confirmado_at` y `requiere_accion_manual`. En sandbox, `sender_sid` va como `""`.
+   - Las rutas nuevas se declaran antes de `/{connection_id}`.
+6. **Confirmación del webhook.** El alta deja la conexión en `pending`. El primer entrante o estado con firma válida y `AccountSid` correcto marca `webhook_confirmado_at` (un `UPDATE … WHERE webhook_confirmado_at IS NULL`) y la pasa a `connected`. La firma no cambia: sigue fail-closed y no hay modo permisivo.
+7. **Bifurcación por modo.**
+   - La salud solo revisa la cuenta (`GET /Accounts`) y la confirmación; nunca llama a `get_sender`.
+   - Registrar los webhooks de nuevo responde 409 `sandbox_webhook_manual`, con las URL.
+   - Rotar credenciales revalida la cuenta.
+   - Desconectar no restaura nada y devuelve `requiere_limpiar_consola=true`.
+   - Crear, enviar a aprobación o borrar plantillas responde 409 `no_aplica_sandbox`. Sincronizar sigue permitido.
+8. **63015** entra en la tabla de channel-twilio como `PERMANENT`: no se reintenta y no da de baja al cliente. El mensaje de prueba responde 422 `participante_no_unido`, con el texto para volver a unirse.
+9. **Sin limitador propio en v1.** El ritmo de un mensaje cada 3 s lo cubren los reintentos por `RATE_LIMIT` que ya existen. Si en test se pierden mensajes de un mismo turno, una HU posterior agrega un limitador por conexión en Redis.
+
+### Pendiente de verificar en test con el sandbox
+
+1. Que la firma use el Auth Token de la cuenta contra la URL pegada en la consola, y si esos campos aceptan `#rc=…`.
+2. Que `AccountSid` y `To=whatsapp:+14155238886` lleguen como en un sender real.
+3. Cómo llega el 63015: si sale al enviar o en el callback de estado.
+4. Qué código responde Twilio al pasarse del ritmo, y si los reintentos alcanzan.
+5. Si el sandbox acepta interactivos.
+6. Si `sync` trae las 3 plantillas preaprobadas y si se pueden mandar fuera de la ventana.
+7. Que la Senders API no liste el sandbox, y que el `StatusCallback` de cada mensaje llegue aunque la consola no tenga la URL de estado.
+8. Que funcione con cuentas Trial y de pago.
