@@ -12687,6 +12687,244 @@
         }
       }
     },
+    "/api/v1/admin/connections/twilio/capabilities": {
+      "get": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Capacidades",
+        "description": "Qué modos de alta ofrece este ambiente. Sin la bandera del negocio, 404.",
+        "operationId": "capacidades_api_v1_admin_connections_twilio_capabilities_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwilioCapacidadesOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/twilio/sandbox": {
+      "post": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Conectar Sandbox",
+        "description": "Conecta el Sandbox de WhatsApp de la cuenta de Twilio (solo en test). Queda `pending` y con\n`requiere_accion_manual` hasta que se peguen las dos URL en la consola de Twilio y llegue el primer mensaje.\n201 si se creó; 200 si ya existía.",
+        "operationId": "conectar_sandbox_api_v1_admin_connections_twilio_sandbox_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwilioSandboxIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConexionTwilioOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para el negocio o el sandbox no está en este ambiente."
+          },
+          "409": {
+            "description": "`cuenta_en_otro_negocio`, `twilio_account_suspended` o `conflicto`."
+          },
+          "422": {
+            "description": "`twilio_credentials_invalid` o `join_code_invalido`."
+          },
+          "502": {
+            "description": "`twilio_unavailable` o `twilio_error`."
+          },
+          "200": {
+            "description": "El sandbox de esa cuenta ya estaba conectado en este negocio: se actualizó."
+          }
+        }
+      }
+    },
+    "/api/v1/admin/connections/twilio/{connection_id}/sandbox": {
+      "patch": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Fijar Join Code",
+        "description": "Cambia el código de unión del sandbox que se muestra para `join <código>`.",
+        "operationId": "fijar_join_code_api_v1_admin_connections_twilio__connection_id__sandbox_patch",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwilioJoinCodeIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConexionTwilioOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Twilio no está habilitado para este negocio, o la conexión no existe."
+          },
+          "409": {
+            "description": "`no_es_sandbox`."
+          },
+          "422": {
+            "description": "`join_code_invalido`."
+          }
+        }
+      }
+    },
     "/api/v1/admin/connections/twilio/{connection_id}": {
       "get": {
         "tags": [
@@ -52229,6 +52467,43 @@
           "active": {
             "type": "boolean",
             "title": "Active"
+          },
+          "modo": {
+            "type": "string",
+            "title": "Modo",
+            "description": "`sender` (número propio) o `sandbox` (Sandbox de Twilio, solo en test).",
+            "default": "sender"
+          },
+          "sandbox_join_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sandbox Join Code",
+            "description": "Sandbox: lo que sigue a `join` para unirse. No es secreto."
+          },
+          "webhook_confirmado_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Confirmado At",
+            "description": "Primer entrante o estado con firma válida."
+          },
+          "requiere_accion_manual": {
+            "type": "boolean",
+            "title": "Requiere Accion Manual",
+            "description": "Sandbox sin confirmar: hay que pegar `webhook_inbound_url` y `webhook_status_url` en la consola de Twilio (Sandbox settings).",
+            "default": false
           }
         },
         "type": "object",
@@ -77711,6 +77986,26 @@
         ],
         "title": "TwilioAltaIn"
       },
+      "TwilioCapacidadesOut": {
+        "properties": {
+          "sandbox_disponible": {
+            "type": "boolean",
+            "title": "Sandbox Disponible",
+            "description": "Este ambiente permite conectar el Sandbox de Twilio."
+          },
+          "sandbox_e164": {
+            "type": "string",
+            "title": "Sandbox E164",
+            "description": "Número compartido del sandbox (`\"\"` si no está disponible)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "sandbox_disponible",
+          "sandbox_e164"
+        ],
+        "title": "TwilioCapacidadesOut"
+      },
       "TwilioCostoMoneda": {
         "properties": {
           "moneda": {
@@ -77872,6 +78167,23 @@
           "senders"
         ],
         "title": "TwilioDescubrirOut"
+      },
+      "TwilioJoinCodeIn": {
+        "properties": {
+          "join_code": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "title": "Join Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "join_code"
+        ],
+        "title": "TwilioJoinCodeIn"
       },
       "TwilioPlantillaIn": {
         "properties": {
@@ -78089,6 +78401,51 @@
           "auth_token"
         ],
         "title": "TwilioRotarIn"
+      },
+      "TwilioSandboxIn": {
+        "properties": {
+          "account_sid": {
+            "type": "string",
+            "maxLength": 34,
+            "minLength": 34,
+            "title": "Account Sid",
+            "description": "Account SID de Twilio (`AC…`)."
+          },
+          "auth_token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Auth Token",
+            "description": "Auth Token de la cuenta. No se devuelve nunca."
+          },
+          "join_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Join Code",
+            "description": "Lo que sigue a `join` en la consola de Twilio (p. ej. `cloud-forgotten`)."
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 120,
+            "title": "Label",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_sid",
+          "auth_token"
+        ],
+        "title": "TwilioSandboxIn"
       },
       "TwilioSenderOut": {
         "properties": {

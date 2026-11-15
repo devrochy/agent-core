@@ -23,6 +23,7 @@ from __future__ import annotations
 import secrets
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -97,6 +98,14 @@ class ConexionTwilio:
     active: bool
     created: bool = False
     detalles: dict[str, Any] = field(default_factory=dict)
+    modo: str = "sender"
+    sandbox_join_code: str | None = None
+    webhook_confirmado_at: datetime | None = None
+
+    @property
+    def requiere_accion_manual(self) -> bool:
+        """Sandbox sin confirmar: el dueño tiene que pegar las URL en la consola de Twilio (no hay API para eso)."""
+        return self.modo == "sandbox" and self.webhook_confirmado_at is None
 
 
 def _base_webhooks() -> str:
@@ -367,6 +376,184 @@ async def conectar(
     return resultado
 
 
+async def conectar_sandbox(
+    tenant_id: uuid.UUID,
+    *,
+    account_sid: str,
+    auth_token: str,
+    join_code: str | None = None,
+    label: str = "",
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> ConexionTwilio:
+    """Conecta el Sandbox de WhatsApp de la cuenta (HU-CONN-20, solo donde `sandbox.permitido()`).
+
+    No usa la Senders API: valida la cuenta con `GET /Accounts/{sid}` y guarda la conexión con el número compartido
+    como `From` y `external_id = sandbox:<AccountSid>`. Los webhooks del sandbox solo se configuran en la consola de
+    Twilio, así que la conexión queda `pending` hasta que llegue el primer entrante o estado firmado
+    (`webhook_confirmado_at`). Repetirla con la misma cuenta devuelve la misma conexión y el mismo `public_id`
+    (actualiza el token y, si viene, el código de unión). Usa el mismo candado de cuenta que el alta de senders."""
+    from core.gateway.twilio import sandbox
+
+    if not sandbox.permitido():
+        log.info("twilio_sandbox_gate_apagado", tenant_id=str(tenant_id))
+        raise AltaError(
+            404, "not_found", "El Sandbox de Twilio no está disponible en este ambiente."
+        )
+    _exigir_scope(tenant_id)
+    codigo = (join_code or "").strip().lower() or None
+    if codigo is not None and not sandbox.join_code_valido(codigo):
+        raise AltaError(
+            422,
+            "join_code_invalido",
+            "El código de unión son las palabras que siguen a «join», p. ej. cloud-forgotten.",
+        )
+    client = _cliente(account_sid, auth_token, transport)
+    try:
+        await _cuenta(client)
+    except ProviderError as exc:
+        raise _traducir(exc) from exc
+
+    e164 = sandbox.e164()
+    try:
+        async with get_session() as session:
+            await session.execute(
+                text("select pg_advisory_xact_lock(hashtext(:k))"),
+                {"k": f"twilio_asset:account:{client.account_sid}"},
+            )
+            en_otro = await session.execute(
+                text("select twilio_account_en_otro_negocio(:a)"),
+                {"a": client.account_sid},
+            )
+            if en_otro.scalar():
+                raise AltaError(
+                    409,
+                    "cuenta_en_otro_negocio",
+                    "Esta cuenta de Twilio ya está conectada en otro negocio. Usa una cuenta propia para este.",
+                )
+            connection, created = await save_connection_in(
+                session,
+                label.strip() or "WhatsApp Sandbox de Twilio",
+                {
+                    "account_sid": client.account_sid,
+                    "auth_token": auth_token.strip(),
+                    "sender_e164": e164,
+                },
+                type_id=WHATSAPP_TWILIO,
+                external_id_override=sandbox.external_id(client.account_sid),
+            )
+            await session.flush()
+            fila = (
+                await session.execute(
+                    select(TwilioConnection).where(
+                        TwilioConnection.tenant_id == tenant_id,
+                        TwilioConnection.channel_connection_id == connection.id,
+                        TwilioConnection.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if fila is not None and fila.modo != sandbox.MODO_SANDBOX:
+                # No pasa: un sender nunca tiene `external_id = sandbox:…`. Si pasara, no se convierte.
+                raise AltaError(
+                    409, "conflicto", "No se pudo guardar la conexión. Intenta de nuevo."
+                )
+            if fila is None:
+                public_id = secrets.token_urlsafe(18)
+                inbound_url, status_url = urls_webhook(public_id)
+                fila = TwilioConnection(
+                    tenant_id=tenant_id,
+                    channel_connection_id=connection.id,
+                    public_id=public_id,
+                    account_sid=client.account_sid,
+                    modo=sandbox.MODO_SANDBOX,
+                    sender_sid=None,
+                    sender_e164=e164,
+                    sandbox_join_code=codigo,
+                    webhook_inbound_url=inbound_url,
+                    webhook_status_url=status_url,
+                    previous_webhook={},
+                )
+                session.add(fila)
+            else:
+                fila.sender_e164 = e164
+                if codigo is not None:
+                    fila.sandbox_join_code = codigo
+            # Las credenciales se acaban de validar: el estado depende solo de si las URL ya se confirmaron.
+            fila.status = "connected" if fila.webhook_confirmado_at is not None else "pending"
+            fila.sender_status = ""
+            fila.display_name = "Sandbox de Twilio"
+            fila.last_error_code = None
+            fila.last_health_at = utcnow()
+            await session.flush()
+            resultado = _resultado(fila, connection.label, connection.active, created)
+    except IntegrityError as exc:
+        if _INDICE_NUMERO in str(exc.orig):
+            # `sandbox:<AccountSid>` ya vive en otro negocio: es la misma cuenta.
+            raise AltaError(
+                409,
+                "cuenta_en_otro_negocio",
+                "Esta cuenta de Twilio ya está conectada en otro negocio. Usa una cuenta propia para este.",
+            ) from None
+        restriccion = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        log.warning("twilio_sandbox_integrity_error", constraint=restriccion)
+        raise AltaError(
+            409, "conflicto", "No se pudo guardar la conexión. Intenta de nuevo."
+        ) from None
+    log.info(
+        "twilio_sandbox_alta",
+        tenant_id=str(tenant_id),
+        connection_id=str(resultado.connection_id),
+        created=created,
+        status=resultado.status,
+    )
+    return resultado
+
+
+async def fijar_join_code(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID, join_code: str
+) -> ConexionTwilio | None:
+    """Cambia el código de unión de un sandbox (el que se muestra para `join <código>`). `None` si no existe."""
+    from core.gateway.twilio import sandbox
+
+    if not sandbox.permitido():
+        raise AltaError(
+            404, "not_found", "El Sandbox de Twilio no está disponible en este ambiente."
+        )
+    _exigir_scope(tenant_id)
+    codigo = join_code.strip().lower()
+    if not sandbox.join_code_valido(codigo):
+        raise AltaError(
+            422,
+            "join_code_invalido",
+            "El código de unión son las palabras que siguen a «join», p. ej. cloud-forgotten.",
+        )
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(TwilioConnection, ChannelConnection)
+                .join(
+                    ChannelConnection,
+                    (ChannelConnection.id == TwilioConnection.channel_connection_id)
+                    & (ChannelConnection.tenant_id == TwilioConnection.tenant_id),
+                )
+                .where(
+                    TwilioConnection.tenant_id == tenant_id,
+                    TwilioConnection.channel_connection_id == connection_id,
+                    TwilioConnection.deleted_at.is_(None),
+                    ChannelConnection.deleted_at.is_(None),
+                )
+                .with_for_update(of=TwilioConnection)
+            )
+        ).first()
+        if row is None:
+            return None
+        fila, conexion = row
+        if fila.modo != sandbox.MODO_SANDBOX:
+            raise AltaError(409, "no_es_sandbox", "Esta conexión no es del Sandbox de Twilio.")
+        fila.sandbox_join_code = codigo
+        await session.flush()
+        return _resultado(fila, conexion.label, conexion.active, False)
+
+
 # Connection overrides de Twilio (en el fragmento de la URL): hasta 3 reintentos ante un 5xx o una conexión que no
 # se establece. Por defecto Twilio solo reintenta una vez si no conecta, así que un 500 de la auditoría perdería el
 # mensaje. El fragmento NO entra en la firma (documentación de Twilio): la URL guardada, contra la que se verifica,
@@ -429,6 +616,9 @@ def _resultado(fila: TwilioConnection, label: str, active: bool, created: bool) 
         last_error_code=fila.last_error_code,
         active=active,
         created=created,
+        modo=fila.modo,
+        sandbox_join_code=fila.sandbox_join_code,
+        webhook_confirmado_at=fila.webhook_confirmado_at,
     )
 
 

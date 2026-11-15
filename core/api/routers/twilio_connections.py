@@ -21,7 +21,7 @@ from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
 from core.db.session import get_session
 from core.gateway.twilio import alta as svc
-from core.gateway.twilio import bandera
+from core.gateway.twilio import bandera, sandbox
 
 router = APIRouter(prefix="/admin/connections/twilio", tags=["connections"])
 
@@ -99,6 +99,21 @@ class ConexionTwilioOut(BaseModel):
     tenia_webhook_previo: bool
     last_error_code: int | None
     active: bool
+    modo: str = Field(
+        default="sender",
+        description="`sender` (número propio) o `sandbox` (Sandbox de Twilio, solo en test).",
+    )
+    sandbox_join_code: str | None = Field(
+        default=None, description="Sandbox: lo que sigue a `join` para unirse. No es secreto."
+    )
+    webhook_confirmado_at: datetime | None = Field(
+        default=None, description="Primer entrante o estado con firma válida."
+    )
+    requiere_accion_manual: bool = Field(
+        default=False,
+        description="Sandbox sin confirmar: hay que pegar `webhook_inbound_url` y `webhook_status_url` en la consola "
+        "de Twilio (Sandbox settings).",
+    )
 
 
 def _tenant(principal: Principal) -> uuid.UUID:
@@ -132,6 +147,10 @@ def _out(c: svc.ConexionTwilio) -> ConexionTwilioOut:
         tenia_webhook_previo=c.tenia_webhook_previo,
         last_error_code=c.last_error_code,
         active=c.active,
+        modo=c.modo,
+        sandbox_join_code=c.sandbox_join_code,
+        webhook_confirmado_at=c.webhook_confirmado_at,
+        requiere_accion_manual=c.requiere_accion_manual,
     )
 
 
@@ -202,6 +221,123 @@ async def conectar(
     if not resultado.created:
         response.status_code = 200
     return _out(resultado)
+
+
+# --------------------------------------------------------------------------- Sandbox (HU-CONN-20, solo en test)
+# Van antes de `/{connection_id}`: si no, `GET /capabilities` caería en esa ruta.
+
+
+class TwilioCapacidadesOut(BaseModel):
+    sandbox_disponible: bool = Field(
+        description="Este ambiente permite conectar el Sandbox de Twilio."
+    )
+    sandbox_e164: str = Field(
+        description='Número compartido del sandbox (`""` si no está disponible).'
+    )
+
+
+class TwilioSandboxIn(TwilioCredencialesIn):
+    join_code: str | None = Field(
+        default=None,
+        max_length=64,
+        pattern=sandbox.FORMATO_JOIN_CODE,
+        description="Lo que sigue a `join` en la consola de Twilio (p. ej. `cloud-forgotten`).",
+    )
+    label: str = Field(default="", max_length=120)
+
+
+class TwilioJoinCodeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    join_code: str = Field(min_length=1, max_length=64, pattern=sandbox.FORMATO_JOIN_CODE)
+
+
+def _exigir_sandbox() -> None:
+    if not sandbox.permitido():
+        raise ApiError.not_found("El Sandbox de Twilio no está disponible en este ambiente.")
+
+
+@router.get("/capabilities", response_model=TwilioCapacidadesOut, responses={404: _ERRORES[404]})
+async def capacidades(
+    principal: Annotated[Principal, Depends(require("connections"))],
+) -> TwilioCapacidadesOut:
+    """Qué modos de alta ofrece este ambiente. Sin la bandera del negocio, 404."""
+    await _exigir_bandera(_tenant(principal))
+    disponible = sandbox.permitido()
+    return TwilioCapacidadesOut(
+        sandbox_disponible=disponible, sandbox_e164=sandbox.e164() if disponible else ""
+    )
+
+
+@router.post(
+    "/sandbox",
+    response_model=ConexionTwilioOut,
+    status_code=201,
+    responses={
+        404: {
+            "description": "Twilio no está habilitado para el negocio o el sandbox no está en este ambiente."
+        },
+        409: {"description": "`cuenta_en_otro_negocio`, `twilio_account_suspended` o `conflicto`."},
+        422: {"description": "`twilio_credentials_invalid` o `join_code_invalido`."},
+        502: _ERRORES[502],
+        200: {
+            "description": "El sandbox de esa cuenta ya estaba conectado en este negocio: se actualizó."
+        },
+    },
+)
+async def conectar_sandbox(
+    payload: TwilioSandboxIn,
+    response: Response,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> ConexionTwilioOut:
+    """Conecta el Sandbox de WhatsApp de la cuenta de Twilio (solo en test). Queda `pending` y con
+    `requiere_accion_manual` hasta que se peguen las dos URL en la consola de Twilio y llegue el primer mensaje.
+    201 si se creó; 200 si ya existía."""
+    require_owner_or_master(principal)
+    tid = _tenant(principal)
+    _exigir_sandbox()
+    await _exigir_bandera(tid)
+    try:
+        resultado = await svc.conectar_sandbox(
+            tid,
+            account_sid=payload.account_sid,
+            auth_token=payload.auth_token,
+            join_code=payload.join_code,
+            label=payload.label,
+        )
+    except svc.AltaError as exc:
+        raise _api_error(exc) from None
+    await _auditar(principal, "twilio.sandbox_connected", resultado.connection_id)
+    if not resultado.created:
+        response.status_code = 200
+    return _out(resultado)
+
+
+@router.patch(
+    "/{connection_id}/sandbox",
+    response_model=ConexionTwilioOut,
+    responses={
+        404: _ERRORES[404],
+        409: {"description": "`no_es_sandbox`."},
+        422: {"description": "`join_code_invalido`."},
+    },
+)
+async def fijar_join_code(
+    connection_id: uuid.UUID,
+    payload: TwilioJoinCodeIn,
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+) -> ConexionTwilioOut:
+    """Cambia el código de unión del sandbox que se muestra para `join <código>`."""
+    require_owner_or_master(principal)
+    tid = _tenant(principal)
+    _exigir_sandbox()
+    await _exigir_bandera(tid)
+    try:
+        resultado = _o_404(await svc.fijar_join_code(tid, connection_id, payload.join_code))
+    except svc.AltaError as exc:
+        raise _api_error(exc) from None
+    await _auditar(principal, "twilio.sandbox_join_code", connection_id)
+    return resultado
 
 
 @router.get("/{connection_id}", response_model=ConexionTwilioOut, responses={404: _ERRORES[404]})
