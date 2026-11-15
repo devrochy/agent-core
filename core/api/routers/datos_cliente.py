@@ -15,6 +15,7 @@ import uuid
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -372,6 +373,39 @@ async def save_datos_cliente(
                 )
             )
     return await _leer(principal, await _agente(principal, agent_id))
+
+
+# ------------------------------------------------------------------ compatibilidad (HU-CRM-28)
+
+
+def _politica_migrada() -> JSONResponse:
+    """Los endpoints globales quedan un release, deprecados: la política ahora es de cada agente."""
+    return JSONResponse(
+        status_code=410,
+        content={
+            "error": {
+                "code": "datos_cliente_por_agente",
+                "message": "La política de datos ahora es de cada agente. Usa /admin/agents/{id}/datos-cliente.",
+            }
+        },
+        headers={"Deprecation": "true"},
+    )
+
+
+@router.get("/politica", deprecated=True, status_code=410)
+async def get_politica_deprecada(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> JSONResponse:
+    _exigir_negocio(principal)
+    return _politica_migrada()
+
+
+@router.put("/politica", deprecated=True, status_code=410)
+async def save_politica_deprecado(
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> JSONResponse:
+    _exigir_negocio(principal)
+    return _politica_migrada()
 
 
 # ------------------------------------------------------------------ aviso de tratamiento de datos (HU-CRM-16)
