@@ -82,6 +82,7 @@ async def request_send(
     to: str,
     text: str,
     image_url: str | None = None,
+    audio_url: str | None = None,
 ) -> str:
     """Encola un envío y espera el wamid del connector.
 
@@ -96,7 +97,8 @@ async def request_send(
         "to": to,
         "text": text,
         "image_url": image_url or "",
-        "kind": "image" if image_url else "text",
+        "audio_url": audio_url or "",
+        "kind": "audio" if audio_url else ("image" if image_url else "text"),
     }
     if not await is_ready(tenant_id):
         # Fail-fast: sin sesión conectada, mejor reintentar (con backoff) que

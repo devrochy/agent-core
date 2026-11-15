@@ -6,6 +6,7 @@ import pytest
 
 from core.media import ingesta
 from core.media.config import AudioConfig, VisionConfig
+from core.media.errors import MediaProviderError
 from core.media.meta_media import DownloadedMedia
 from core.media.stt import TranscriptionResult
 from core.media.vision import VisionResult
@@ -163,3 +164,107 @@ async def test_imagen_no_identificada_responde_fijo(monkeypatch: pytest.MonkeyPa
 
     assert outcome.reply_key == "media_image_unidentified"
     assert outcome.reply
+
+
+def _fields_waweb(
+    media_type: str,
+    *,
+    tenant_id: uuid.UUID,
+    caption: str = "",
+    redis_key: str | None = None,
+    error: str | None = None,
+) -> dict[str, str]:
+    item: dict[str, object] = {"type": media_type, "bytes": 5}
+    if redis_key:
+        item["redis_key"] = redis_key
+    if error:
+        item["error"] = error
+    return {
+        "media": json.dumps([item]),
+        "content": caption,
+        "external_message_id": "wamid-1",
+        "provider": "waweb",
+        "channel": "whatsapp",
+    }
+
+
+async def test_audio_waweb_transcrito_sin_credenciales_meta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tid = uuid.uuid4()
+
+    async def _fake_waweb(_item, *, tenant_id):  # type: ignore[no-untyped-def]
+        assert tenant_id == tid
+        return DownloadedMedia(b"voz", "audio/ogg", "sha", 4)
+
+    async def _sin_credenciales(*_a, **_k):  # type: ignore[no-untyped-def]
+        raise AssertionError("waweb no debe resolver credenciales de Meta/Twilio")
+
+    async def _guardar(*_a, **_k):  # type: ignore[no-untyped-def]
+        return "tenant-1/media/entrantes/audio"
+
+    async def _noop(*_a, **_k):  # type: ignore[no-untyped-def]
+        return None
+
+    async def _transcribir(*_a, **_k):  # type: ignore[no-untyped-def]
+        return TranscriptionResult("hola, busco un casco", 2.0, 0.001, "openai", "gpt-4o-mini-transcribe")
+
+    monkeypatch.setattr(ingesta, "descargar_media_waweb", _fake_waweb)
+    monkeypatch.setattr("core.gateway.sender.resolve_credentials", _sin_credenciales)
+    monkeypatch.setattr(ingesta, "_guardar", _guardar)
+    monkeypatch.setattr(ingesta, "_cache_get", _noop)
+    monkeypatch.setattr(ingesta, "_cache_set", _noop)
+    monkeypatch.setattr(ingesta, "_registrar_consumo", _noop)
+    monkeypatch.setattr(
+        ingesta,
+        "resolve_audio_config",
+        lambda _s: AudioConfig(True, "openai", "gpt-4o-mini-transcribe", "sk", "platform"),
+    )
+    monkeypatch.setattr(ingesta, "transcribir_audio", _transcribir)
+
+    fields = _fields_waweb(
+        "audio/ogg",
+        tenant_id=tid,
+        redis_key=f"waweb:media:{tid}:wamid-1:0",
+    )
+    conversation = SimpleNamespace(id=uuid.uuid4(), connection_id=None, meta_connection_id=None)
+
+    async with tenant_scope(tid):
+        outcome = await ingesta.procesar_media_entrante(fields, conversation, _app_settings())
+
+    assert outcome.handled is True
+    assert outcome.media_transcription == "hola, busco un casco"
+    assert outcome.media_key == "tenant-1/media/entrantes/audio"
+    assert outcome.reply is None
+
+
+async def test_media_waweb_expirada_responde_fijo(monkeypatch: pytest.MonkeyPatch) -> None:
+    tid = uuid.uuid4()
+
+    async def _expirada(_item, *, tenant_id):  # type: ignore[no-untyped-def]
+        raise MediaProviderError("expiro", code="media_expirada")
+
+    async def _noop(*_a, **_k):  # type: ignore[no-untyped-def]
+        return None
+
+    async def _respuesta(key: str) -> str:
+        return ingesta.RESPUESTAS_FALLBACK.get(key, key)
+
+    monkeypatch.setattr(ingesta, "descargar_media_waweb", _expirada)
+    monkeypatch.setattr(ingesta, "_cache_get", _noop)
+    monkeypatch.setattr(ingesta, "_cache_set", _noop)
+    monkeypatch.setattr(ingesta, "_respuesta", _respuesta)
+
+    fields = _fields_waweb(
+        "audio/ogg",
+        tenant_id=tid,
+        redis_key=f"waweb:media:{tid}:wamid-1:0",
+    )
+    conversation = SimpleNamespace(id=uuid.uuid4(), connection_id=None, meta_connection_id=None)
+
+    async with tenant_scope(tid):
+        outcome = await ingesta.procesar_media_entrante(fields, conversation, _app_settings())
+
+    assert outcome.handled is True
+    assert outcome.reply_key == "media_download_failed"
+    assert outcome.decision == "media_descarga_fallida"

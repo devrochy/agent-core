@@ -19,8 +19,12 @@ from core.waweb import backend_neonize
 
 
 class _EventRegistrar:
-    def __call__(self, _tipo: object):
+    def __init__(self) -> None:
+        self.registros: list[tuple[object, object]] = []
+
+    def __call__(self, tipo: object):
         def _wrap(fn):
+            self.registros.append((tipo, fn))
             return fn
 
         return _wrap
@@ -50,8 +54,21 @@ class FakeClient:
     async def send_message(self, _jid: str, _message: object) -> object:
         return types.SimpleNamespace(ID="WAMID-1")
 
+    async def download_any(self, _message: object) -> bytes:
+        return self.download_bytes
+
+    async def send_audio(self, _jid: str, _file: str, ptt: bool = False) -> object:
+        self.audio_enviado = (_jid, _file, ptt)
+        return types.SimpleNamespace(ID="WA-AUDIO")
+
+    async def send_image(self, _jid: str, _file: str, caption: str | None = None) -> object:
+        self.imagen_enviada = (_jid, _file, caption)
+        return types.SimpleNamespace(ID="WA-IMAGE")
+
     async def disconnect(self) -> None:
         return None
+
+    download_bytes = b"datos"
 
     # Como en `neonize.aioze` 0.5.2: las propiedades devuelven una corutina
     # (`asyncio.to_thread` sobre el puente Go), no un bool.
@@ -88,6 +105,8 @@ def _fake_neonize(monkeypatch: pytest.MonkeyPatch) -> None:
         MessageEv=object(),
     )
     monkeypatch.setattr(backend_neonize, "_import_neonize", lambda: (FakeClient, ev))
+    FakeClient.ev = ev  # type: ignore[attr-defined]
+    FakeClient.download_bytes = b"datos"
     modulo_jid = types.ModuleType("neonize.utils.jid")
     modulo_jid.jid_is_lid = lambda _jid: False  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "neonize.utils.jid", modulo_jid)
@@ -264,3 +283,142 @@ async def test_identity_lee_client_me_sin_llamar_al_puente() -> None:
     assert identidad is not None
     assert identidad.phone == "573005550103"
     assert identidad.push_name == "Ana"
+
+
+class _Source:
+    IsFromMe = False
+    IsGroup = False
+    Sender = _JID("573001112233")
+    SenderAlt = None
+
+
+class _Info:
+    ID = "W-AUDIO"
+    Pushname = "Ana"
+    MessageSource = _Source()
+
+
+class _Evento:
+    Info = _Info()
+
+    def __init__(self, message: object) -> None:
+        self.Message = message
+
+
+class _Msg:
+    """Mensaje proto falso: `HasField` como el real y atributos por campo."""
+
+    def __init__(self, **campos: object) -> None:
+        self._campos = campos
+
+    def HasField(self, nombre: str) -> bool:
+        return nombre in self._campos
+
+    def __getattr__(self, nombre: str) -> object:
+        try:
+            return self._campos[nombre]
+        except KeyError:
+            raise AttributeError(nombre) from None
+
+
+class _Audio:
+    mimetype = "audio/ogg; codecs=opus"
+    fileLength = 5
+    seconds = 2
+    PTT = True
+
+
+class _Imagen:
+    mimetype = "image/jpeg"
+    fileLength = 5
+    caption = "¿Tienen este?"
+
+
+async def _socket_con_mensajes(
+    tmp_path: Path, capturados: list[backend_neonize.InboundEvent]
+) -> tuple[backend_neonize.NeonizeSocket, object]:
+    socket = backend_neonize.NeonizeSocket()
+
+    async def _on_message(event: backend_neonize.InboundEvent) -> None:
+        capturados.append(event)
+
+    await socket.connect(
+        session_dir=tmp_path / "m", on_qr=_noop, on_status=_noop, on_message=_on_message
+    )
+    handler = next(
+        fn for tipo, fn in socket._client.event.registros if tipo is FakeClient.ev.MessageEv
+    )
+    return socket, handler
+
+
+async def test_audio_entrante_sin_texto_se_publica_con_media(tmp_path: Path) -> None:
+    capturados: list[backend_neonize.InboundEvent] = []
+    socket, handler = await _socket_con_mensajes(tmp_path, capturados)
+    try:
+        await handler(None, _Evento(_Msg(audioMessage=_Audio())))
+    finally:
+        await socket.disconnect()
+
+    assert len(capturados) == 1
+    evento = capturados[0]
+    assert evento.text == ""
+    assert evento.media[0]["type"] == "audio/ogg"
+    assert evento.media[0]["data"] == b"datos"
+    assert evento.media[0]["ptt"] is True
+    assert evento.media[0]["seconds"] == 2
+
+
+async def test_imagen_entrante_usa_el_caption_como_texto(tmp_path: Path) -> None:
+    capturados: list[backend_neonize.InboundEvent] = []
+    socket, handler = await _socket_con_mensajes(tmp_path, capturados)
+    try:
+        await handler(None, _Evento(_Msg(imageMessage=_Imagen())))
+    finally:
+        await socket.disconnect()
+
+    evento = capturados[0]
+    assert evento.text == "¿Tienen este?"
+    assert evento.media[0]["type"] == "image/jpeg"
+    assert evento.media[0]["data"] == b"datos"
+
+
+async def test_media_que_no_se_descarga_se_publica_para_la_respuesta_fija(
+    tmp_path: Path,
+) -> None:
+    capturados: list[backend_neonize.InboundEvent] = []
+    socket, handler = await _socket_con_mensajes(tmp_path, capturados)
+    socket._client.download_bytes = b""
+    try:
+        await handler(None, _Evento(_Msg(audioMessage=_Audio())))
+    finally:
+        await socket.disconnect()
+
+    assert capturados[0].media[0]["error"] == "empty"
+
+
+async def test_send_audio_usa_ptt_y_devuelve_wamid(tmp_path: Path) -> None:
+    socket = backend_neonize.NeonizeSocket()
+    await socket.connect(session_dir=tmp_path / "a", on_qr=_noop, on_status=_noop, on_message=_noop)
+
+    wamid = await socket.send_audio(to="57300", audio_url="https://api/files/audio.ogg")
+
+    assert wamid == "WA-AUDIO"
+    assert socket._client.audio_enviado == ("57300@s.whatsapp.net", "https://api/files/audio.ogg", True)
+    await socket.disconnect()
+
+
+async def test_send_image_envia_imagen_nativa(tmp_path: Path) -> None:
+    socket = backend_neonize.NeonizeSocket()
+    await socket.connect(session_dir=tmp_path / "i", on_qr=_noop, on_status=_noop, on_message=_noop)
+
+    wamid = await socket.send_image(
+        to="57300", image_url="https://api/files/foto.jpg", caption="mirá"
+    )
+
+    assert wamid == "WA-IMAGE"
+    assert socket._client.imagen_enviada == (
+        "57300@s.whatsapp.net",
+        "https://api/files/foto.jpg",
+        "mirá",
+    )
+    await socket.disconnect()
