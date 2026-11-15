@@ -283,6 +283,14 @@ class TwilioConnection(Base):
             unique=True,
             postgresql_where=text("deleted_at is null"),
         ),
+        # Un sandbox por cuenta en cada negocio (migración 0136, HU-CONN-20).
+        Index(
+            "uq_twilio_connections_sandbox_cuenta_viva",
+            "tenant_id",
+            "account_sid",
+            unique=True,
+            postgresql_where=text("modo = 'sandbox' and deleted_at is null"),
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "channel_connection_id"],
             ["channel_connections.tenant_id", "channel_connections.id"],
@@ -296,8 +304,14 @@ class TwilioConnection(Base):
     channel_connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     public_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     account_sid: Mapped[str] = mapped_column(Text, nullable=False)
-    sender_sid: Mapped[str] = mapped_column(Text, nullable=False)
+    # sender | sandbox (0136): el sandbox usa el número compartido de Twilio y no tiene sender (`sender_sid` NULL).
+    modo: Mapped[str] = mapped_column(Text, nullable=False, default="sender", server_default="sender")
+    sender_sid: Mapped[str | None] = mapped_column(Text)
     sender_e164: Mapped[str] = mapped_column(Text, nullable=False)
+    # Lo que sigue a `join` para unirse al sandbox de la cuenta. No es secreto; solo en modo sandbox.
+    sandbox_join_code: Mapped[str | None] = mapped_column(Text)
+    # Primer entrante o estado con firma válida: en el sandbox las URL se pegan a mano y esto confirma que quedaron.
+    webhook_confirmado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sender_status: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     # pending | connected | degraded | revoked | error
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", server_default="pending")

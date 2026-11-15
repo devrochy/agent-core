@@ -750,6 +750,7 @@ def test_la_tabla_entera_es_deliberada():
         63030: "CONTENT",
         30007: "CONTENT",
         63049: "PERMANENT",
+        63015: "PERMANENT",
         30004: "PERMANENT",
         20404: "PERMANENT",
     }

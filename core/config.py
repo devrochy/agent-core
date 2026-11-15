@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     app_env: Literal["development", "production"] = Field(default="development", alias="APP_ENV")
     app_secret_key: str = Field(default="change-me", alias="APP_SECRET_KEY")
     public_base_url: str = Field(default="http://localhost:8000", alias="PUBLIC_BASE_URL")
+    # Modo Sandbox de WhatsApp vía Twilio (HU-CONN-20, adenda del ADR-0186): solo en test, apagado por defecto. Se lee
+    # únicamente en `core/gateway/twilio/sandbox.py`.
+    twilio_sandbox_permitido: bool = Field(default=False, alias="TWILIO_SANDBOX_PERMITIDO")
+    # Número compartido del sandbox (el `From` de cada mensaje). Configurable por si Twilio lo cambia.
+    twilio_sandbox_e164: str = Field(default="+14155238886", alias="TWILIO_SANDBOX_E164")
     # URL del panel nuevo: a donde vuelve el navegador tras el OAuth de Google.
     # En producción suele coincidir con el origen público; en dev apunta al :3200.
     panel_base_url: str = Field(default="", alias="PANEL_BASE_URL")
