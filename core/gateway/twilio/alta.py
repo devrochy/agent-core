@@ -384,6 +384,7 @@ async def conectar_sandbox(
     join_code: str | None = None,
     label: str = "",
     transport: httpx.AsyncBaseTransport | None = None,
+    origen: str = "alta",
 ) -> ConexionTwilio:
     """Conecta el Sandbox de WhatsApp de la cuenta (HU-CONN-20, solo donde `sandbox.permitido()`).
 
@@ -395,7 +396,8 @@ async def conectar_sandbox(
     from core.gateway.twilio import sandbox
 
     if not sandbox.permitido():
-        log.info("twilio_sandbox_gate_apagado", tenant_id=str(tenant_id))
+        log.info("twilio_sandbox_gate_apagado", tenant_id=str(tenant_id), via="alta")
+        sandbox.contar("gate_apagado")
         raise AltaError(
             404, "not_found", "El Sandbox de Twilio no está disponible en este ambiente."
         )
@@ -514,6 +516,9 @@ async def conectar_sandbox(
         raise AltaError(
             409, "conflicto", "No se pudo guardar la conexión. Intenta de nuevo."
         ) from None
+    if origen == "alta":
+        # La rotación de credenciales reutiliza el alta: no cuenta como alta.
+        sandbox.contar("alta_creada" if created else "alta_repetida")
     log.info(
         "twilio_sandbox_alta",
         tenant_id=str(tenant_id),
@@ -684,6 +689,7 @@ async def credenciales_de_envio(
     if sandbox.inerte(fila[1]):
         # Un sandbox donde el ambiente no lo permite no envía (HU-CONN-20): falla cerrado, sin respaldo.
         log.info("twilio_sandbox_gate_apagado", connection_id=str(connection.id), via="envio")
+        sandbox.contar("gate_apagado")
         return {}
     salida = {
         "account_sid": creds.get("account_sid", ""),

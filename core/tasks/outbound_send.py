@@ -421,6 +421,8 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
                 wamid = await adapter.send_text(credentials, customer.external_id, message.content)
         except ProviderError as exc:
             await _release_claim(message.id, message.conversation_id, tenant_id)
+            if provider == "twilio":
+                _medir_sandbox(exc, credentials, tenant_id)
             return exc
         except WaWebPolicyBlocked as exc:
             await _release_claim(message.id, message.conversation_id, tenant_id)
@@ -505,6 +507,24 @@ async def _mark_failed(
             await escalate(conversation_id, reason="send_failed", summary=exc.message[:500])
 
     return conversation_id, created_at, failed_id
+
+
+def _medir_sandbox(exc: ProviderError, credentials: dict[str, str], tenant_id: uuid.UUID) -> None:
+    """Sandbox de Twilio (HU-CONN-20): cuenta los 63015 (destinatario sin unir) y los reintentos por ritmo (un mensaje
+    cada 3 s). Si se pierden mensajes de un turno, una HU posterior agrega un limitador por conexión."""
+    try:
+        from core.gateway.twilio import sandbox
+
+        if not sandbox.es_from_del_sandbox(credentials):
+            return
+        if exc.code == sandbox.CODIGO_NO_UNIDO:
+            log.info("twilio_sandbox_no_unido", tenant_id=str(tenant_id), via="envio")
+            sandbox.contar("no_unido")
+        elif exc.category == "RATE_LIMIT":
+            log.info("twilio_sandbox_reintento_ritmo", tenant_id=str(tenant_id), code=exc.code)
+            sandbox.contar("reintento_ritmo")
+    except Exception as fallo:  # medir nunca cambia el error que ya se clasificó
+        log.warning("metrica_fallo", error_type=type(fallo).__name__)
 
 
 async def _baja_por_proveedor(

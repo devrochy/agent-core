@@ -464,3 +464,47 @@ async def test_plantillas_propias_no_aplican_al_sandbox(negocio, gate, twilio) -
         with pytest.raises(AltaError) as exc:
             await _en(negocio, llamada)
         assert (exc.value.http_status, exc.value.code) == (409, "no_aplica_sandbox")
+
+
+class _Registro:
+    def __init__(self) -> None:
+        self.puntos: list[tuple[float, dict[str, str]]] = []
+
+    def add(self, valor: float, atributos: dict[str, str] | None = None) -> None:
+        self.puntos.append((valor, dict(atributos or {})))
+
+    set = add
+
+
+async def test_eventos_y_ronda_de_salud(negocio, app_client, gate, twilio, monkeypatch) -> None:
+    from core.gateway.twilio import operacion, sandbox
+    from core.gateway.twilio.alta import AltaError
+
+    eventos = _Registro()
+    monkeypatch.setattr(sandbox, "_eventos", eventos)
+
+    # El fixture `twilio` atiende con la última cuenta creada: la que se usa va al final.
+    _, sin_confirmar = await _sandbox(negocio, twilio)
+    tw, hecha = await _sandbox(negocio, twilio)
+    r, _ = await _post(app_client, hecha, tw, "inbound", token="otro")
+    assert r.status_code == 403
+    r, _ = await _post(app_client, hecha, tw, "inbound")
+    assert r.status_code == 200
+    tw.error_envio = 63015
+    with pytest.raises(AltaError) as exc:
+        await _en(negocio, operacion.enviar_prueba, negocio, hecha.connection_id, "+573001234567")
+    assert exc.value.code == "participante_no_unido"
+    r, _ = await _post(
+        app_client, hecha, tw, "status", MessageStatus="undelivered", ErrorCode="63015"
+    )
+    assert r.status_code == 200
+
+    nombres = [p[1]["evento"] for p in eventos.puntos]
+    assert nombres.count("alta_creada") == 2
+    assert {"firma_invalida", "webhook_confirmado"} <= set(nombres)
+    assert nombres.count("no_unido") == 2
+
+    # La ronda del cron revisa los sandbox y deja el sin confirmar en su estado.
+    assert await operacion.revisar_todas() >= 2
+    assert sin_confirmar.requiere_accion_manual is True
+    assert (await _estado(negocio, sin_confirmar.connection_id))[1] is None

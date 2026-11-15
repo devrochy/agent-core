@@ -297,17 +297,24 @@ async def revisar_todas() -> int:
         filas = (
             await session.execute(text("select id, tenant_id from admin_twilio_connection_ids()"))
         ).all()
-    revisadas = 0
+    revisadas = sin_confirmar = 0
     for connection_id, tenant_id in filas:
         try:
             async with tenant_scope(tenant_id):
-                await revisar(tenant_id, connection_id)
+                revisada = await revisar(tenant_id, connection_id)
             revisadas += 1
+            if revisada is not None and revisada.requiere_accion_manual:
+                sin_confirmar += 1
         except Exception:
             log.exception(
                 "twilio_salud_fallo", tenant_id=str(tenant_id), connection_id=str(connection_id)
             )
-    log.info("twilio_salud_ronda", revisadas=revisadas, total=len(filas))
+    log.info(
+        "twilio_salud_ronda",
+        revisadas=revisadas,
+        total=len(filas),
+        sandbox_sin_confirmar=sin_confirmar,
+    )
     return revisadas
 
 
@@ -387,7 +394,14 @@ async def enviar_prueba(
     try:
         sid = await TwilioOutbound(transport).send_text(creds, destino, _TEXTO_DE_PRUEBA)
     except ProviderError as exc:
-        if exc.code == 63015:
+        if exc.code == sandbox.CODIGO_NO_UNIDO:
+            log.info(
+                "twilio_sandbox_no_unido",
+                tenant_id=str(tenant_id),
+                connection_id=str(connection_id),
+                via="prueba",
+            )
+            sandbox.contar("no_unido")
             raise _no_unido(c) from None
         if exc.category == "WINDOW":
             raise alta.AltaError(
@@ -455,6 +469,7 @@ async def rotar_credenciales(
             auth_token=auth_token,
             label=c.connection.label,
             transport=transport,
+            origen="rotacion",
         )
     return await alta.conectar(
         tenant_id,
@@ -512,6 +527,13 @@ async def desconectar(
                     "restaurarlos.",
                 ) from None
     await delete_connection(connection_id)
+    if c.fila.modo == sandbox.MODO_SANDBOX:
+        sandbox.contar("desconectado")
+        log.info(
+            "twilio_sandbox_desconectado",
+            tenant_id=str(tenant_id),
+            connection_id=str(connection_id),
+        )
     log.info(
         "twilio_conexion_desconectada",
         tenant_id=str(tenant_id),
