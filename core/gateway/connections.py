@@ -322,7 +322,21 @@ async def save_connection_in(
         previous = _decrypt_raw(connection)
 
     clean = normalize_credentials(ctype, credentials, previous)
+    if external_id_override is not None and (
+        type_id != WHATSAPP_TWILIO
+        or external_id_override != f"sandbox:{clean.get('account_sid', '')}"
+    ):
+        # Solo el sandbox de Twilio, y con la MISMA cuenta de las credenciales: un override libre permitiría ocupar
+        # en el índice global el `sandbox:` de la cuenta de otro negocio.
+        raise ValueError("external_id_override solo vale para el sandbox de Twilio de esa cuenta.")
     external_id = external_id_override or external_id_for(ctype, clean)
+    if (
+        connection is not None
+        and external_id_override is None
+        and (connection.external_id or "").startswith("sandbox:")
+    ):
+        # Editar un sandbox sin el override no lo convierte en el número compartido (lo ocuparía para todos).
+        external_id = connection.external_id or ""
     encrypted = box.encrypt_json(clean)
 
     if type_id == WHATSAPP_META and external_id:

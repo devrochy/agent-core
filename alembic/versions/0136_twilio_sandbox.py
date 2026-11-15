@@ -71,6 +71,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("SET LOCAL lock_timeout = '5s'")
     sandbox = (
         op.get_bind()
         .execute(sa.text(f"select count(*) from {_TABLA} where modo = 'sandbox'"))

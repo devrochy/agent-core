@@ -259,3 +259,59 @@ async def test_un_sandbox_vivo_por_cuenta_y_rls(negocios) -> None:
     assert (
         len(await _sql(tid_a, "select 1 from twilio_connections where account_sid = :a", a=ac)) == 2
     )
+
+
+async def test_el_override_solo_vale_para_la_cuenta_de_las_credenciales(negocios) -> None:
+    tid, _ = negocios
+    from core.db.session import get_session
+    from core.gateway.connection_types import WHATSAPP_META, WHATSAPP_TWILIO
+    from core.gateway.connections import save_connection_in
+    from core.shared.tenant import tenant_scope
+
+    ajena = _cuenta()
+    casos = [
+        (WHATSAPP_TWILIO, f"sandbox:{ajena}"),  # la cuenta de otro, con mis credenciales
+        (WHATSAPP_TWILIO, "+14155238886"),
+        (WHATSAPP_META, "sandbox:x"),
+    ]
+    for type_id, override in casos:
+        async with tenant_scope(tid):
+            async with get_session() as session:
+                with pytest.raises(ValueError):
+                    await save_connection_in(
+                        session,
+                        "x",
+                        {"account_sid": _cuenta(), "auth_token": "t", "sender_e164": SANDBOX},
+                        type_id=type_id,
+                        external_id_override=override,
+                    )
+    assert (
+        await _sql(
+            tid, "select 1 from channel_connections where external_id = :e", e=f"sandbox:{ajena}"
+        )
+        == []
+    )
+
+
+async def test_editar_un_sandbox_sin_override_conserva_su_external_id(negocios) -> None:
+    tid, _ = negocios
+    from core.db.session import get_session
+    from core.gateway.connection_types import WHATSAPP_TWILIO
+    from core.gateway.connections import save_connection_in
+    from core.shared.tenant import tenant_scope
+
+    ac = _cuenta()
+    connection_id, _ = await _conexion(tid, ac)
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            await save_connection_in(
+                session,
+                "Otra etiqueta",
+                {"account_sid": ac, "auth_token": "nuevo", "sender_e164": SANDBOX},
+                connection_id=connection_id,
+                type_id=WHATSAPP_TWILIO,
+            )
+    [(external_id, label)] = await _sql(
+        tid, "select external_id, label from channel_connections where id = :c", c=connection_id
+    )
+    assert (external_id, label) == (f"sandbox:{ac}", "Otra etiqueta")
