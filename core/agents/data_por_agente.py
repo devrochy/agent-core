@@ -236,6 +236,7 @@ async def resumen(tenant_id: uuid.UUID, *, ahora: datetime | None = None) -> dic
                 "id": agente.id,
                 "ref": str(agente.id),
                 "key": agente.key,
+                "source_template": agente.source_template,
                 "name": agente.name,
                 "kind": agente.kind,
                 "status": agente.status,
