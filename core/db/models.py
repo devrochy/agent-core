@@ -697,6 +697,13 @@ class PluginTenantState(Base):
 # ---------------------------------------------------------------- admin (sistema, sin RLS)
 class Admin(Base):
     __tablename__ = "admins"
+    __table_args__ = (
+        Index(
+            "ix_admins_deleted_from_tenant",
+            "deleted_from_tenant_id",
+            postgresql_where=text("deleted_at is not null"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(Text, unique=True)
@@ -709,6 +716,18 @@ class Admin(Base):
     password_hash: Mapped[str] = mapped_column(Text)
     role: Mapped[str] = mapped_column(Text, default="colaborador")  # master | colaborador
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Baja lógica de una cuenta de equipo (ADR-0198). La fila NO se borra y conserva su correo,
+    # usuario y nombre: el historial de cartera guarda el correo como texto (`registrado_por`)
+    # y la auditoría necesita la identidad real. Sin `deleted_at` la cuenta está viva.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Solo para bajas hechas por un dueño/tester: negocio desde el que se eliminó, para que ese
+    # negocio pueda reactivarla. NULL en las bajas del master (solo el master la reactiva).
+    deleted_from_tenant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Vínculos que tenía al darse de baja (`[{tenant_id, role}]`). La reactivación los restaura:
+    # la misma identidad vuelve a sus negocios y el pack revive su perfil (ADR-0198).
+    deleted_links: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
+    deletion_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

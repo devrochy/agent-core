@@ -22773,7 +22773,7 @@
           "admin · colaboradores"
         ],
         "summary": "Email Existe",
-        "description": "¿Ya existe una cuenta con este correo? Lo usa el alta en dos pasos (D-SPEC-34).",
+        "description": "¿Ya existe una cuenta con este correo? Lo usa el alta en dos pasos (D-SPEC-34).\n\nSi la cuenta fue dada de baja (ADR-0198), `existe` es False (el correo no se reasigna solo)\npero `eliminada` es True: el alta avisa que hay que reactivarla, no crear otra.",
         "operationId": "email_existe_api_v1_admin_collaborators_existe_get",
         "parameters": [
           {
@@ -22925,7 +22925,7 @@
           "admin · colaboradores"
         ],
         "summary": "List Collaborators",
-        "description": "Cuentas del **negocio activo**. El master puede pedir `?todos=1` para ver todas las\ncuentas de la plataforma (gestión de cuentas); un owner siempre ve solo su negocio.",
+        "description": "Cuentas del **negocio activo**. El master puede pedir `?todos=1` para ver todas las\ncuentas de la plataforma (gestión de cuentas); un owner siempre ve solo su negocio.\n\nCon `?eliminadas=1` trae las cuentas dadas de baja (ADR-0198): el master todas; un\ndueño/tester solo las que dio de baja en su negocio activo.",
         "operationId": "list_collaborators_api_v1_admin_collaborators_get",
         "parameters": [
           {
@@ -22936,6 +22936,16 @@
               "type": "boolean",
               "default": false,
               "title": "Todos"
+            }
+          },
+          {
+            "name": "eliminadas",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Eliminadas"
             }
           },
           {
@@ -23648,6 +23658,166 @@
         ],
         "summary": "Toggle Collaborator Active",
         "operationId": "toggle_collaborator_active_api_v1_admin_collaborators__admin_id__toggle_post",
+        "parameters": [
+          {
+            "name": "admin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Admin Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_colaboradores`, `error.details = {metric, used, limit}`; no se escribió nada."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/collaborators/{admin_id}/delete": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · colaboradores"
+        ],
+        "summary": "Delete Collaborator Endpoint",
+        "description": "Baja lógica de una cuenta de equipo (ADR-0198).\n\nNo borra la identidad ni el historial: la cuenta deja de entrar, sale de Equipo y se\nrevocan sus vínculos, permisos y sesiones. El perfil de Gestor de Cobranza se da de baja\nsin tocar sus registros ni sus carteras. Solo se reactiva con la acción explícita.",
+        "operationId": "delete_collaborator_endpoint_api_v1_admin_collaborators__admin_id__delete_post",
+        "parameters": [
+          {
+            "name": "admin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Admin Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DeleteRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/collaborators/{admin_id}/reactivate": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · colaboradores"
+        ],
+        "summary": "Reactivate Collaborator Endpoint",
+        "description": "Reactiva la MISMA cuenta eliminada (mismo correo, mismo historial y mismo Gestor).\n\nEl master reactiva cualquiera; un dueño/tester solo las que dio de baja en su negocio\nactivo. Reactivar vuelve a ocupar cupo de colaboradores del plan.",
+        "operationId": "reactivate_collaborator_endpoint_api_v1_admin_collaborators__admin_id__reactivate_post",
         "parameters": [
           {
             "name": "admin_id",
@@ -33252,6 +33422,150 @@
         }
       }
     },
+    "/api/v1/admin/datos-cliente/politica": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · datos del cliente"
+        ],
+        "summary": "Get Politica Deprecada",
+        "description": "Deprecado: la política es de cada agente. Devuelve la del especialista por defecto.",
+        "operationId": "get_politica_deprecada_api_v1_admin_datos_cliente_politica_get",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoliticaDatosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · datos del cliente"
+        ],
+        "summary": "Save Politica Deprecado",
+        "description": "Deprecado: aplica el cuerpo al especialista por defecto, ignorando lo que ese agente no tenga.",
+        "operationId": "save_politica_deprecado_api_v1_admin_datos_cliente_politica_put",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PoliticaDatosUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoliticaDatosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/datos-cliente/aviso": {
       "get": {
         "tags": [
@@ -33376,6 +33690,167 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AvisoDatosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/datos-cliente": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · datos del cliente"
+        ],
+        "summary": "Get Datos Cliente",
+        "operationId": "get_datos_cliente_api_v1_admin_agents__agent_id__datos_cliente_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgenteDatosOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · datos del cliente"
+        ],
+        "summary": "Save Datos Cliente",
+        "description": "Reemplaza los ajustes de las operaciones del agente. Rechaza acciones o datos que ese agente\nno tiene y los pisos técnicos; guarda solo lo que difiere del valor del módulo.",
+        "operationId": "save_datos_cliente_api_v1_admin_agents__agent_id__datos_cliente_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgenteDatosUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgenteDatosOut"
                 }
               }
             }
@@ -44105,311 +44580,6 @@
           }
         }
       }
-    },
-    "/api/v1/admin/agents/{agent_id}/datos-cliente": {
-      "get": {
-        "tags": [
-          "api",
-          "admin · datos del cliente"
-        ],
-        "summary": "Get Datos Cliente",
-        "operationId": "get_datos_cliente_api_v1_admin_agents__agent_id__datos_cliente_get",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgenteDatosOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "api",
-          "admin · datos del cliente"
-        ],
-        "summary": "Save Datos Cliente",
-        "description": "Reemplaza los ajustes de las operaciones del agente. Rechaza acciones o datos que ese agente\nno tiene y los pisos técnicos; guarda solo lo que difiere del valor del módulo.",
-        "operationId": "save_datos_cliente_api_v1_admin_agents__agent_id__datos_cliente_put",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgenteDatosUpdate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgenteDatosOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/datos-cliente/politica": {
-      "get": {
-        "tags": [
-          "api",
-          "admin · datos del cliente"
-        ],
-        "summary": "Get Politica Deprecada",
-        "description": "Deprecado: la política es de cada agente. Devuelve la del especialista por defecto.",
-        "operationId": "get_politica_deprecada_api_v1_admin_datos_cliente_politica_get",
-        "deprecated": true,
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PoliticaDatosOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "api",
-          "admin · datos del cliente"
-        ],
-        "summary": "Save Politica Deprecado",
-        "description": "Deprecado: aplica el cuerpo al especialista por defecto, ignorando lo que ese agente no tenga.",
-        "operationId": "save_politica_deprecado_api_v1_admin_datos_cliente_politica_put",
-        "deprecated": true,
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PoliticaDatosUpdate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PoliticaDatosOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -47356,6 +47526,124 @@
           "created_at"
         ],
         "title": "AgentVersionSummary"
+      },
+      "AgenteDatosOut": {
+        "properties": {
+          "agente_id": {
+            "type": "string",
+            "title": "Agente Id"
+          },
+          "niveles": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "requerido",
+                "recomendado",
+                "no_pedir"
+              ]
+            },
+            "type": "array",
+            "title": "Niveles"
+          },
+          "acciones": {
+            "items": {
+              "$ref": "#/components/schemas/AccionPoliticaOut"
+            },
+            "type": "array",
+            "title": "Acciones"
+          },
+          "procedimientos": {
+            "items": {
+              "$ref": "#/components/schemas/ProcedimientoDatosOut"
+            },
+            "type": "array",
+            "title": "Procedimientos",
+            "default": []
+          },
+          "herramientas_del_agente": {
+            "type": "boolean",
+            "title": "Herramientas Del Agente",
+            "default": false
+          },
+          "metodos_entrega": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "domicilio",
+                "recoger_en_tienda"
+              ]
+            },
+            "type": "array",
+            "title": "Metodos Entrega"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agente_id",
+          "niveles",
+          "acciones"
+        ],
+        "title": "AgenteDatosOut"
+      },
+      "AgenteDatosUpdate": {
+        "properties": {
+          "politica": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "type": "string",
+                    "enum": [
+                      "requerido",
+                      "recomendado",
+                      "no_pedir"
+                    ]
+                  },
+                  "type": "object"
+                },
+                "type": "object",
+                "maxProperties": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Politica"
+          },
+          "herramientas_del_agente": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Herramientas Del Agente"
+          },
+          "metodos_entrega": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "domicilio",
+                    "recoger_en_tienda"
+                  ]
+                },
+                "type": "array",
+                "maxItems": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metodos Entrega"
+          }
+        },
+        "type": "object",
+        "title": "AgenteDatosUpdate",
+        "description": "`{accion_id: {clave: nivel}}`. Lo que no viene para una acción vuelve al valor del módulo.\nSin `politica` (None) no se tocan los ajustes: sirve para cambiar solo la bandera."
       },
       "AgenteResumen": {
         "properties": {
@@ -51598,6 +51886,21 @@
             "type": "array",
             "title": "Pack Profiles",
             "default": []
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted",
+            "default": false
+          },
+          "can_delete": {
+            "type": "boolean",
+            "title": "Can Delete",
+            "default": false
+          },
+          "can_reactivate": {
+            "type": "boolean",
+            "title": "Can Reactivate",
+            "default": false
           }
         },
         "type": "object",
@@ -54873,6 +55176,17 @@
         ],
         "title": "DejarListoOut"
       },
+      "DeleteRequest": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "DeleteRequest"
+      },
       "Dependencia": {
         "properties": {
           "clave": {
@@ -56529,6 +56843,11 @@
           "existe": {
             "type": "boolean",
             "title": "Existe"
+          },
+          "eliminada": {
+            "type": "boolean",
+            "title": "Eliminada",
+            "default": false
           }
         },
         "type": "object",
@@ -67897,6 +68216,82 @@
         ],
         "title": "PluginSummary"
       },
+      "PoliticaDatosOut": {
+        "properties": {
+          "niveles": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "requerido",
+                "recomendado",
+                "no_pedir"
+              ]
+            },
+            "type": "array",
+            "title": "Niveles"
+          },
+          "acciones": {
+            "items": {
+              "$ref": "#/components/schemas/AccionPoliticaOut"
+            },
+            "type": "array",
+            "title": "Acciones"
+          },
+          "herramientas_del_agente": {
+            "type": "boolean",
+            "title": "Herramientas Del Agente",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "niveles",
+          "acciones"
+        ],
+        "title": "PoliticaDatosOut",
+        "description": "Contrato legado de la política global; se conserva un release, deprecado."
+      },
+      "PoliticaDatosUpdate": {
+        "properties": {
+          "politica": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "type": "string",
+                    "enum": [
+                      "requerido",
+                      "recomendado",
+                      "no_pedir"
+                    ]
+                  },
+                  "type": "object"
+                },
+                "type": "object",
+                "maxProperties": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Politica"
+          },
+          "herramientas_del_agente": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Herramientas Del Agente"
+          }
+        },
+        "type": "object",
+        "title": "PoliticaDatosUpdate",
+        "description": "Cuerpo legado. Se aplica al especialista por defecto del negocio; lo que no tenga se ignora."
+      },
       "Portfolio": {
         "properties": {
           "id": {
@@ -68376,6 +68771,77 @@
           "recorrido"
         ],
         "title": "PrimerosPasosResponse"
+      },
+      "ProcedimientoDatoOut": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "etiqueta": {
+            "type": "string",
+            "title": "Etiqueta"
+          },
+          "obligatorio": {
+            "type": "boolean",
+            "title": "Obligatorio",
+            "default": true
+          },
+          "condicion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Condicion"
+          },
+          "tipo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tipo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "etiqueta"
+        ],
+        "title": "ProcedimientoDatoOut"
+      },
+      "ProcedimientoDatosOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "datos": {
+            "items": {
+              "$ref": "#/components/schemas/ProcedimientoDatoOut"
+            },
+            "type": "array",
+            "title": "Datos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "titulo",
+          "datos"
+        ],
+        "title": "ProcedimientoDatosOut"
       },
       "ProcedureCompletion": {
         "properties": {
@@ -79907,271 +80373,6 @@
           "fecha_hora"
         ],
         "title": "Payment"
-      },
-      "AgenteDatosOut": {
-        "properties": {
-          "agente_id": {
-            "type": "string",
-            "title": "Agente Id"
-          },
-          "niveles": {
-            "items": {
-              "type": "string",
-              "enum": [
-                "requerido",
-                "recomendado",
-                "no_pedir"
-              ]
-            },
-            "type": "array",
-            "title": "Niveles"
-          },
-          "acciones": {
-            "items": {
-              "$ref": "#/components/schemas/AccionPoliticaOut"
-            },
-            "type": "array",
-            "title": "Acciones"
-          },
-          "procedimientos": {
-            "items": {
-              "$ref": "#/components/schemas/ProcedimientoDatosOut"
-            },
-            "type": "array",
-            "title": "Procedimientos",
-            "default": []
-          },
-          "herramientas_del_agente": {
-            "type": "boolean",
-            "title": "Herramientas Del Agente",
-            "default": false
-          },
-          "metodos_entrega": {
-            "items": {
-              "type": "string",
-              "enum": [
-                "domicilio",
-                "recoger_en_tienda"
-              ]
-            },
-            "type": "array",
-            "title": "Metodos Entrega"
-          }
-        },
-        "type": "object",
-        "required": [
-          "agente_id",
-          "niveles",
-          "acciones"
-        ],
-        "title": "AgenteDatosOut"
-      },
-      "AgenteDatosUpdate": {
-        "properties": {
-          "politica": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "additionalProperties": {
-                    "type": "string",
-                    "enum": [
-                      "requerido",
-                      "recomendado",
-                      "no_pedir"
-                    ]
-                  },
-                  "type": "object"
-                },
-                "type": "object",
-                "maxProperties": 50
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Politica"
-          },
-          "herramientas_del_agente": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Herramientas Del Agente"
-          },
-          "metodos_entrega": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string",
-                  "enum": [
-                    "domicilio",
-                    "recoger_en_tienda"
-                  ]
-                },
-                "type": "array",
-                "maxItems": 2
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metodos Entrega"
-          }
-        },
-        "type": "object",
-        "title": "AgenteDatosUpdate",
-        "description": "`{accion_id: {clave: nivel}}`. Lo que no viene para una acción vuelve al valor del módulo.\nSin `politica` (None) no se tocan los ajustes: sirve para cambiar solo la bandera."
-      },
-      "ProcedimientoDatoOut": {
-        "properties": {
-          "clave": {
-            "type": "string",
-            "title": "Clave"
-          },
-          "etiqueta": {
-            "type": "string",
-            "title": "Etiqueta"
-          },
-          "obligatorio": {
-            "type": "boolean",
-            "title": "Obligatorio",
-            "default": true
-          },
-          "condicion": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Condicion"
-          },
-          "tipo": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tipo"
-          }
-        },
-        "type": "object",
-        "required": [
-          "clave",
-          "etiqueta"
-        ],
-        "title": "ProcedimientoDatoOut"
-      },
-      "ProcedimientoDatosOut": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "titulo": {
-            "type": "string",
-            "title": "Titulo"
-          },
-          "datos": {
-            "items": {
-              "$ref": "#/components/schemas/ProcedimientoDatoOut"
-            },
-            "type": "array",
-            "title": "Datos"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "titulo",
-          "datos"
-        ],
-        "title": "ProcedimientoDatosOut"
-      },
-      "PoliticaDatosOut": {
-        "properties": {
-          "niveles": {
-            "items": {
-              "type": "string",
-              "enum": [
-                "requerido",
-                "recomendado",
-                "no_pedir"
-              ]
-            },
-            "type": "array",
-            "title": "Niveles"
-          },
-          "acciones": {
-            "items": {
-              "$ref": "#/components/schemas/AccionPoliticaOut"
-            },
-            "type": "array",
-            "title": "Acciones"
-          },
-          "herramientas_del_agente": {
-            "type": "boolean",
-            "title": "Herramientas Del Agente",
-            "default": false
-          }
-        },
-        "type": "object",
-        "required": [
-          "niveles",
-          "acciones"
-        ],
-        "title": "PoliticaDatosOut",
-        "description": "Contrato legado de la política global; se conserva un release, deprecado."
-      },
-      "PoliticaDatosUpdate": {
-        "properties": {
-          "politica": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "additionalProperties": {
-                    "type": "string",
-                    "enum": [
-                      "requerido",
-                      "recomendado",
-                      "no_pedir"
-                    ]
-                  },
-                  "type": "object"
-                },
-                "type": "object",
-                "maxProperties": 50
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Politica"
-          },
-          "herramientas_del_agente": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Herramientas Del Agente"
-          }
-        },
-        "type": "object",
-        "title": "PoliticaDatosUpdate",
-        "description": "Cuerpo legado. Se aplica al especialista por defecto del negocio; lo que no tenga se ignora."
       }
     }
   }

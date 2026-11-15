@@ -68,9 +68,15 @@ async def _resolve_admin(email: str | None) -> Admin | None:
         return None
     email = email.strip().lower()
     async with get_session() as session:
-        return (
+        admin = (
             await session.execute(select(Admin).where(Admin.email == email))
         ).scalar_one_or_none()
+    if admin is not None and admin.deleted_at is not None:
+        # Baja lógica de equipo (ADR-0198): se reactiva la misma cuenta, no se reasigna.
+        raise ValueError(
+            "la cuenta de ese correo fue eliminada: reactívala antes de dar de alta el negocio"
+        )
+    return admin
 
 
 async def _phone_claimed_by_other(phone_number_id: str, tenant_id: uuid.UUID | None) -> bool:

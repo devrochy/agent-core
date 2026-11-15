@@ -59,6 +59,11 @@ async def _invitado_valido(admin_id: uuid.UUID) -> str | None:
         target = await session.get(Admin, admin_id)
         if target is None:
             return "usuario no encontrado"
+        if target.deleted_at is not None:
+            # Baja lógica (ADR-0198): se reactiva la misma cuenta, no se invita a una eliminada.
+            return "la cuenta fue eliminada: reactívala desde Equipo"
+        if not target.active:
+            return "la cuenta está desactivada"
         if target.role == "master":
             return "no se puede invitar a un master de plataforma"
         if target.role == "tester":

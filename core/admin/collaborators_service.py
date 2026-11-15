@@ -11,6 +11,7 @@ import asyncio
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import delete, func, select, update
@@ -28,7 +29,16 @@ from core.admin.permissions import (
     seccion_padre,
 )
 from core.admin.roles import ROLES_DE_PLATAFORMA, es_tester
-from core.db.models import Admin, AdminPermission, Tenant, TenantInvitation, TenantUser
+from core.db.models import (
+    AccountDevice,
+    Admin,
+    AdminPermission,
+    PasswordResetToken,
+    PushToken,
+    Tenant,
+    TenantInvitation,
+    TenantUser,
+)
 from core.db.session import get_session
 from core.mcp.types import PackProfile
 from core.plugin_manager import plugin_manager
@@ -38,6 +48,12 @@ from core.shared.tenant import get_current_tenant_id, tenant_scope
 log = get_logger(__name__)
 
 VALID_ROLES = ("master", "owner", "colaborador")
+
+CUENTA_ELIMINADA = "esa cuenta fue eliminada: reactívala desde Equipo"
+
+
+def _ahora() -> datetime:
+    return datetime.now(UTC)
 
 
 @dataclass(slots=True)
@@ -142,6 +158,15 @@ async def target_allowed_for_owner(
     return global_perms == 0 and other_links == 0
 
 
+async def _error_si_eliminada(admin_id: uuid.UUID) -> str | None:
+    """Bloquea cualquier gestión sobre una cuenta dada de baja (ADR-0198)."""
+    async with get_session() as session:
+        target = await session.get(Admin, admin_id)
+    if target is None:
+        return "admin no encontrado"
+    return CUENTA_ELIMINADA if target.deleted_at is not None else None
+
+
 async def apply_pack_roles(
     values: list[str], tenant_id: uuid.UUID | None, admin_id: uuid.UUID | None
 ) -> None:
@@ -206,6 +231,13 @@ async def create_collaborator(
             await session.execute(select(Admin).where(Admin.email == email))
         ).scalar_one_or_none()
         existing_id = existing.id if existing is not None else None
+        existing_eliminada = existing is not None and existing.deleted_at is not None
+
+    if existing_eliminada:
+        # Baja lógica (ADR-0198): el correo sigue siendo la identidad y el ancla del historial.
+        # No se reasigna solo: reactivar la misma cuenta es una acción explícita del master
+        # (o del dueño que la dio de baja), para que nadie herede historial ajeno.
+        return CUENTA_ELIMINADA
 
     if existing_id is not None:
         # Identidad ya registrada: no se duplica ni se toca su contraseña; se
@@ -268,6 +300,8 @@ async def reset_password(*, actor: Admin, admin_id: uuid.UUID, password: str) ->
         admin = await session.get(Admin, admin_id)
         if admin is None:
             return "admin no encontrado"
+        if admin.deleted_at is not None:
+            return CUENTA_ELIMINADA
         admin.password_hash = hash_password(password)
         # Cambiar la contraseña desde Colaboradores cierra las sesiones abiertas de esa
         # cuenta (panel y app): quien tenía el token viejo vuelve al login.
@@ -300,6 +334,8 @@ async def grant_permission(
         return "sección inválida"
     if access not in VALID_ACCESS:
         return "acceso inválido"
+    if (error := await _error_si_eliminada(admin_id)) is not None:
+        return error
 
     if is_master:
         tenant_id = await resolve_tenant_id(tenant_slug) if tenant_slug else None
@@ -470,6 +506,8 @@ async def set_permissions(
             return f"sección inválida: {section}"
         if access not in VALID_ACCESS:
             return f"acceso inválido: {access}"
+    if (error := await _error_si_eliminada(admin_id)) is not None:
+        return error
 
     if is_master:
         tenant_id = await resolve_tenant_id(tenant_slug) if tenant_slug else None
@@ -528,6 +566,8 @@ async def link_tenant(
     tenant_id = await resolve_tenant_id(tenant_slug)
     if tenant_id is None:
         return "tenant no encontrado"
+    if (error := await _error_si_eliminada(admin_id)) is not None:
+        return error
     async with get_session() as session:
         row = (
             await session.execute(
@@ -617,6 +657,298 @@ async def unlink_tenant(*, actor: Admin, admin_id: uuid.UUID, tenant_slug: str) 
     return None
 
 
+async def delete_collaborator(
+    *,
+    actor: Admin,
+    admin_id: uuid.UUID,
+    current_tenant_id: uuid.UUID | None = None,
+    reason: str = "",
+) -> str | None:
+    """Baja lógica de una cuenta de equipo (ADR-0198).
+
+    Borra el acceso, no la identidad: la fila `admins` conserva correo, usuario y nombre porque
+    el historial de cartera guarda el correo como texto (`registrado_por`) y la auditoría
+    necesita la identidad real. Se borran vínculos y permisos, se revocan sesiones e
+    invitaciones, y por negocio se dan de baja equipos y tokens de push. Los packs reciben
+    `on_collaborator_removed` para dar de baja su perfil (p. ej. el Gestor de Cobranza) sin
+    borrar sus registros ni sus carteras.
+    """
+    is_master = actor.role == "master"
+    if actor.id == admin_id:
+        return "no podés eliminar tu propia cuenta"
+    if not is_master and not await target_allowed_for_owner(
+        admin_id, current_tenant_id, actor=actor
+    ):
+        return "no podés eliminar esa cuenta"
+
+    async with get_session() as session:
+        target = await session.get(Admin, admin_id, with_for_update=True)
+        if target is None:
+            return "admin no encontrado"
+        if target.deleted_at is not None:
+            return CUENTA_ELIMINADA
+        if target.role in ROLES_DE_PLATAFORMA:
+            return "las cuentas de plataforma se desactivan, no se eliminan"
+
+        links = (
+            (
+                await session.execute(
+                    select(TenantUser)
+                    .where(TenantUser.admin_id == admin_id)
+                    .with_for_update()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        # Nadie deja un negocio sin propietario (misma guarda que `unlink_tenant`).
+        for link in links:
+            if link.role != "owner":
+                continue
+            otros = (
+                (
+                    await session.execute(
+                        select(TenantUser.id)
+                        .where(
+                            TenantUser.tenant_id == link.tenant_id,
+                            TenantUser.role == "owner",
+                            TenantUser.admin_id != admin_id,
+                        )
+                        .with_for_update()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not otros:
+                return "ese negocio quedaría sin propietario: vinculá otro antes"
+
+        tenant_ids = [link.tenant_id for link in links]
+        email_original = target.email
+        motivo = (reason or "").strip()[:200] or None
+        target.deleted_at = _ahora()
+        target.deleted_by = actor.id
+        # Una baja de dueño/tester puede revertirla ese negocio; la del master, solo el master.
+        target.deleted_from_tenant_id = None if is_master else current_tenant_id
+        target.deleted_links = [
+            {"tenant_id": str(link.tenant_id), "role": link.role} for link in links
+        ]
+        target.deletion_reason = motivo
+        target.active = False
+        await revocar_sesiones(session, admin_id)
+        await session.execute(
+            update(PasswordResetToken)
+            .where(
+                PasswordResetToken.admin_id == admin_id,
+                PasswordResetToken.used_at.is_(None),
+            )
+            .values(used_at=func.now())
+        )
+        await session.execute(delete(TenantUser).where(TenantUser.admin_id == admin_id))
+        await session.execute(
+            delete(AdminPermission).where(AdminPermission.admin_id == admin_id)
+        )
+        await session.execute(
+            update(TenantInvitation)
+            .where(
+                TenantInvitation.admin_id == admin_id,
+                TenantInvitation.estado == "pendiente",
+            )
+            .values(estado="revocada", token_nonce=None, responded_at=func.now())
+        )
+
+    # Fuera de la transacción: equipos y tokens de push viven bajo RLS por negocio.
+    for tenant_id in tenant_ids:
+        equipos: list[tuple[uuid.UUID, str | None]] = []
+        try:
+            async with tenant_scope(tenant_id), get_session() as session:
+                ahora = _ahora()
+                await session.execute(
+                    update(PushToken)
+                    .where(PushToken.admin_id == admin_id, PushToken.deleted_at.is_(None))
+                    .values(deleted_at=ahora)
+                )
+                filas = (
+                    (
+                        await session.execute(
+                            select(AccountDevice).where(
+                                AccountDevice.admin_id == admin_id,
+                                AccountDevice.deleted_at.is_(None),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                for fila in filas:
+                    fila.deleted_at = ahora
+                    equipos.append((fila.id, fila.device_id))
+        except Exception:
+            log.warning(
+                "baja_cuenta_equipos_fallo",
+                tenant_id=str(tenant_id),
+                admin_id=str(admin_id),
+                exc_info=True,
+            )
+            continue
+        try:
+            from core.access.devices import invalidar_cuenta
+
+            await invalidar_cuenta(tenant_id, admin_id, equipos)
+        except Exception:
+            log.warning(
+                "baja_cuenta_invalidar_fallo",
+                tenant_id=str(tenant_id),
+                admin_id=str(admin_id),
+                exc_info=True,
+            )
+
+    # El pack da de baja su perfil (Gestor de Cobranza) sin tocar sus registros ni carteras.
+    for tenant_id in tenant_ids:
+        for module in plugin_manager.list_modules():
+            try:
+                await module.on_collaborator_removed(tenant_id, admin_id)
+            except Exception:
+                log.warning(
+                    "on_collaborator_removed_failed",
+                    pack=module.id,
+                    tenant_id=str(tenant_id),
+                    exc_info=True,
+                )
+
+    audit(
+        "delete_collaborator",
+        actor.email,
+        email_original,
+        admin_id=str(admin_id),
+        tenants=[str(t) for t in tenant_ids],
+        reason=motivo,
+    )
+    return None
+
+
+async def reactivate_collaborator(
+    *,
+    actor: Admin,
+    admin_id: uuid.UUID,
+    current_tenant_id: uuid.UUID | None = None,
+) -> str | None:
+    """Reactiva una cuenta eliminada (ADR-0198): la MISMA identidad, su correo y su historial.
+
+    Restaura los vínculos que tenía al darse de baja (`deleted_links`): la misma cuenta vuelve
+    a sus negocios con el mismo rol y el pack revive su perfil (p. ej. el `Gestor`), conservando
+    carteras e historial. El master reactiva cualquiera; un dueño/tester solo las que dio de baja
+    en su negocio activo y solo ese vínculo. Reactivar vuelve a ocupar cupo del plan.
+    """
+    is_master = actor.role == "master"
+
+    async with get_session() as session:
+        target = await session.get(Admin, admin_id, with_for_update=True)
+        if target is None:
+            return "admin no encontrado"
+        if target.deleted_at is None:
+            return "esa cuenta no está eliminada"
+        if target.role in ROLES_DE_PLATAFORMA:
+            return "las cuentas de plataforma no se reactivan desde Equipo"
+        if not is_master and (
+            current_tenant_id is None or target.deleted_from_tenant_id != current_tenant_id
+        ):
+            return "no podés reactivar esa cuenta"
+        previos = list(target.deleted_links or [])
+        email = target.email
+
+    restaurables: list[tuple[uuid.UUID, str]] = []
+    for item in previos:
+        try:
+            tid = uuid.UUID(str(item.get("tenant_id")))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        rol = str(item.get("role") or "colaborador")
+        if rol not in ("owner", "colaborador"):
+            continue
+        if not is_master and tid != current_tenant_id:
+            continue
+        restaurables.append((tid, rol))
+
+    if restaurables:
+        async with get_session() as session:
+            existentes = set(
+                (
+                    await session.execute(
+                        select(Tenant.id).where(
+                            Tenant.id.in_([tid for tid, _rol in restaurables])
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        restaurables = [(tid, rol) for tid, rol in restaurables if tid in existentes]
+
+    # Reactivar vuelve a ocupar cupo en cada negocio donde vuelve como colaborador.
+    for tenant_id, rol in restaurables:
+        if rol != "colaborador":
+            continue
+        async with scope_del_negocio(tenant_id), get_session() as medida:
+            from core.billing.enforcement import enforce_growth
+
+            await enforce_growth(tenant_id, "colaboradores", session=medida)
+
+    async with get_session() as session:
+        target = await session.get(Admin, admin_id, with_for_update=True)
+        if target is None:
+            return "admin no encontrado"
+        target.deleted_at = None
+        target.deleted_by = None
+        target.deleted_from_tenant_id = None
+        target.deleted_links = None
+        target.deletion_reason = None
+        target.active = True
+        for tenant_id, rol in restaurables:
+            link = (
+                await session.execute(
+                    select(TenantUser).where(
+                        TenantUser.admin_id == admin_id,
+                        TenantUser.tenant_id == tenant_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if link is None:
+                session.add(TenantUser(tenant_id=tenant_id, admin_id=admin_id, role=rol))
+
+    for tenant_id, _rol in restaurables:
+        for module in plugin_manager.list_modules():
+            try:
+                await module.on_collaborator_restored(tenant_id, admin_id)
+            except Exception:
+                log.warning(
+                    "on_collaborator_restored_failed",
+                    pack=module.id,
+                    tenant_id=str(tenant_id),
+                    exc_info=True,
+                )
+        try:
+            from core.access.sesion import invalidar
+
+            await invalidar(tenant_id, admin_id)
+        except Exception:
+            log.warning(
+                "reactivar_cuenta_invalidar_fallo",
+                tenant_id=str(tenant_id),
+                admin_id=str(admin_id),
+                exc_info=True,
+            )
+
+    audit(
+        "reactivate_collaborator",
+        actor.email,
+        email,
+        admin_id=str(admin_id),
+        tenants=[str(t) for t, _ in restaurables],
+    )
+    return None
+
+
 async def toggle_active(
     *, actor: Admin, admin_id: uuid.UUID, current_tenant_id: uuid.UUID | None = None
 ) -> str | None:
@@ -631,6 +963,8 @@ async def toggle_active(
         admin = await session.get(Admin, admin_id)
         if admin is None:
             return "admin no encontrado"
+        if admin.deleted_at is not None:
+            return CUENTA_ELIMINADA
         reactivar = not admin.active
         negocios = (
             list(

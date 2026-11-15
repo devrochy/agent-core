@@ -294,6 +294,9 @@ async def _save(entity: str, record_id: str | None, values: dict[str, Any]) -> N
                     return
                 existente = (await session.execute(select(Admin).where(Admin.email == correo))).scalar_one_or_none()
                 if existente is not None:
+                    if existente.deleted_at is not None:
+                        # Baja lógica de equipo (ADR-0198): no se invita a una cuenta eliminada.
+                        return
                     # Identidad existente: se invita al negocio (ADR-0081), sin duplicar.
                     pendiente = (
                         await session.execute(
