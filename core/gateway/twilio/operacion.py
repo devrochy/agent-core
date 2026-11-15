@@ -28,7 +28,7 @@ from sqlalchemy import select, text
 from core.db.models import ChannelConnection, TwilioConnection, utcnow
 from core.db.session import get_session
 from core.gateway.channels.base import ProviderError
-from core.gateway.twilio import alta
+from core.gateway.twilio import alta, sandbox
 from core.shared.crypto import get_secret_box
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
@@ -155,13 +155,15 @@ async def revisar(
     c = await _cargar(tenant_id, connection_id)
     if c is None:
         return None
+    if c.fila.modo == sandbox.MODO_SANDBOX:
+        return await _revisar_sandbox(tenant_id, connection_id, c, transport)
     motivo = ""
     sender_status = display_name = ""
     codigo: int | None = None
     try:
         client = _cliente_de(c, transport)
         cuenta = await client.get(f"{client.account_url}.json", op="accounts.get")
-        sender = await get_sender(client, c.fila.sender_sid)
+        sender = await get_sender(client, c.fila.sender_sid or "")
     except alta.AltaError:
         nuevo, motivo = "revoked", "credenciales con formato inválido"
     except ProviderError as exc:
@@ -217,6 +219,78 @@ async def revisar(
     return await alta.obtener(tenant_id, connection_id)
 
 
+async def _revisar_sandbox(
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    c: _Conexion,
+    transport: httpx.AsyncBaseTransport | None,
+) -> alta.ConexionTwilio | None:
+    """Salud de un sandbox (HU-CONN-20): no hay sender, así que solo la cuenta y la confirmación del webhook. Nunca
+    llama a la Senders API. Con el gate apagado la conexión está inerte: no se consulta a Twilio."""
+    if sandbox.inerte(c.fila.modo):
+        return await alta.obtener(tenant_id, connection_id)
+    motivo = ""
+    codigo: int | None = None
+    try:
+        client = _cliente_de(c, transport)
+        cuenta = await client.get(f"{client.account_url}.json", op="accounts.get")
+    except alta.AltaError:
+        nuevo, motivo = "revoked", "credenciales con formato inválido"
+    except ProviderError as exc:
+        codigo = exc.code
+        if exc.category == "AUTH":
+            nuevo, motivo = (
+                "revoked",
+                f"Twilio rechazó las credenciales ({exc.code or exc.http_status})",
+            )
+        elif exc.category in ("TRANSIENT", "AMBIGUOUS", "RATE_LIMIT", "QUOTA"):
+            await _guardar_estado(tenant_id, connection_id, status=None)
+            return await alta.obtener(tenant_id, connection_id)
+        else:
+            nuevo, motivo = "error", f"Twilio respondió {exc.code or exc.http_status}"
+    else:
+        if str(cuenta.get("status") or "").lower() != "active":
+            nuevo, motivo = "revoked", "la cuenta de Twilio no está activa"
+        elif c.fila.webhook_confirmado_at is None:
+            # Las URL se pegan a mano en la consola: hasta el primer mensaje firmado no hay cómo saber si quedaron.
+            nuevo = "pending"
+        else:
+            nuevo = "connected"
+    anterior = await _guardar_estado(
+        tenant_id,
+        connection_id,
+        status=nuevo,
+        last_error_code=codigo,
+        desde=c.fila.updated_at,
+    )
+    if anterior is None:
+        return await alta.obtener(tenant_id, connection_id)
+    if anterior != nuevo:
+        log.info(
+            "twilio_sender_status_changed",
+            tenant_id=str(tenant_id),
+            connection_id=str(connection_id),
+            antes=anterior,
+            ahora=nuevo,
+            modo=sandbox.MODO_SANDBOX,
+        )
+    await _alertar(tenant_id, connection_id, anterior, nuevo, motivo)
+    return await alta.obtener(tenant_id, connection_id)
+
+
+def _error_webhook_manual(c: _Conexion) -> alta.AltaError:
+    return alta.AltaError(
+        409,
+        "sandbox_webhook_manual",
+        "Los webhooks del Sandbox solo se configuran en la consola de Twilio (Sandbox settings). Pega ahí estas dos "
+        "direcciones.",
+        {
+            "webhook_inbound_url": c.fila.webhook_inbound_url,
+            "webhook_status_url": c.fila.webhook_status_url,
+        },
+    )
+
+
 async def revisar_todas() -> int:
     """Cron: revisa todas las conexiones vivas y activas. Una que falla no corta las demás. Devuelve cuántas."""
     async with get_session() as session:
@@ -247,6 +321,8 @@ async def reregistrar_webhooks(
     c = await _cargar(tenant_id, connection_id)
     if c is None:
         return None
+    if c.fila.modo == sandbox.MODO_SANDBOX or not c.fila.sender_sid:
+        raise _error_webhook_manual(c)
     status, codigo, sender_status, display_name = await alta._registrar_webhooks(
         _cliente_de(c, transport),
         c.fila.sender_sid,
@@ -280,7 +356,7 @@ async def enviar_prueba(
     from core.memory.working import get_redis
 
     c = await _cargar(tenant_id, connection_id)
-    if c is None:
+    if c is None or sandbox.inerte(c.fila.modo):
         raise alta.AltaError(404, "not_found", "Conexión no encontrada.")
     if not c.connection.active:
         raise alta.AltaError(409, "conexion_pausada", "La conexión está pausada.")
@@ -311,6 +387,8 @@ async def enviar_prueba(
     try:
         sid = await TwilioOutbound(transport).send_text(creds, destino, _TEXTO_DE_PRUEBA)
     except ProviderError as exc:
+        if exc.code == 63015:
+            raise _no_unido(c) from None
         if exc.category == "WINDOW":
             raise alta.AltaError(
                 409,
@@ -327,6 +405,20 @@ async def enviar_prueba(
         input_data={"connection_id": str(connection_id), "to_last4": destino[-4:]},
     )
     return sid
+
+
+def _no_unido(c: _Conexion) -> alta.AltaError:
+    """63015: el destinatario no se unió al sandbox de la cuenta, o su unión de 3 días venció."""
+    codigo = c.fila.sandbox_join_code
+    union = f"join {codigo}" if codigo else "join <código de tu sandbox>"
+    numero = c.fila.sender_e164
+    return alta.AltaError(
+        422,
+        "participante_no_unido",
+        f"Ese número no está unido al Sandbox de Twilio. Desde ese teléfono, envía «{union}» por WhatsApp al "
+        f"{numero} y vuelve a probar. La unión vence a los 3 días.",
+        {"join": union, "sandbox_e164": numero},
+    )
 
 
 async def rotar_credenciales(
@@ -348,11 +440,27 @@ async def rotar_credenciales(
         raise alta.AltaError(
             409, "conexion_pausada", "Reanuda la conexión antes de cambiar sus credenciales."
         )
+    if c.fila.modo == sandbox.MODO_SANDBOX:
+        if account_sid.strip() != c.fila.account_sid:
+            # El sandbox es de la cuenta: otra cuenta es otro sandbox (su propia conexión y sus propias URL).
+            raise alta.AltaError(
+                422,
+                "sandbox_otra_cuenta",
+                "Este sandbox es de otra cuenta de Twilio. Para usar otra cuenta, conecta su sandbox aparte.",
+            )
+        # Revalida la cuenta y guarda el token nuevo en la misma conexión (mismo `public_id`, mismo código).
+        return await alta.conectar_sandbox(
+            tenant_id,
+            account_sid=account_sid,
+            auth_token=auth_token,
+            label=c.connection.label,
+            transport=transport,
+        )
     return await alta.conectar(
         tenant_id,
         account_sid=account_sid,
         auth_token=auth_token,
-        sender_sid=c.fila.sender_sid,
+        sender_sid=c.fila.sender_sid or "",
         label=c.connection.label,
         # Si alguien movió los webhooks a otra integración, se pregunta igual que en el alta.
         confirm_overwrite_webhook=confirm_overwrite_webhook,
@@ -379,16 +487,16 @@ async def desconectar(
     if c is None:
         raise alta.AltaError(404, "not_found", "Conexión no encontrada.")
     restaurados = False
-    if restaurar_webhooks:
+    # El sandbox no tiene webhooks que restaurar por API: sus URL las borra el dueño en la consola de Twilio.
+    if restaurar_webhooks and c.fila.modo != sandbox.MODO_SANDBOX and c.fila.sender_sid:
         try:
             client = _cliente_de(c, transport)
-            sender = await get_sender(client, c.fila.sender_sid)
+            sender_sid = c.fila.sender_sid
+            sender = await get_sender(client, sender_sid)
             if alta.apunta_a_nosotros(
                 sender, c.fila.webhook_inbound_url, c.fila.webhook_status_url
             ):
-                await restore_webhooks(
-                    client, c.fila.sender_sid, dict(c.fila.previous_webhook or {})
-                )
+                await restore_webhooks(client, sender_sid, dict(c.fila.previous_webhook or {}))
                 restaurados = True
         except (ProviderError, alta.AltaError):
             log.warning(

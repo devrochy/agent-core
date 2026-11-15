@@ -31,10 +31,11 @@ from typing import Any
 from agentcore_channel_twilio.adapters import TwilioInbound, form_params
 from agentcore_channel_twilio.status import parse_status
 from fastapi import APIRouter, Request, Response
-from sqlalchemy import select, text
+from sqlalchemy import case, func, select, text, update
 
 from core.db.models import ChannelConnection, TwilioConnection
 from core.db.session import get_session
+from core.gateway.twilio import sandbox
 from core.gateway.twilio.alta import registrada
 from core.gateway.webhook_flatten import FlattenedEvent
 from core.shared.crypto import get_secret_box
@@ -121,6 +122,34 @@ async def _conexion(
     return (fila[0], fila[1]) if fila is not None else None
 
 
+async def _confirmar_webhook(tenant_id: uuid.UUID, fila_id: uuid.UUID, kind: str) -> None:
+    """Primer entrante o estado con firma válida de un sandbox: las URL pegadas en la consola de Twilio quedaron bien
+    (HU-CONN-20). Un solo UPDATE condicionado, así que dos webhooks simultáneos confirman una vez; pasa a `connected`
+    solo desde `pending` (una conexión `revoked` o `error` la decide la salud)."""
+    async with get_session() as session:
+        confirmada = (
+            await session.execute(
+                update(TwilioConnection)
+                .where(
+                    TwilioConnection.tenant_id == tenant_id,
+                    TwilioConnection.id == fila_id,
+                    TwilioConnection.deleted_at.is_(None),
+                    TwilioConnection.webhook_confirmado_at.is_(None),
+                )
+                .values(
+                    webhook_confirmado_at=func.now(),
+                    status=case(
+                        (TwilioConnection.status == "pending", "connected"),
+                        else_=TwilioConnection.status,
+                    ),
+                )
+                .returning(TwilioConnection.id)
+            )
+        ).first()
+    if confirmada is not None:
+        log.info("twilio_sandbox_webhook_confirmado", tenant_id=str(tenant_id), kind=kind)
+
+
 def _evento(kind: str, external_id: str, public_id: str, params: dict[str, str]) -> FlattenedEvent:
     return FlattenedEvent(
         object_type="twilio",
@@ -155,6 +184,10 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
         if par is None:
             return Response(status_code=404)
         connection, twilio = par
+        if sandbox.inerte(twilio.modo):
+            # Sandbox en un ambiente que no lo permite (HU-CONN-20): inerte. 200 para que Twilio no reintente.
+            log.info("twilio_sandbox_gate_apagado", tenant_id=str(tenant_id), kind=kind)
+            return _twiml()
         creds: dict[str, Any] = (
             get_secret_box().decrypt_json(connection.credentials_encrypted)
             if connection.credentials_encrypted
@@ -180,6 +213,9 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
             )
             await _alert_on_invalid_signature(f"twilio:{twilio.account_sid}")
             return Response(status_code=403)
+
+        if twilio.modo == sandbox.MODO_SANDBOX and twilio.webhook_confirmado_at is None:
+            await _confirmar_webhook(tenant_id, twilio.id, kind)
 
         if not connection.active and kind == "inbound":
             log.info("twilio_webhook_conexion_pausada", tenant_id=str(tenant_id), kind=kind)
