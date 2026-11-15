@@ -162,6 +162,8 @@ class Settings(BaseSettings):
     media_download_timeout_s: float = Field(default=20.0, alias="MEDIA_DOWNLOAD_TIMEOUT_S")
     stt_timeout_s: float = Field(default=45.0, alias="STT_TIMEOUT_S")
     vision_timeout_s: float = Field(default=45.0, alias="VISION_TIMEOUT_S")
+    # TTS de salida (pack-voice, ADR-0197): la síntesis corre en el worker de envío.
+    tts_timeout_s: float = Field(default=60.0, alias="TTS_TIMEOUT_S")
 
     # --- Embeddings ---
     embedding_provider: Literal["local", "openai", "none"] = Field(

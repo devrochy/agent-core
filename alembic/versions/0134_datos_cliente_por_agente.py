@@ -7,8 +7,8 @@ que difiere del valor por defecto del módulo.
 La política global se migra a cada especialista con `scripts/migrar_datos_cliente_agentes.py`
 (`--dry-run` por defecto) antes de retirarla. Esta migración solo crea la columna: no toca datos.
 
-Revision ID: 0133
-Revises: 0132
+Revision ID: 0134
+Revises: 0133
 Create Date: 2026-11-14
 """
 
@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0133"
-down_revision = "0132"
+revision = "0134"
+down_revision = "0133"
 branch_labels = None
 depends_on = None
 

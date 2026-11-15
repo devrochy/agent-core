@@ -63,6 +63,9 @@ class Componente:
     # ADR-0190 §5: ids de las habilidades instaladas en el agente al construir (nunca su config). `None` = el
     # agente no tiene instalaciones propias y hereda las del negocio (hasta la resiembra, HU-AOS-65).
     skills: tuple[str, ...] | None = None
+    # ADR-0195: flujo propio del agente (secciones + hash). `None` = release anterior, lee `flow_tenant`.
+    flow: Mapping[str, Any] | None = None
+    flow_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,7 @@ def _componente(c: Componente) -> dict[str, Any]:
         "is_default": c.is_default,
         "procedures": [{"id": pid, "version": v} for pid, v in sorted(c.procedures)],
         **({"skills": sorted(c.skills)} if c.skills is not None else {}),
+        **({"flow": {"sha256": c.flow_hash, "sections": c.flow}} if c.flow is not None else {}),
     }
 
 

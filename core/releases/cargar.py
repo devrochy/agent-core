@@ -257,6 +257,7 @@ class ReleaseCongelada:
                 playbooks=self.playbooks,
                 flow_tenant=copy.deepcopy(self.flow_tenant),
                 app_settings=self.app_settings,
+                flow_agente=self.flujo_de(foco),
             )
         except ErrorDeCompilacion as exc:
             log.warning("release_compilacion_fallida", release_number=self.number, motivo=str(exc))
@@ -305,6 +306,11 @@ class ReleaseCongelada:
                     salida[pid] = proc
             self._procedimientos = salida
         return self._procedimientos
+
+    def flujo_de(self, foco: AgenteCongelado) -> Any:
+        """Flujo propio del agente congelado (ADR-0195) o `None` para una release anterior."""
+        flujo = foco.flow
+        return copy.deepcopy(flujo) if isinstance(flujo, Mapping) else None
 
     def procedimientos_de(self, instance_id: uuid.UUID | None) -> dict[str, Procedure]:
         """Los procedimientos PUBLICADOS del agente (sin los abiertos), por id: lo que su
@@ -546,6 +552,7 @@ async def _componentes(
                     else None
                 ),
                 packs=frozenset(str(s) for s in c["skills"]) if isinstance(c.get("skills"), list) else None,
+                flow=c["flow"] if isinstance(c.get("flow"), Mapping) else None,
             )
         )
     return tuple(salida), total

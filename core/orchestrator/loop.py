@@ -251,6 +251,9 @@ async def _write_usage_ledger(
         # Release y agente del turno (HU-AOS-15): NULL si el turno corrió sin release.
         release = release_vigente.vigente()
         agente = release.foco if release is not None else None
+        if release is not None and release.efimera:
+            # Prueba de un borrador (HU-AOS-72): sus ids no existen en la base; la fila de costo queda.
+            release, agente = None, None
         fila = dict(
             tenant_id=get_current_tenant_id(),
             conversation_id=conversation_id,

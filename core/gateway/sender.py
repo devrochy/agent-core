@@ -596,6 +596,72 @@ async def send_to_conversation(
     return True
 
 
+async def send_voice_to_conversation(
+    conversation_id: uuid.UUID,
+    text: str,
+    *,
+    sender_type: str = "agent",
+    include_text: bool = True,
+) -> bool:
+    """Encola una nota de voz (pack-voice, ADR-0197).
+
+    Solo `waweb` la soporta en esta tanda. El texto (si `include_text`) se encola
+    primero con el camino normal; luego una fila `audio/tts` que el worker
+    sintetiza y envía. Si el audio no se puede encolar, el texto ya entregado
+    sigue siendo la respuesta.
+    """
+    async with get_session() as session:
+        conversation = await session.get(Conversation, conversation_id)
+        if conversation is None or conversation.channel != "whatsapp":
+            return False
+
+    try:
+        provider, _credentials = await resolve_credentials(
+            conversation.connection_id,
+            conversation.meta_connection_id,
+            expected_tenant_id=conversation.tenant_id,
+        )
+    except Exception:
+        log.warning("voice_credentials_failed", conversation_id=str(conversation_id), exc_info=True)
+        return False
+    if provider != "waweb":
+        return False
+
+    texto_entregado = False
+    if include_text:
+        texto_entregado = await send_to_conversation(conversation_id, text, sender_type=sender_type)
+        if not texto_entregado:
+            return False
+
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return texto_entregado
+    try:
+        async with get_session() as session:
+            message = Message(
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                direction="outbound",
+                sender_type=sender_type,
+                content="",
+                media_type="audio/tts",
+                media_transcription=text,
+                status="queued",
+                client_message_id=str(uuid.uuid4()),
+            )
+            session.add(message)
+            await session.flush()
+            message_id = message.id
+    except Exception:
+        log.exception("voice_enqueue_failed", conversation_id=str(conversation_id))
+        return texto_entregado
+
+    from core.tasks.outbound_send import outbound_send_task
+
+    outbound_send_task.delay(str(message_id), str(tenant_id))
+    return True
+
+
 async def send_template_to_conversation(
     conversation_id: uuid.UUID,
     *,

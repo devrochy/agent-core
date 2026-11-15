@@ -197,6 +197,7 @@ Columnas A/W/B: la variable va en la API, el worker o el beat. Fuente de verdad 
 | `OPENAI_API_KEY` | ✓ | ✓ | ✓ | proveedor: llave de producción (respaldo `gpt-4o-mini` y embeddings `openai`) |
 | `STT_PROVIDER`, `STT_MODEL`, `STT_API_KEY` | ✓ | ✓ | ✓ | audio entrante (SPEC-04, ADR-0151): Groq por defecto; sin llave propia de negocio se usa esta. `STT_API_KEY` es la del proveedor activo |
 | `VISION_PROVIDER`, `VISION_MODEL`, `VISION_API_KEY` | ✓ | ✓ | ✓ | visión de imágenes (SPEC-04, ADR-0151): DeepSeek por defecto; sin llave propia de negocio se usa esta |
+| `TTS_TIMEOUT_S` | ✓ | ✓ | ✓ | opcional (default `60`): tope de la síntesis de voz de `pack-voice` (ADR-0197); usa `OPENAI_API_KEY` o la llave BYOK del negocio |
 | `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY` | — | ✓ | ✓ | llaves específicas de los proveedores de media si no se usa `STT_API_KEY`/`VISION_API_KEY` |
 | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `MEMORY_RETENTION_DAYS` | ✓ | ✓ | ✓ | heredada: la dimensión tiene que coincidir con los vectores migrados |
 | `KNOWLEDGE_EMBEDDING_PROVIDER` | ✓ | ✓ | ✓ | fijo: `openai` en producción (usa `OPENAI_API_KEY`, `text-embedding-3-small`); sin definir en test, que queda en `hash` (sin red ni costo). Fuera de `APP_ENV=production` siempre es `hash` (ADR-0145 §3) |
@@ -494,6 +495,19 @@ en la BD. Requisitos al desplegar (aplicar a mano en Coolify; el repo no los fij
   Neonize van lentos, y la sesión se reanuda con el último estado guardado.
 - Tras un despliegue, verificar en logs `waweb_inbound_publicado`/`connected` y que no
   aparezca `waweb_sesion_perdida`. No redesplegar el conector mientras se re-vincula.
+
+**Multimedia y respuestas por voz (ADR-0196/0197).** Con el conector desplegado, el
+canal QR ya procesa notas de voz y fotos entrantes y envía imágenes nativas y notas de
+voz salientes:
+- Para transcribir/entender con la llave de plataforma OpenAI: `STT_PROVIDER=openai`,
+  `STT_MODEL=gpt-4o-mini-transcribe`, `VISION_PROVIDER=openai`, `VISION_MODEL=gpt-4o-mini`
+  (reutilizan `OPENAI_API_KEY`).
+- Las respuestas por voz requieren instalar y activar `pack-voice` en el agente del
+  negocio; sin el pack, el agente sigue respondiendo en texto. El audio se sintetiza en
+  `celery-worker` y se guarda bajo `TENANTS_ROOT`, por lo que el worker necesita el volumen
+  `tenants-data` (ya montado en el compose; en Coolify, el mismo que usa la API).
+- El connector descarga la nota desde la URL firmada del backend: `PUBLIC_BASE_URL` debe
+  ser alcanzable desde el contenedor del connector.
 
 ## Persistencia de artefactos de tenant (`TENANTS_ROOT`)
 

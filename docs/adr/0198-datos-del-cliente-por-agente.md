@@ -1,4 +1,4 @@
-# ADR-0195 — Los datos que pide el cliente son de cada agente especialista
+# ADR-0198 — Los datos que pide el cliente son de cada agente especialista
 
 - **Estado:** propuesto (se acepta al mergear la HU-CRM-28).
 - **Fecha:** 2026-11-14
@@ -74,7 +74,7 @@ tipo no pueden pedir datos distintos, y el dueño no encuentra la configuración
 
 ## Impacto en el código
 
-- `core/db/models.py` (`AgentRecord.data_policy`) y migración `0133`.
+- `core/db/models.py` (`AgentRecord.data_policy`) y migración `0134`.
 - `core/datos_cliente/` (`modelo.py` con `AccionDatos.tools`, `ajustes.py` con los métodos de
   entrega, `servicio.py`, `legado.py`, `guardar.py`, `tools.py`) y los `datos.py` de commerce,
   calendar y subscriptions. `pack_commerce` sube a 3.3.0: `crear_pedido` valida los métodos y el

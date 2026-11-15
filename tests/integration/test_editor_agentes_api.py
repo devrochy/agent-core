@@ -451,3 +451,60 @@ async def _publicar_desde_el_guion(app_client, h, cid, plantilla: str, respuesta
     )
     assert r.status_code == 200, r.text
     return r.json()
+
+
+async def test_flujo_de_atencion_por_agente(app_client) -> None:
+    """HU-AOS-74: el flujo vive en el agente, valida acciones y se congela al publicar."""
+    tid, cid = await _negocio()
+    h = await _dueno(app_client, tid)
+    r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={"name": "Ventas flujo"})
+    assert r.status_code == 201, r.text
+    aid = r.json()["agent"]["id"]
+
+    # Sin flujo propio, la lectura devuelve la semilla del pack (no se guarda todavía).
+    r = await app_client.get(f"/api/v1/admin/agents/{aid}/flow", headers=h)
+    assert r.status_code == 200, r.text
+    leido = r.json()
+    assert leido["seeded"] is True and leido["source"] == "semilla"
+    assert leido["flow"]["sections"]
+    assert leido["warnings"] == []
+
+    opciones = (await app_client.get(f"/api/v1/admin/agents/{aid}/flow/options", headers=h)).json()
+    accion = next(a["tool"] for a in opciones["actions"] if a["enabled"] or a["by_superpower"])
+    nuevo = {"sections": [{"id": "propia", "label": "Propia", "purpose": "", "tools": [accion]}]}
+    r = await app_client.put(
+        f"/api/v1/admin/agents/{aid}/flow",
+        headers=h,
+        json={"flow": nuevo, "lock_version": leido["lock_version"]},
+    )
+    assert r.status_code == 200, r.text
+    guardado = r.json()
+    assert guardado["seeded"] is False and guardado["flow"] == nuevo
+
+    # Una acción que el agente no puede ejecutar no se guarda.
+    r = await app_client.put(
+        f"/api/v1/admin/agents/{aid}/flow",
+        headers=h,
+        json={
+            "flow": {"sections": [{"id": "mala", "label": "Mala", "purpose": "", "tools": ["no_existe"]}]},
+            "lock_version": guardado["lock_version"],
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert "sections[0].tools[0]" in r.json()["error"]["fields"]
+
+    # Publicar congela el flujo y su hash en la versión.
+    r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
+    assert r.status_code == 200, r.text
+    publicada = r.json()
+    assert publicada["version"]["flow_hash"]
+    detalle = (await app_client.get(
+        f"/api/v1/admin/agents/{aid}/versions/{publicada['version']['id']}", headers=h
+    )).json()
+    assert detalle["flow"] == nuevo
+
+    # Aislamiento: otro negocio no ve el flujo.
+    otro, _ = await _negocio()
+    h_otro = await _dueno(app_client, otro)
+    r = await app_client.get(f"/api/v1/admin/agents/{aid}/flow", headers=h_otro)
+    assert r.status_code == 404, r.text

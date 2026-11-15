@@ -1,6 +1,6 @@
 # ADR-0191 — Un solo motor: retiro del runtime `legacy`
 
-- **Estado:** propuesto
+- **Estado:** aceptado (2026-11-14, código mergeado en agent-core#754/#757/#758/#761/#762; panel#253/#257/#258/#259/#260 y apk#249/#250/#251/#252)
 - **Fecha:** 2026-11-12
 
 ## Contexto
@@ -111,3 +111,40 @@ del gate y obliga a regrabarlas (aprobado por el dueño el 2026-11-14).
 `core/agents/base.py`, `core/agents/editor.py`, `core/api/routers/connection_releases.py`,
 `tests/test_prompt_fecha_actual.py` y `tests/test_voz_del_negocio.py`. En el panel y la APK, la calidez
 pasa a 0–5 con seis etiquetas y el preview distingue cada nivel.
+
+## Adenda (2026-11-14): probar el borrador de un agente sin publicarlo (HU-AOS-72)
+
+**Caso.** El asistente de «Nuevo agente» (SPEC-45, D-71) termina con «Pruébalo» antes de publicar. Publicar
+para probar consume cupo de agentes, choca con un chat web en vivo (409 `canal_en_vivo`) y el Coordinador
+puede enrutar a otro especialista; el §1 y el §3 no dejan responder sin release.
+
+**Decisión.** Una única excepción acotada al §1 y al §3: la **prueba del panel** (canal `test` con el
+marcador `panel`, sandbox de HU-ARCH-14 y ADR-0195) de un **borrador** corre con una **release efímera**
+armada en memoria (`core/releases/efimera.py`).
+- Componentes: el Coordinador con su última versión publicada (o los defaults del `KernelSpec` en memoria)
+  y el borrador (`agent_drafts.content`, revalidado con `revisar_spec`) como único especialista por defecto,
+  con sus habilidades de agente. Habilidades, procedimientos, overrides, flujo y `AppSettings` salen de los
+  mismos pasos del build (`build.armar_con_instancias`) sobre la conexión interna de pruebas.
+- Nada se persiste: ni release, ni componentes, ni versión, ni instancia; nunca entra a la caché de
+  releases (ADR-0117 §7). Los ids de instancia y versión son `uuid4` de cada turno y los artefactos van
+  marcados `efimera`: el ledger, el dueño de las tareas, la procedencia de registros y `core_decisions`
+  quedan con NULL (no se llama `asignar` ni `anotar_release`), y no hay grafo A2A.
+- Sin router ni pila: el turno va directo al borrador. `exige_concesion()` sigue verdadero: la concesión
+  sale del borrador (HU-ARCH-34 se mantiene).
+- `fijar_release_del_turno` toma esta rama solo si `is_panel_test(conversation)` y `state.draft_agent_id`;
+  el `state` es un dato (invariante 7): el agente se revalida en la base en cada turno (especialista
+  activo del negocio con borrador). Si deja de serlo, el turno falla cerrado como sin release.
+- API: `agent_id` opcional en `GET /admin/playground`, `POST /message`, `/reset` y `/close`; exige además
+  escritura en `settings`. Un agente que no es del negocio es 404 `agente_no_encontrado`.
+
+**Consecuencias.** El dueño prueba lo que acaba de crear sin publicar ni gastar cupo de agentes (el tope
+solo se mide al crear y al publicar, ADR-0142). La cuota de mensajes del período sigue aplicando
+(`ingress.py`). No se filtra «nunca publicado»: el mismo mecanismo prueba el borrador de un agente ya
+publicado. Cada turno de prueba arma el manifiesto (lee disco y base) y compila sin caché: aceptable para
+una prueba manual, no para tráfico real. `/options` y `/tap` siguen sin `agent_id`.
+
+**Código:** `core/releases/efimera.py`, `core/releases/build.py`, `core/kernel/release_del_turno.py`,
+`core/shared/release_vigente.py`, `core/orchestrator/loop.py`, `core/kernel/procedures/ejecucion.py`,
+`core/agents/procedencia.py`, `core/kernel/handoff.py`, `core/admin/playground.py`,
+`core/api/routers/playground.py`; tests en `tests/test_release_efimera_borrador.py` y
+`tests/integration/test_playground_borrador.py`.
