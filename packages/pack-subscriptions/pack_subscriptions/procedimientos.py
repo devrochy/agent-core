@@ -241,7 +241,11 @@ async def resumen_de_inscripcion(args: dict[str, Any], ctx: ToolContext) -> list
         cot = await cotizacion_de_inscripcion(ctx, str(args.get("plan_code") or ""), args.get("codigo_promocion"))
     except SubscriptionError:
         return None
-    datos: list[DatoDeResumen] = [DatoDeResumen("plan", _nombre_de_plan(str(cot.get("plan") or ""), cot.get("periodicidad")))]
+    # `plan_code` (el nombre del dato de la tarea, rótulo «Plan»): así el kernel no repite el plan con su SKU
+    # entre los datos del cliente.
+    datos: list[DatoDeResumen] = [
+        DatoDeResumen("plan_code", _nombre_de_plan(str(cot.get("plan") or ""), cot.get("periodicidad")))
+    ]
     descuento = float(cot.get("descuento") or 0)
     if descuento > 0:
         etiqueta = str(cot.get("promocion") or "").strip()

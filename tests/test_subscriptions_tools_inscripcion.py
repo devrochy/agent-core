@@ -87,9 +87,9 @@ async def test_listar_planes_no_expone_ids_internos(cap) -> None:
     assert r["encontrado"] and "plan_id" not in r["planes"][0] and r["planes"][0]["plan_code"] == "PREMIUM"
     uno = await tools_mod.SubscriptionSkill().listar_planes({"plan_code": "PREMIUM"}, _ctx())
     assert uno["plan"]["nombre"] == "Premium"
-    with pytest.raises(SubscriptionError) as e:
-        await tools_mod.SubscriptionSkill().listar_planes({"plan_code": "NOPE"}, _ctx())
-    assert e.value.code == "plan_no_encontrado"
+    # Un código que no existe devuelve el catálogo (con el código marcado), no un error.
+    otro = await tools_mod.SubscriptionSkill().listar_planes({"plan_code": "free"}, _ctx())
+    assert otro["codigo_no_encontrado"] == "free" and otro["planes"][0]["plan_code"] == "PREMIUM"
 
 
 async def test_cotizar_marca_lo_que_se_pide_y_pasa_el_cliente_de_la_conversacion(cap) -> None:
