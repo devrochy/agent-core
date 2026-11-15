@@ -22,6 +22,9 @@ from core.shared.tenant import get_current_tenant_id
 
 CLAVE = "datos_cliente"
 _NIVELES = {n.value for n in Nivel}
+# Métodos de entrega que un agente de Comercio puede ofrecer (HU-CRM-28). Es una preferencia
+# operativa del agente, no un dato del cliente: vive en `data_policy` para no crear otra columna.
+METODOS_DE_ENTREGA = ("domicilio", "recoger_en_tienda")
 
 
 def limpiar(crudo: Any, acciones: list[AccionDatos] | None = None) -> dict[str, dict[str, str]]:
@@ -68,6 +71,28 @@ def herramientas_de(data_policy: dict[str, Any] | None) -> bool:
     return bool((data_policy or {}).get("herramientas"))
 
 
+def metodos_entrega_de(data_policy: dict[str, Any] | None) -> list[str]:
+    """Métodos de entrega habilitados del agente, saneados. Sin dato = ambos (compatibilidad)."""
+    crudo = (data_policy or {}).get("metodos_entrega")
+    if not isinstance(crudo, list):
+        return list(METODOS_DE_ENTREGA)
+    elegidos = {str(m) for m in crudo}
+    validos = [m for m in METODOS_DE_ENTREGA if m in elegidos]
+    return validos or list(METODOS_DE_ENTREGA)
+
+
+def con_metodos_entrega(data_policy: dict[str, Any] | None, metodos: list[str]) -> dict[str, Any]:
+    """Copia de `data_policy` con los métodos de entrega. Ambos es el valor por defecto: no se guarda."""
+    nuevo = dict(data_policy or {})
+    elegidos = {str(m) for m in metodos}
+    validos = [m for m in METODOS_DE_ENTREGA if m in elegidos]
+    if validos and validos != list(METODOS_DE_ENTREGA):
+        nuevo["metodos_entrega"] = validos
+    else:
+        nuevo.pop("metodos_entrega", None)
+    return nuevo
+
+
 def con_herramientas(data_policy: dict[str, Any] | None, activas: bool) -> dict[str, Any]:
     """Copia de `data_policy` con la bandera de las herramientas del agente puesta o quitada."""
     nuevo = dict(data_policy or {})
@@ -102,6 +127,10 @@ async def cargar_ajustes(agent_id: uuid.UUID | None) -> dict[str, dict[str, str]
 
 async def herramientas_activas(agent_id: uuid.UUID | None) -> bool:
     return herramientas_de(await cargar_data_policy(agent_id))
+
+
+async def metodos_entrega_del_agente(agent_id: uuid.UUID | None) -> list[str]:
+    return metodos_entrega_de(await cargar_data_policy(agent_id))
 
 
 def _bloque_del_negocio(behavior: dict[str, Any] | None) -> dict[str, Any]:

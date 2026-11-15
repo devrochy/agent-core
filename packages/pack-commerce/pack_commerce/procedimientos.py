@@ -46,6 +46,11 @@ def registrar(host: MCPHost) -> None:
 
     host.register_procedures(de_pack.cargar(PLUGIN_ID))
     host.register_resolver(f"{PLUGIN_ID}.metodo_de_pago", validar=metodo_de_pago)
+    host.register_resolver(
+        f"{PLUGIN_ID}.metodo_de_entrega",
+        validar=metodo_de_entrega,
+        candidatos=metodos_de_entrega_candidatos,
+    )
     host.register_resumen("confirmar_cotizacion", resumen_de_cotizacion)
     host.register_rotulos(rotulos_de_datos())
 
@@ -76,6 +81,30 @@ async def metodo_de_pago(valor: Any, ctx: ToolContext, datos: dict[str, Any]) ->
             ok=False, error="El pago en línea no está disponible en este negocio: ofrece otro método de pago."
         )
     return ResolverResult(ok=True)
+
+
+async def _metodos_entrega_de(ctx: ToolContext) -> list[str]:
+    from core.datos_cliente.ajustes import cargar_data_policy, metodos_entrega_de
+
+    return metodos_entrega_de(await cargar_data_policy(ctx.agent_id))
+
+
+async def metodo_de_entrega(valor: Any, ctx: ToolContext, datos: dict[str, Any]) -> ResolverResult:
+    """El método de entrega debe estar habilitado para ESTE agente (HU-CRM-28)."""
+    metodos = await _metodos_entrega_de(ctx)
+    if valor in metodos:
+        return ResolverResult(ok=True)
+    etiquetas = {"domicilio": "domicilio", "recoger_en_tienda": "recoger en tienda"}
+    disponibles = ", ".join(etiquetas.get(m, m) for m in metodos)
+    return ResolverResult(
+        ok=False,
+        error=f"Ese método de entrega no está habilitado. Ofrece: {disponibles}.",
+    )
+
+
+async def metodos_de_entrega_candidatos(ctx: ToolContext, datos: dict[str, Any]) -> list[str]:
+    """Opciones de entrega que el cliente puede elegir: solo las habilitadas por el agente."""
+    return await _metodos_entrega_de(ctx)
 
 
 # ------------------------------------------------------------------ resumen de la confirmación

@@ -24,9 +24,12 @@ from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.datos_cliente import AccionDatos, Nivel, niveles_efectivos, registro_datos
 from core.datos_cliente.ajustes import (
+    METODOS_DE_ENTREGA,
     con_herramientas,
+    con_metodos_entrega,
     con_politica,
     herramientas_de,
+    metodos_entrega_de,
     politica_de,
 )
 from core.datos_cliente.servicio import base_de
@@ -37,6 +40,7 @@ router = APIRouter(prefix="/admin/datos-cliente", tags=["admin · datos del clie
 router_agente = APIRouter(prefix="/admin/agents", tags=["admin · datos del cliente"])
 
 NivelOut = Literal["requerido", "recomendado", "no_pedir"]
+MetodoEntregaOut = Literal["domicilio", "recoger_en_tienda"]
 
 
 class CampoPoliticaOut(BaseModel):
@@ -76,6 +80,7 @@ class AgenteDatosOut(BaseModel):
     # Datos que exigen los superpoderes del agente: solo lectura, no se ajustan aquí.
     procedimientos: list[ProcedimientoDatosOut] = []
     herramientas_del_agente: bool = False
+    metodos_entrega: list[MetodoEntregaOut] = Field(default_factory=lambda: list(METODOS_DE_ENTREGA))
 
 
 class AgenteDatosUpdate(BaseModel):
@@ -84,6 +89,7 @@ class AgenteDatosUpdate(BaseModel):
 
     politica: dict[str, dict[str, NivelOut]] | None = Field(default=None, max_length=50)
     herramientas_del_agente: bool | None = None
+    metodos_entrega: list[MetodoEntregaOut] | None = Field(default=None, max_length=2)
 
 
 def _exigir_negocio(principal: Principal) -> None:
@@ -252,6 +258,7 @@ async def _leer(principal: Principal, agente: AgentRecord) -> AgenteDatosOut:
         acciones=salida,
         procedimientos=_procedimientos(contenido, packs),
         herramientas_del_agente=herramientas_de(agente.data_policy),
+        metodos_entrega=metodos_entrega_de(agente.data_policy),
     )
 
 
@@ -331,10 +338,21 @@ async def save_datos_cliente(
         nuevo_policy = con_politica(fila.data_policy, resultado)
         if payload.herramientas_del_agente is not None:
             nuevo_policy = con_herramientas(nuevo_policy, payload.herramientas_del_agente)
+        if payload.metodos_entrega is not None:
+            metodos = list(dict.fromkeys(payload.metodos_entrega))
+            if not metodos:
+                raise ApiError(
+                    422,
+                    "metodos_entrega_vacios",
+                    "Elige al menos un método de entrega.",
+                    fields={"metodos_entrega": "Elige al menos un método de entrega."},
+                )
+            nuevo_policy = con_metodos_entrega(nuevo_policy, metodos)
         if nuevo_policy != (fila.data_policy or {}):
             antes = {
                 "politica": {k: v for k, v in actual.items() if k in acciones},
                 "herramientas": herramientas_de(fila.data_policy),
+                "metodos_entrega": metodos_entrega_de(fila.data_policy),
             }
             fila.data_policy = nuevo_policy
             session.add(
@@ -348,6 +366,7 @@ async def save_datos_cliente(
                         "despues": {
                             "politica": nuevos,
                             "herramientas": herramientas_de(nuevo_policy),
+                            "metodos_entrega": metodos_entrega_de(nuevo_policy),
                         },
                     },
                 )

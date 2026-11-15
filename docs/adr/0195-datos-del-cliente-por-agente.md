@@ -21,16 +21,21 @@ tipo no pueden pedir datos distintos, y el dueño no encuentra la configuración
 ## Decisión
 
 1. **La política es de cada agente especialista.** Vive en `agents.data_policy` como
-   `{politica: {accion_id: {clave: nivel}}, herramientas: bool}`, solo con lo que difiere del valor
-   por defecto del módulo. No hay política global.
+   `{politica: {accion_id: {clave: nivel}}, herramientas: bool, metodos_entrega: [...]}`.
+   `metodos_entrega` (HU-CRM-28, adenda de 2026-11-14) guarda qué métodos de entrega de Comercio
+   puede ofrecer el agente (`domicilio`, `recoger_en_tienda`); sin el dato, ambos. Solo se guarda
+   lo que difiere del valor por defecto del módulo. No hay política global.
 2. **Precedencia:** ajuste del agente > configuración del módulo (`base`) > defecto de la acción.
    Los pisos técnicos (`ajustable=False`) siguen sin poder bajarse.
 3. **Cada acción de datos declara sus tools.** `AccionDatos.tools` relaciona una operación
    (`ventas.pedido_domicilio`) con las acciones del agente (`crear_pedido`). El panel muestra solo
    las operaciones que ese agente puede ejecutar; una acción sin `tools` se filtra por pack.
-4. **Runtime por agente.** `evaluar_accion()`, `requeridos_efectivos()`, `guardar()` y
-   `herramientas_activas()` reciben el `agent_id` del `ToolContext`; sin él usan el especialista en
-   foco de la release. Fuera de una conversación se usan los defaults del módulo.
+4. **Runtime por agente.** `evaluar_accion()`, `requeridos_efectivos()`, `guardar()`,
+   `herramientas_activas()` y los métodos de entrega reciben el `agent_id` del `ToolContext`; sin
+   él usan el especialista en foco de la release. Fuera de una conversación se usan los defaults
+   del módulo. `crear_pedido` y el resolver `pack_commerce.metodo_de_entrega` rechazan un método
+   que el agente no tenga habilitado y devuelven los disponibles; el procedimiento ofrece solo esos
+   como candidatos.
 5. **API y panel.** `GET/PUT /admin/agents/{id}/datos-cliente` con permiso `settings` (escritura) y
    auditoría `agent.datos_cliente`. El editor del agente gana el paso «Datos del cliente», después
    de Acciones, con la matriz editable, el interruptor de herramientas y los datos obligatorios de
@@ -70,8 +75,10 @@ tipo no pueden pedir datos distintos, y el dueño no encuentra la configuración
 ## Impacto en el código
 
 - `core/db/models.py` (`AgentRecord.data_policy`) y migración `0133`.
-- `core/datos_cliente/` (`modelo.py` con `AccionDatos.tools`, `ajustes.py`, `servicio.py`,
-  `legado.py`, `guardar.py`, `tools.py`) y los `datos.py` de commerce, calendar y subscriptions.
+- `core/datos_cliente/` (`modelo.py` con `AccionDatos.tools`, `ajustes.py` con los métodos de
+  entrega, `servicio.py`, `legado.py`, `guardar.py`, `tools.py`) y los `datos.py` de commerce,
+  calendar y subscriptions. `pack_commerce` sube a 3.3.0: `crear_pedido` valida los métodos y el
+  procedimiento `tomar_pedido` 1.2.0 usa el resolver y los candidatos dinámicos.
 - `core/orchestrator/loop.py`, `core/memory/historial_tool.py`, `core/tools/core_skill.py`.
 - `core/api/routers/datos_cliente.py` y `core/api/__init__.py`.
 - `scripts/migrar_datos_cliente_agentes.py`.

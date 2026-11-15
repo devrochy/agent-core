@@ -79206,6 +79206,17 @@
             "type": "boolean",
             "title": "Herramientas Del Agente",
             "default": false
+          },
+          "metodos_entrega": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "domicilio",
+                "recoger_en_tienda"
+              ]
+            },
+            "type": "array",
+            "title": "Metodos Entrega"
           }
         },
         "type": "object",
@@ -79322,6 +79333,25 @@
               }
             ],
             "title": "Herramientas Del Agente"
+          },
+          "metodos_entrega": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "domicilio",
+                    "recoger_en_tienda"
+                  ]
+                },
+                "type": "array",
+                "maxItems": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metodos Entrega"
           }
         },
         "type": "object",

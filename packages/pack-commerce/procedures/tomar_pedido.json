@@ -1,7 +1,7 @@
 {
   "contract": "procedure/1",
   "id": "pack_commerce.tomar_pedido",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "title": "Tomar un pedido",
   "triggers": {
     "description": "El cliente quiere pedir o comprar productos del catálogo, para recoger o a domicilio.",
@@ -22,7 +22,12 @@
         "domicilio",
         "recoger_en_tienda"
       ],
-      "required": true
+      "required": true,
+      "resolver": "pack_commerce.metodo_de_entrega",
+      "candidates": {
+        "source": "resolver:pack_commerce.metodo_de_entrega",
+        "max": 2
+      }
     },
     "address": {
       "type": "string",

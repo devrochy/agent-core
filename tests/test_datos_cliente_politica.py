@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 
 from core.datos_cliente import AccionDatos, CampoPolitica, Nivel, evaluar, niveles_efectivos
-from core.datos_cliente.ajustes import con_politica, limpiar, politica_de
+from core.datos_cliente.ajustes import (
+    con_metodos_entrega,
+    con_politica,
+    limpiar,
+    metodos_entrega_de,
+    politica_de,
+)
 from core.datos_cliente.legado import aplicar_niveles
 from core.datos_cliente.registro import RegistroDeDatos
 
@@ -106,6 +112,15 @@ def test_con_politica_conserva_el_resto_de_la_politica_del_agente() -> None:
 def test_politica_de_sin_bloque_es_vacia() -> None:
     assert politica_de(None) == {}
     assert politica_de({"politica": "x"}) == {}
+
+
+def test_metodos_entrega_por_defecto_saneados_y_sin_ruido() -> None:
+    assert metodos_entrega_de(None) == ["domicilio", "recoger_en_tienda"]
+    assert metodos_entrega_de({"metodos_entrega": ["recoger_en_tienda"]}) == ["recoger_en_tienda"]
+    assert metodos_entrega_de({"metodos_entrega": []}) == ["domicilio", "recoger_en_tienda"]
+    assert metodos_entrega_de({"metodos_entrega": ["otro"]}) == ["domicilio", "recoger_en_tienda"]
+    assert con_metodos_entrega({}, ["recoger_en_tienda"])["metodos_entrega"] == ["recoger_en_tienda"]
+    assert "metodos_entrega" not in con_metodos_entrega({}, ["domicilio", "recoger_en_tienda"])
 
 
 def test_aplica_a_filtra_por_las_tools_del_agente() -> None:

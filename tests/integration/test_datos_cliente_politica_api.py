@@ -186,6 +186,22 @@ async def test_solo_quien_puede_escribir_en_configuracion_guarda(app_client) -> 
     assert r.status_code == 403
 
 
+async def test_los_metodos_de_entrega_se_ajustan_por_agente(app_client) -> None:
+    tid = await _negocio()
+    h = await api_headers(app_client, tid)
+    agent_id = await _agente(tid)
+    assert (await app_client.get(_url(agent_id), headers=h)).json()["metodos_entrega"] == [
+        "domicilio",
+        "recoger_en_tienda",
+    ]
+    r = await app_client.put(_url(agent_id), headers=h, json={"metodos_entrega": ["recoger_en_tienda"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["metodos_entrega"] == ["recoger_en_tienda"]
+    assert (await app_client.get(_url(agent_id), headers=h)).json()["metodos_entrega"] == ["recoger_en_tienda"]
+    r = await app_client.put(_url(agent_id), headers=h, json={"metodos_entrega": []})
+    assert r.status_code == 422
+
+
 async def test_la_politica_de_un_agente_no_afecta_a_otro(app_client) -> None:
     a, b = await _negocio(), await _negocio()
     agente_a, agente_b = await _agente(a), await _agente(b)

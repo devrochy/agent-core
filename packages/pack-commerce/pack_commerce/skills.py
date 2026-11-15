@@ -67,6 +67,18 @@ QUOTE_STATUS_VIGENTE = ("draft", "aceptada")
 
 PAYMENT_METHODS = ("efectivo_contraentrega", "transferencia", "pago_en_linea")
 DELIVERY_METHODS = ("domicilio", "recoger_en_tienda")
+_ETIQUETA_ENTREGA = {"domicilio": "domicilio", "recoger_en_tienda": "recoger en tienda"}
+
+
+def _etiqueta_metodo_entrega(metodo: str) -> str:
+    return _ETIQUETA_ENTREGA.get(metodo, metodo)
+
+
+async def _metodos_entrega(context: ToolContext) -> list[str]:
+    """Métodos que ESTE agente puede ofrecer (HU-CRM-28). Sin ajuste del dueño: ambos."""
+    from core.datos_cliente.ajustes import cargar_data_policy, metodos_entrega_de
+
+    return metodos_entrega_de(await cargar_data_policy(context.agent_id))
 
 
 # ------------------------------------------------------------------ helpers
@@ -1649,6 +1661,15 @@ class OrderSkill(BaseSkill):
             }
         if delivery_method and delivery_method not in DELIVERY_METHODS:
             return {"error": "Método de entrega no válido. Usa 'domicilio' o 'recoger_en_tienda'."}
+        metodos = await _metodos_entrega(context)
+        if delivery_method and delivery_method not in metodos:
+            return {
+                "error": "Ese método de entrega no está habilitado.",
+                "metodos_disponibles": metodos,
+                "hint": "Ofrecele uno de estos: "
+                + ", ".join(_etiqueta_metodo_entrega(m) for m in metodos)
+                + ".",
+            }
         if _parse_uuid(quote_id) is None:
             return await _cotizacion_no_encontrada(
                 context, _sin_cotizacion_vigente()
@@ -1698,7 +1719,13 @@ class OrderSkill(BaseSkill):
                 return {"error": "La cotización no tiene productos."}
 
             if not delivery_method:
-                return {"error": "Falta el método de entrega: 'domicilio' o 'recoger_en_tienda'."}
+                return {
+                    "error": "Falta el método de entrega.",
+                    "metodos_disponibles": metodos,
+                    "hint": "Preguntale cuál prefiere entre: "
+                    + ", ".join(_etiqueta_metodo_entrega(m) for m in metodos)
+                    + ".",
+                }
             threshold = _monto_alto_threshold(config)
             if _float(quote.total) > threshold:
                 return {
