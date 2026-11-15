@@ -41,6 +41,9 @@ from core.waweb.backend import (
 
 log = get_logger(__name__)
 
+# Único mimetype con el que WhatsApp reproduce una nota de voz (PTT).
+MIMETYPE_NOTA_DE_VOZ = "audio/ogg; codecs=opus"
+
 # Neonize (el puente Go de fondo) tiene una condición de carrera real: crear o
 # conectar dos clientes a la vez revienta el proceso con `fatal error: concurrent
 # map writes` (visto en vivo con dos negocios con sesión en el mismo conector).
@@ -426,9 +429,15 @@ class NeonizeSocket:
         if self._client is None:
             raise RuntimeError("el socket waweb no está conectado")
         jid = to if "@" in to else f"{to}@s.whatsapp.net"
-        # Neonize descarga la URL y arma el `audioMessage` con `PTT` (nota de voz).
+        # Neonize descarga la URL, sube el archivo y arma el `audioMessage` con `PTT`. El mimetype
+        # lo toma de libmagic (`audio/ogg`), pero WhatsApp solo reproduce una nota de voz con
+        # `audio/ogg; codecs=opus`: con el otro llega una burbuja vacía. pack-voice siempre
+        # entrega OGG/Opus, así que se corrige antes de enviar.
         async with _BRIDGE_LOCK:
-            sent = await self._client.send_audio(jid, audio_url, ptt=ptt)
+            mensaje = await self._client.build_audio_message(audio_url, ptt)
+            if ptt:
+                mensaje.audioMessage.mimetype = MIMETYPE_NOTA_DE_VOZ
+            sent = await self._client.send_message(jid, mensaje)
         return str(getattr(sent, "ID", "") or "")
 
     async def alive(self) -> bool:
