@@ -683,6 +683,23 @@ class BaseModule(ABC):
         """
         return None
 
+    async def on_collaborator_removed(self, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> None:
+        """Hook opcional (ADR-0198): la cuenta `admin_id` se dio de baja en `tenant_id`.
+
+        El pack da de baja lógica su perfil (p. ej. el `Gestor` de Cobranza) para que no siga
+        apareciendo como asignable, SIN borrar sus registros, carteras ni historial. La cuenta
+        puede reactivarse después con `on_collaborator_restored`. Default: no-op.
+        """
+        return None
+
+    async def on_collaborator_restored(self, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> None:
+        """Hook opcional (ADR-0198): la cuenta `admin_id` volvió a estar activa en `tenant_id`.
+
+        El pack revive el perfil que dio de baja en `on_collaborator_removed`, conservando su
+        historial y sus asignaciones. Default: no-op.
+        """
+        return None
+
     async def collaborator_profiles(
         self, tenant_id: uuid.UUID, admin_ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, list[PackProfile]]:

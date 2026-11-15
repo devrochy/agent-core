@@ -60,6 +60,10 @@ def cuenta_habilitada(admin: Any) -> bool:
     habilitado. Lo llaman el login del panel, la validación de sesión y la app de campo."""
     if admin is None or not getattr(admin, "active", False):
         return False
+    # Baja lógica de equipo (ADR-0198): una cuenta eliminada no vuelve a entrar ni con `active`
+    # encendido por error. Solo se reactiva reviviendo la misma fila desde Equipo.
+    if getattr(admin, "deleted_at", None) is not None:
+        return False
     if es_tester(admin) or str(getattr(admin, "email", "")).endswith("@" + DOMINIO_DE_PRUEBA):
         return testers_habilitados()
     return True

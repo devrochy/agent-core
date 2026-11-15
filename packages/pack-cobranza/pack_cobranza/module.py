@@ -253,6 +253,11 @@ class CobranzaModule(BaseModule):
                             correo=admin.email if admin else None,
                         )
                     )
+                elif existe.deleted_at is not None:
+                    # Volvió a tener el rol de gestor tras una baja de equipo (ADR-0198):
+                    # se revive el MISMO perfil para conservar carteras e historial.
+                    existe.deleted_at = None
+                    existe.estatus = "activo"
                 # Pasa a la política de campo (más estricta): sus equipos que entraron solo porque la política
                 # de colaborador era abierta vuelven a pendiente (ADR-0174, HU-ACC-06). Idempotente.
                 bajados = await degradar_por_cambio_de_rol(session, tid, aid, "gestor")
@@ -262,6 +267,56 @@ class CobranzaModule(BaseModule):
         await invalidar_cuenta(tid, aid, bajados)
         if bajados:
             log.info("access_equipos_degradados", tenant_id=str(tid), admin_id=str(aid), equipos=len(bajados))
+
+    async def on_collaborator_removed(self, tenant_id: Any, admin_id: Any) -> None:
+        """Baja lógica del perfil `Gestor` cuando la cuenta de equipo se elimina (ADR-0198).
+
+        No se borra nada del historial: pagos, abonos, visitas, promesas, gastos, notas y las
+        carteras asignadas siguen intactos. Solo se marca el perfil para que deje de aparecer
+        como gestor asignable y no pueda operar.
+        """
+        import uuid as _uuid
+        from datetime import UTC, datetime
+
+        from sqlalchemy import select
+
+        from core.db.session import get_session
+        from core.shared.tenant import tenant_scope
+        from pack_cobranza.models import Gestor
+
+        tid = _uuid.UUID(str(tenant_id))
+        aid = _uuid.UUID(str(admin_id))
+        async with tenant_scope(tid), get_session() as session:
+            gestor = (
+                await session.execute(
+                    select(Gestor).where(Gestor.tenant_id == tid, Gestor.admin_id == aid)
+                )
+            ).scalar_one_or_none()
+            if gestor is not None and gestor.deleted_at is None:
+                gestor.deleted_at = datetime.now(UTC)
+                gestor.estatus = "baja"
+
+    async def on_collaborator_restored(self, tenant_id: Any, admin_id: Any) -> None:
+        """Revive el perfil `Gestor` al reactivar la cuenta, con su historial y carteras (ADR-0198)."""
+        import uuid as _uuid
+
+        from sqlalchemy import select
+
+        from core.db.session import get_session
+        from core.shared.tenant import tenant_scope
+        from pack_cobranza.models import Gestor
+
+        tid = _uuid.UUID(str(tenant_id))
+        aid = _uuid.UUID(str(admin_id))
+        async with tenant_scope(tid), get_session() as session:
+            gestor = (
+                await session.execute(
+                    select(Gestor).where(Gestor.tenant_id == tid, Gestor.admin_id == aid)
+                )
+            ).scalar_one_or_none()
+            if gestor is not None:
+                gestor.deleted_at = None
+                gestor.estatus = "activo"
 
     async def seed_data(self, tenant_id: Any, data: dict[str, Any]) -> list[str]:
         """Datos de ejemplo de la cartera (ADR-0083): carteras, caja, gestor y clientes con

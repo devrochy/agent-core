@@ -771,14 +771,27 @@ async def _collaborators_context(request: Request) -> dict[str, Any] | None:
 
     async with get_session() as session:
         if is_master:
-            admins = (await session.execute(select(Admin).order_by(Admin.email))).scalars().all()
+            admins = (
+                (
+                    await session.execute(
+                        select(Admin)
+                        .where(Admin.deleted_at.is_(None))
+                        .order_by(Admin.email)
+                    )
+                )
+                .scalars()
+                .all()
+            )
         else:
             admins = list(
                 (
                     await session.execute(
                         select(Admin)
                         .join(TenantUser, TenantUser.admin_id == Admin.id)
-                        .where(TenantUser.tenant_id == tid)
+                        .where(
+                            TenantUser.tenant_id == tid,
+                            Admin.deleted_at.is_(None),
+                        )
                         .order_by(Admin.email)
                     )
                 ).scalars().all()
