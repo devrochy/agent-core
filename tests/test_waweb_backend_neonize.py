@@ -51,15 +51,20 @@ class FakeClient:
     async def idle(self) -> None:
         await asyncio.sleep(3600)
 
-    async def send_message(self, _jid: str, _message: object) -> object:
-        return types.SimpleNamespace(ID="WAMID-1")
-
     async def download_any(self, _message: object) -> bytes:
         return self.download_bytes
 
-    async def send_audio(self, _jid: str, _file: str, ptt: bool = False) -> object:
-        self.audio_enviado = (_jid, _file, ptt)
-        return types.SimpleNamespace(ID="WA-AUDIO")
+    async def build_audio_message(self, file: str, ptt: bool = False) -> object:
+        # Como neonize 0.10: el mimetype sale de libmagic, sin `codecs=opus`.
+        audio = types.SimpleNamespace(mimetype="audio/ogg", PTT=ptt, archivo=file)
+        return types.SimpleNamespace(audioMessage=audio)
+
+    async def send_message(self, _jid: str, _message: object) -> object:
+        audio = getattr(_message, "audioMessage", None)
+        if audio is not None:
+            self.audio_enviado = (_jid, audio.archivo, audio.PTT, audio.mimetype)
+            return types.SimpleNamespace(ID="WA-AUDIO")
+        return types.SimpleNamespace(ID="WAMID-1")
 
     async def send_image(self, _jid: str, _file: str, caption: str | None = None) -> object:
         self.imagen_enviada = (_jid, _file, caption)
@@ -403,7 +408,13 @@ async def test_send_audio_usa_ptt_y_devuelve_wamid(tmp_path: Path) -> None:
     wamid = await socket.send_audio(to="57300", audio_url="https://api/files/audio.ogg")
 
     assert wamid == "WA-AUDIO"
-    assert socket._client.audio_enviado == ("57300@s.whatsapp.net", "https://api/files/audio.ogg", True)
+    # La nota de voz sale con el mimetype que WhatsApp reproduce, no el `audio/ogg` de libmagic.
+    assert socket._client.audio_enviado == (
+        "57300@s.whatsapp.net",
+        "https://api/files/audio.ogg",
+        True,
+        "audio/ogg; codecs=opus",
+    )
     await socket.disconnect()
 
 
