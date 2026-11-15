@@ -485,3 +485,73 @@ async def test_send_one_de_un_canal_sin_adaptador_falla_permanente_y_libera_el_c
     assert isinstance(result, GraphError) and result.category == "PERMANENT"
     assert "meta/instagram" in str(result)
     assert calls["release"] == 1 and calls["next"] == []
+
+
+@pytest.mark.asyncio
+async def test_send_one_audio_tts_sintetiza_y_envia_nota(monkeypatch):
+    from types import SimpleNamespace
+
+    from core.mcp.host import mcp_host
+    from core.mcp.types import VoiceSynthesis
+    from core.tasks.outbound_send import _send_one
+
+    async def _synth(_cid, texto):
+        assert texto == "hola en voz"
+        return VoiceSynthesis(audio_key="k", audio_url="https://api/files/a.ogg")
+
+    monkeypatch.setattr(mcp_host, "synthesize_voice", _synth)
+
+    enviados = {}
+
+    async def _send_audio(_credentials, external_id, audio_url):
+        enviados["audio"] = (external_id, audio_url)
+        return "wamid-audio"
+
+    adapter = SimpleNamespace(
+        send_text=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no debe ser texto")),
+        send_image=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no debe ser imagen")),
+        send_audio=_send_audio,
+    )
+    msg, tenant_id, _calls = _send_one_fixture(monkeypatch, adapter=adapter)
+    msg.media_type = "audio/tts"
+    msg.media_transcription = "hola en voz"
+
+    assert await _send_one(msg.id, tenant_id) is None
+    assert enviados["audio"] == ("whatsapp:+573001234567", "https://api/files/a.ogg")
+    assert msg.media_type == "audio/ogg"
+    assert msg.media_url == "https://api/files/a.ogg"
+    assert msg.status == "sent"
+    assert msg.external_message_id == "wamid-audio"
+
+
+@pytest.mark.asyncio
+async def test_send_one_audio_tts_sin_sintesis_cae_a_texto(monkeypatch):
+    from types import SimpleNamespace
+
+    from core.mcp.host import mcp_host
+    from core.tasks.outbound_send import _send_one
+
+    async def _sin_voz(_cid, _texto):
+        return None
+
+    monkeypatch.setattr(mcp_host, "synthesize_voice", _sin_voz)
+
+    enviados = {}
+
+    async def _send_text(_credentials, external_id, content):
+        enviados["texto"] = (external_id, content)
+        return "wamid-texto"
+
+    adapter = SimpleNamespace(
+        send_text=_send_text,
+        send_image=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no debe ser imagen")),
+        send_audio=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no debe ser audio")),
+    )
+    msg, tenant_id, _calls = _send_one_fixture(monkeypatch, adapter=adapter)
+    msg.media_type = "audio/tts"
+    msg.media_transcription = "hola en voz"
+
+    assert await _send_one(msg.id, tenant_id) is None
+    assert enviados["texto"] == ("whatsapp:+573001234567", "hola en voz")
+    assert msg.media_type is None
+    assert msg.status == "sent"

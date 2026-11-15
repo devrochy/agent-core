@@ -34,6 +34,10 @@ from core.mcp.types import (
     SkillInfo,
     ToolContext,
     ValidarDatoFn,
+    VoicePlan,
+    VoicePolicyFn,
+    VoiceSynthesis,
+    VoiceSynthesizerFn,
 )
 from core.shared.events import ON_TOOL_EXECUTED, EventHandler, event_bus
 from core.shared.exceptions import BusinessError, PluginError
@@ -62,6 +66,9 @@ class MCPHost:
         self._resolvers: dict[str, Resolver] = {}
         # Resúmenes de confirmación por acción (HU-AOS-07): acción -> (fn, plugin_id).
         self._resumenes: dict[str, tuple[ResumenFn, str]] = {}
+        # Respuestas por voz (ADR-0197): política y sintetizador por plugin.
+        self._voice_policies: dict[str, VoicePolicyFn] = {}
+        self._voice_synthesizers: dict[str, VoiceSynthesizerFn] = {}
         # Rótulos humanos de los datos de los procedimientos de cada plugin (adenda 2026-10-13).
         self._rotulos: dict[str, dict[str, str]] = {}
         self._resources: dict[str, MCPResource] = {}
@@ -231,6 +238,53 @@ class MCPHost:
         """(fn, plugin_id) del resumen de una acción, o None (el motor filtra por packs permitidos)."""
         return self._resumenes.get(accion)
 
+    def register_voice_policy(self, fn: VoicePolicyFn) -> None:
+        """Registra la política de respuestas por voz del plugin que se activa (ADR-0197).
+
+        El core la consulta antes de entregar un turno; `fn(conversation_id, texto)` decide
+        si ESE turno va con nota de voz. Una por plugin."""
+        plugin_id = self._active_plugin
+        if plugin_id in self._voice_policies:
+            raise PluginError(plugin_id, "Política de voz ya registrada")
+        self._voice_policies[plugin_id] = fn
+
+    def register_voice_synthesizer(self, fn: VoiceSynthesizerFn) -> None:
+        """Registra el sintetizador de voz del plugin que se activa (ADR-0197).
+
+        Corre en el worker de salida (no en el turno): `fn(conversation_id, texto)` devuelve
+        el audio guardado o `None` si no pudo. Uno por plugin."""
+        plugin_id = self._active_plugin
+        if plugin_id in self._voice_synthesizers:
+            raise PluginError(plugin_id, "Sintetizador de voz ya registrado")
+        self._voice_synthesizers[plugin_id] = fn
+
+    async def resolve_voice(self, conversation_id: uuid.UUID, text: str) -> VoicePlan | None:
+        """Plan de voz del primer pack que lo pida, o None. Un fallo no frena a los demás."""
+        for plugin_id, fn in list(self._voice_policies.items()):
+            try:
+                decision = await fn(conversation_id, text)
+            except Exception:
+                log.exception("voice_policy_failed", plugin=plugin_id)
+                continue
+            if not decision:
+                continue
+            return VoicePlan(
+                include_text=bool(getattr(decision, "include_text", True)),
+                plugin_id=plugin_id,
+            )
+        return None
+
+    async def synthesize_voice(self, conversation_id: uuid.UUID, text: str) -> VoiceSynthesis | None:
+        """Audio del primer sintetizador que lo logre, o None (el worker cae a texto)."""
+        for plugin_id, fn in list(self._voice_synthesizers.items()):
+            try:
+                sintesis = await fn(conversation_id, text)
+                if sintesis is not None:
+                    return sintesis
+            except Exception:
+                log.exception("voice_synthesizer_failed", plugin=plugin_id)
+        return None
+
     def register_rotulos(self, rotulos: Mapping[str, str]) -> None:
         """Rótulos humanos de los datos de los procedimientos del plugin que se activa (adenda
         2026-10-13 de ADR-0113): `{"email": "Correo"}`, y de los valores de una lista:
@@ -284,6 +338,8 @@ class MCPHost:
         self._procedimientos.pop(plugin_id, None)
         self._resolvers = {k: v for k, v in self._resolvers.items() if v.plugin_id != plugin_id}
         self._resumenes = {k: v for k, v in self._resumenes.items() if v[1] != plugin_id}
+        self._voice_policies.pop(plugin_id, None)
+        self._voice_synthesizers.pop(plugin_id, None)
         self._rotulos.pop(plugin_id, None)
         self._resources = {k: v for k, v in self._resources.items() if v.plugin_id != plugin_id}
         handlers = self._plugin_handlers.pop(plugin_id, [])

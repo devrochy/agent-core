@@ -20,6 +20,8 @@ from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select, text, true
 
+from core.almacenamiento import key_limpia
+from core.almacenamiento import url as url_firmada
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
@@ -97,6 +99,11 @@ class MessageItem(BaseModel):
     tool_calls: list[str] = Field(default_factory=list)
     # HU-AOS-28: el turno que produjo el mensaje del agente (abre el depurador, `GET /turns/{id}`).
     turn_id: uuid.UUID | None = Field(default=None, description="Turno del agente que lo envió; null salvo en los mensajes del agente.")
+    # Multimedia (ADR-0196/0197): audio, imagen o nota de voz. `media_url` sale firmada y
+    # `media_transcription` guarda el texto del STT o la descripción de la imagen.
+    media_type: str | None = Field(default=None, description="MIME del archivo (audio/ogg, image/jpeg…).")
+    media_url: str | None = Field(default=None, description="URL firmada para descargar o reproducir el archivo.")
+    media_transcription: str | None = Field(default=None, description="Transcripción del audio o descripción de la imagen.")
 
 
 class MessagesSince(BaseModel):
@@ -223,6 +230,15 @@ def _summary(
     )
 
 
+def _media_url(value: str | None) -> str | None:
+    """URL para el panel: respeta una URL externa y firma una `key` del storage."""
+    if not value:
+        return None
+    if value.startswith(("http://", "https://")):
+        return value
+    return url_firmada(value) if key_limpia(value) else None
+
+
 def _pendientes(messages: list[Message]) -> int:
     """Mensajes del cliente posteriores a la última respuesta entregada.
 
@@ -299,6 +315,9 @@ async def _message_items(session: Any, tenant_id: uuid.UUID, conversation_id: uu
             error_reason=m.error_reason,
             tool_calls=herramientas.get(m.turn_id, []) if m.turn_id and primero.get(m.turn_id) == m.id else [],
             turn_id=m.turn_id if m.sender_type == "agent" else None,
+            media_type=m.media_type,
+            media_url=_media_url(m.media_url),
+            media_transcription=m.media_transcription,
         )
         for m in messages
     ]

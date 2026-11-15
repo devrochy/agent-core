@@ -389,6 +389,30 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
                     return GraphError(
                         f"Mensaje interactivo no enviable: {exc}", category="PERMANENT"
                     )
+            elif message.media_type == "audio/tts":
+                # Respuesta por voz (ADR-0197): se sintetiza en el worker, no en el turno. Si el
+                # pack no puede (sin llave, proveedor caído), se degrada al texto ya escrito.
+                from core.mcp.host import mcp_host
+
+                texto = message.media_transcription or message.content
+                sintesis = await mcp_host.synthesize_voice(message.conversation_id, texto)
+                if sintesis is None:
+                    async with get_session() as session:
+                        db_message = await session.get(Message, message_id)
+                        if db_message is not None:
+                            db_message.content = texto
+                            db_message.media_type = None
+                            db_message.media_url = None
+                    wamid = await adapter.send_text(credentials, customer.external_id, texto)
+                else:
+                    async with get_session() as session:
+                        db_message = await session.get(Message, message_id)
+                        if db_message is not None:
+                            db_message.media_type = sintesis.mimetype
+                            db_message.media_url = sintesis.audio_url
+                    wamid = await adapter.send_audio(
+                        credentials, customer.external_id, sintesis.audio_url
+                    )
             elif message.media_type == "image" and message.media_url:
                 wamid = await adapter.send_image(
                     credentials, customer.external_id, message.media_url, message.content

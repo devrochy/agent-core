@@ -27,7 +27,9 @@ import asyncio
 import inspect
 import re
 from pathlib import Path
+from typing import Any
 
+from core.config import get_settings
 from core.shared.logger import get_logger
 from core.waweb.backend import (
     DeviceIdentity,
@@ -119,6 +121,81 @@ def _jid_phone(jid: object) -> str | None:
 
 def _texto(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _presente(message: object, campo: str) -> bool:
+    """¿El proto trae ese campo? En los dobles de test, si el atributo no es None."""
+    try:
+        return bool(message.HasField(campo))
+    except Exception:
+        return getattr(message, campo, None) is not None
+
+
+def _mime(value: object, default: str) -> str:
+    texto = _texto(value)
+    base = texto.split(";", 1)[0].strip().lower() if texto else ""
+    return base or default
+
+
+def _media_descripcion(message: object) -> list[dict[str, Any]]:
+    """Media que trae el mensaje, sin descargarla.
+
+    WhatsApp entrega las notas de voz como `audioMessage` (con `PTT=True`) y las
+    fotos como `imageMessage`. El caption de una foto cuenta como texto del
+    mensaje para que el turno no quede vacío.
+    """
+    items: list[dict[str, Any]] = []
+    if _presente(message, "audioMessage"):
+        audio = getattr(message, "audioMessage", None)
+        items.append(
+            {
+                "type": _mime(getattr(audio, "mimetype", None), "audio/ogg"),
+                "bytes": int(getattr(audio, "fileLength", 0) or 0),
+                "seconds": int(getattr(audio, "seconds", 0) or 0),
+                "ptt": bool(getattr(audio, "PTT", False)),
+            }
+        )
+    if _presente(message, "imageMessage"):
+        image = getattr(message, "imageMessage", None)
+        items.append(
+            {
+                "type": _mime(getattr(image, "mimetype", None), "image/jpeg"),
+                "bytes": int(getattr(image, "fileLength", 0) or 0),
+                "caption": _texto(getattr(image, "caption", None)) or "",
+            }
+        )
+    return items
+
+
+async def _descargar_media(
+    client: object, message: object, descripcion: dict[str, Any]
+) -> dict[str, Any]:
+    """Descarga la media del mensaje y devuelve el ítem para `InboundEvent.media`.
+
+    El puente Go se serializa con `_BRIDGE_LOCK` (misma razón que el resto de
+    llamadas a Neonize). Un fallo no tumba el inbound: se publica el descriptor
+    con `error` y el consumer responde el texto fijo de media no recibida.
+    """
+    tope = get_settings().media_max_bytes
+    tamano = int(descripcion.get("bytes") or 0)
+    if tamano > tope:
+        log.warning("waweb_inbound_media_too_large", tipo=descripcion.get("type"), bytes=tamano)
+        return {**descripcion, "error": "too_large"}
+    try:
+        download_any = getattr(client, "download_any", None)
+        if download_any is None:
+            raise RuntimeError("el cliente de Neonize no expone download_any")
+        async with _BRIDGE_LOCK:
+            datos = await download_any(message)
+    except Exception:
+        log.warning("waweb_inbound_media_failed", tipo=descripcion.get("type"), exc_info=True)
+        return {**descripcion, "error": "download_failed"}
+    if not datos:
+        return {**descripcion, "error": "empty"}
+    if len(datos) > tope:
+        log.warning("waweb_inbound_media_too_large", tipo=descripcion.get("type"), bytes=len(datos))
+        return {**descripcion, "error": "too_large"}
+    return {**descripcion, "data": bytes(datos)}
 
 
 def _identity_from_pair(event: object) -> DeviceIdentity:
@@ -261,15 +338,42 @@ class NeonizeSocket:
                 sender_jid = alt
             message = getattr(event, "Message", None)
             text = _message_text(message) if message is not None else ""
+            descripciones = _media_descripcion(message) if message is not None else []
+            if not text:
+                # El caption de una foto cuenta como texto; una nota de voz no trae
+                # caption y se resuelve por el media del evento.
+                text = next(
+                    (str(item.get("caption") or "") for item in descripciones if item.get("caption")),
+                    "",
+                )
+            media: list[dict[str, Any]] = []
+            if message is not None:
+                for descripcion in descripciones:
+                    media.append(await _descargar_media(client, message, descripcion))
             wamid = str(getattr(info, "ID", "") or "")
             sender = _jid_number(sender_jid)
-            if not wamid or not text or not sender:
+            if not wamid or not sender or (not text and not media):
                 # Sin remitente resoluble no se publica: mejor no crear un
-                # customer basura ni responder a un destino inválido.
+                # customer basura ni responder a un destino inválido. Sin texto
+                # NI media tampoco hay turno (reacciones, protocolos, etc.).
                 log.warning("waweb_inbound_sin_remitente", wamid=wamid)
                 return
+            if media:
+                log.info(
+                    "waweb_inbound_media",
+                    wamid=wamid,
+                    tipos=[str(item.get("type") or "") for item in media],
+                )
             name = str(getattr(info, "Pushname", "") or "") or None
-            await on_message(InboundEvent(sender=sender, text=text, wamid=wamid, customer_name=name))
+            await on_message(
+                InboundEvent(
+                    sender=sender,
+                    text=text,
+                    wamid=wamid,
+                    customer_name=name,
+                    media=media,
+                )
+            )
 
         handlers = {
             "ConnectedEv": _connected,
@@ -298,15 +402,33 @@ class NeonizeSocket:
             self._idle_task = asyncio.create_task(client.idle())
 
     async def send(self, *, to: str, text: str, image_url: str | None = None) -> str:
+        if image_url:
+            # Compatibilidad: cualquier caller que pase una imagen por `send` sale nativo.
+            return await self.send_image(to=to, image_url=image_url, caption=text)
         if self._client is None:
             raise RuntimeError("el socket waweb no está conectado")
         jid = to if "@" in to else f"{to}@s.whatsapp.net"
-        # Media nativa (imagen) entra en F3; por ahora la URL va en el texto.
-        body = text if not image_url else f"{text}\n{image_url}".strip()
         from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message
 
         async with _BRIDGE_LOCK:
-            sent = await self._client.send_message(jid, Message(conversation=body))
+            sent = await self._client.send_message(jid, Message(conversation=text))
+        return str(getattr(sent, "ID", "") or "")
+
+    async def send_image(self, *, to: str, image_url: str, caption: str = "") -> str:
+        if self._client is None:
+            raise RuntimeError("el socket waweb no está conectado")
+        jid = to if "@" in to else f"{to}@s.whatsapp.net"
+        async with _BRIDGE_LOCK:
+            sent = await self._client.send_image(jid, image_url, caption=caption or None)
+        return str(getattr(sent, "ID", "") or "")
+
+    async def send_audio(self, *, to: str, audio_url: str, ptt: bool = True) -> str:
+        if self._client is None:
+            raise RuntimeError("el socket waweb no está conectado")
+        jid = to if "@" in to else f"{to}@s.whatsapp.net"
+        # Neonize descarga la URL y arma el `audioMessage` con `PTT` (nota de voz).
+        async with _BRIDGE_LOCK:
+            sent = await self._client.send_audio(jid, audio_url, ptt=ptt)
         return str(getattr(sent, "ID", "") or "")
 
     async def alive(self) -> bool:
