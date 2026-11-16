@@ -104,9 +104,9 @@ def test_canales_se_deduplican_y_siguen_el_orden_del_catalogo() -> None:
 
 def test_canales_desconocidos_o_sin_conversaciones_se_rechazan() -> None:
     with pytest.raises(svc.ErrorMensajeGuardado) as exc:
-        svc.normalizar_canales(["whatsapp_meta", "telegram", "playground"])
+        svc.normalizar_canales(["whatsapp_meta", "canal_inexistente", "playground"])
     assert _codigo(exc) == (422, "canales_invalidos")
-    assert exc.value.details["invalidos"] == ["playground", "telegram"]  # type: ignore[index]
+    assert exc.value.details["invalidos"] == ["canal_inexistente", "playground"]  # type: ignore[index]
 
 
 def test_los_canales_permitidos_excluyen_el_playground_y_todo_tipo_sin_conversaciones() -> None:

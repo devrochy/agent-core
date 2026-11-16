@@ -303,7 +303,7 @@ async def test_api_bandera_catalogo_y_alta(negocios, app_client, monkeypatch) ->
         r.text
     )
     r = await app_client.put(
-        f"/api/v1/admin/platform/tenants/{tid}/canales/telegram",
+        f"/api/v1/admin/platform/tenants/{tid}/canales/canal_inexistente",
         headers=h,
         json={"habilitado": True},
     )

@@ -223,8 +223,8 @@ async def test_validacion_del_texto_las_variables_y_los_canales(app_client, nego
     assert _codigo(await intentar(texto="   ")) == "texto_invalido"
     assert _codigo(await intentar(texto="x" * 1025)) == "texto_invalido"
     assert _codigo(await intentar(titulo="  ")) == "titulo_invalido"
-    r = await intentar(canales=["whatsapp_meta", "telegram", "playground"])
-    assert r.status_code == 422 and _codigo(r) == "canales_invalidos" and r.json()["error"]["details"]["invalidos"] == ["playground", "telegram"]
+    r = await intentar(canales=["whatsapp_meta", "canal_inexistente", "playground"])
+    assert r.status_code == 422 and _codigo(r) == "canales_invalidos" and r.json()["error"]["details"]["invalidos"] == ["canal_inexistente", "playground"]
     assert (await intentar(clave="Mal Formada")).status_code == 422
     assert (await intentar(estado="archivado")).status_code == 422, "un mensaje nuevo es borrador o activo"
     assert (await intentar(estado="publicado")).status_code == 422

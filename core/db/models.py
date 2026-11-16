@@ -327,6 +327,53 @@ class TwilioConnection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class TelegramConnection(Base):
+    """Lo propio de una conexión de Telegram (bot propio del negocio), 1:1 con su `ChannelConnection` (ADR-0199,
+    migración 0137).
+
+    Sin secretos: el token del bot y el secreto del webhook van cifrados en `channel_connections.credentials_encrypted`.
+    El `bot_id` es `channel_connections.external_id` (de `getMe`); un bot vivo solo está en un negocio por
+    `uq_channel_connections_telegram_bot_viva`. `public_id` va en la URL del webhook."""
+
+    __tablename__ = "telegram_connections"
+    __table_args__ = (
+        Index(
+            "uq_telegram_connections_conexion_viva",
+            "tenant_id",
+            "channel_connection_id",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "channel_connection_id"],
+            ["channel_connections.tenant_id", "channel_connections.id"],
+            name="fk_telegram_connections_conexion",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    channel_connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    public_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    bot_username: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    bot_name: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    # pending | connected | degraded | revoked | error
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", server_default="pending")
+    # URL registrada con `setWebhook`; `webhook_confirmado_at` = cuando `getWebhookInfo` la devolvió igual.
+    webhook_url: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    webhook_confirmado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Lo último que dijo `getWebhookInfo` (cron de salud).
+    pending_update_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    last_error_message: Mapped[str | None] = mapped_column(Text)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_update_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class TwilioContentTemplate(Base):
     """Plantilla de la Content API de Twilio (`HX…`) de una conexión de WhatsApp vía Twilio, con su aprobación de
     WhatsApp (ADR-0186 §8, migración 0123). Twilio no avisa los cambios de aprobación: `next_poll_at` programa la
