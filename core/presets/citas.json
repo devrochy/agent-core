@@ -1,0 +1,51 @@
+{
+  "id": "citas",
+  "version": 1,
+  "nombre": "Citas y reservas",
+  "descripcion": "Negocio que atiende con cita: peluquería, barbería, spa o consultorio. Agenda, reprograma y recuerda citas por WhatsApp.",
+  "sinonimos": [
+    "citas",
+    "reservas",
+    "agenda",
+    "peluquería",
+    "barbería",
+    "salón de belleza",
+    "estética",
+    "spa",
+    "uñas",
+    "manicure",
+    "masajes",
+    "consultorio",
+    "odontología",
+    "veterinaria"
+  ],
+  "plan_minimo": "basic",
+  "packs": [
+    "pack_calendar",
+    "pack_commerce"
+  ],
+  "playbooks": [
+    "citas",
+    "seguimiento"
+  ],
+  "persona": {
+    "tone": "cercano",
+    "warmth": 5,
+    "emojis": "sparse"
+  },
+  "app_settings": {
+    "split_style": "un_mensaje",
+    "language": "es",
+    "currency": "COP"
+  },
+  "conexiones_requeridas": [
+    "whatsapp"
+  ],
+  "pasos_de_activacion": [
+    "conectar_whatsapp",
+    "configurar_agenda"
+  ],
+  "agentes": [
+    "agenda"
+  ]
+}

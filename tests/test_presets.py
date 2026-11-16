@@ -126,3 +126,44 @@ def test_seed_de_suscripciones_respeta_d16() -> None:
     assert fragmento.seed["planes"]
     for plan in fragmento.seed["planes"]:
         assert plan.get("trial_dias", 0) == 0 or plan["precio"] == 0, plan["codigo"]
+
+
+def test_preset_de_citas_instala_la_agenda() -> None:
+    """Negocios que atienden con cita (peluquería, barbería, spa, consultorio) tienen su preset (2026-11-16): antes
+    caían en «Planes por suscripción» y el alta les instalaba Ventas y Suscripciones en vez de la agenda."""
+    from core.presets import plantillas_del_preset
+
+    preset = load_preset("citas")
+    assert preset.es_v2 and preset.agentes == ["agenda"]
+    assert {"pack_calendar"} <= set(preset.packs)
+    for plantilla in plantillas_del_preset(preset):
+        assert set(plantilla.habilidades) <= set(preset.packs)
+
+
+@pytest.mark.parametrize(
+    ("texto", "esperado"),
+    [
+        ("peluquería", "citas"),
+        ("Tengo una barbería en el centro", "citas"),
+        ("salón de belleza", "citas"),
+        ("consultorio odontológico", "citas"),
+        ("gimnasio", "suscripciones"),
+        ("tienda de ropa", "comercio"),
+        ("pizzería", "restaurante"),
+    ],
+)
+def test_el_tipo_de_negocio_sale_del_texto_del_cliente(texto: str, esperado: str) -> None:
+    from pack_subscriptions.procedimientos import _presets_con_sinonimos, tipo_desde_texto
+
+    assert tipo_desde_texto(texto, _presets_con_sinonimos()) == esperado
+
+
+def test_ningun_sinonimo_esta_en_dos_presets() -> None:
+    """Un sinónimo repetido vuelve ambiguo el tipo de negocio (`tipo_desde_texto` no elige ninguno)."""
+    from pack_subscriptions.procedimientos import _normalizar
+
+    vistos: dict[str, str] = {}
+    for preset in list_presets():
+        for frase in (preset.id, preset.nombre, *preset.sinonimos):
+            clave = _normalizar(frase)
+            assert vistos.setdefault(clave, preset.id) == preset.id, f"{frase!r} en {vistos[clave]} y {preset.id}"

@@ -203,7 +203,7 @@ El flujo agrupa las tools por **etapas** de la atención y se **compone** en cad
 
 ### Presets de negocio (ADR-0110)
 
-Un **preset** arma un tipo de negocio (comercio, restaurante, cobranza…) en una llamada:
+Un **preset** arma un tipo de negocio (comercio, restaurante, cobranza, citas, suscripciones) en una llamada:
 `core/presets/<id>.json` es un manifiesto corto (packs, playbooks por nombre, persona, `AppSettings`,
 plan mínimo, conexiones y pasos de activación) y cada pack aporta su fragmento por vertical en
 `packages/pack-*/presets/<vertical>.json` (config sin secretos y datos de ejemplo para `seed_data`).

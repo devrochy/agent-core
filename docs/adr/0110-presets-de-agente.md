@@ -74,7 +74,8 @@ regla de no pisar.
 
 **Entradas:** `agent-core tenant create --preset <id>` y el consumidor de aprovisionamiento (HU-SH-03)
 llaman a la misma función. Catálogo inicial (HU-FWK-03): `comercio`, `restaurante` y `cobranza`. HU-SUB-11
-agrega `planes-y-suscripciones`.
+agrega `planes-y-suscripciones`. Adenda 2026-11-16: `citas` (peluquería, barbería, spa, consultorio) instala la
+Agenda; esos sinónimos salen de `suscripciones`, que queda para gimnasios, academias y membresías.
 
 ### 4. Lugar en el orden de personalización
 
