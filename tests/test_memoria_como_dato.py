@@ -174,3 +174,11 @@ async def test_remember_fact_v3_con_perfil_y_legacy_guardan(guardados: list[str]
     assert v3 == {"status": "stored"}
     assert legacy == {"status": "stored"}
     assert guardados == ["Prefiere café", "Pide los viernes"]
+
+
+def test_el_tope_del_recuerdo_es_el_de_escapar() -> None:
+    """Si cambia uno solo, lo guardado se cortaría en silencio al entrar al prompt."""
+    from core.kernel.tarjeta import MAX_VALOR_CHARS
+    from core.memory.facts import MAX_RECUERDO_CHARS
+
+    assert MAX_RECUERDO_CHARS == MAX_VALOR_CHARS
