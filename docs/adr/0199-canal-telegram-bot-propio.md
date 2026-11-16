@@ -3,6 +3,7 @@
 - **Estado:** propuesto
 - **Fecha:** 2026-11-15
 - **Contexto:** D-74 (docs); HU-CONN-22 a HU-CONN-28 (SPEC-08). Decisiones del dueño del 2026-11-15.
+- **Enmienda:** ADR-0197 punto 6 (la voz deja de estar atada a `waweb`, §13).
 - **Usa:** ADR-0007 (ids globales de mensajes), ADR-0052 (canales por entry points), ADR-0069 (catálogo de tipos de conexión), ADR-0094 (credenciales por conexión), ADR-0115 (conexión canónica), ADR-0122 (pausa y borrado lógico), ADR-0186 (WhatsApp vía Twilio: el precedente de alta, webhook por `public_id`, salud y rutas), ADR-0188 (observabilidad), ADR-0197 (respuestas por voz).
 
 ## Contexto
@@ -82,6 +83,8 @@ Dos hechos de la Bot API (https://core.telegram.org/bots/api, v10.4, leída el 2
     - Un 401 la pasa a `revoked`.
     - «Reparar» re-registra el webhook.
 
+13. **La voz no está atada a una conexión** (pedido del dueño, 2026-11-16; enmienda ADR-0197 punto 6). `CapacidadesCanal` suma `voz`, declarada por tipo de conexión en `CAPACIDADES_POR_TIPO`: hoy `whatsapp_waweb` y `telegram`, los dos con `send_audio`. La política de `pack-voice` elige voz en cualquier conversación cuya conexión viva tenga esa capacidad, sin mirar el proveedor. Si un adaptador no sabe mandar audio (`ChannelError`) o el proveedor lo rechaza (`CONTENT`), `outbound_send` manda el texto ya escrito, como cuando el TTS no puede. Sumar voz a otro canal es implementar su `send_audio` y encender `voz` en su tipo.
+
 ## Alternativas consideradas
 
 | Opción | Por qué no |
@@ -126,7 +129,7 @@ Dos hechos de la Bot API (https://core.telegram.org/bots/api, v10.4, leída el 2
   - redacción en `tracing.py` y `sentry_setup.py`.
 - **PR core 2:** `core/gateway/telegram/alta.py` y `operacion.py`, `core/api/routers/telegram_connections.py`, el cron de salud `core.telegram_health_check` con la migración 0138 (`admin_telegram_connection_ids()`, SECURITY DEFINER como `admin_twilio_connection_ids`), y `docs/openapi.json`. El mensaje de prueba va a un `chat_id` que ya le escribió al bot: Telegram no deja que un bot inicie la conversación.
 - **PR core 3:** `core/gateway/telegram/webhook.py` (montado en `core/main.py`), `agentcore_channel_telegram.adapters.TelegramInbound`, ids globales, auditoría `telegram:<bot_id>`, `answerCallbackQuery` del toque, consumer fail-closed sin conexión y `avisos_canal` (`telegram` en `TIPOS_DE_TEXTO`, sin ventana). Los medios entran como `file_id`; la ingesta los descarga en el PR core 5.
-- **PR core 4:** `OutboundAdapter`, `sender.py`, `outbound_send.py`, `callback_query`, ritmo y voz saliente. Enciende `available` y `en_selector`.
+- **PR core 4:** `TelegramOutbound` (texto en partes de 4096, foto, `sendVoice` por URL y teclado inline una fila por opción), `resolve_credentials` (solo su bot, sin respaldo, nada con el kill-switch apagado), `core/gateway/telegram/interactivos.py` (ids de más de 64 bytes como `t:<token>` en Redis 7 días, resueltos por el webhook, que además quita el teclado), `core/gateway/telegram/ritmo.py` (25/s por bot, 1/s por chat, pausa tras un 429), `outbound_send` (401 → `revoked`, 409 → `error`, voz rechazada → texto), la capacidad `voz` (§13) y `available`/`en_selector` encendidos.
 - **PR core 5:** `media/ingesta.py`, `request_contact` y `shared_phone`.
 - **Panel y APK:** HU-CONN-27 y HU-CONN-28.
 - **Fuera del repo:** agregar el patrón del token de Telegram a la redacción de logs de Alloy (`solvershub-infra`).

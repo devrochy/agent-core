@@ -84,9 +84,10 @@ async def test_modal_agrupado_por_categoria_con_disponibles_y_proximamente(app_c
     assert 'href="/admin/plugins/pack_calendar/oauth"' in r.text
     # No disponibles (Twilio, Plivo).
     assert r.text.count("Próximamente") == 2
-    # Messenger e Instagram se conectan solo en el panel nuevo: su tarjeta no lleva a un enlace vacío.
-    assert r.text.count("Solo en el panel nuevo") == 2
-    assert r.text.count('aria-disabled="true"') == 4
+    # Messenger, Instagram y Telegram (ADR-0199) se conectan solo en el panel nuevo: su tarjeta no lleva a un enlace
+    # vacío.
+    assert r.text.count("Solo en el panel nuevo") == 3
+    assert r.text.count('aria-disabled="true"') == 5
 
 
 async def test_formulario_generico_guarda_conexion_de_correo(app_client):
