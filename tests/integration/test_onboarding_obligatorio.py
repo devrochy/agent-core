@@ -121,7 +121,7 @@ async def test_abre_solo_al_propietario_y_los_negocios_anteriores_al_corte_no_ap
     master = await api_headers(app_client, tid)
 
     r = await _recorrido(app_client, dueno)
-    assert (r["estado"], r["aplica"], r["abrir"], r["avisar"], r["total_pasos"]) == ("pendiente", True, True, False, 6)
+    assert (r["estado"], r["aplica"], r["abrir"], r["avisar"], r["total_pasos"]) == ("pendiente", True, True, False, 9)
     # El master ve el estado, pero no lo bloquea; el colaborador tampoco es redirigido.
     assert (await _recorrido(app_client, master))["abrir"] is False
     assert (await _recorrido(app_client, colaborador))["abrir"] is False
@@ -163,12 +163,36 @@ async def test_avanzar_omitir_y_reanudar_dejan_rastro_y_solo_los_mueve_el_propie
     assert (r.status_code, r.json()["error"]["code"]) == (409, "transicion_invalida")
 
     # Fuera de rango: lo frena el esquema.
-    r = await app_client.post("/api/v1/admin/onboarding/avanzar", headers=dueno, json={"paso": 9})
+    r = await app_client.post("/api/v1/admin/onboarding/avanzar", headers=dueno, json={"paso": 10})
     assert r.status_code == 422
 
     # Un colaborador con permiso de escribir no mueve el recorrido del negocio.
     r = await app_client.post("/api/v1/admin/onboarding/omitir", headers=colaborador)
     assert r.status_code == 403, r.text
+
+
+async def test_un_recorrido_de_6_pasos_se_retoma_en_su_equivalente_de_9(app_client) -> None:
+    """HU-UX-23 (SPEC-47): un recorrido guardado con el asistente de 6 pasos se lee en su paso de 9 y,
+    al escribirse otra vez, queda guardado ya con los 9 sin perder el paso."""
+    tid = await _negocio()
+    dueno = await _persona(app_client, tid, "owner")
+    # Guardado por la bienvenida de 6 pasos: «Carga sus datos» era el 5.
+    await _sql(
+        tid,
+        "update tenants set settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{onboarding}', "
+        "cast(:o as jsonb)) where id = :t",
+        o='{"estado": "en_curso", "paso": 5}',
+        t=tid,
+    )
+    recorrido = await _recorrido(app_client, dueno)
+    assert (recorrido["estado"], recorrido["paso"], recorrido["total_pasos"]) == ("en_curso", 7, 9)
+
+    # Omitir no trae paso: se escribe el ya traducido y queda marcado con los 9.
+    r = await app_client.post("/api/v1/admin/onboarding/omitir", headers=dueno)
+    assert (r.status_code, r.json()["paso"]) == (200, 7), r.text
+    [(guardado,)] = await _sql(tid, "select settings->'onboarding' from tenants where id = :t", t=tid)
+    assert (guardado["paso"], guardado["pasos"]) == (7, 9)
+    assert (await _recorrido(app_client, dueno))["paso"] == 7
 
 
 async def test_el_aviso_y_la_apertura_solo_insisten_sin_agente_propio(app_client) -> None:

@@ -1,4 +1,4 @@
-"""Recorrido del onboarding obligatorio (HU-SH-10): estados y transiciones, sin base de datos."""
+"""Recorrido del onboarding obligatorio (HU-SH-10, HU-UX-23): estados y transiciones, sin base de datos."""
 
 from __future__ import annotations
 
@@ -16,6 +16,11 @@ VIEJO = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
 
 def _r(crudo: object, creado: datetime = NUEVO, desde: date | None = CORTE) -> r.Recorrido:
     return r.desde_crudo(crudo, creado_en=creado, desde=desde)
+
+
+def _9(**datos: object) -> dict[str, object]:
+    """Un recorrido guardado ya con los 9 pasos de SPEC-47."""
+    return {**datos, "pasos": r.TOTAL_PASOS}
 
 
 def test_sin_fecha_de_corte_la_funcion_esta_apagada() -> None:
@@ -40,7 +45,7 @@ def test_negocio_anterior_al_corte_no_aplica_y_el_nuevo_queda_pendiente() -> Non
 
 
 def test_lo_guardado_manda_aunque_el_negocio_sea_anterior_al_corte() -> None:
-    actual = _r({"estado": "omitido", "paso": 3}, creado=VIEJO)
+    actual = _r(_9(estado="omitido", paso=3), creado=VIEJO)
     assert (actual.estado, actual.paso, actual.aplica, actual.avisa, actual.obliga) == (
         "omitido",
         3,
@@ -58,7 +63,7 @@ def test_con_un_agente_propio_no_abre_ni_avisa() -> None:
         False,
         False,
     )
-    for crudo in ({"estado": "en_curso", "paso": 2}, {"estado": "omitido", "paso": 3}):
+    for crudo in (_9(estado="en_curso", paso=2), _9(estado="omitido", paso=3)):
         actual = r.desde_crudo(crudo, creado_en=NUEVO, desde=CORTE, con_agente=True)
         assert actual.aplica and not actual.avisa and not actual.obliga
 
@@ -69,8 +74,21 @@ def test_datos_mal_formados_se_leen_como_no_guardados(crudo: object) -> None:
 
 
 def test_el_paso_guardado_se_acota() -> None:
-    assert _r({"estado": "en_curso", "paso": 99}).paso == r.TOTAL_PASOS
-    assert _r({"estado": "en_curso", "paso": -4}).paso == 1
+    assert _r(_9(estado="en_curso", paso=99)).paso == r.TOTAL_PASOS
+    assert _r(_9(estado="en_curso", paso=-4)).paso == 1
+
+
+def test_el_recorrido_de_6_pasos_se_lee_en_su_equivalente_de_9() -> None:
+    """SPEC-47: lo guardado sin `pasos` es del recorrido de 6; se traduce al leerlo. «Crea tu agente»
+    vuelve a «Horario y reglas», que es donde ahora se crea el agente al avanzar."""
+    equivalentes = {1: 1, 2: 3, 3: 4, 4: 4, 5: 7, 6: 8}
+    for viejo, nuevo in equivalentes.items():
+        assert _r({"estado": "en_curso", "paso": viejo}).paso == nuevo
+    assert _r({"estado": "omitido", "paso": 5}).paso == 7
+    # Ya guardado con 9, no se traduce; y un recorrido completo queda en el último paso.
+    assert _r(_9(estado="en_curso", paso=5)).paso == 5
+    assert _r({"estado": "completo", "paso": 6}).paso == r.TOTAL_PASOS
+    assert r.paso_guardado({"estado": "en_curso", "paso": True}) == 1
 
 
 def test_avanzar_empieza_y_retoma() -> None:
@@ -94,7 +112,7 @@ def test_no_se_avanza_ni_se_omite_lo_que_no_aplica_o_ya_esta_completo() -> None:
 
 def test_omitir_guarda_quien_y_cuando_y_conserva_el_paso() -> None:
     cambios = r.cambios_de_omitir(
-        _r({"estado": "en_curso", "paso": 4}), por="dueño@x.co", ahora=AHORA
+        _r(_9(estado="en_curso", paso=4)), por="dueño@x.co", ahora=AHORA
     )
     assert cambios == {
         "estado": "omitido",
@@ -105,7 +123,7 @@ def test_omitir_guarda_quien_y_cuando_y_conserva_el_paso() -> None:
 
 
 def test_reanudar_solo_si_estaba_omitido() -> None:
-    assert r.cambios_de_reanudar(_r({"estado": "omitido", "paso": 5})) == {
+    assert r.cambios_de_reanudar(_r(_9(estado="omitido", paso=5))) == {
         "estado": "en_curso",
         "paso": 5,
     }

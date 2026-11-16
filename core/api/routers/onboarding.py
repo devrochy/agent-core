@@ -425,6 +425,7 @@ async def dejar_listo(
     if actual.agente_id != cambios["agente_id"]:
         cambios["probado_en"] = None  # otro agente: la prueba anterior no cuenta
     if actual.estado == "pendiente":
+        # Al dejarlo listo sigue «Habilidades» (paso 5 de 9, SPEC-47).
         cambios.update(estado="en_curso", paso=5)
     try:
         nuevo = await rec.fijar(tid, cambios, actor=actor, accion="dejar-listo")

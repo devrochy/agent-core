@@ -49950,7 +49950,7 @@
         "properties": {
           "paso": {
             "type": "integer",
-            "maximum": 6.0,
+            "maximum": 9.0,
             "minimum": 1.0,
             "title": "Paso",
             "description": "Paso al que llega la persona."
