@@ -10,9 +10,10 @@ siempre en la misma transacción (un test estático lo vigila).
   así los lectores ven exactamente lo mismo. Los demás namespaces (los datos de las tareas,
   `ventas`, `cobranza`…) viven solo en `memory_facts`: los leerá el runtime v3 filtrando por
   `readScopes` y `data_class`, nunca a ciegas en cada prompt.
-- **Permisos:** `concedidos` son los `writeNamespaces` del agente que escribe. `None` = quien
-  escribe no es un agente v3 (tools de los packs, runtime legacy, consolidación, importación) y
-  no se chequea; con un conjunto, escribir fuera de él es `NamespaceNoConcedido`.
+- **Permisos:** `concedidos` son los `writeNamespaces` del agente que escribe; las tools del core
+  y de los packs pasan los de su `ToolContext` (por `datos_cliente.guardar`). `None` = quien
+  escribe no es un agente (consolidación, importación, siembra de pruebas, operador) y no se
+  chequea; con un conjunto, escribir fuera de él es `NamespaceNoConcedido`.
 - **data_class** la asigna el código por namespace y clave (`clasificar`); si quien escribe
   declara otra, gana la más estricta. Los hechos nunca se embeben en `memory_vectors`.
 - **Olvido:** `purgar_de_cliente` borra (lógico) sus hechos, vacía su proyección y anota
