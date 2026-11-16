@@ -563,7 +563,7 @@ async def _handle_inbound_scoped(fields: dict[str, str], *, opciones_habilitada:
 
 # ------------------------------------------------------------------ resolución
 class InboundSinConexion(Exception):
-    """El entrante es de un proveedor que solo responde por su conexión (Twilio) y esa conexión no está."""
+    """El entrante es de un proveedor que solo responde por su conexión (Twilio, Telegram) y esa conexión no está."""
 
 
 async def _conexion_validada(session: Any, tenant_id: uuid.UUID | None, fields: dict[str, str]) -> Any:
@@ -667,9 +667,9 @@ async def _resolve_conversation(
             )
 
         connection = await _conexion_validada(session, tenant_id, fields)
-        if connection is None and fields.get("provider") == "twilio":
-            # Twilio no tiene ruta sin su conexión (ADR-0186): una conversación sin conexión respondería por la
-            # primaria o por el número de la plataforma. No se crea.
+        if connection is None and fields.get("provider") in ("twilio", "telegram"):
+            # Twilio y Telegram no tienen ruta sin su conexión (ADR-0186, ADR-0199): una conversación sin conexión
+            # respondería por la primaria o por el número de la plataforma. No se crea.
             raise InboundSinConexion(fields.get("provider", ""))
         if connection is None:
             connection = (
