@@ -74447,12 +74447,12 @@
           "abrir": {
             "type": "boolean",
             "title": "Abrir",
-            "description": "El panel debe abrir el asistente solo: nunca se tocó y quien consulta es propietario del negocio."
+            "description": "El panel debe abrir el asistente solo: nunca se tocó, el negocio no tiene agente creado y quien consulta es propietario del negocio."
           },
           "avisar": {
             "type": "boolean",
             "title": "Avisar",
-            "description": "Aviso persistente: empezó o saltó el recorrido y no lo terminó."
+            "description": "Aviso persistente: empezó o saltó el recorrido, no lo terminó y el negocio no tiene agente creado."
           },
           "omitido_en": {
             "anyOf": [

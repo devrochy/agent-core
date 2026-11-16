@@ -13,6 +13,10 @@ Estados:
 - `completo`: lo validó el servidor (`finalizar`), nunca el panel.
 - `no_aplica`: no se calcula de la clave; es del negocio. Negocios creados antes de
   `ONBOARDING_DESDE`, o todos si la variable está vacía (función apagada).
+
+La apertura automática y el aviso solo tienen sentido mientras el negocio no tenga ningún agente
+propio: en cuanto existe uno, el recorrido deja de insistir (`con_agente`). El Coordinador del
+alta (`kind = 'core'`) no cuenta: lo crea el sistema para todos.
 """
 
 from __future__ import annotations
@@ -63,16 +67,20 @@ class Recorrido:
     agente_id: str | None = None
     conexion_id: str | None = None
     probado_en: datetime | None = None
+    # El negocio ya tiene un agente propio (distinto del Coordinador del sistema).
+    con_agente: bool = False
 
     @property
     def obliga(self) -> bool:
-        """El panel abre el asistente solo si el recorrido es del negocio y nunca se tocó."""
-        return self.estado == "pendiente"
+        """El panel abre el asistente solo si el recorrido es del negocio, nunca se tocó y no hay
+        ningún agente creado."""
+        return self.estado == "pendiente" and not self.con_agente
 
     @property
     def avisa(self) -> bool:
-        """El aviso persistente se ve mientras el recorrido está empezado o saltado."""
-        return self.estado in ("en_curso", "omitido")
+        """El aviso persistente se ve mientras el recorrido está empezado o saltado y el negocio
+        todavía no tiene un agente propio."""
+        return self.estado in ("en_curso", "omitido") and not self.con_agente
 
 
 def _fecha(valor: Any) -> datetime | None:
@@ -93,7 +101,9 @@ def aplica_al_negocio(creado_en: datetime, desde: date | None) -> bool:
     return ref.date() >= desde
 
 
-def desde_crudo(crudo: Any, *, creado_en: datetime, desde: date | None) -> Recorrido:
+def desde_crudo(
+    crudo: Any, *, creado_en: datetime, desde: date | None, con_agente: bool = False
+) -> Recorrido:
     """El recorrido a partir de `settings.onboarding` (tolera claves ausentes o mal formadas)."""
     datos = crudo if isinstance(crudo, dict) else {}
     estado = datos.get("estado")
@@ -111,10 +121,11 @@ def desde_crudo(crudo: Any, *, creado_en: datetime, desde: date | None) -> Recor
             if isinstance(datos.get("conexion_id"), str)
             else None,
             probado_en=_fecha(datos.get("probado_en")),
+            con_agente=con_agente,
         )
     if not aplica_al_negocio(creado_en, desde):
-        return Recorrido(estado="no_aplica", paso=1, aplica=False)
-    return Recorrido(estado="pendiente", paso=1, aplica=True)
+        return Recorrido(estado="no_aplica", paso=1, aplica=False, con_agente=con_agente)
+    return Recorrido(estado="pendiente", paso=1, aplica=True, con_agente=con_agente)
 
 
 # --------------------------------------------------------------------- transiciones (puras)
@@ -180,6 +191,13 @@ def cambios_de_finalizar(
 
 # --------------------------------------------------------------------- base de datos
 
+# Un agente propio es cualquier fila vigente de `agents` que no sea el Coordinador (`kind='core'`),
+# que se crea con el negocio. Se evalúa en el mismo query: el aviso se decide en cada lectura.
+_AGENTE_PROPIO_SQL: Final = (
+    "EXISTS (SELECT 1 FROM agents a WHERE a.tenant_id = tenants.id "
+    "AND a.deleted_at IS NULL AND a.kind <> 'core')"
+)
+
 
 def _exigir_scope(tenant_id: uuid.UUID) -> None:
     if get_current_tenant_id() != tenant_id:
@@ -200,14 +218,17 @@ async def leer(tenant_id: uuid.UUID) -> Recorrido:
         fila = (
             await session.execute(
                 text(
-                    "SELECT settings->'onboarding', created_at FROM tenants WHERE id = :t AND deleted_at IS NULL"
+                    "SELECT settings->'onboarding', created_at, "
+                    f"{_AGENTE_PROPIO_SQL} FROM tenants WHERE id = :t AND deleted_at IS NULL"
                 ),
                 {"t": tenant_id},
             )
         ).first()
     if fila is None:
         raise NegocioNoEncontrado(str(tenant_id))
-    return desde_crudo(fila[0], creado_en=fila[1], desde=desde_fecha_de_corte())
+    return desde_crudo(
+        fila[0], creado_en=fila[1], desde=desde_fecha_de_corte(), con_agente=bool(fila[2])
+    )
 
 
 async def fijar(
@@ -225,7 +246,8 @@ async def fijar(
                 text(
                     "UPDATE tenants SET settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{onboarding}', "
                     "coalesce(settings->'onboarding', '{}'::jsonb) || cast(:cambios as jsonb)) "
-                    "WHERE id = :t AND deleted_at IS NULL RETURNING settings->'onboarding', created_at"
+                    "WHERE id = :t AND deleted_at IS NULL "
+                    f"RETURNING settings->'onboarding', created_at, {_AGENTE_PROPIO_SQL}"
                 ),
                 {"t": tenant_id, "cambios": json.dumps(cambios)},
             )
@@ -246,7 +268,9 @@ async def fijar(
         accion=accion,
         estado=cambios.get("estado"),
     )
-    return desde_crudo(fila[0], creado_en=fila[1], desde=desde_fecha_de_corte())
+    return desde_crudo(
+        fila[0], creado_en=fila[1], desde=desde_fecha_de_corte(), con_agente=bool(fila[2])
+    )
 
 
 async def marcar_prueba(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> None:
