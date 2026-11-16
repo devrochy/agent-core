@@ -50,6 +50,19 @@ def test_lo_guardado_manda_aunque_el_negocio_sea_anterior_al_corte() -> None:
     )
 
 
+def test_con_un_agente_propio_no_abre_ni_avisa() -> None:
+    pendiente = r.desde_crudo(None, creado_en=NUEVO, desde=CORTE, con_agente=True)
+    assert (pendiente.estado, pendiente.aplica, pendiente.obliga, pendiente.avisa) == (
+        "pendiente",
+        True,
+        False,
+        False,
+    )
+    for crudo in ({"estado": "en_curso", "paso": 2}, {"estado": "omitido", "paso": 3}):
+        actual = r.desde_crudo(crudo, creado_en=NUEVO, desde=CORTE, con_agente=True)
+        assert actual.aplica and not actual.avisa and not actual.obliga
+
+
 @pytest.mark.parametrize("crudo", [None, [], "x", {"estado": "inventado"}, {"estado": 3}])
 def test_datos_mal_formados_se_leen_como_no_guardados(crudo: object) -> None:
     assert _r(crudo).estado == "pendiente"
