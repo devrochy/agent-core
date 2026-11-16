@@ -51,9 +51,12 @@ def _etiqueta(principal: Principal) -> str:
     return str(getattr(principal.admin, "email", "") or principal.admin.id)
 
 
-async def _require_master(principal: Principal) -> None:
+async def _require_master(principal: Principal, *, registrar: bool) -> None:
+    """403 para quien no es master. Solo el intento de CAMBIARLO queda en el historial: registrar también las
+    lecturas dejaría a cualquier admin llenar una tabla de solo inserción y tapar los cambios reales."""
     if not es_master(principal.admin):
-        await svc.registrar_denegado(admin_id=principal.admin.id, etiqueta=_etiqueta(principal))
+        if registrar:
+            await svc.registrar_denegado(admin_id=principal.admin.id, etiqueta=_etiqueta(principal))
         raise ApiError.forbidden("Solo el admin de plataforma puede usar el interruptor global.")
 
 
@@ -76,13 +79,13 @@ def _salida(e: svc.Estado) -> KillSwitchOut:
 
 @router.get("", response_model=KillSwitchOut)
 async def obtener(principal: Annotated[Principal, Depends(get_principal)]) -> KillSwitchOut:
-    await _require_master(principal)
+    await _require_master(principal, registrar=False)
     return _salida(await svc.estado())
 
 
 @router.put("", response_model=KillSwitchOut)
 async def fijar(body: KillSwitchIn, principal: Annotated[Principal, Depends(get_principal)]) -> KillSwitchOut:
-    await _require_master(principal)
+    await _require_master(principal, registrar=True)
     try:
         estado = await svc.fijar(
             body.active, body.reason, admin_id=principal.admin.id, etiqueta=_etiqueta(principal), fuente="api"

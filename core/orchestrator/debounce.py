@@ -299,11 +299,13 @@ async def recover_orphaned_conversations() -> None:
                                 FROM messages m
                                 JOIN conversations c ON c.id = m.conversation_id
                                 WHERE c.status = 'open' AND c.bot_paused = false
-                                  AND (CAST(:desde AS timestamptz) IS NULL OR m.created_at > :desde)
+                                  AND m.tenant_id = :tid AND c.tenant_id = :tid
+                                  AND (CAST(:desde AS timestamptz) IS NULL
+                                       OR m.created_at > CAST(:desde AS timestamptz))
                                 ORDER BY m.conversation_id, m.created_at DESC
                                 """
                             ),
-                            {"desde": desde},
+                            {"desde": desde, "tid": tenant_id},
                         )
                     ).all()
                 # DENTRO del tenant_scope (bug encontrado por auditor-multitenant,

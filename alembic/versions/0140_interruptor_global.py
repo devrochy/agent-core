@@ -73,7 +73,11 @@ def upgrade() -> None:
         DO $do$
         BEGIN
             IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_runtime') THEN
-                GRANT SELECT, UPDATE ON platform_kill_switch TO app_runtime;
+                -- Sin REVOKE, los default privileges de 0003 le dejarían DELETE: borrar la única fila detiene
+                -- la plataforma (el lector falla cerrado). Solo lo mínimo.
+                REVOKE ALL ON platform_kill_switch FROM app_runtime;
+                REVOKE ALL ON platform_kill_switch_events FROM app_runtime;
+                GRANT SELECT, INSERT, UPDATE ON platform_kill_switch TO app_runtime;
                 GRANT SELECT, INSERT ON platform_kill_switch_events TO app_runtime;
             END IF;
         END $do$;

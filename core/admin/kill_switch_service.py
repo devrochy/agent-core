@@ -14,7 +14,8 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from core.db.models import PlatformKillSwitch, PlatformKillSwitchEvent, utcnow
 from core.db.session import get_session
@@ -66,7 +67,8 @@ async def estado() -> Estado:
         ).scalars().all()
     historial = [Evento(e.action, e.reason, e.actor_label, e.source, e.created_at) for e in eventos]
     if fila is None:
-        return Estado(False, None, None, None, None, historial)
+        # Sin la fila el lector falla cerrado: la plataforma está detenida y así se informa. `fijar` la recrea.
+        return Estado(True, "Sin la fila del interruptor: se trata como activo", None, None, None, historial)
     return Estado(fila.active, fila.reason, fila.changed_by_label, fila.source, fila.changed_at, historial)
 
 
@@ -80,14 +82,16 @@ async def fijar(
     if activo and razon is None:
         raise MotivoRequerido("Para activar el interruptor global hay que decir por qué.")
     accion = "activated" if activo else "deactivated"
+    valores = {
+        "active": activo, "reason": razon, "changed_by": admin_id, "changed_by_label": etiqueta,
+        "source": fuente, "changed_at": utcnow(),
+    }
     async with get_session() as session:
+        # Upsert: si la fila faltara (la plataforma estaría detenida), desactivar la recrea en vez de no hacer nada.
         await session.execute(
-            update(PlatformKillSwitch)
-            .where(PlatformKillSwitch.id == 1)
-            .values(
-                active=activo, reason=razon, changed_by=admin_id, changed_by_label=etiqueta,
-                source=fuente, changed_at=utcnow(),
-            )
+            pg_insert(PlatformKillSwitch)
+            .values(id=1, **valores)
+            .on_conflict_do_update(index_elements=[PlatformKillSwitch.id], set_=valores)
         )
         session.add(
             PlatformKillSwitchEvent(
@@ -95,7 +99,7 @@ async def fijar(
             )
         )
     kill_switch.invalidar()
-    log.warning("kill_switch_cambio", nivel="global", accion=accion, fuente=fuente, actor=etiqueta)
+    log.warning("kill_switch_cambio", nivel="global", accion=accion, fuente=fuente, admin_id=str(admin_id or ""))
     _metrica("global", accion)
     await _avisar(activo, razon, etiqueta)
     return await estado()
@@ -103,7 +107,7 @@ async def fijar(
 
 async def registrar_denegado(*, admin_id: uuid.UUID | None, etiqueta: str, fuente: str = "api") -> None:
     """Un intento de cambiar el interruptor sin ser master: queda en el historial (no cambia nada)."""
-    log.warning("kill_switch_acceso_denegado", actor=etiqueta, fuente=fuente)
+    log.warning("kill_switch_acceso_denegado", admin_id=str(admin_id or ""), fuente=fuente)
     try:
         async with get_session() as session:
             session.add(
