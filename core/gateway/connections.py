@@ -25,6 +25,7 @@ from core.db.session import get_session
 from core.gateway.connection_types import (
     CATEGORY_COMMUNICATION,
     PLAYGROUND,
+    TELEGRAM,
     WEBCHAT,
     WHATSAPP_META,
     WHATSAPP_TWILIO,
@@ -315,9 +316,11 @@ async def save_connection_in(
             raise ValueError("La conexión no existe")
         if connection.tenant_id != tid:
             raise ValueError("La conexión no pertenece a este tenant")
-        if (connection.provider == "twilio") != (type_id == WHATSAPP_TWILIO):
-            # Una conexión de Twilio tiene su fila `twilio_connections` y sus webhooks: no se convierte en otro tipo
-            # (ni otro tipo en Twilio) desde el formulario manual (ADR-0186).
+        if (connection.provider == "twilio") != (type_id == WHATSAPP_TWILIO) or (
+            connection.provider == "telegram"
+        ) != (type_id == TELEGRAM):
+            # Una conexión de Twilio o de Telegram tiene su fila propia y su webhook: no se convierte en otro tipo (ni
+            # otro tipo en una de ellas) desde el formulario manual (ADR-0186, ADR-0199).
             raise ValueError("Esta conexión no se puede cambiar a otro tipo.")
         previous = _decrypt_raw(connection)
 
@@ -496,6 +499,19 @@ async def delete_connection(connection_id: uuid.UUID) -> None:
         if connection is not None and not administrada_aparte(connection):
             connection.deleted_at = utcnow()
             connection.active = False
+            if connection.provider == "telegram":
+                # Su fila de Telegram se va con ella (ADR-0199): libera el bot y el ruteo del webhook.
+                from core.db.models import TelegramConnection
+
+                await session.execute(
+                    update(TelegramConnection)
+                    .where(
+                        TelegramConnection.tenant_id == connection.tenant_id,
+                        TelegramConnection.channel_connection_id == connection.id,
+                        TelegramConnection.deleted_at.is_(None),
+                    )
+                    .values(deleted_at=connection.deleted_at)
+                )
             if connection.provider == "twilio":
                 # Su fila de Twilio se va con ella (ADR-0186): libera el número y el ruteo del webhook.
                 from core.db.models import TwilioConnection

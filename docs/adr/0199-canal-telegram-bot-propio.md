@@ -123,7 +123,7 @@ Dos hechos de la Bot API (https://core.telegram.org/bots/api, v10.4, leída el 2
   - `canales_con` ignora los tipos ocultos para todos;
   - `TELEGRAM_HABILITADO` y `core/gateway/telegram/habilitado.py`;
   - redacción en `tracing.py` y `sentry_setup.py`.
-- **PR core 2:** `core/gateway/telegram/alta.py` y `operacion.py`, `core/api/routers/telegram_connections.py`, el cron de salud y `docs/openapi.json`.
+- **PR core 2:** `core/gateway/telegram/alta.py` y `operacion.py`, `core/api/routers/telegram_connections.py`, el cron de salud `core.telegram_health_check` con la migración 0138 (`admin_telegram_connection_ids()`, SECURITY DEFINER como `admin_twilio_connection_ids`), y `docs/openapi.json`. El mensaje de prueba va a un `chat_id` que ya le escribió al bot: Telegram no deja que un bot inicie la conversación.
 - **PR core 3:** webhook, `InboundAdapter`, ids globales, consumer y `avisos_canal`.
 - **PR core 4:** `OutboundAdapter`, `sender.py`, `outbound_send.py`, `callback_query`, ritmo y voz saliente. Enciende `available` y `en_selector`.
 - **PR core 5:** `media/ingesta.py`, `request_contact` y `shared_phone`.
