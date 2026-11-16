@@ -198,7 +198,7 @@ _MENSAJE_AGENTE = {
     CONTEXTO_INCOMPLETO: "Faltan datos del cliente que la plantilla necesita; no se envió.",
     SIN_PLANTILLA: "El cliente está fuera de la ventana de 24 h y la plantilla no está aprobada por Meta; no se envió.",
     DATOS_INVALIDOS: "No se pudo armar el contexto de la plantilla.",
-    PAUSADA: "El envío está pausado en esta conexión; no se envió.",
+    PAUSADA: "El envío está en pausa (la conexión, el negocio o este cliente); no se envió.",
     NO_ENCOLADO: "No se pudo enviar la plantilla.",
     ERROR_INTERNO: "No se pudo enviar la plantilla.",
 }

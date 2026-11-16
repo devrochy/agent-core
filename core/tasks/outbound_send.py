@@ -70,6 +70,11 @@ class ConexionPausadaError(GraphError):
         super().__init__(motivo, category="PERMANENT")
 
 
+class PausaAutomaticaError(ConexionPausadaError):
+    """El negocio o el cliente quedó en pausa con el mensaje automático ya en la cola (HU-ARCH-37, D-76).
+    Como la pausa de la conexión: falla con el motivo, sin reintentos y sin escalar."""
+
+
 @dataclass
 class RetryDecision:
     action: Literal["retry", "fail_permanent", "defer"]
@@ -268,6 +273,16 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
         if (motivo := await motivo_pausa_de_conversacion(conversation)) is not None:
             await _release_claim(message.id, message.conversation_id, tenant_id)
             return ConexionPausadaError(motivo)
+
+        # El negocio o el cliente quedó en pausa con un mensaje automático en la cola (HU-ARCH-37): lo de
+        # una persona sale; lo automático (agente, avisos, segmentos) falla con el motivo.
+        from core.gateway.pausa_automatica import es_envio_automatico, motivo_pausa_automatica
+
+        if es_envio_automatico(getattr(message, "sender_type", None), getattr(message, "client_message_id", None)) and (
+            motivo := await motivo_pausa_automatica(conversation, customer)
+        ):
+            await _release_claim(message.id, message.conversation_id, tenant_id)
+            return PausaAutomaticaError(motivo)
 
         provider, credentials = await resolve_credentials(
             conversation.connection_id,

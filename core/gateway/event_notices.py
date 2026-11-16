@@ -61,6 +61,7 @@ class NoticeNotSentError(RuntimeError):
 @dataclass(frozen=True)
 class NoticeResult:
     # "texto" | "plantilla" | "sin_plantilla" | "duplicado" | "no_enviado" | "conexion_pausada" | "omitido_canal" | "opciones"
+    # | "negocio_pausado" | "cliente_pausado" (HU-ARCH-37: el aviso no sale y no se reintenta)
     # ("omitido_canal": solo con la bandera `avisos_por_canal`, un canal de texto sin texto definido o con la política en
     # contra. "opciones": solo con esa bandera y la de `opciones_directas`, el aviso salió como plantilla con opciones,
     # ADR-0178 D3; `detalle` es la vía: interactivo, plantilla o texto).
@@ -237,6 +238,37 @@ async def _registrar_sin_plantilla(
     )
 
 
+async def _registrar_aviso_frenado(conversation: Conversation, event_key: str, notice_key: str) -> NoticeResult | None:
+    """Si el negocio o el cliente está en pausa, deja el aviso `failed` con el motivo y devuelve el resultado."""
+    from core.gateway.pausa_automatica import motivo_pausa_automatica
+
+    motivo = await motivo_pausa_automatica(conversation)
+    if motivo is None:
+        return None
+    async with get_session() as session:
+        session.add(
+            Message(
+                tenant_id=conversation.tenant_id,
+                conversation_id=conversation.id,
+                direction="outbound",
+                sender_type="agent",
+                content=f"Aviso «{event_key}» sin enviar: {motivo}",
+                status="failed",
+                error_reason=motivo,
+                client_message_id=notice_key,
+            )
+        )
+    log.info("event_notice_frenado_por_pausa", conversation_id=str(conversation.id), event_key=event_key, motivo=motivo)
+    return NoticeResult(motivo, motivo)
+
+
+async def _pausa_tras_envio(conversation: Conversation) -> NoticeResult | None:
+    from core.gateway.pausa_automatica import motivo_pausa_automatica
+
+    motivo = await motivo_pausa_automatica(conversation)
+    return NoticeResult(motivo, motivo) if motivo else None
+
+
 async def send_event_notice(
     conversation_id: uuid.UUID,
     event_key: str,
@@ -285,6 +317,11 @@ async def send_event_notice(
         log.info("event_notice_conexion_pausada", conversation_id=str(conversation_id), event_key=event_key)
         return NoticeResult("conexion_pausada", motivo)
 
+    # Negocio o cliente en pausa (HU-ARCH-37, D-76): lo mismo que la conexión pausada. Un solo `failed` con el
+    # motivo bajo el id estable del aviso; el evento termina sin reintentos y al reactivar no se reenvía.
+    if pausa := await _registrar_aviso_frenado(conversation, event_key, notice_key):
+        return pausa
+
     entrada = (await load_templates_map(conversation.tenant_id)).get(event_key) or {}
     fallback = str(entrada.get("fallback_text") or default_fallback_text).strip()
 
@@ -315,6 +352,9 @@ async def send_event_notice(
         except OutboundWindowExpiredError:
             enviado = False
         if not enviado:
+            # El negocio o el cliente se pausó entre el chequeo y el envío: el sender ya lo dejó `failed`.
+            if pausa := await _pausa_tras_envio(conversation):
+                return pausa
             raise NoticeNotSentError(f"Aviso {event_key} sin encolar (pausa o ventana cerrada)")
         return NoticeResult("texto")
 
@@ -355,6 +395,9 @@ async def send_event_notice(
         client_message_id=notice_key,
     )
     if not enviado:
+        # El negocio o el cliente se pausó entre el chequeo y el envío: el sender ya lo dejó `failed`.
+        if pausa := await _pausa_tras_envio(conversation):
+            return pausa
         raise NoticeNotSentError(f"Aviso {event_key} sin encolar (pausa por uso de la API)")
     return NoticeResult("plantilla")
 
@@ -394,6 +437,9 @@ async def _aviso_con_plantilla_de_twilio(
         client_message_id=notice_key,
     )
     if not enviado:
+        # El negocio o el cliente se pausó entre el chequeo y el envío: el sender ya lo dejó `failed`.
+        if pausa := await _pausa_tras_envio(conversation):
+            return pausa
         raise NoticeNotSentError(f"Aviso {event_key} sin encolar")
     return NoticeResult("plantilla")
 
@@ -463,5 +509,8 @@ async def _aviso_por_canal(
         ac.aviso_omitido(event_key, conversation.channel, ac.VENTANA_CERRADA, conversation_id=conversation.id)
         return NoticeResult("omitido_canal", ac.VENTANA_CERRADA)
     if not enviado:
+        # El negocio o el cliente se pausó entre el chequeo y el envío: el sender ya lo dejó `failed`.
+        if pausa := await _pausa_tras_envio(conversation):
+            return pausa
         raise NoticeNotSentError(f"Aviso {event_key} sin encolar (pausa por uso o conversación)")
     return NoticeResult("texto", decision.tipo or "")

@@ -218,8 +218,10 @@ IDENTIDAD = [
         tipo="booleano",
         etiqueta="Pausar el asistente",
         explicacion=(
-            "Con la pausa activa el asistente deja de contestar en todos los canales del negocio "
-            "hasta que lo reactives. Las conversaciones siguen entrando a la bandeja."
+            "Con la pausa activa el asistente deja de contestar en todos los canales y no sale nada automático "
+            "a tus clientes: seguimientos, recordatorios de citas, avisos de cobro ni envíos a segmentos. Lo que "
+            "no salió queda registrado y no se reenvía al reactivar. Tú y tu equipo pueden seguir escribiendo "
+            "desde el panel o la app. Las conversaciones siguen entrando a la bandeja."
         ),
         por_defecto=False,
         almacen="columna:bot_paused",
