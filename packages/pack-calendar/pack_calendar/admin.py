@@ -585,8 +585,8 @@ async def _notify_cita_movida(conversation_id: uuid.UUID, title: str, new_start:
     template = getattr(config, "appointment_moved_message", "") or DEFAULT_MOVED_MESSAGE
     message = template.format(fecha=fecha, hora=hora, titulo=title or "tu cita")
     try:
-        await send_to_conversation(conversation_id, message, sender_type="agent")
-        return True
+        # El sender frena la pausa del negocio o del cliente (HU-ARCH-37): se informa si salió.
+        return await send_to_conversation(conversation_id, message, sender_type="agent")
     except Exception:
         log.warning("calendar_notify_moved_failed", conversation_id=str(conversation_id), exc_info=True)
         return False

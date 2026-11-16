@@ -167,3 +167,22 @@ def rl_redis(monkeypatch: pytest.MonkeyPatch, rl_clock: RateLimitClock) -> FakeR
     fake = FakeRateLimitRedis(rl_clock)
     monkeypatch.setattr(rate_limit, "get_redis", lambda: fake)
     return fake
+
+
+@pytest.fixture(autouse=True)
+def _sin_pausa_automatica(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """HU-ARCH-37: los tests unitarios que parchean el envío no tienen base para leer la pausa del negocio y del
+    cliente; aquí se supone sin pausa. La integración y los tests marcados `pausa_real` la leen de verdad."""
+    if request.node.get_closest_marker("pausa_real") or "integration" in request.node.path.parts:
+        return
+    from core.gateway import pausa_automatica
+
+    async def _sin_pausa(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def _no_pausado(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    monkeypatch.setattr(pausa_automatica, "motivo_pausa_automatica", _sin_pausa)
+    monkeypatch.setattr(pausa_automatica, "motivo_pausa_por_id", _sin_pausa)
+    monkeypatch.setattr(pausa_automatica, "negocio_pausado", _no_pausado)

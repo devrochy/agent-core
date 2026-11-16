@@ -131,4 +131,5 @@ asyncio_default_test_loop_scope = "session"
 # Subconjunto crítico de integración que corre en las PRs a develop (ADR-0120).
 markers = [
     "aislamiento: RLS, aislamiento entre tenants, webhooks e IDOR (nivel rápido del CI)",
+    "pausa_real: el test usa la pausa del negocio y del cliente de verdad (sin el fixture `_sin_pausa_automatica`)",
 ]

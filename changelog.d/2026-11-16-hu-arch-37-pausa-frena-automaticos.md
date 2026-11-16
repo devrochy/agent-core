@@ -1,0 +1,8 @@
+## La pausa del negocio y del cliente frena lo automático (HU-ARCH-37, 2026-11-16)
+
+- Con `app_settings.bot_paused` (o `customers.bot_paused`) no sale nada automático hacia el cliente (D-76): respuestas del agente, seguimientos, recordatorios de cita, avisos de cobro, opciones, correos y envíos a segmento. Lo que escribe una persona desde el panel o la app (`sender_type="human"`) sigue saliendo. Lo frenado queda `failed` con el motivo (`negocio_pausado` o `cliente_pausado`) y no se reenvía al reactivar.
+- Un solo guardián (`core/gateway/pausa_automatica.py` + `sender._registrar_si_frenada`) en texto, voz, plantilla e interactivo, antes del canal de prueba; re-chequeo en el worker para lo ya encolado (`PausaAutomaticaError`, sin reintentos ni escalamiento); los avisos por evento terminan con su propio resultado, sin `NoticeNotSentError`; `egress` no escala una respuesta frenada por la pausa.
+- Seguimientos de leads y cotizaciones: se salta el negocio pausado y la marca («contactado», `follow_up_sent_at`) solo se gasta si el mensaje salió; si no (pausa, ventana cerrada, conexión pausada), sigue siendo candidato dentro de su ventana.
+- Envíos a segmento en curso: con el negocio pausado los destinatarios que faltan quedan `omitido` (`negocio_pausado`) y el envío termina; un cliente pausado queda `omitido` (`cliente_pausado`).
+- Las opciones que manda un operador y los avisos de cita que dispara el panel se frenan también en esta versión (decisión del dueño).
+- Texto de la opción «Pausar el asistente» actualizado. Sin migración. Los crons que solo escriben datos (cargos, mora, cierre) siguen corriendo.
