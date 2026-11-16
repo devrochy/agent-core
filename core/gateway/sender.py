@@ -333,10 +333,13 @@ async def resolve_credentials(
             ):
                 return "telegram", {}
             creds = get_secret_box().decrypt_json(connection.credentials_encrypted)
-            return "telegram", {
-                "bot_token": str(creds.get("bot_token") or ""),
-                "bot_id": str(creds.get("bot_id") or connection.external_id or ""),
-            }
+            bot_id = connection.external_id or ""
+            if creds.get("bot_id") not in (None, "", bot_id):
+                # `external_id` es la única fuente del `bot_id` (0137): si las credenciales dicen otro bot, algo se
+                # desalineó y no se envía (los tokens de botón, el ritmo y los ids saldrían con otro bot).
+                log.error("telegram_credenciales_de_otro_bot", connection_id=str(connection_id))
+                return "telegram", {}
+            return "telegram", {"bot_token": str(creds.get("bot_token") or ""), "bot_id": bot_id}
         if connection and connection.credentials_encrypted:
             creds = get_secret_box().decrypt_json(connection.credentials_encrypted)
             return connection.provider, {str(k): str(v) for k, v in creds.items()}
@@ -622,14 +625,14 @@ async def send_voice_to_conversation(
 ) -> bool:
     """Encola una nota de voz (pack-voice, ADR-0197).
 
-    Solo `waweb` la soporta en esta tanda. El texto (si `include_text`) se encola
-    primero con el camino normal; luego una fila `audio/tts` que el worker
-    sintetiza y envía. Si el audio no se puede encolar, el texto ya entregado
-    sigue siendo la respuesta.
+    Sale por cualquier conexión cuyo tipo declare la capacidad `voz` (ADR-0199 §13: QR y Telegram hoy), sin atarse a
+    un canal ni a un proveedor. El texto (si `include_text`) se encola primero con el camino normal; luego una fila
+    `audio/tts` que el worker sintetiza y envía. Si el audio no se puede encolar, el texto ya entregado sigue siendo la
+    respuesta.
     """
     async with get_session() as session:
         conversation = await session.get(Conversation, conversation_id)
-        if conversation is None or conversation.channel != "whatsapp":
+        if conversation is None:
             return False
 
     try:
@@ -641,7 +644,7 @@ async def send_voice_to_conversation(
     except Exception:
         log.warning("voice_credentials_failed", conversation_id=str(conversation_id), exc_info=True)
         return False
-    if provider != "waweb":
+    if not capacidades_de(conversation.channel, provider).voz:
         return False
 
     texto_entregado = False

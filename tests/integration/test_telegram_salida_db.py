@@ -137,6 +137,28 @@ async def test_credenciales_del_bot_y_sin_respaldo(conexion, monkeypatch) -> Non
         await _sql(conexion["tid"], "update channel_connections set is_primary = false where id = :c", c=conexion["connection_id"])
 
 
+async def test_credenciales_de_otro_bot_no_envian(conexion) -> None:
+    """`external_id` es la única fuente del `bot_id`: si las credenciales guardadas dicen otro bot, no se envía."""
+    from core.db.models import ChannelConnection
+    from core.db.session import get_session
+    from core.shared.crypto import get_secret_box
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(conexion["tid"]):
+        async with get_session() as session:
+            fila = await session.get(ChannelConnection, conexion["connection_id"])
+            original = fila.credentials_encrypted
+            creds = get_secret_box().decrypt_json(original)
+            fila.credentials_encrypted = get_secret_box().encrypt_json({**creds, "bot_id": "999"})
+    try:
+        assert await _credenciales(conexion, conexion["connection_id"]) == ("telegram", {})
+    finally:
+        async with tenant_scope(conexion["tid"]):
+            async with get_session() as session:
+                fila = await session.get(ChannelConnection, conexion["connection_id"])
+                fila.credentials_encrypted = original
+
+
 # --------------------------------------------------------------------------- botones con ids largos
 async def test_id_largo_viaja_como_token_y_el_webhook_lo_devuelve(conexion, app_client, _ambiente) -> None:
     from core.gateway.telegram import interactivos
@@ -213,7 +235,7 @@ async def test_un_error_de_envio_cambia_la_conexion_solo_si_es_suyo(conexion, er
 
 
 # --------------------------------------------------------------------------- voz por capacidad
-async def test_la_politica_de_voz_decide_por_la_capacidad_del_tipo(conexion) -> None:
+async def test_la_politica_de_voz_decide_por_la_capacidad_del_tipo(conexion, monkeypatch) -> None:
     from pack_voice import policy
 
     from core.db.models import Conversation, Customer
@@ -236,3 +258,19 @@ async def test_la_politica_de_voz_decide_por_la_capacidad_del_tipo(conexion) -> 
             conversation_id = conversacion.id
         estado = await policy._estado_de_la_conversacion(conversation_id)
     assert estado == (True, False, False), "Telegram tiene voz aunque no sea WhatsApp por QR"
+
+    # Y el sender la encola: el texto primero y después la fila `audio/tts` que sintetiza el worker.
+    from core.gateway import sender
+    from core.tasks import outbound_send
+
+    encolados: list[str] = []
+    monkeypatch.setattr(outbound_send.outbound_send_task, "delay", lambda message_id, tenant_id: encolados.append(message_id))
+    async with tenant_scope(conexion["tid"]):
+        assert await sender.send_voice_to_conversation(conversation_id, "Tu pedido sale hoy") is True
+    filas = await _sql(
+        conexion["tid"],
+        "select media_type, media_transcription from messages where conversation_id = :c order by created_at",
+        c=conversation_id,
+    )
+    assert [f[0] for f in filas] == [None, "audio/tts"] and filas[1][1] == "Tu pedido sale hoy"
+    assert len(encolados) == 2

@@ -74,6 +74,7 @@ async def _estado_de_la_conversacion(
                     ChannelConnection.id == conversation.connection_id,
                     ChannelConnection.tenant_id == conversation.tenant_id,
                     ChannelConnection.deleted_at.is_(None),
+                    ChannelConnection.active.is_(True),
                 )
             )
         ).scalar_one_or_none()

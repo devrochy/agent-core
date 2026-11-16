@@ -299,9 +299,11 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
                 provider="twilio",
                 category="CONFIG",
             )
-        elif provider == "telegram" and not (credentials.get("bot_token") and credentials.get("bot_id")):
-            # Telegram (ADR-0199): conexión borrada, pausada, sin token o con el kill-switch apagado. No se arregla
-            # reintentando.
+        elif (provider == "telegram" or conversation.channel == "telegram") and not (
+            provider == "telegram" and credentials.get("bot_token") and credentials.get("bot_id")
+        ):
+            # Telegram (ADR-0199): conexión borrada, pausada, sin token o con el kill-switch apagado, o una conversación de
+            # Telegram que no resolvió a su bot (nunca sale por otro proveedor). No se arregla reintentando.
             await _release_claim(message.id, message.conversation_id, tenant_id)
             return ProviderError(
                 "La conexión de Telegram no puede enviar", provider="telegram", category="CONFIG"
@@ -431,15 +433,17 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
                             db_message.media_url = None
                     wamid = await adapter.send_text(credentials, customer.external_id, texto)
                 else:
-                    async with get_session() as session:
-                        db_message = await session.get(Message, message_id)
-                        if db_message is not None:
-                            db_message.media_type = sintesis.mimetype
-                            db_message.media_url = sintesis.audio_url
+                    # El audio se registra en el mensaje solo si salió: un reintento (red, ritmo) vuelve por esta rama
+                    # `audio/tts` y no por el texto, que en la fila de la nota está vacío.
                     try:
                         wamid = await adapter.send_audio(
                             credentials, customer.external_id, sintesis.audio_url
                         )
+                        async with get_session() as session:
+                            db_message = await session.get(Message, message_id)
+                            if db_message is not None:
+                                db_message.media_type = sintesis.mimetype
+                                db_message.media_url = sintesis.audio_url
                     except (ProviderError, ChannelError) as exc:
                         # El canal no sabe mandar voz (`ChannelError`) o rechazó el audio (`CONTENT`): sale el texto ya
                         # escrito, como cuando el TTS no puede. Otro error del proveedor sigue su camino de reintento.

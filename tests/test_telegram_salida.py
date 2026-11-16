@@ -287,3 +287,40 @@ async def test_un_canal_sin_voz_manda_el_texto(monkeypatch):
     monkeypatch.setattr(mcp_host, "synthesize_voice", sintetizar)
     assert await _send_one(msg.id, tenant_id) is None
     assert textos == ["Hola por voz"]
+
+
+async def test_una_conversacion_de_telegram_nunca_sale_por_otro_proveedor(monkeypatch):
+    import core.tasks.outbound_send as mod
+    from core.tasks.outbound_send import _send_one
+
+    bot = BotFalso()
+    msg, tenant_id, _calls = _con_telegram(monkeypatch, bot)
+    _patch_cliente(monkeypatch)
+
+    async def a_meta(*a, **k):
+        return ("meta", {"phone_number_id": "pn", "access_token": "tok"})
+
+    monkeypatch.setattr(mod, "resolve_credentials", a_meta)
+    error = await _send_one(msg.id, tenant_id)
+    assert error is not None and error.category == "CONFIG" and bot.enviados == []
+
+
+async def test_voz_con_error_transitorio_se_reintenta_como_voz(monkeypatch):
+    """Si la nota falla por red o ritmo, la fila sigue siendo `audio/tts`: el reintento vuelve a intentar la voz y no
+    manda el `content` vacío de la nota."""
+    from core.mcp.host import mcp_host
+    from core.tasks.outbound_send import _send_one
+
+    bot = BotFalso()
+    bot.respuesta = _error(502, "Bad Gateway")
+    msg, tenant_id, _calls = _con_telegram(monkeypatch, bot)
+    _patch_cliente(monkeypatch)
+    msg.media_type, msg.media_transcription, msg.content = "audio/tts", "Hola", ""
+
+    async def sintetizar(conversation_id, texto):
+        return SimpleNamespace(mimetype="audio/ogg", audio_url="https://x/voz.ogg")
+
+    monkeypatch.setattr(mcp_host, "synthesize_voice", sintetizar)
+    error = await _send_one(msg.id, tenant_id)
+    assert error is not None and error.category == "TRANSIENT"
+    assert msg.media_type == "audio/tts" and getattr(msg, "media_url", None) is None
