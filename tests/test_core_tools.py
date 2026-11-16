@@ -22,6 +22,7 @@ EXPECTED_TOOLS = {
     "set_conversation_note",
     "send_email",
     "enviar_plantilla_opciones",
+    "pedir_telefono",
 }
 
 

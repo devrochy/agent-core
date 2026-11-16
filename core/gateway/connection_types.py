@@ -384,13 +384,18 @@ class CapacidadesCanal:
     # El adaptador de salida sabe mandar una nota de voz (`send_audio`, ADR-0197). La política de voz de `pack-voice`
     # elige voz en cualquier conexión con esta capacidad, sin atarse a un proveedor.
     voz: bool = False
+    # Botón que le pide al cliente compartir su teléfono (`interactive.type == "contacto"`, ADR-0199 §10). Lo usa la
+    # tool del core `pedir_telefono`; solo Telegram lo tiene (`request_contact` del teclado de respuesta).
+    pedir_contacto: bool = False
 
     def admite(self, tipo_interactivo: object) -> bool:
-        """¿Admite este `interactive.type` (`button` | `list`)?"""
+        """¿Admite este `interactive.type` (`button` | `list` | `contacto`)?"""
         if tipo_interactivo == "button":
             return self.botones
         if tipo_interactivo == "list":
             return self.lista
+        if tipo_interactivo == "contacto":
+            return self.pedir_contacto
         return False
 
 
@@ -414,8 +419,9 @@ CAPACIDADES_POR_TIPO: dict[str, CapacidadesCanal] = {
         botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True
     ),
     # Telegram (ADR-0199): botones y lista como teclado inline (una fila por opción; la lista no se degrada en el
-    # adaptador, adenda §9 del ADR-0186). Sin ventana ni plantillas: Telegram no las tiene.
-    "telegram": CapacidadesCanal(botones=True, lista=True, voz=True),
+    # adaptador, adenda §9 del ADR-0186). Sin ventana ni plantillas: Telegram no las tiene. Es el único que pide el
+    # teléfono con un botón (`request_contact`, ADR-0199 §10).
+    "telegram": CapacidadesCanal(botones=True, lista=True, voz=True, pedir_contacto=True),
     "whatsapp_plivo": SOLO_TEXTO,
     "instagram_meta": TEXTO_CON_MENU,
     "messenger_meta": TEXTO_CON_MENU,

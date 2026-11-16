@@ -71,7 +71,7 @@ def test_entra_al_catalogo_de_mensajes_con_botones():
 
 
 def test_capacidades_de_telegram():
-    assert CAPACIDADES_POR_TIPO["telegram"] == CapacidadesCanal(botones=True, lista=True, voz=True)
+    assert CAPACIDADES_POR_TIPO["telegram"] == CapacidadesCanal(botones=True, lista=True, voz=True, pedir_contacto=True)
     assert capacidades_de("telegram", "telegram").ventana_24h is False
     assert capacidades_de("telegram").plantilla_aprobada is False
     assert tipo_de_conexion("telegram") == "telegram"

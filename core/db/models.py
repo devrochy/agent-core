@@ -566,10 +566,10 @@ class Message(Base):
             "status in ('queued','sent','delivered','read','failed')", name="ck_messages_status"
         ),
         # Migración 0082 (HU-AOS-09): forma mínima del mensaje interactivo y solo en un outbound
-        # que no es plantilla.
+        # que no es plantilla. La 0139 suma `contacto` (botón que pide el teléfono, ADR-0199 §10).
         CheckConstraint(
             "interactive IS NULL OR (jsonb_typeof(interactive) = 'object' "
-            "AND interactive->>'type' IN ('button','list') AND jsonb_typeof(interactive->'body') = 'string' "
+            "AND interactive->>'type' IN ('button','list','contacto') AND jsonb_typeof(interactive->'body') = 'string' "
             "AND direction = 'outbound' AND template_name IS NULL)",
             name="ck_messages_interactive_objeto",
         ),

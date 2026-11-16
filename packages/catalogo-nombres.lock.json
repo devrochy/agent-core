@@ -37,6 +37,7 @@
     "list_calendars",
     "list_client_appointments",
     "load_playbook",
+    "pedir_telefono",
     "recomendar_producto",
     "remember_fact",
     "search_memories",

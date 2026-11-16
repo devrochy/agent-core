@@ -47,7 +47,7 @@ def test_todo_tipo_de_conexion_con_canal_declara_sus_capacidades() -> None:
         ("email", "smtp", SOLO_TEXTO),
         ("test", "internal", PLAYGROUND),
         # Telegram (ADR-0199): teclado inline y notas de voz, sin ventana ni plantillas.
-        ("telegram", "telegram", CapacidadesCanal(botones=True, lista=True, voz=True)),
+        ("telegram", "telegram", CapacidadesCanal(botones=True, lista=True, voz=True, pedir_contacto=True)),
     ],
 )
 def test_capacidades_de_cada_canal_y_proveedor(canal: str, proveedor: str, esperado: CapacidadesCanal) -> None:
@@ -114,6 +114,7 @@ def test_canales_con_solo_lista_canales_de_clientes() -> None:
     # (ADR-0199).
     assert canales_con("botones") == ["whatsapp", "telegram"]
     assert canales_con("voz") == ["whatsapp", "telegram"]
+    assert canales_con("pedir_contacto") == ["telegram"]
     # Atado a `core/events/core_handlers.py` (`_whatsapp_conversation_for`, los avisos por evento solo buscan
     # conversaciones `whatsapp`) y al catálogo de mensajes: si otro canal gana plantilla aprobada, este test obliga
     # a revisar los avisos por evento (D2) antes de que el catálogo diga que salen por ahí.
@@ -133,7 +134,7 @@ def test_la_tabla_cubre_los_canales_que_guardan_las_conversaciones() -> None:
 
 def test_el_modulo_no_deja_capacidades_sin_campo() -> None:
     assert set(CapacidadesCanal.__dataclass_fields__) == {
-        "botones", "lista", "plantilla_aprobada", "ventana_24h", "respuesta_numerica", "voz"
+        "botones", "lista", "plantilla_aprobada", "ventana_24h", "respuesta_numerica", "voz", "pedir_contacto"
     }
     assert ct.SOLO_TEXTO is SOLO_TEXTO
 

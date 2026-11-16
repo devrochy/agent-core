@@ -84,6 +84,12 @@ Dos hechos de la Bot API (https://core.telegram.org/bots/api, v10.4, leída el 2
     - «Reparar» re-registra el webhook.
 
 13. **La voz no está atada a una conexión** (pedido del dueño, 2026-11-16; enmienda ADR-0197 punto 6). `CapacidadesCanal` suma `voz`, declarada por tipo de conexión en `CAPACIDADES_POR_TIPO`: hoy `whatsapp_waweb` y `telegram`, los dos con `send_audio`. La política de `pack-voice` elige voz en cualquier conversación cuya conexión viva tenga esa capacidad, sin mirar el proveedor. Si un adaptador no sabe mandar audio (`ChannelError`) o el proveedor lo rechaza (`CONTENT`), `outbound_send` manda el texto ya escrito, como cuando el TTS no puede. Sumar voz a otro canal es implementar su `send_audio` y encender `voz` en su tipo.
+14. **Pedir el teléfono es una tool del agente** (decisión del dueño, 2026-11-16; HU-CONN-26 «Pedir»). No es un mensaje automático: lo pide el agente cuando necesita el número (cobranza, citas, suscripciones).
+    - **Tool del core `pedir_telefono`** (`core/tools/core_skill.py`), porque `contact_phone` es del `Customer` del core y la necesitan varios packs que no se importan entre sí. Parámetros `texto` y `etiqueta` (el texto al cliente lo pone el agente: cero prompts en código). Se ofrece siempre (como las demás del core) en los negocios con una conexión activa que tenga `pedir_contacto` y, si es Telegram, con el kill-switch encendido (`connection_predicate`, por negocio).
+    - **Capacidad `pedir_contacto`** en `CapacidadesCanal`, encendida solo en `telegram` (el playground no la tiene: no pinta un teclado de respuesta).
+    - **Tipo interactivo `contacto`** (`{"type": "contacto", "body", "button"}`). Lo valida `sender.contacto_valido`, aparte de `interactivo_valido`, que son los topes de Meta. `send_interactive_to_conversation` lo deja pasar solo donde la capacidad lo admite y la tool lo encola con `sin_degradar=True`. La migración 0139 suma `contacto` al CHECK `ck_messages_interactive_objeto`. `TelegramOutbound.send_interactive` lo manda como teclado de respuesta de un solo uso: `{"keyboard": [[{"text": etiqueta, "request_contact": true}]], "one_time_keyboard": true, "resize_keyboard": true}`. La respuesta del cliente entra por §8.
+    - **Resultados, nunca excepciones:** en un canal sin la capacidad devuelve `canal_sin_pedir_contacto` y no envía nada (el agente lo pide por texto en su respuesta); con `contact_phone` ya lleno devuelve `ya_tiene_telefono` sin enviar ni devolver el número (§8 no pisa otro); una llamada repetida (misma `idempotency_key`) devuelve `ya_enviado`. En el playground se simula y lo dice.
+    - **Bindings (HU-ARCH-34):** como acción del core, los presets le ponen binding a los agentes que se publiquen desde ahora. Las versiones ya publicadas son inmutables y no la tienen: se ofrece al republicar. El reporte de bindings la lista como faltante `core` en todos los negocios, igual que `send_email` y `enviar_plantilla_opciones`, que también dependen de una conexión.
 
 ## Alternativas consideradas
 
@@ -95,6 +101,9 @@ Dos hechos de la Bot API (https://core.telegram.org/bots/api, v10.4, leída el 2
 | `telegram_bot_en_otro_negocio` SECURITY DEFINER, como en Twilio | Redundante con el índice único (el bot es la clave) y suma un oráculo que salta la RLS |
 | Columna `bot_id` en `telegram_connections` | Duplica `external_id` sin un lector que lo necesite |
 | Degradar la lista a texto numerado en el adaptador | La adenda §9 del ADR-0186 lo prohíbe: el outbox no sabe si quien encoló aceptó `sin_degradar` |
+| Pedir el teléfono con un mensaje automático del canal (§14) | El dueño eligió la tool: el agente sabe cuándo hace falta el número; un mensaje automático lo pediría a quien no lo necesita |
+| En un canal sin `pedir_contacto`, que la tool mande solo el texto (§14) | Duplica lo que el agente ya escribe en su respuesta, sin botón, y la decisión de degradar se toma antes de encolar (adenda §9 del ADR-0186) |
+| Ofrecer `pedir_telefono` según el canal de la conversación del turno (§14) | `connection_predicate` solo recibe los tipos de conexión del negocio; un filtro por conversación es un mecanismo nuevo sin un segundo caso. Costo aceptado: en un negocio con Telegram la tool también se ofrece en WhatsApp y responde `canal_sin_pedir_contacto` |
 
 ## Consecuencias
 
@@ -111,6 +120,8 @@ Dos hechos de la Bot API (https://core.telegram.org/bots/api, v10.4, leída el 2
 - Si el backend cae más de 24 h, Telegram descarta los updates pendientes.
 - `AMBIGUOUS` con un reintento puede duplicar un mensaje, igual que con Twilio.
 - Un token filtrado solo se rota a mano en BotFather.
+- El teclado de «Compartir mi teléfono» se oculta solo cuando el cliente lo toca; si escribe en vez de tocarlo, sigue visible hasta que lo toque o lo cierre (§14).
+- Cuándo pedir el teléfono queda a criterio del modelo hasta que los playbooks o procedimientos de cobranza, citas y suscripciones lo digan (§14).
 
 **Qué haría que revisáramos esto:**
 - Que un negocio pida un bot para varias sucursales o atender grupos.
@@ -130,6 +141,7 @@ Dos hechos de la Bot API (https://core.telegram.org/bots/api, v10.4, leída el 2
 - **PR core 2:** `core/gateway/telegram/alta.py` y `operacion.py`, `core/api/routers/telegram_connections.py`, el cron de salud `core.telegram_health_check` con la migración 0138 (`admin_telegram_connection_ids()`, SECURITY DEFINER como `admin_twilio_connection_ids`), y `docs/openapi.json`. El mensaje de prueba va a un `chat_id` que ya le escribió al bot: Telegram no deja que un bot inicie la conversación.
 - **PR core 3:** `core/gateway/telegram/webhook.py` (montado en `core/main.py`), `agentcore_channel_telegram.adapters.TelegramInbound`, ids globales, auditoría `telegram:<bot_id>`, `answerCallbackQuery` del toque, consumer fail-closed sin conexión y `avisos_canal` (`telegram` en `TIPOS_DE_TEXTO`, sin ventana). Los medios entran como `file_id`; la ingesta los descarga en el PR core 5.
 - **PR core 4:** `TelegramOutbound` (texto en partes de 4096, foto, `sendVoice` por URL y teclado inline una fila por opción), `resolve_credentials` (solo su bot, sin respaldo, nada con el kill-switch apagado), `core/gateway/telegram/interactivos.py` (ids de más de 64 bytes como `t:<token>` en Redis 7 días, resueltos por el webhook, que además quita el teclado), `core/gateway/telegram/ritmo.py` (25/s por bot, 1/s por chat, pausa tras un 429), `outbound_send` (401 → `revoked`, 409 → `error`, voz rechazada → texto), la capacidad `voz` (§13) y `available`/`en_selector` encendidos.
-- **PR core 5:** `core/media/telegram_media.py` (`getFile` + descarga con el token de la conexión de la conversación, tope de 20 MB) y la ingesta para `telegram`; `shared_phone` (adaptador, stream y UPDATE condicionado en el consumer). **Pedir** el teléfono (`request_contact`) va en un PR aparte, como una tool del agente que manda el botón «Compartir mi teléfono» (decisión del dueño, 2026-11-16).
+- **PR core 5:** `core/media/telegram_media.py` (`getFile` + descarga con el token de la conexión de la conversación, tope de 20 MB) y la ingesta para `telegram`; `shared_phone` (adaptador, stream y UPDATE condicionado en el consumer). **Pedir** el teléfono (`request_contact`) va en un PR aparte (§14).
+- **PR core 6 (pedir el teléfono, §14):** la tool `pedir_telefono` y su simulación (`core/tools/sandbox.py`), la capacidad `pedir_contacto`, `sender.contacto_valido`, la migración 0139 (CHECK con `contacto`), `TelegramOutbound` con el teclado `request_contact` y `packages/catalogo-nombres.lock.json`.
 - **Panel y APK:** HU-CONN-27 y HU-CONN-28.
 - **Fuera del repo:** agregar el patrón del token de Telegram a la redacción de logs de Alloy (`solvershub-infra`).
