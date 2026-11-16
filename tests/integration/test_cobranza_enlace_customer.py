@@ -295,3 +295,25 @@ async def test_telegram_sin_telefono_no_cachea_y_al_compartirlo_enlaza() -> None
     _, (otro,), _ = await _sembrar(tid, telefonos=["3004445555"])
     async with tenant_scope(tid), get_session() as s:
         assert (await enlazar_cliente(s, await s.get(Cliente, otro))).value == "sin_match"
+
+
+async def test_telegram_de_otro_negocio_con_el_mismo_numero_no_enlaza() -> None:
+    """El teléfono compartido en Telegram cruza solo dentro del mismo negocio."""
+    from pack_cobranza.enlazar import enlazar_customer
+
+    from core.db.models import Customer
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    tid_a = await _tenant(f"enl-tga-{uuid.uuid4().hex[:6]}")
+    tid_b = await _tenant(f"enl-tgb-{uuid.uuid4().hex[:6]}")
+    _, (cid,), _ = await _sembrar(tid_a, telefonos=["300 777 1212"])
+    async with tenant_scope(tid_b), get_session() as s:
+        tg = Customer(
+            tenant_id=tid_b, channel="telegram", external_id=f"bot:{uuid.uuid4().int % 10**9}",
+            contact_phone="+573007771212", name="Chat",
+        )
+        s.add(tg)
+        await s.flush()
+        assert (await enlazar_customer(s, tg.id)).value == "sin_match"
+    assert (await _customer_ids(tid_a))[cid] is None

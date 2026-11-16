@@ -14,7 +14,13 @@ from collections import Counter
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[1]
-_ESCRITURA = re.compile(r"contact_phone\s*=(?!=)")
+# Asignación o kwarg, `setattr(x, "contact_phone", …)` y SQL crudo que lo pone en un SET o en las columnas de un INSERT.
+_ESCRITURA = re.compile(
+    r"contact_phone\s*=(?!=)"
+    r"|setattr\([^)]*[\"']contact_phone[\"']"
+    r"|\bSET\b[^;\"']*\bcontact_phone\b"
+    r"|INSERT\s+INTO\s+customers\s*\([^)]*\bcontact_phone\b"
+)
 
 # archivo → cuántas escrituras se revisaron.
 ESCRITORES_REVISADOS = {
@@ -25,9 +31,9 @@ ESCRITORES_REVISADOS = {
 
 def _escrituras() -> Counter[str]:
     encontradas: Counter[str] = Counter()
-    for carpeta in ("core", "packages", "cli", "scripts"):
+    for carpeta in ("core", "packages", "plugins", "cli", "scripts", "evals"):
         for ruta in (RAIZ / carpeta).rglob("*.py"):
-            if "tests" in ruta.parts or "alembic" in ruta.parts:
+            if not ruta.is_file() or "tests" in ruta.parts or "alembic" in ruta.parts:
                 continue
             n = len(_ESCRITURA.findall(ruta.read_text(encoding="utf-8")))
             if n:
