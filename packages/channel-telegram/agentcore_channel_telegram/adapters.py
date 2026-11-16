@@ -1,4 +1,4 @@
-"""Adaptador de entrada del canal `telegram` (ADR-0199 §4-5).
+"""Adaptadores del canal `telegram` (ADR-0199 §4-7): entrada y salida.
 
 `TelegramInbound` verifica el secreto del webhook y convierte un `Update` de la Bot API en `InboundMessage`. El
 webhook del core le pasa el update JUNTO con el `bot_id` de la conexión que ya validó, porque los ids de Telegram
@@ -21,8 +21,21 @@ import hmac
 from collections.abc import Mapping
 from typing import Any
 
-from agentcore_channel_telegram.limites import ARCHIVO_DESCARGA_MAX
-from core.gateway.channels.base import InboundAdapter, InboundMessage
+import httpx
+
+from agentcore_channel_telegram.client import TelegramClient
+from agentcore_channel_telegram.limites import (
+    ARCHIVO_DESCARGA_MAX,
+    CAPTION_MAX,
+    TEXTO_MAX,
+    cabe_callback_data,
+)
+from core.gateway.channels.base import (
+    InboundAdapter,
+    InboundMessage,
+    OutboundAdapter,
+    ProviderError,
+)
 
 PROVIDER = "telegram"
 CHANNEL = "telegram"
@@ -190,3 +203,100 @@ def callback_query_id(update: object) -> str:
         return ""
     valor = update["callback_query"].get("id")
     return valor if isinstance(valor, str) else ""
+
+
+# --------------------------------------------------------------------------- salida (PR core 4)
+def _chat_id(to_external_id: str) -> int:
+    """El cliente de Telegram es el id de su usuario, que en un chat privado es también el `chat_id`."""
+    try:
+        return int(str(to_external_id).strip())
+    except ValueError:
+        raise ProviderError("Destinatario de Telegram inválido", provider=PROVIDER, category="RECIPIENT") from None
+
+
+def _partes(texto: str) -> list[str]:
+    """El texto en trozos de hasta 4096 caracteres (el core ya parte en burbujas; esto solo evita un 400)."""
+    texto = texto or ""
+    if len(texto) <= TEXTO_MAX:
+        return [texto]
+    return [texto[i : i + TEXTO_MAX] for i in range(0, len(texto), TEXTO_MAX)]
+
+
+def teclado_inline(interactive: Mapping[str, Any]) -> dict[str, Any]:
+    """Botones o lista del kernel → teclado inline, una fila por opción. La lista NO se degrada aquí (adenda §9 del
+    ADR-0186): si hay que degradar, el sender lo decide antes de encolar. Los ids ya llegan cortos (≤ 64 bytes): el
+    core cambia los largos por un token antes de llamar al adaptador. Un id que no cabe es un error de contenido."""
+    if interactive.get("type") == "list":
+        opciones = [(f.get("title"), f.get("id")) for f in interactive.get("rows") or [] if isinstance(f, Mapping)]
+    else:
+        opciones = [(b.get("title"), b.get("id")) for b in interactive.get("buttons") or [] if isinstance(b, Mapping)]
+    filas = []
+    for titulo, data in opciones:
+        if not isinstance(titulo, str) or not titulo or not isinstance(data, str) or not cabe_callback_data(data):
+            raise ProviderError(
+                "Opción no enviable por Telegram (título vacío o id de más de 64 bytes)",
+                provider=PROVIDER,
+                category="CONTENT",
+            )
+        filas.append([{"text": titulo, "callback_data": data}])
+    if not filas:
+        raise ProviderError("Mensaje interactivo sin opciones", provider=PROVIDER, category="CONTENT")
+    return {"inline_keyboard": filas}
+
+
+class TelegramOutbound(OutboundAdapter):
+    """Salida por la Bot API. Credenciales: `bot_token` y `bot_id` (las arma `resolve_credentials`). Devuelve el id
+    global `tg:<bot_id>:<chat_id>:<message_id>`: el `message_id` de Telegram es por chat y la llave de `messages`
+    no lleva proveedor."""
+
+    provider = PROVIDER
+
+    def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self._transport = transport
+
+    def _cliente(self, credentials: Mapping[str, str]) -> TelegramClient:
+        return TelegramClient.from_credentials(credentials, transport=self._transport)
+
+    @staticmethod
+    def _id(credentials: Mapping[str, str], chat_id: int, enviado: object) -> str:
+        message_id = enviado.get("message_id") if isinstance(enviado, Mapping) else None
+        if not isinstance(message_id, int):
+            # Telegram respondió ok sin `message_id`: no se sabe qué quedó; se trata como ambiguo.
+            raise ProviderError("Telegram no devolvió el id del mensaje", provider=PROVIDER, category="AMBIGUOUS")
+        return id_saliente(str(credentials.get("bot_id") or ""), chat_id, message_id)
+
+    async def send_text(self, credentials: dict[str, str], to_external_id: str, text: str) -> str:
+        chat_id = _chat_id(to_external_id)
+        cliente = self._cliente(credentials)
+        enviado: object = None
+        for parte in _partes(text):
+            enviado = await cliente.send_message(chat_id, parte)
+        return self._id(credentials, chat_id, enviado)
+
+    async def send_image(
+        self, credentials: dict[str, str], to_external_id: str, image_url: str, caption: str = ""
+    ) -> str:
+        chat_id = _chat_id(to_external_id)
+        enviado = await self._cliente(credentials).send_photo(chat_id, image_url, caption=caption[:CAPTION_MAX])
+        return self._id(credentials, chat_id, enviado)
+
+    async def send_audio(
+        self, credentials: dict[str, str], to_external_id: str, audio_url: str, caption: str = ""
+    ) -> str:
+        """Nota de voz (`sendVoice`) por URL: el TTS ya la deja en OGG/Opus. Si Telegram la rechaza, el error es
+        `CONTENT` y el envío del core se degrada al texto."""
+        chat_id = _chat_id(to_external_id)
+        enviado = await self._cliente(credentials).send_voice(chat_id, audio_url, caption=caption[:CAPTION_MAX])
+        return self._id(credentials, chat_id, enviado)
+
+    async def send_interactive(
+        self, credentials: dict[str, str], to_external_id: str, interactive: dict[str, Any]
+    ) -> str:
+        chat_id = _chat_id(to_external_id)
+        cuerpo = _texto(interactive.get("body"))
+        if not cuerpo:
+            raise ProviderError("Mensaje interactivo sin cuerpo", provider=PROVIDER, category="CONTENT")
+        enviado = await self._cliente(credentials).send_message(
+            chat_id, cuerpo, reply_markup=teclado_inline(interactive)
+        )
+        return self._id(credentials, chat_id, enviado)

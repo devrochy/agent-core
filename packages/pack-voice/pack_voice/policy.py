@@ -59,12 +59,14 @@ async def cargar_config() -> VoiceConfig | None:
 async def _estado_de_la_conversacion(
     conversation_id: uuid.UUID,
 ) -> tuple[bool, bool, bool] | None:
-    """(canal waweb, último inbound es audio, última respuesta fue voz)."""
+    """(la conexión manda voz, último inbound es audio, última respuesta fue voz). `None` si la conversación no
+    tiene una conexión viva cuyo tipo declare la capacidad `voz` (sin atarse a un proveedor: QR, Telegram y los que
+    la sumen después)."""
+    from core.gateway.connection_types import capacidades_de
+
     async with get_session() as session:
         conversation = await session.get(Conversation, conversation_id)
-        if conversation is None or conversation.channel != "whatsapp":
-            return None
-        if conversation.connection_id is None:
+        if conversation is None or conversation.connection_id is None:
             return None
         connection = (
             await session.execute(
@@ -75,7 +77,7 @@ async def _estado_de_la_conversacion(
                 )
             )
         ).scalar_one_or_none()
-        if connection is None or connection.provider != "waweb":
+        if connection is None or not capacidades_de(conversation.channel, connection.provider).voz:
             return None
 
         ultimo_in = (
@@ -125,7 +127,7 @@ async def decidir(conversation_id: uuid.UUID, texto: str) -> VoicePlan | None:
         return None
     if estado is None:
         return None
-    _waweb, es_audio, voz_anterior = estado
+    _con_voz, es_audio, voz_anterior = estado
     if not decidir_por_reglas(
         config,
         texto=texto,

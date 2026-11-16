@@ -320,6 +320,23 @@ async def resolve_credentials(
                 return "twilio", await credenciales_de_envio(
                     session, connection, {str(k): str(v) for k, v in creds.items()}
                 )
+        if connection.provider == "telegram":
+            # Telegram (ADR-0199): solo su bot, sin respaldo. Borrada, pausada, sin credenciales o con el kill-switch
+            # apagado: no envía (no sale por la primaria ni por el número de la plataforma).
+            from core.gateway.telegram.habilitado import habilitado
+
+            if (
+                not habilitado()
+                or not connection.credentials_encrypted
+                or connection.deleted_at is not None
+                or not connection.active
+            ):
+                return "telegram", {}
+            creds = get_secret_box().decrypt_json(connection.credentials_encrypted)
+            return "telegram", {
+                "bot_token": str(creds.get("bot_token") or ""),
+                "bot_id": str(creds.get("bot_id") or connection.external_id or ""),
+            }
         if connection and connection.credentials_encrypted:
             creds = get_secret_box().decrypt_json(connection.credentials_encrypted)
             return connection.provider, {str(k): str(v) for k, v in creds.items()}
@@ -353,9 +370,9 @@ async def resolve_credentials(
                     ChannelConnection.category == CATEGORY_COMMUNICATION,
                     ChannelConnection.category.is_(None),
                 ),
-                # Twilio no es respaldo de nada (ADR-0186): sus conversaciones siempre llevan su conexión, y una
-                # conversación sin conexión no debe salir por un número de Twilio.
-                ChannelConnection.provider != "twilio",
+                # Twilio y Telegram no son respaldo de nada (ADR-0186, ADR-0199): sus conversaciones siempre llevan su
+                # conexión, y una conversación sin conexión no debe salir por un número de Twilio ni por un bot.
+                ChannelConnection.provider.not_in(("twilio", "telegram")),
             ).limit(1)
         )
         primary = result.scalars().first()

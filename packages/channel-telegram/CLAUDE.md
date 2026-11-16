@@ -10,7 +10,8 @@ Aporta lo propio de la Bot API, sin estado y sin base de datos:
   Un 403 «bot was blocked» es `RECIPIENT`, nunca `OPT_OUT`: el bloqueo es reversible.
 - `limites.py`: límites de la Bot API (texto, caption, `callback_data`, archivos, secreto del webhook) y el ritmo.
 - `adapters.py`: `TelegramInbound` (secreto del webhook y `Update` → `InboundMessage`, solo chats privados, ids
-  globales `tg:<bot_id>:<update_id>`). El `OutboundAdapter` llega en el PR core 4.
+  globales `tg:<bot_id>:<update_id>`) y `TelegramOutbound` (texto, foto, nota de voz y teclado inline, una fila por
+  opción; devuelve `tg:<bot_id>:<chat_id>:<message_id>`).
 
 El webhook, las tablas, el alta, la salud y el kill-switch (`TELEGRAM_HABILITADO`) viven en el core
 (`core/gateway/telegram/`).

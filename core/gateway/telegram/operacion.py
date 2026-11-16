@@ -417,3 +417,44 @@ async def desconectar(
         webhook_quitado=quitado,
     )
     return quitado
+
+
+async def marcar_por_envio(tenant_id: uuid.UUID, connection_id: uuid.UUID | None, exc: ProviderError) -> None:
+    """Lo que un error de envío dice de la conexión (ADR-0199 §6): un 401 es el token revocado (`revoked`), un 409
+    es otro webhook o un `getUpdates` en el bot (`error`). Los demás errores son del mensaje o del cliente y no tocan
+    la conexión. Best-effort: el envío ya falló y esto no debe tapar su error."""
+    if connection_id is None:
+        return
+    nuevo = "revoked" if exc.category == "AUTH" else ("error" if exc.http_status == 409 else None)
+    if nuevo is None:
+        return
+    try:
+        async with get_session() as session:
+            fila = (
+                await session.execute(
+                    select(TelegramConnection)
+                    .where(
+                        TelegramConnection.tenant_id == tenant_id,
+                        TelegramConnection.channel_connection_id == connection_id,
+                        TelegramConnection.deleted_at.is_(None),
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if fila is None or fila.status == nuevo:
+                return
+            anterior = fila.status
+            fila.status = nuevo
+            fila.last_error_message = str(exc)[:300]
+            fila.last_error_at = utcnow()
+        log.info(
+            "telegram.salud.revocada" if nuevo == "revoked" else "telegram.salud.cambio",
+            tenant_id=str(tenant_id),
+            connection_id=str(connection_id),
+            antes=anterior,
+            ahora=nuevo,
+            via="envio",
+        )
+        await _alertar(tenant_id, connection_id, anterior, nuevo, "un envío falló")
+    except Exception:
+        log.warning("telegram.envio.estado_no_marcado", tenant_id=str(tenant_id), connection_id=str(connection_id))

@@ -1,7 +1,7 @@
 """Canal Telegram (`telegram`) con bot propio por negocio — cliente de la Bot API (ADR-0199).
 
 El registry del core (`agent_core.channels`) carga este módulo y lee `PROVIDER`, `InboundAdapter` y
-`OutboundAdapter`. El de entrada llega en el PR core 3; el de salida, en el PR core 4.
+`OutboundAdapter`.
 
 Credenciales de la conexión (las arma el alta y las guarda cifradas en `channel_connections`):
 
@@ -11,8 +11,9 @@ Credenciales de la conexión (las arma el alta y las guarda cifradas en `channel
 
 from __future__ import annotations
 
-from agentcore_channel_telegram.adapters import PROVIDER, TelegramInbound
+from agentcore_channel_telegram.adapters import PROVIDER, TelegramInbound, TelegramOutbound
 
 InboundAdapter = TelegramInbound
+OutboundAdapter = TelegramOutbound
 
-__all__ = ["PROVIDER", "InboundAdapter", "TelegramInbound"]
+__all__ = ["PROVIDER", "InboundAdapter", "OutboundAdapter", "TelegramInbound", "TelegramOutbound"]

@@ -299,6 +299,24 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
                 provider="twilio",
                 category="CONFIG",
             )
+        elif provider == "telegram" and not (credentials.get("bot_token") and credentials.get("bot_id")):
+            # Telegram (ADR-0199): conexión borrada, pausada, sin token o con el kill-switch apagado. No se arregla
+            # reintentando.
+            await _release_claim(message.id, message.conversation_id, tenant_id)
+            return ProviderError(
+                "La conexión de Telegram no puede enviar", provider="telegram", category="CONFIG"
+            )
+        if provider == "telegram":
+            # Ritmo por bot y por chat (y la pausa tras un 429): se reprograma con `retry_after`, sin gastar el envío.
+            from core.gateway.telegram import ritmo
+
+            espera = await ritmo.esperar(tenant_id, credentials["bot_id"], customer.external_id)
+            if espera > 0:
+                await _release_claim(message.id, message.conversation_id, tenant_id)
+                return ProviderError(
+                    "Ritmo de Telegram: el envío espera", provider="telegram", category="RATE_LIMIT",
+                    retry_after=espera,
+                )
         if conversation.channel in CANALES_DE_MENSAJERIA_META:
             # Ventana y autoría para decidir `RESPONSE` o `HUMAN_AGENT` (ADR-0152): los datos del
             # mensaje que el adaptador no ve.
@@ -372,6 +390,14 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
                             dict(message.interactive),
                             outbound=adapter,
                         )
+                    elif provider == "telegram":
+                        # Los ids que no caben en `callback_data` (64 bytes) van como token; el webhook los resuelve.
+                        from core.gateway.telegram import interactivos as tg_interactivos
+
+                        preparado = await tg_interactivos.preparar(
+                            tenant_id, credentials["bot_id"], dict(message.interactive)
+                        )
+                        wamid = await adapter.send_interactive(credentials, customer.external_id, preparado)
                     else:
                         wamid = await adapter.send_interactive(
                             credentials, customer.external_id, dict(message.interactive)
@@ -410,9 +436,28 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
                         if db_message is not None:
                             db_message.media_type = sintesis.mimetype
                             db_message.media_url = sintesis.audio_url
-                    wamid = await adapter.send_audio(
-                        credentials, customer.external_id, sintesis.audio_url
-                    )
+                    try:
+                        wamid = await adapter.send_audio(
+                            credentials, customer.external_id, sintesis.audio_url
+                        )
+                    except (ProviderError, ChannelError) as exc:
+                        # El canal no sabe mandar voz (`ChannelError`) o rechazó el audio (`CONTENT`): sale el texto ya
+                        # escrito, como cuando el TTS no puede. Otro error del proveedor sigue su camino de reintento.
+                        if isinstance(exc, ProviderError) and exc.category != "CONTENT":
+                            raise
+                        log.info(
+                            "voz_degradada_a_texto",
+                            provider=provider,
+                            motivo=type(exc).__name__,
+                            tenant_id=str(tenant_id),
+                        )
+                        async with get_session() as session:
+                            db_message = await session.get(Message, message_id)
+                            if db_message is not None:
+                                db_message.content = texto
+                                db_message.media_type = None
+                                db_message.media_url = None
+                        wamid = await adapter.send_text(credentials, customer.external_id, texto)
             elif message.media_type == "image" and message.media_url:
                 wamid = await adapter.send_image(
                     credentials, customer.external_id, message.media_url, message.content
@@ -423,6 +468,8 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
             await _release_claim(message.id, message.conversation_id, tenant_id)
             if provider == "twilio":
                 _medir_sandbox(exc, credentials, tenant_id)
+            if provider == "telegram":
+                await _tras_error_de_telegram(exc, credentials, tenant_id, conversation.connection_id)
             return exc
         except WaWebPolicyBlocked as exc:
             await _release_claim(message.id, message.conversation_id, tenant_id)
@@ -507,6 +554,26 @@ async def _mark_failed(
             await escalate(conversation_id, reason="send_failed", summary=exc.message[:500])
 
     return conversation_id, created_at, failed_id
+
+
+async def _tras_error_de_telegram(
+    exc: ProviderError, credentials: dict[str, str], tenant_id: uuid.UUID, connection_id: uuid.UUID | None
+) -> None:
+    """Un 429 pausa el bot `retry_after` segundos; un 401 o un 409 cambian el estado de la conexión (ADR-0199 §6).
+    Un 403 (bloqueado) es `RECIPIENT`: falla este envío y NO da de baja al cliente."""
+    from core.gateway.telegram import operacion, ritmo
+
+    if exc.category == "RATE_LIMIT" and exc.retry_after:
+        await ritmo.pausar(credentials.get("bot_id", ""), exc.retry_after)
+    log.info(
+        "telegram.envio.fallo" if exc.category != "AMBIGUOUS" else "telegram.envio.ambiguo",
+        tenant_id=str(tenant_id),
+        connection_id=str(connection_id) if connection_id else None,
+        bot_id=credentials.get("bot_id"),
+        category=exc.category,
+        status=exc.http_status,
+    )
+    await operacion.marcar_por_envio(tenant_id, connection_id, exc)
 
 
 def _medir_sandbox(exc: ProviderError, credentials: dict[str, str], tenant_id: uuid.UUID) -> None:
