@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 from agentcore_channel_telegram.adapters import teclado_contacto
-from test_telegram_salida import CREDS, BotFalso
+from test_telegram_salida import CREDS, BotFalso, _con_telegram, _patch_cliente
 
 from core.gateway.channels.base import ProviderError
 from core.gateway.connection_types import (
@@ -61,6 +61,19 @@ async def test_contacto_sale_como_teclado_de_respuesta_de_un_solo_uso():
         "one_time_keyboard": True,
         "resize_keyboard": True,
     }
+
+
+async def test_send_one_lleva_el_contacto_de_la_cola_al_teclado(monkeypatch):
+    """El tramo de la cola: un `Message` con `interactive = contacto` sale por `_send_one` como `request_contact`."""
+    from core.tasks.outbound_send import _send_one
+
+    bot = BotFalso()
+    msg, tenant_id, _calls = _con_telegram(monkeypatch, bot)
+    msg.interactive, msg.content = dict(CONTACTO), CONTACTO["body"]
+    _patch_cliente(monkeypatch)
+    assert await _send_one(msg.id, tenant_id) is None
+    [(metodo, cuerpo)] = bot.enviados
+    assert metodo == "sendMessage" and cuerpo["reply_markup"]["keyboard"][0][0]["request_contact"] is True
 
 
 def test_contacto_sin_etiqueta_es_error_de_contenido():
