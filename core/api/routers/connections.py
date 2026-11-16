@@ -598,8 +598,8 @@ async def reveal_connection_credentials(
     ctype = get_connection_type(existing.type_id) if existing.type_id else None
     if ctype is None:
         raise ApiError.not_found("Tipo de conexión no encontrado.")
-    if existing.provider == "twilio":
-        # Como en el alta (ADR-0186): solo quien puede cargar el Auth Token puede verlo.
+    if existing.provider in ("twilio", "telegram"):
+        # Como en el alta (ADR-0186, ADR-0199): solo quien puede cargar el token puede verlo.
         require_owner_or_master(principal)
     values = credentials_of(existing)
     secrets = {
@@ -685,8 +685,9 @@ async def connection_action(
     # clave y sus dominios están en Configuración → Chat web.
     if existing is None or administrada_aparte(existing):
         raise ApiError.not_found("Conexión no encontrada.")
-    if existing.provider == "twilio":
-        # Como el alta (ADR-0186): pausar, borrar o marcar principal un número de Twilio es del propietario o el master.
+    if existing.provider in ("twilio", "telegram"):
+        # Como el alta (ADR-0186, ADR-0199): pausar, borrar o marcar principal un número de Twilio o un bot de Telegram
+        # es del propietario o el master.
         require_owner_or_master(principal)
 
     if payload.action == "delete":

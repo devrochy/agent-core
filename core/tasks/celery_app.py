@@ -170,6 +170,17 @@ def _twilio_health_check() -> Any:
     return revisar_todas()
 
 
+_TELEGRAM_HEALTH_CHECK_TASK = "core.telegram_health_check"
+
+
+@core_cron(_TELEGRAM_HEALTH_CHECK_TASK, crontab(minute="*/15"))
+def _telegram_health_check() -> Any:
+    """Salud de los bots de Telegram (ADR-0199 §12): token y webhook. No consulta a Telegram con el kill-switch apagado."""
+    from core.gateway.telegram.operacion import revisar_todas
+
+    return revisar_todas()
+
+
 @core_cron(_META_HEALTH_CHECK_TASK, crontab(minute="30"))
 def _meta_health_check() -> Any:
     from core.tasks.meta_health_check import check_all_connections_health

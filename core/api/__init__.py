@@ -66,6 +66,7 @@ from core.api.routers import (
     settings,
     skill_installations,
     sync,
+    telegram_connections,
     tenants,
     turnos,
     twilio_connections,
@@ -103,6 +104,8 @@ api_router.include_router(agents.router)
 api_router.include_router(agent_editor.router)
 # ADR-0186: antes que `connections` (su `/{connection_id}` capturaría `/twilio`).
 api_router.include_router(twilio_connections.router)
+# ADR-0199: antes que `connections` (su `/{connection_id}` capturaría `/telegram`).
+api_router.include_router(telegram_connections.router)
 api_router.include_router(connections.router)
 api_router.include_router(connection_agents.router)
 api_router.include_router(connection_releases.router)
