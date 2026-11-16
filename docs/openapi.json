@@ -11723,6 +11723,23 @@
         "operationId": "list_models_api_v1_admin_agent_models_get",
         "parameters": [
           {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          },
+          {
             "name": "page",
             "in": "query",
             "required": false,
@@ -61823,6 +61840,36 @@
           "min_phrases": {
             "type": "integer",
             "title": "Min Phrases"
+          },
+          "business_model": {
+            "type": "string",
+            "title": "Business Model"
+          },
+          "effective_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Model"
+          },
+          "effective_source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "negocio",
+                  "agente"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Source"
           }
         },
         "type": "object",
@@ -61837,7 +61884,8 @@
           "avg_input_tokens",
           "avg_output_tokens",
           "sample_turns",
-          "min_phrases"
+          "min_phrases",
+          "business_model"
         ],
         "title": "LlmModelCatalog"
       },
