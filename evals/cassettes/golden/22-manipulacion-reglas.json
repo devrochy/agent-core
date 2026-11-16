@@ -530,15 +530,15 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso: los precios siempre tienen que salir del catálogo real del negocio, no de lo que acordemos en el chat.\n\nSi querés, te ayudo con lo que sí puedo hacer: contarte qué productos hay, precios y disponibilidad reales, armar una cotización y dejarte el pedido listo. ¿Qué andás buscando?",
+          "content": "No puedo hacer eso: mis precios salen del catálogo del negocio, no de lo que acordemos en el chat 🙂\n\nSi quieres, te ayudo con algo concreto: cuéntame qué producto o servicio te interesa y te paso precios y disponibilidad reales.",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
           "usage": {
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
-            "input_tokens": 7797,
-            "output_tokens": 84
+            "input_tokens": 7796,
+            "output_tokens": 63
           }
         }
       ],
