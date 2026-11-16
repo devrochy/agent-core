@@ -10,7 +10,7 @@ Negocio v3 con `pack_commerce` y `pack_calendar`, una conexión conversacional c
 - D-35: sin conexión no se publica; al publicar se instala el agente y se construye la release
   candidata, sin activarla; reintentar no duplica nada.
 
-Más: plantilla sin habilidades, key ocupada, modelo de otro proveedor, catálogo de modelos con el
+Más: plantilla sin habilidades, key ocupada, modelo que no sirve (HU-AOS-79), catálogo de modelos con el
 costo estimado desde el consumo real, colaborador sin permiso (403) y aislamiento entre negocios.
 Sin LLM ni red.
 """
@@ -174,21 +174,16 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
     assert set(error["fields"]) == {"procedures[0].overrides.examples"}
     assert "frases" in error["fields"]["procedures[0].overrides.examples"]
 
-    # Copiar frases de la habilidad no suma; frases propias sí. Y un modelo de otro proveedor no pasa.
+    # Copiar frases de la habilidad no suma; frases propias sí. (Un modelo que no sirve ya no
+    # bloquea: test_modelo_que_no_sirve_usa_el_del_negocio, HU-AOS-79.)
     borrador = (await app_client.get(f"/api/v1/admin/agents/{aid}/draft", headers=h)).json()
     nuevo = borrador["content"]
     for ref in nuevo["procedures"]:
         ref["overrides"] = {"examples": ["Quiero hacer un pedido", "me interesa comprar algo", "necesito cotizar"]}
-    nuevo["model"]["primary"] = "claude-haiku-4-5"
     r = await app_client.put(
         f"/api/v1/admin/agents/{aid}/draft", headers=h, json={"content": nuevo, "lock_version": borrador["lock_version"]}
     )
     assert r.status_code == 200, r.text
-    lock = r.json()["lock_version"]
-    r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
-    assert set(r.json()["error"]["fields"]) == {"model.primary"}, r.text
-    nuevo["model"]["primary"] = "deepseek-flash"
-    r = await app_client.put(f"/api/v1/admin/agents/{aid}/draft", headers=h, json={"content": nuevo, "lock_version": lock})
     lock = r.json()["lock_version"]
     assert await _sql(tid, "select 1 from agent_versions where agent_id = :a", a=uuid.UUID(aid)) == []
 
@@ -302,6 +297,72 @@ async def test_catalogo_de_modelos_con_costo_estimado_del_consumo_real(app_clien
     otro, _ = await _negocio()
     r = await app_client.get("/api/v1/admin/agent-models", headers=await _dueno(app_client, otro))
     assert r.json()["sample_turns"] == 0
+
+
+async def _poner_modelo(app_client, h: dict[str, str], aid: str, modelo: str) -> None:
+    borrador = (await app_client.get(f"/api/v1/admin/agents/{aid}/draft", headers=h)).json()
+    contenido = borrador["content"]
+    contenido["model"]["primary"] = modelo
+    r = await app_client.put(
+        f"/api/v1/admin/agents/{aid}/draft", headers=h, json={"content": contenido, "lock_version": borrador["lock_version"]}
+    )
+    assert r.status_code == 200, r.text
+
+
+async def test_modelo_que_no_sirve_usa_el_del_negocio(app_client) -> None:
+    """HU-AOS-79: el dueño ya no elige modelo. Uno de otro proveedor o retirado no bloquea la
+    publicación: la versión usa el del negocio y lo anota; uno válido se respeta."""
+    tid, cid = await _negocio()
+    h = await _dueno(app_client, tid)
+    r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
+    assert r.status_code == 201, r.text
+    aid = r.json()["agent"]["id"]
+
+    del_negocio = (await app_client.get("/api/v1/admin/agent-models", headers=h)).json()["business_model"]
+    assert del_negocio  # sin BYOK: el del despliegue, que el proveedor del negocio sirve
+
+    # Modelo de otro proveedor: el catálogo dice que atenderá con el del negocio.
+    await _poner_modelo(app_client, h, aid, "claude-haiku-4-5")
+    catalogo = (await app_client.get(f"/api/v1/admin/agent-models?agent_id={aid}", headers=h)).json()
+    assert (catalogo["effective_model"], catalogo["effective_source"]) == (del_negocio, "negocio")
+
+    # Publicar no falla: la versión lleva el del negocio, con la nota; el borrador no cambia.
+    r = await app_client.post(
+        f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)], "notes": "Primera"}
+    )
+    assert r.status_code == 200, r.text
+    pub = r.json()
+    nota = f"Se usó el modelo de tu negocio: {del_negocio}."
+    assert nota in pub["warnings"]
+    [(contenido, notas)] = await _sql(
+        tid, "select content, notes from agent_versions where id = :v", v=uuid.UUID(pub["version"]["id"])
+    )
+    assert contenido["model"]["primary"] == del_negocio and notas == f"Primera\n{nota}"
+    borrador = (await app_client.get(f"/api/v1/admin/agents/{aid}/draft", headers=h)).json()
+    assert borrador["content"]["model"]["primary"] == "claude-haiku-4-5"
+
+    # Retirado: igual.
+    await _poner_modelo(app_client, h, aid, "deepseek-chat")
+    r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
+    assert r.status_code == 200 and nota in r.json()["warnings"], r.text
+
+    # Un modelo válido distinto (lo fija un master en el JSON) se respeta, sin aviso.
+    propio = next(m for m in catalogo["items"] if m["selectable"] and m["model"] != del_negocio)["model"]
+    await _poner_modelo(app_client, h, aid, propio)
+    catalogo = (await app_client.get(f"/api/v1/admin/agent-models?agent_id={aid}", headers=h)).json()
+    assert (catalogo["effective_model"], catalogo["effective_source"]) == (propio, "agente")
+    r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
+    assert r.status_code == 200, r.text
+    assert not any("modelo de tu negocio" in w for w in r.json()["warnings"])
+    [(contenido,)] = await _sql(
+        tid, "select content from agent_versions where id = :v", v=uuid.UUID(r.json()["version"]["id"])
+    )
+    assert contenido["model"]["primary"] == propio
+
+    # Aislamiento: otro negocio no consulta el modelo de este agente.
+    otro, _ = await _negocio()
+    r = await app_client.get(f"/api/v1/admin/agent-models?agent_id={aid}", headers=await _dueno(app_client, otro))
+    assert r.status_code == 404, r.text
 
 
 async def test_superpoderes_por_enfoque(app_client) -> None:
