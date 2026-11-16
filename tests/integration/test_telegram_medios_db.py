@@ -110,6 +110,31 @@ async def test_el_telefono_propio_se_guarda_sin_pisar_otro(conexion) -> None:
     assert await _telefono(conexion, cliente.id) == "+573001112233"
 
 
+async def test_los_logs_del_contacto_no_llevan_el_numero(conexion) -> None:
+    from structlog.testing import capture_logs
+
+    usuario = str(secrets.randbelow(10**9))
+    with capture_logs() as logs:
+        await _resolver(conexion, _campos(conexion, usuario, shared_phone="+573005556677"))
+        await _resolver(conexion, _campos(conexion, usuario, shared_phone="+573004443322"))  # conflicto
+        await _resolver(conexion, _campos(conexion, usuario, shared_phone="no-es"))  # inválido
+    eventos = [e for e in logs if str(e.get("event", "")).startswith("telegram.contacto")]
+    assert {e["event"] for e in eventos} == {
+        "telegram.contacto.compartido", "telegram.contacto.conflicto", "telegram.contacto.invalido"
+    }
+    assert "5556677" not in str(eventos) and "4443322" not in str(eventos)
+
+
+async def test_una_conexion_de_otro_negocio_no_escribe_el_telefono(conexion) -> None:
+    """Un `connection_id` que no es de este negocio: el consumer no crea la conversación y no guarda el número."""
+    from core.orchestrator.consumer import InboundSinConexion
+
+    usuario = str(secrets.randbelow(10**9))
+    with pytest.raises(InboundSinConexion):
+        await _resolver(conexion, {**_campos(conexion, usuario, shared_phone="+573007778899"), "connection_id": str(uuid.uuid4())})
+    assert await _sql(conexion["tid"], "select 1 from customers where contact_phone = '+573007778899'") == []
+
+
 async def test_un_telefono_invalido_en_el_stream_no_se_guarda(conexion) -> None:
     _c, cliente, _ = await _resolver(conexion, _campos(conexion, str(secrets.randbelow(10**9)), shared_phone="no-es"))
     assert await _telefono(conexion, cliente.id) is None

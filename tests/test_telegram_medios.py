@@ -90,7 +90,8 @@ def _con_contacto(**contacto: Any) -> dict[str, Any]:
 @pytest.mark.parametrize("numero", ["573001112233", "+573001112233", "+57 300 111 2233"])
 def test_el_contacto_propio_llega_como_shared_phone_en_e164(numero):
     (m,) = TelegramInbound().parse_update(_con_contacto(phone_number=numero, user_id=555), bot_id="1")
-    assert m.shared_phone == "+573001112233" and m.content == "+573001112233"
+    assert m.shared_phone == "+573001112233"
+    assert m.content == "[Compartió su teléfono]", "el número no va en el texto (logs, Sentry, DLQ)"
 
 
 @pytest.mark.parametrize(

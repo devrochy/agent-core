@@ -109,11 +109,14 @@ def _foto(mensaje: Mapping[str, Any]) -> dict[str, str] | None:
 
 
 _E164 = re.compile(r"^\+[1-9]\d{6,14}$")
+# Lo que «dice» el turno cuando el cliente solo compartió su teléfono (el número no va en el texto).
+TELEFONO_COMPARTIDO = "[Compartió su teléfono]"
 
 
 def telefono_propio(mensaje: Mapping[str, Any], persona: Mapping[str, Any]) -> str | None:
     """El teléfono del contacto compartido, en E.164, solo si es del propio remitente: un contacto reenviado (de otra
-    persona) o sin `user_id` no cuenta. Telegram a veces lo manda sin `+`."""
+    persona) o sin `user_id` no cuenta. Telegram a veces lo manda sin `+`. Supuesto (ADR-0199 §8): `contact.user_id`
+    lo pone el servidor de Telegram, no el cliente, y solo cuando el número es de esa cuenta."""
     contacto = mensaje.get("contact")
     if not isinstance(contacto, Mapping) or contacto.get("user_id") != persona.get("id"):
         return None
@@ -189,8 +192,13 @@ class TelegramInbound(InboundAdapter):
             return None
         media = [m for m in (_foto(mensaje), _voz(mensaje)) if m is not None]
         telefono = telefono_propio(mensaje, persona)
-        # El número compartido es también lo que el cliente «dijo»: así el turno no llega vacío al agente.
-        contenido = _texto(mensaje.get("text")) or _texto(mensaje.get("caption"), 1024) or (telefono or "")
+        # El número va aparte (`shared_phone` → `contact_phone`) y NO en `content`, que llega a logs, Sentry y la vista
+        # de la DLQ: el turno lleva un marcador, como «[Archivo adjunto]» en los medios.
+        contenido = (
+            _texto(mensaje.get("text"))
+            or _texto(mensaje.get("caption"), 1024)
+            or (TELEFONO_COMPARTIDO if telefono else "")
+        )
         if not contenido and not media:
             return None  # sticker, documento, ubicación, contacto de otra persona…
         return InboundMessage(
