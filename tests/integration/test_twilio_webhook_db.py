@@ -513,3 +513,28 @@ async def test_firma_sobre_la_url_registrada_tambien_vale(conexion, app_client) 
     )
     assert r.status_code == 200
     assert await _encolados(dict(params)["MessageSid"]) == 1
+
+
+async def test_el_rechazo_de_la_prueba_llega_por_el_estado(conexion, app_client) -> None:
+    """Sender real: el 63016 (fuera de la ventana de 24 h) llega por el status callback de la prueba."""
+    from core.gateway.twilio import operacion, prueba
+    from core.shared.tenant import tenant_scope
+
+    tid, cid = conexion["tid"], conexion["connection_id"]
+    sid = "SM" + uuid.uuid4().hex
+    async with tenant_scope(tid):
+        await prueba.registrar_envio(tid, cid, sid)
+    params = list(
+        {
+            "MessageSid": sid,
+            "AccountSid": AC,
+            "MessageStatus": "undelivered",
+            "ErrorCode": "63016",
+        }.items()
+    )
+    assert (await _post(app_client, conexion, "status", params)).status_code == 200
+    async with tenant_scope(tid):
+        r = await operacion.resultado_prueba(tid, cid, sid)
+    assert r is not None
+    assert (r.estado, r.provider_status, r.error_code) == ("failed", "undelivered", 63016)
+    assert r.motivo is not None and "24 h" in r.motivo

@@ -508,3 +508,81 @@ async def test_eventos_y_ronda_de_salud(negocio, app_client, gate, twilio, monke
     assert await operacion.revisar_todas() >= 2
     assert sin_confirmar.requiere_accion_manual is True
     assert (await _estado(negocio, sin_confirmar.connection_id))[1] is None
+
+
+async def test_el_63015_del_estado_llega_a_la_prueba(negocio, app_client, gate, twilio) -> None:
+    """Twilio acepta la prueba (201) y el 63015 llega después por el status callback: la ficha lo ve."""
+    from core.gateway.twilio import operacion
+
+    tw, hecha = await _sandbox(negocio, twilio)
+    sid = await _en(negocio, operacion.enviar_prueba, negocio, hecha.connection_id, "+573001234567")
+    h = await api_headers(app_client, negocio)
+    url = f"/api/v1/admin/connections/twilio/{hecha.connection_id}/test-message/{sid}"
+    r = await app_client.get(url, headers=h)
+    assert r.status_code == 200, r.text
+    assert (r.json()["estado"], r.json()["motivo"]) == ("queued", None)
+
+    r, _ = await _post(
+        app_client, hecha, tw, "status", MessageSid=sid, MessageStatus="failed", ErrorCode="63015"
+    )
+    assert r.status_code == 200
+    # Un `sent` atrasado no revive una prueba que ya falló.
+    await _post(app_client, hecha, tw, "status", MessageSid=sid, MessageStatus="sent")
+
+    cuerpo = (await app_client.get(url, headers=h)).json()
+    assert (cuerpo["estado"], cuerpo["provider_status"], cuerpo["error_code"]) == (
+        "failed",
+        "failed",
+        63015,
+    )
+    assert cuerpo["motivo"] == (
+        "Ese número debe enviar «join cloud-forgotten» al +1 415 523 8886 (la unión vence a los 3 días)."
+    )
+
+
+async def test_la_prueba_avanza_hasta_leido_y_solo_la_ultima(
+    negocio, app_client, gate, twilio
+) -> None:
+    from core.gateway.twilio import operacion, prueba
+
+    tw, hecha = await _sandbox(negocio, twilio)
+    sid = await _en(negocio, operacion.enviar_prueba, negocio, hecha.connection_id, "+573001234567")
+    for status in ("delivered", "read", "delivered"):
+        await _post(app_client, hecha, tw, "status", MessageSid=sid, MessageStatus=status)
+    # El estado de otro mensaje de la misma conexión no toca la prueba.
+    await _post(app_client, hecha, tw, "status", MessageStatus="failed", ErrorCode="63016")
+
+    h = await api_headers(app_client, negocio)
+    base = f"/api/v1/admin/connections/twilio/{hecha.connection_id}/test-message"
+    cuerpo = (await app_client.get(f"{base}/{sid}", headers=h)).json()
+    assert (cuerpo["estado"], cuerpo["error_code"], cuerpo["motivo"]) == ("read", None, None)
+
+    otro = "SM" + uuid.uuid4().hex
+    assert (await app_client.get(f"{base}/{otro}", headers=h)).status_code == 404
+    assert (await app_client.get(f"{base}/no-es-un-sid", headers=h)).status_code == 422
+    # Una prueba nueva reemplaza a la anterior.
+    await _en(negocio, prueba.registrar_envio, negocio, hecha.connection_id, otro)
+    assert (await app_client.get(f"{base}/{sid}", headers=h)).status_code == 404
+
+
+async def test_la_prueba_no_se_ve_desde_otro_negocio(negocio, app_client, gate, twilio) -> None:
+    from core.alta_negocio import onboard_tenant
+    from core.gateway.twilio import bandera, operacion
+    from core.tenants import deactivate_tenant, purge_tenant
+
+    _, hecha = await _sandbox(negocio, twilio)
+    sid = await _en(negocio, operacion.enviar_prueba, negocio, hecha.connection_id, "+573001234567")
+    slug = f"tso-{uuid.uuid4().hex[:8]}"
+    otro, _ = await onboard_tenant(name=f"Otro {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
+    try:
+        await _en(otro, bandera.fijar, otro, "whatsapp_twilio", True, actor="test")
+        h = await api_headers(app_client, otro)
+        r = await app_client.get(
+            f"/api/v1/admin/connections/twilio/{hecha.connection_id}/test-message/{sid}",
+            headers=h,
+        )
+        assert r.status_code == 404
+        assert await _en(otro, operacion.resultado_prueba, otro, hecha.connection_id, sid) is None
+    finally:
+        await _en(otro, deactivate_tenant, str(otro))
+        await purge_tenant(str(otro), f"ELIMINAR {slug}")
