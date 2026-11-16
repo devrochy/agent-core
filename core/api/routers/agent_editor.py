@@ -22,12 +22,16 @@ el editor del panel necesita y no existía:
 - `GET  /api/v1/admin/agent-models` — modelos de la tabla de precios del core, cuáles sirve el
   proveedor del negocio, si hay un modelo BYOK que manda y el costo estimado por 1.000 turnos
   con el promedio real de tokens por turno del negocio (30 días); sin historial (o sin acceso a
-  la sección `costs`), `null`.
+  la sección `costs`), `null`. Siempre trae `business_model`, el modelo por defecto del negocio;
+  con `?agent_id=`, `effective_model` y `effective_source` (`negocio` o `agente`) de ese agente
+  (HU-AOS-79). 404 si el agente no es del negocio.
 - `GET  /api/v1/admin/agents/{id}/publish-targets` — conexiones donde se puede instalar.
 - `POST /api/v1/admin/agents/{id}/publish` — `{connection_ids, lock_version?, notes?}`. D-35:
   sin al menos una conexión no se publica. Publica la versión, instala el agente y construye la
   release candidata de cada conexión, SIN activarla (el botón «Activar» del panel usa el
   promote de la API de releases, solo del propietario). 422 por campo antes de escribir nada.
+  Un modelo retirado o de otro proveedor ya no da 422: la versión usa el del negocio y lo anota
+  en sus notas y en `warnings` (HU-AOS-79).
 
 Rutas con prefijos propios (`/agent-templates`, ...) para no depender del orden de los routers
 frente a `/admin/agents/{agent_id}`. Toda lista va paginada (`page`, `page_size`).
@@ -178,6 +182,11 @@ class LlmModelCatalog(Page[LlmModel]):
     avg_output_tokens: float | None
     sample_turns: int
     min_phrases: int
+    # HU-AOS-79: el modelo por defecto del negocio, el que usa un agente cuyo modelo ya no sirve.
+    business_model: str
+    # Con `?agent_id=`: el modelo con el que atenderá ese agente y de dónde sale.
+    effective_model: str | None = None
+    effective_source: Literal["negocio", "agente"] | None = None
 
 
 class PublishTarget(BaseModel):
@@ -434,10 +443,19 @@ async def list_requirements(
 
 @router.get("/agent-models", response_model=LlmModelCatalog)
 async def list_models(
-    principal: Annotated[Principal, Depends(require("settings"))], params: Paginados
+    principal: Annotated[Principal, Depends(require("settings"))],
+    params: Paginados,
+    agent_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> LlmModelCatalog:
     tid = _tenant(principal)
     ctx = await svc.contexto_de_modelos(tid)
+    efectivo: tuple[str, Literal["negocio", "agente"]] | None = None
+    if agent_id is not None:
+        try:
+            borrador = await versiones.obtener_borrador(tid, agent_id)
+        except versiones.AgenteNoEncontrado:
+            raise ApiError.not_found("Agente no encontrado.") from None
+        efectivo = svc.modelo_efectivo(borrador.content, ctx)
     # El consumo (promedios y estimados) es de la sección Costos: sin ella, solo los precios.
     ve_costos = actua_como_master(principal.admin) or await effective_access(principal.admin, "costs", tid) is not None
     items = [
@@ -461,6 +479,9 @@ async def list_models(
         avg_output_tokens=ctx.avg_output_tokens if ve_costos else None,
         sample_turns=ctx.sample_turns if ve_costos else 0,
         min_phrases=svc.MIN_FRASES,
+        business_model=ctx.business_model,
+        effective_model=efectivo[0] if efectivo else None,
+        effective_source=efectivo[1] if efectivo else None,
     )
 
 
