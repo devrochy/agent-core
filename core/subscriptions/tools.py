@@ -94,10 +94,27 @@ SIN_SUSCRIPCION_HINT = (
 )
 
 
+# El estado en palabras del cliente: el código interno (`trialing`, `pendiente_pago`) no se le dice al cliente
+# (prueba de contratación en test, 2026-11-16: el cierre decía «Estado: trialing»).
+ESTADO_PARA_EL_CLIENTE = {
+    "pendiente_pago": "pendiente de pago",
+    "trialing": "en período de prueba",
+    "activa": "activa",
+    "pausada": "pausada",
+    "vencida": "vencida",
+    "cancelada": "cancelada",
+}
+
+
+def _con_estado_para_el_cliente(resultado: dict[str, Any]) -> dict[str, Any]:
+    texto = ESTADO_PARA_EL_CLIENTE.get(str(resultado.get("estado") or ""))
+    return {**resultado, "estado_para_el_cliente": texto} if texto else resultado
+
+
 def _view_como_resultado(view: SubscriptionView | None) -> dict[str, Any]:
     if view is None:
         return {"encontrado": False, "mensaje": "No tenés una suscripción activa.", "hint": SIN_SUSCRIPCION_HINT}
-    return {"encontrado": True, **view}
+    return _con_estado_para_el_cliente({"encontrado": True, **view})
 
 
 class SubscriptionSkill(BaseSkill):
@@ -497,6 +514,7 @@ class SubscriptionSkill(BaseSkill):
             "numero_publico": vista.get("numero_publico"),
             "plan": vista.get("plan"),
             "estado": vista.get("estado"),
+            "estado_para_el_cliente": ESTADO_PARA_EL_CLIENTE.get(str(vista.get("estado") or "")),
             "inscripcion": vista.get("inscripcion"),
             "monto_a_pagar": float(cargo.get("monto") or 0),
             "link": cargo.get("link") or None,

@@ -107,6 +107,7 @@ async def test_sub_consultar_despacha_y_envuelve_la_vista(fake_cap) -> None:
         "subscription_id": fake_cap.subscription_id,
         "plan": "Basic",
         "estado": "activa",
+        "estado_para_el_cliente": "activa",
     }
 
 

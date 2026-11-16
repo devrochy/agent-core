@@ -133,6 +133,8 @@ async def test_inscribir_toma_el_cliente_del_contexto_y_no_deja_fijar_precio_ni_
     assert llamada["datos_alta"] == {"nombre": "Ana", "email": "ana@x.co"}  # sin vacíos ni el token
     assert llamada["terminos"]["acepta_terminos"] == "tok" and llamada["terminos"]["canal"] == "whatsapp"
     assert llamada["monto_esperado"] == 80000
+    # El estado en palabras del cliente, sin el código interno (2026-11-16: el cierre decía «Estado: trialing»).
+    assert r["estado"] == "pendiente_pago" and r["estado_para_el_cliente"] == "pendiente de pago"
     assert r["link"] == "https://pago.test/x" and r["monto_a_pagar"] == 80000.0 and "https://pago.test/x" in r["_safe_append"]
 
 
@@ -221,3 +223,9 @@ async def test_el_cambio_de_plan_pasa_el_codigo_de_promocion_solo_si_el_cliente_
         ("aplicar", {"codigo_promocion": "LANZA"}),
     ]
     assert cot["monto_a_pagar"] == 40000.0 and cot["monto_bruto"] == 50000.0
+
+
+def test_la_consulta_trae_el_estado_en_palabras_del_cliente() -> None:
+    r = tools_mod._view_como_resultado({"estado": "trialing", "plan": "Free"})  # type: ignore[typeddict-item]
+    assert r["estado"] == "trialing" and r["estado_para_el_cliente"] == "en período de prueba"
+    assert "estado_para_el_cliente" not in tools_mod._view_como_resultado({"estado": "otro"})  # type: ignore[typeddict-item]
