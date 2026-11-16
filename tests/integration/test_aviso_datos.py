@@ -293,7 +293,7 @@ async def test_con_el_aviso_activo_lo_no_operativo_espera_la_aceptacion(app_clie
 
     # Aviso apagado: se guarda todo, como antes.
     async with tenant_scope(tid):
-        g = await guardar(cliente.id, {"email": "a@example.com"}, accion="ventas.pedido_retiro")
+        g = await guardar(cliente.id, {"email": "a@example.com"}, accion="ventas.pedido_retiro", concedidos=None)
     assert g.guardados == ["email"] and not g.requiere_aceptacion
 
     await _activar_aviso(app_client, tid)
@@ -303,6 +303,7 @@ async def test_con_el_aviso_activo_lo_no_operativo_espera_la_aceptacion(app_clie
             {"name": "Ana", "address": "Calle 1", "gusto": "pizza"},
             accion="ventas.pedido_retiro",
             operativos=("gusto",),
+            concedidos=None,
         )
     # name es requerido en la acción y `gusto` lo declara el módulo como operativo; la dirección (no se pide para retirar) espera.
     assert set(g.guardados) == {"name", "gusto"} and g.diferidos == ["address"]
@@ -317,7 +318,7 @@ async def test_con_el_aviso_activo_lo_no_operativo_espera_la_aceptacion(app_clie
         await _anexar(tid, conv, cliente, await _behavior(tid))
         await _mensaje_del_cliente(tid, conv.id, "acepto")
         await responder(tid, conv.id, cliente.id, "acepto")
-        g = await guardar(cliente.id, {"address": "Calle 1"}, accion="ventas.pedido_retiro")
+        g = await guardar(cliente.id, {"address": "Calle 1"}, accion="ventas.pedido_retiro", concedidos=None)
     assert g.guardados == ["address"] and not g.requiere_aceptacion
     assert (await _perfil(tid, cliente.id))["address"] == "Calle 1"
 
@@ -355,7 +356,7 @@ async def test_la_ficha_muestra_el_estado_y_el_dueno_puede_revocar(app_client) -
         await _anexar(tid, conv, cliente, await _behavior(tid))
         await _mensaje_del_cliente(tid, conv.id, "acepto")
         await responder(tid, conv.id, cliente.id, "acepto")
-        await guardar(cliente.id, {"email": "a@example.com", "hobby": "ajedrez"})
+        await guardar(cliente.id, {"email": "a@example.com", "hobby": "ajedrez"}, concedidos=None)
     h = await api_headers(app_client, tid)
     base = f"/api/v1/admin/leads/{cliente.id}/consentimiento-datos"
     cuerpo = (await app_client.get(base, headers=h)).json()
@@ -412,7 +413,7 @@ async def _cliente_que_acepto_con_datos(app_client, tid):
         await _anexar(tid, conv, cliente, await _behavior(tid))
         await _mensaje_del_cliente(tid, conv.id, "acepto")
         await responder(tid, conv.id, cliente.id, "acepto")
-        await guardar(cliente.id, {"email": "a@example.com", "hobby": "ajedrez"})
+        await guardar(cliente.id, {"email": "a@example.com", "hobby": "ajedrez"}, concedidos=None)
     return cliente
 
 

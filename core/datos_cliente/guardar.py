@@ -81,10 +81,13 @@ async def guardar(
     accion: str | None = None,
     operativos: Collection[str] = (),
     source: str = "agent",
-    concedidos: Collection[str] | None = None,
+    concedidos: Collection[str] | None,
     agent_id: uuid.UUID | None = None,
 ) -> Guardado:
-    """Guarda en el perfil lo que corresponde. Propaga `NamespaceNoConcedido` y `HechoInvalido`."""
+    """Guarda en el perfil lo que corresponde. Propaga `NamespaceNoConcedido` y `HechoInvalido`.
+
+    `concedidos` es obligatorio: quien llama pasa los `writeNamespaces` del agente
+    (`ToolContext.write_namespaces`, ADR-0114 §3) para que ninguna tool se salte el permiso."""
     tenant_id = get_current_tenant_id()
     resultado = Guardado()
     if tenant_id is None or not atributos:

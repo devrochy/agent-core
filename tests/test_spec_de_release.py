@@ -242,7 +242,8 @@ async def test_spec_del_turno_sin_release_es_el_mismo_y_con_release_la_vista(cat
 @pytest.mark.asyncio
 async def test_write_namespaces_legacy_none_y_v3_sin_release_niega_todo() -> None:
     """Revisión de seguridad: un negocio v3 sin release activa no escribe memoria (fail-closed);
-    legacy sigue sin chequeo (None); otro negocio en el mismo contexto no hereda la marca."""
+    legacy sigue sin chequeo (None); otro negocio en el mismo contexto tampoco escribe: la marca
+    exige concesión y sin agente en foco suyo se niega todo, nunca se vuelve a legacy."""
     from core.shared.tenant import tenant_scope
 
     token = release_vigente.abrir()
@@ -252,7 +253,7 @@ async def test_write_namespaces_legacy_none_y_v3_sin_release_niega_todo() -> Non
             release_vigente.marcar_v3_sin_release(T)
             assert release_vigente.write_namespaces_del_turno() == frozenset()
         async with tenant_scope(uuid.uuid4()):
-            assert release_vigente.write_namespaces_del_turno() is None
+            assert release_vigente.write_namespaces_del_turno() == frozenset()
     finally:
         release_vigente.cerrar(token)
     assert release_vigente.write_namespaces_del_turno() is None

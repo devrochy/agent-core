@@ -47,7 +47,7 @@ async def upsert_attributes(
     """Fusiona atributos nuevos con los existentes (los plugins llaman esto).
 
     Escribe hechos `perfil` con procedencia y su proyección en una sola transacción.
-    `concedidos` = `writeNamespaces` del agente v3 que escribe (None en el runtime legacy).
+    `concedidos` = `writeNamespaces` del agente que escribe (None si no escribe un agente).
     """
     tenant_id = get_current_tenant_id()
     if tenant_id is None:

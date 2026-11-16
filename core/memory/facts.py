@@ -10,9 +10,10 @@ siempre en la misma transacción (un test estático lo vigila).
   así los lectores ven exactamente lo mismo. Los demás namespaces (los datos de las tareas,
   `ventas`, `cobranza`…) viven solo en `memory_facts`: los leerá el runtime v3 filtrando por
   `readScopes` y `data_class`, nunca a ciegas en cada prompt.
-- **Permisos:** `concedidos` son los `writeNamespaces` del agente que escribe. `None` = quien
-  escribe no es un agente v3 (tools de los packs, runtime legacy, consolidación, importación) y
-  no se chequea; con un conjunto, escribir fuera de él es `NamespaceNoConcedido`.
+- **Permisos:** `concedidos` son los `writeNamespaces` del agente que escribe; las tools del core
+  y de los packs pasan los de su `ToolContext` (por `datos_cliente.guardar`). `None` = quien
+  escribe no es un agente (consolidación, importación, siembra de pruebas, operador) y no se
+  chequea; con un conjunto, escribir fuera de él es `NamespaceNoConcedido`.
 - **data_class** la asigna el código por namespace y clave (`clasificar`); si quien escribe
   declara otra, gana la más estricta. Los hechos nunca se embeben en `memory_vectors`.
 - **Olvido:** `purgar_de_cliente` borra (lógico) sus hechos, vacía su proyección y anota
@@ -202,8 +203,8 @@ async def escribir_hechos(
 
     Por clave: si el vigente tiene el mismo valor y clase no se crea fila; si no, el vigente
     queda `superseded_at` y entra el nuevo. Una clave que el esquema no admite (vacía o de más
-    de 80 caracteres) se descarta con un log cuando escribe el runtime legacy (`concedidos=None`,
-    para no cambiar el resultado de sus tools) y es `HechoInvalido` para un agente v3.
+    de 80 caracteres) se descarta con un log cuando no escribe un agente (`concedidos=None`:
+    consolidación, importación, siembra, operador) y es `HechoInvalido` para un agente.
     Cliente inexistente en el negocio: no escribe nada (como el `upsert_attributes` de antes).
     """
     if source not in FUENTES:
