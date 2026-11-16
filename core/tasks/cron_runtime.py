@@ -34,6 +34,7 @@ log = get_logger(__name__)
 
 # Motivos de una ejecución omitida (columna `detail`).
 OMITIDA_EN_EJECUCION = "en_ejecucion"
+OMITIDA_KILL_SWITCH = "kill_switch"
 OMITIDA_PLUGIN_INACTIVO = "plugin_inactivo"
 
 Job = Callable[[], Awaitable[None] | None]
@@ -78,7 +79,16 @@ def run_cron(
 
     inicio_reloj = time.monotonic()
     inicio = utcnow()
-    motivo = skip_if() if skip_if is not None else None
+    motivo = None
+    # Interruptor global (HU-ARCH-38, ADR-0200): un cron programado que escribe a clientes no corre. Falla
+    # cerrado si no se puede leer. A mano sí corre (decisión del dueño); sus envíos los frena el guardián.
+    if not manual and meta is not None and meta.writes_to_customers:
+        from core.shared import kill_switch
+
+        if _seguro(kill_switch.global_activo(), que="kill_switch", task=task_name, default=True):
+            motivo = OMITIDA_KILL_SWITCH
+    if motivo is None and skip_if is not None:
+        motivo = skip_if()
     # Sin Redis no hay lock, pero el cron corre: peor es no cobrar que cobrar sin lock.
     tomado = _seguro(svc.tomar_lock(task_name), que="lock", task=task_name, default=True)
     if tomado is not True and not motivo:

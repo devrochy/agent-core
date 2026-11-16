@@ -53,10 +53,10 @@ async def queue_outbound_email(to: str, subject: str, body: str, *, al_cliente: 
         raise EmailOutboxError("empty_body")
     subject = (subject or "").strip().replace("\r", " ").replace("\n", " ")
 
-    from core.gateway.pausa_automatica import MOTIVO_NEGOCIO_PAUSADO, negocio_pausado
+    from core.gateway.pausa_automatica import motivo_pausa_negocio
 
-    if al_cliente and await negocio_pausado(tenant_id):
-        raise EmailOutboxError(MOTIVO_NEGOCIO_PAUSADO)
+    if al_cliente and (motivo_pausa := await motivo_pausa_negocio(tenant_id)):
+        raise EmailOutboxError(motivo_pausa)
 
     from core.gateway.connections import get_active_connection
 

@@ -63,6 +63,7 @@ reconoce `.claude/hooks/guards.py`) y explica el motivo.
 | `webhook_events`, `meta_app_subscriptions`, `admin_permissions`, `tenant_invitations`, `platform_meta_app_requirements` | se leen antes de resolver el negocio o son de la plataforma |
 | `tenant_user` | membresía admin→negocio: se consulta antes de conocer el negocio (ADR-0012) y es la base de la autorización |
 | `cron_job_configs`, `cron_runs` | estado operativo e historial de los crons periódicos de la plataforma (ADR-0183): sin `tenant_id` ni datos de un negocio (solo la clase de la excepción). Solo las toca `core/admin/crons_service.py`, desde rutas master-only, el wrapper de los crons y el planificador del beat |
+| `platform_kill_switch`, `platform_kill_switch_events` | interruptor global de la plataforma y su historial (HU-ARCH-38, ADR-0200): sin `tenant_id` ni datos de un negocio. Lo escribe solo `core/admin/kill_switch_service.py` (ruta master-only y CLI) y lo lee `core/shared/kill_switch.py` con caché y fallo cerrado |
 | `qa_tester_datasets` | datos de prueba de cada tester (ADR-0135 §4), como el resto de `qa_*`; solo el master accede |
 
 Ninguna **vista** de `public` puede tener columna `tenant_id`: `purge_tenant` recorre

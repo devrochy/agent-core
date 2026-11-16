@@ -84,6 +84,7 @@ MOTIVOS = {
     "otra_conexion": "Escribió por otra conexión después de armar el envío",
     "sin_nombre": "Sin nombre y sin valor de respaldo",
     "negocio_pausado": "Asistente del negocio en pausa",
+    "kill_switch": "Plataforma en pausa de emergencia",
     "cliente_pausado": "Asistente en pausa para este cliente",
 }
 
@@ -760,11 +761,7 @@ async def procesar_lote(send_id: str, lote: int = 1, **_: Any) -> None:
     from core.events.outbox import emit_domain
     from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
     from core.gateway.meta_usage import connection_id_for_phone_number, is_paused
-    from core.gateway.pausa_automatica import (
-        MOTIVO_CLIENTE_PAUSADO,
-        MOTIVO_NEGOCIO_PAUSADO,
-        negocio_pausado,
-    )
+    from core.gateway.pausa_automatica import MOTIVO_CLIENTE_PAUSADO, motivo_pausa_negocio
     from core.gateway.sender import send_template_to_conversation
     from core.shared.events import ON_SEGMENT_SEND_BATCH
 
@@ -776,7 +773,7 @@ async def procesar_lote(send_id: str, lote: int = 1, **_: Any) -> None:
         ).scalar_one_or_none()
         if envio is None or envio.estado not in ("confirmado", "enviando"):
             return
-        if await negocio_pausado(tenant_id):
+        if motivo_pausa := await motivo_pausa_negocio(tenant_id):
             # Pausa del negocio con el envío en curso (HU-ARCH-37, D-76): los que faltan quedan omitidos con el motivo
             # y el envío termina sin reintentos. Al reactivar no se reenvía nada.
             await session.execute(
@@ -786,7 +783,7 @@ async def procesar_lote(send_id: str, lote: int = 1, **_: Any) -> None:
                     SegmentSendRecipient.send_id == envio_id,
                     SegmentSendRecipient.estado == "pendiente",
                 )
-                .values(estado="omitido", motivo=MOTIVO_NEGOCIO_PAUSADO, updated_at=utcnow())
+                .values(estado="omitido", motivo=motivo_pausa, updated_at=utcnow())
             )
             envio.estado = "terminado"
             envio.finished_at = utcnow()

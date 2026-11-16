@@ -20,6 +20,21 @@ from core.shared.tenant import tenant_scope
 
 pytestmark = pytest.mark.pausa_real
 
+
+@pytest.fixture(autouse=True)
+def _interruptor_apagado(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Estos tests usan la pausa de verdad pero no el interruptor global (HU-ARCH-38), que leería la base."""
+    from core.shared import kill_switch
+
+    async def _no(*_a, **_k):
+        return False
+
+    async def _ninguno(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(kill_switch, "global_activo", _no)
+    monkeypatch.setattr(kill_switch, "motivo_global", _ninguno)
+
 TENANT = uuid.UUID("22222222-2222-2222-2222-222222222222")
 
 
@@ -67,7 +82,11 @@ def _con_pausa(monkeypatch: pytest.MonkeyPatch, motivo: str | None) -> None:
 
     monkeypatch.setattr(pausa_automatica, "motivo_pausa_automatica", _motivo)
     monkeypatch.setattr(pausa_automatica, "motivo_pausa_por_id", _motivo)
+    async def _motivo_negocio(*_a, **_k):
+        return motivo if motivo in ("negocio_pausado", "kill_switch") else None
+
     monkeypatch.setattr(pausa_automatica, "negocio_pausado", _negocio)
+    monkeypatch.setattr(pausa_automatica, "motivo_pausa_negocio", _motivo_negocio)
 
 
 # ---------------------------------------------------------------- automático o persona
@@ -97,7 +116,7 @@ async def test_motivo_de_otro_negocio_no_decide(monkeypatch: pytest.MonkeyPatch)
     async def _no_deberia(*_a, **_k):
         raise AssertionError("no se lee la pausa de otro negocio")
 
-    monkeypatch.setattr(pausa_automatica, "negocio_pausado", _no_deberia)
+    monkeypatch.setattr(pausa_automatica, "_bot_paused", _no_deberia)
     async with tenant_scope(uuid.uuid4()):
         assert await pausa_automatica.motivo_pausa_automatica(_conversacion()) is None
 
@@ -110,7 +129,7 @@ async def test_motivo_primero_el_negocio_despues_el_cliente(monkeypatch: pytest.
         return estado["negocio"]
 
     estado = {"negocio": True}
-    monkeypatch.setattr(pausa_automatica, "negocio_pausado", _negocio)
+    monkeypatch.setattr(pausa_automatica, "_bot_paused", _negocio)
     async with tenant_scope(TENANT):
         assert await pausa_automatica.motivo_pausa_automatica(conv, cliente) == "negocio_pausado"
         estado["negocio"] = False
@@ -127,7 +146,7 @@ async def test_la_pausa_de_la_conversacion_sola_no_frena(monkeypatch: pytest.Mon
     async def _no(_tid):
         return False
 
-    monkeypatch.setattr(pausa_automatica, "negocio_pausado", _no)
+    monkeypatch.setattr(pausa_automatica, "_bot_paused", _no)
     async with tenant_scope(TENANT):
         assert await pausa_automatica.motivo_pausa_automatica(conv, cliente) is None
 
