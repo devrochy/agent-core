@@ -1,0 +1,66 @@
+{
+  "name": "cobranza-sin-boton-no-pide-numero-escrito-38",
+  "spec": "cobranza",
+  "requires_plugins": [
+    "pack_cobranza"
+  ],
+  "connection_types": [
+    "telegram"
+  ],
+  "conversation": [
+    {
+      "role": "user",
+      "content": "Buenas, quiero saber mi saldo"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          
+          "name": "cob_consultar_saldo",
+          "arguments": {},
+          "result": {
+            "encontrado": false,
+            "mensaje": "El cliente no está en la cartera."
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          
+          "name": "pedir_telefono",
+          "arguments": {
+            "texto": "Para buscar tu cuenta necesito tu número de teléfono.",
+            "etiqueta": "Compartir mi teléfono"
+          },
+          "result": {
+            "error": "canal_sin_pedir_contacto",
+            "mensaje": "Este canal no permite pedir el teléfono con un botón."
+          }
+        }
+      ]
+    }
+  ],
+  "assertions": {
+    "must_not_call_tools": [
+      "pedir_telefono"
+    ],
+    "must_not_contain": [
+      "escríbeme tu número",
+      "escribe tu número",
+      "envíame tu número",
+      "envíame tu teléfono",
+      "escríbeme tu teléfono",
+      "dime tu número",
+      "me compartes tu número",
+      "me das tu número",
+      "me pasas tu número"
+    ],
+    "max_response_chars": 400
+  }
+}

@@ -198,3 +198,39 @@ o que el dueño necesite unificar personas entre canales.
   campos legados) y `pack-cobranza` (enlace por teléfono y CLI de backfill).
 - `docs/openapi.json` regenerado; tipos del panel y de la APK (`npm run api:types`).
 - Playbook del kernel `datos_cliente` y el playbook de ventas (replicado en `solvershub-comercial`).
+
+## Adenda (2026-11-16, HU-CONN-26): el enlace de cobranza acepta el teléfono que comparte un cliente de Telegram
+
+**Contexto.** El §7 decía que los clientes de otros canales no se enlazan porque «`contact_phone` solo existe en
+WhatsApp». Esa era la premisa, no la razón. La razón es que el número lo verifica el canal. Desde ADR-0199 §8 y §14,
+Telegram también lo verifica: el cliente comparte su número con el botón de `pedir_telefono` (`request_contact`) y el
+consumer lo guarda en `contact_phone` solo si `contact.user_id == from.id`. El dueño decidió que el agente de cobranza
+pida el teléfono con esa tool cuando el cliente no aparece en la cartera. Sin esta adenda, el número llegaría y no
+encontraría la deuda.
+
+**Decisión.**
+- **Canales verificados.** Son WhatsApp (el `wa_id`) y Telegram (`request_contact` del propio remitente). Solo el
+  camino perezoso (`enlazar_customer`, del `Customer` al `Cliente`) acepta Telegram.
+- **El alta sigue solo con WhatsApp.** El alta y el backfill (`enlazar_cliente`) no cambian. Un deudor que escribió
+  por WhatsApp y por Telegram con el mismo número tiene dos `Customer`: si el alta mirara los dos, quedaría
+  `ambiguo` y perdería el enlace que hoy hace por WhatsApp.
+- **Gana el primer canal que consulta.** `_vincular` (`WHERE customer_id IS NULL`) enlaza con el primer `Customer`
+  que consulta. El otro canal recibe `sin_match` y el agente ofrece el gestor. Es una consecuencia aceptada de
+  D-SPEC-33-5, que no unifica canales.
+- **Caché negativo.** Un `Customer` de un canal verificado que aún no tiene teléfono devuelve el resultado interno
+  `sin_telefono`, que **no** se guarda en el caché negativo de Redis. Así, compartir el número enlaza en el turno
+  siguiente y no 10 minutos después. `contact_phone` solo pasa de vacío a un valor, porque el consumer no pisa otro
+  número (ADR-0199 §8). Por eso no hace falta el teléfono en la clave del caché.
+- **Quién escribe `contact_phone`.** El enlace da acceso a datos de cartera, así que esta propiedad deja de ser una
+  convención: `tests/test_contact_phone_escritores.py` fija los escritores revisados.
+  - El consumer escribe el `wa_id` al crear el `Customer` y el teléfono compartido en Telegram.
+  - El intake web de commerce también lo escribe, pero en `channel == "web"`, que no enlaza.
+  - Un escritor nuevo rompe el test a propósito.
+
+**Riesgo asumido.** El enlace por Telegram depende del supuesto de ADR-0199 §8: `contact.user_id` lo pone el
+servidor de Telegram, no el cliente. Antes, si el supuesto fallaba, solo quedaba mal un teléfono guardado. Ahora
+daría acceso a la cartera de otra persona. Si Telegram cambia ese comportamiento, se quita `telegram` de
+`CANALES_VERIFICADOS` en `pack_cobranza/enlazar.py`.
+
+**Qué haría que lo revisáramos.** Que un cliente denuncie ver la deuda de otra persona desde Telegram, o que el
+dueño pida unificar el mismo deudor entre canales.

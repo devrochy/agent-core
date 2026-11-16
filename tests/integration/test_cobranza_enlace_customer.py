@@ -258,3 +258,40 @@ async def test_customer_de_otro_canal_no_se_enlaza_aunque_declare_el_telefono() 
         await s.flush()
         assert (await enlazar_customer(s, web.id)).value == "sin_match"
     assert (await _customer_ids(tid))[cid] is None
+
+
+async def test_telegram_sin_telefono_no_cachea_y_al_compartirlo_enlaza() -> None:
+    """Adenda de ADR-0179 §7 (HU-CONN-26): el cliente de Telegram sin teléfono no deja caché negativo, y cuando lo
+    comparte con `pedir_telefono` (el consumer lo guarda en `contact_phone`) el turno siguiente lo enlaza."""
+    from pack_cobranza.enlazar import enlazar_cliente
+    from pack_cobranza.models import Cliente
+    from pack_cobranza.skills import _cliente_de_customer
+
+    from core.db.models import Customer
+    from core.db.session import get_session
+    from core.memory.working import get_redis
+    from core.shared.tenant import tenant_scope
+
+    tid = await _tenant(f"enl-tg-{uuid.uuid4().hex[:6]}")
+    _, (cid,), _ = await _sembrar(tid, telefonos=["300 444 5555"])
+    async with tenant_scope(tid), get_session() as s:
+        tg = Customer(tenant_id=tid, channel="telegram", external_id=f"bot:{uuid.uuid4().int % 10**9}", name="Chat")
+        s.add(tg)
+        await s.flush()
+        tg_id = tg.id
+    clave = f"tenant:{tid}:cobr_enlace_neg:{tg_id}"
+
+    async with tenant_scope(tid), get_session() as s:
+        assert await _cliente_de_customer(s, tg_id) is None
+    assert not await get_redis().exists(clave)
+
+    async with tenant_scope(tid), get_session() as s:
+        (await s.get(Customer, tg_id)).contact_phone = "+573004445555"
+    async with tenant_scope(tid), get_session() as s:
+        cliente = await _cliente_de_customer(s, tg_id)
+    assert cliente is not None and cliente.id == cid
+
+    # El alta sigue solo con WhatsApp: un Cliente nuevo con ese número no se enlaza al Customer de Telegram.
+    _, (otro,), _ = await _sembrar(tid, telefonos=["3004445555"])
+    async with tenant_scope(tid), get_session() as s:
+        assert (await enlazar_cliente(s, await s.get(Cliente, otro))).value == "sin_match"

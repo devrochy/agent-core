@@ -150,15 +150,16 @@ def _build_messages(conversation: list[dict]) -> list[LLMMessage]:
     return messages
 
 
-async def _predicado_ok(tool, tenant_id: uuid.UUID) -> bool:  # type: ignore[no-untyped-def]
-    """`connection_predicate` de la tool dentro del `tenant_scope` del negocio."""
+async def _predicado_ok(tool, tenant_id: uuid.UUID, tipos_de_conexion: set[str]) -> bool:  # type: ignore[no-untyped-def]
+    """`connection_predicate` de la tool dentro del `tenant_scope` del negocio, con los tipos de conexión que declara
+    el escenario (`connection_types`; vacío por defecto, como un negocio sin conexiones)."""
     if tool.connection_predicate is None:
         return True
     from core.shared.tenant import tenant_scope
 
     try:
         async with tenant_scope(tenant_id):
-            return bool(await tool.connection_predicate(set()))
+            return bool(await tool.connection_predicate(tipos_de_conexion))
     except Exception:
         return False
 
@@ -182,10 +183,27 @@ def _falla_tools_prohibidas(valor: object, llamadas: list[str]) -> str:
     return f"llamó tools prohibidas: {prohibidas} (llamó: {llamadas})" if prohibidas else ""
 
 
-async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tuple[str, bool, str]:
+def _spec_del_escenario(scenario: dict, spec: AgentSpec, tenant: str | None) -> AgentSpec:
+    """`spec` del escenario: otro spec del framework (`evals/specs/<nombre>.json`) para los packs que el neutro no
+    trae. Con `--tenant` manda el spec real del negocio (ADR-0016) y el campo se rechaza."""
+    nombre = scenario.get("spec")
+    if not nombre:
+        return spec
+    if tenant:
+        raise ValueError("`spec` por escenario solo vale en el golden del framework, no con --tenant")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", str(nombre)):
+        raise ValueError(f"spec inválido: {nombre!r}")
+    return AgentSpec.model_validate(json.loads((SPECS_DIR / f"{nombre}.json").read_text()))
+
+
+async def run_scenario(
+    path: Path, spec: AgentSpec, tenant_id: uuid.UUID, tenant: str | None = None
+) -> tuple[str, bool, str]:
     scenario = json.loads(path.read_text())
     name = scenario["name"]
     assertions = scenario.get("assertions", {})
+    spec = _spec_del_escenario(scenario, spec, tenant)
+    tipos_de_conexion = set(scenario.get("connection_types", []))
 
     # Escalamiento por keyword: se evalúa la regla determinística, sin LLM
     if assertions.get("expect_keyword_escalation"):
@@ -255,7 +273,7 @@ async def run_scenario(path: Path, spec: AgentSpec, tenant_id: uuid.UUID) -> tup
         active += [
             t
             for t in candidate
-            if t.always_available and t.name not in en_flujo and await _predicado_ok(t, tenant_id)
+            if t.always_available and t.name not in en_flujo and await _predicado_ok(t, tenant_id, tipos_de_conexion)
         ]
     else:
         active = candidate
@@ -393,7 +411,7 @@ async def main() -> int:
                 for _ in range(k):
                     inicio = time.monotonic()
                     try:
-                        name, ok, detail = await run_scenario(path, spec, tenant_id)
+                        name, ok, detail = await run_scenario(path, spec, tenant_id, args.tenant)
                     except cassette.ErrorGrabacion:
                         raise  # la grabación falta o cambió: se corta la corrida, no es un fallo del modelo
                     except Exception as exc:

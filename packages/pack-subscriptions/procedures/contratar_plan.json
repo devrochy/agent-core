@@ -1,7 +1,7 @@
 {
   "contract": "procedure/1",
   "id": "pack_subscriptions.contratar_plan",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "title": "Contratar un plan",
   "triggers": {
     "description": "El cliente quiere comprar, contratar o pagar un plan o suscripción del negocio.",
@@ -165,7 +165,7 @@
     },
     {
       "id": "datos",
-      "goal": "Pedir en un solo mensaje, como lista numerada, los datos que el negocio exige para el plan; si el cliente da una parte, pedir solo lo que falta.",
+      "goal": "Pedir en un solo mensaje, como lista numerada, los datos que el negocio exige para el plan; si el cliente da una parte, pedir solo lo que falta. Teléfono: si el perfil del cliente ya tiene contact_phone, úsalo para telefono sin pedirlo; si no lo tiene y existe la herramienta pedir_telefono, pídelo con ella y deja el resto en la lista; si responde canal_sin_pedir_contacto, inclúyelo en la lista.",
       "actions": [
         "sub_listar_planes"
       ],

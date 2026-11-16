@@ -1,0 +1,39 @@
+{
+  "name": "cobranza-pide-telefono-en-telegram-37",
+  "spec": "cobranza",
+  "requires_plugins": [
+    "pack_cobranza"
+  ],
+  "connection_types": [
+    "telegram"
+  ],
+  "conversation": [
+    {
+      "role": "user",
+      "content": "Hola, ¿cuánto debo y cuándo vence mi próxima cuota?"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          
+          "name": "cob_consultar_saldo",
+          "arguments": {},
+          "result": {
+            "encontrado": false,
+            "mensaje": "El cliente no está en la cartera."
+          }
+        }
+      ]
+    }
+  ],
+  "assertions": {
+    "must_call_tool": "pedir_telefono",
+    "must_not_call_tools": [
+      "cob_registrar_promesa_pago",
+      "escalate_to_human"
+    ],
+    "max_response_chars": 400
+  }
+}
