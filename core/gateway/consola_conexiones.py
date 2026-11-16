@@ -185,7 +185,9 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                     "SELECT cc.id, cc.channel, cc.type_id, cc.label, cc.external_id, "
                     "  coalesce(ct.produces_conversations, true), cc.active, cc.is_primary, cc.created_at, "
                     "  cc.meta_connection_id, mc.status, cc.active_release_id, cc.canary_release_id, "
-                    "  pn.display_phone_number, ws.phone, ws.push_name, ws.business_name "
+                    "  pn.display_phone_number, ws.phone, ws.push_name, ws.business_name, "
+                    # Telegram (ADR-0199): el @usuario del bot es su nombre visible (el `external_id` es el id del bot).
+                    "  '@' || nullif(tg.bot_username, '') "
                     "FROM channel_connections cc "
                     "LEFT JOIN connection_types ct ON ct.id = cc.type_id "
                     "LEFT JOIN meta_connections mc "
@@ -198,6 +200,8 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                     # Una sesión viva por conexión (índice único parcial): no duplica filas.
                     "LEFT JOIN waweb_sessions ws "
                     "  ON ws.tenant_id = cc.tenant_id AND ws.connection_id = cc.id AND ws.deleted_at IS NULL "
+                    "LEFT JOIN telegram_connections tg "
+                    "  ON tg.tenant_id = cc.tenant_id AND tg.channel_connection_id = cc.id AND tg.deleted_at IS NULL "
                     "WHERE cc.tenant_id = :t AND cc.deleted_at IS NULL "
                     "  AND cc.type_id IS DISTINCT FROM 'playground' "
                     "  AND (cc.meta_connection_id IS NULL OR mc.id IS NOT NULL) "
@@ -240,7 +244,7 @@ async def consola(tenant_id: uuid.UUID, *, offset: int, limite: int) -> Consola:
                 canary_release=releases.get(f[12]) if f[12] is not None else None,
                 usage_7d=consumo.get(cid, ConsumoFila()),
                 display_phone_number=f[13] or f[14] or None,
-                display_name=f[15] or f[16] or None,
+                display_name=f[15] or f[16] or f[17] or None,
             )
         )
     return Consola(

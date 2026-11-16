@@ -89,6 +89,9 @@ class InboundMessage:
     # Id del botón o de la fila de lista que tocó el cliente (`plan:premium`). `content` sigue
     # siendo el título visible; el id solo lo usa el motor de procedimientos (HU-AOS-05).
     interactive_id: str = ""
+    # Teléfono que el cliente compartió de SÍ MISMO por el canal (Telegram `request_contact`, ADR-0199 §8), en E.164.
+    # Solo lo llena un adaptador que pudo comprobar que es del propio remitente; el consumer lo guarda sin pisar otro.
+    shared_phone: str | None = None
 
 
 class InboundAdapter(ABC):

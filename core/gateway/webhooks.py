@@ -801,6 +801,8 @@ async def _publicar(tenant_id: uuid.UUID, message: Any, connection_id: uuid.UUID
             "media_context": message.media_context,
             # Solo si el cliente tocó un botón o una fila de lista (HU-AOS-05).
             **({"interactive_id": message.interactive_id} if message.interactive_id else {}),
+            # Teléfono compartido por el propio cliente (Telegram, ADR-0199 §8).
+            **({"shared_phone": message.shared_phone} if getattr(message, "shared_phone", None) else {}),
             **({"connection_id": str(connection_id)} if connection_id else {}),
         },
     )

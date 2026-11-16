@@ -414,6 +414,13 @@ async def test_rutas_kill_switch_permisos_y_otro_negocio(negocios, app_client, m
     r = await app_client.get("/api/v1/admin/connections/telegram", headers=h_a)
     assert r.status_code == 200 and hecha.bot_id in {c["bot_id"] for c in r.json()}
 
+    # Las listas de conexiones (APK y panel) muestran el @usuario del bot, no su id.
+    usuario = f"@{hecha.bot_username}"
+    lista = (await app_client.get("/api/v1/admin/connections", headers=h_a)).json()["items"]
+    assert any(i["id"] == str(hecha.connection_id) and i["display_name"] == usuario for i in lista)
+    consola = (await app_client.get("/api/v1/admin/connections/console", headers=h_a)).json()["items"]
+    assert any(i["id"] == str(hecha.connection_id) and i["display_name"] == usuario for i in consola)
+
     h_b = await api_headers(app_client, b)
     assert (await app_client.get(url, headers=h_b)).status_code == 404
 

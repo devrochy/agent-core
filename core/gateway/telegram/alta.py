@@ -416,3 +416,20 @@ async def listar(tenant_id: uuid.UUID) -> list[ConexionTelegram]:
             await session.execute(_consulta(tenant_id).order_by(TelegramConnection.created_at))
         ).all()
     return [a_conexion(fila, conexion) for fila, conexion in rows]
+
+
+async def usuarios_por_conexion(tenant_id: uuid.UUID, connection_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+    """`@usuario` del bot por conexión, para mostrarlo como nombre visible en las listas (una consulta, sin N+1)."""
+    if not connection_ids:
+        return {}
+    async with get_session() as session:
+        filas = (
+            await session.execute(
+                select(TelegramConnection.channel_connection_id, TelegramConnection.bot_username).where(
+                    TelegramConnection.tenant_id == tenant_id,
+                    TelegramConnection.channel_connection_id.in_(connection_ids),
+                    TelegramConnection.deleted_at.is_(None),
+                )
+            )
+        ).all()
+    return {cid: f"@{usuario}" for cid, usuario in filas if usuario}
