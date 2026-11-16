@@ -393,7 +393,8 @@ async def desconectar(
         client = _cliente_de(c, transport)
         info = await client.get_webhook_info() or {}
         if str(info.get("url") or "") == c.fila.webhook_url:
-            quitado = await client.delete_webhook()
+            # Lo pendiente es de este negocio: no debe llegarle a quien conecte el bot después.
+            quitado = await client.delete_webhook(drop_pending_updates=True)
     except (ProviderError, alta.AltaError) as exc:
         revocado = isinstance(exc, ProviderError) and exc.category == "AUTH"
         log.warning(
