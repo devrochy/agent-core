@@ -85,9 +85,6 @@ ESCRITORES_PERMITIDOS = {
     "core/api/routers/leads.py": "ediciones del operador desde el panel: nunca se bloquean",
     "core/orchestrator/consumer.py": "datos que el canal entrega (nombre del perfil), no los dicta el agente",
     "packages/pack-commerce/pack_commerce/api.py": "formulario público de la landing: el titular lo envía",
-    "packages/pack-commerce/pack_commerce/skills.py": (
-        "crear_pedido guarda el perfil solo con `guardar_datos` explícito del cliente (D17)"
-    ),
 }
 
 
@@ -106,8 +103,12 @@ def test_las_tools_del_agente_escriben_el_perfil_solo_por_guardar() -> None:
     assert not ofensores, f"escriben el perfil sin pasar por datos_cliente.guardar(): {ofensores}"
 
 
-def test_el_unico_upsert_que_queda_en_commerce_es_el_del_consentimiento_explicito() -> None:
-    fuente = (RAIZ / "packages/pack-commerce/pack_commerce/skills.py").read_text()
-    assert fuente.count("entity_memory.upsert_attributes(") == 1
-    cuerpo = fuente.split("entity_memory.upsert_attributes(")[0].rsplit("if guardar_datos:", 1)[-1]
-    assert len(cuerpo) < 200, "el único upsert directo debe estar dentro de `if guardar_datos:`"
+def test_guardar_exige_los_concedidos_de_quien_llama() -> None:
+    """Sin valor por defecto, ninguna tool nueva puede olvidar los `writeNamespaces` del agente."""
+    import inspect
+
+    from core.datos_cliente.guardar import guardar
+
+    parametro = inspect.signature(guardar).parameters["concedidos"]
+    assert parametro.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parametro.default is inspect.Parameter.empty
