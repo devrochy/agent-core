@@ -420,9 +420,12 @@ async def publicar(
     contenido: Any = None,
     legacy_agent_spec_id: uuid.UUID | None = None,
     lock_version: int | None = None,
+    modelo: str | None = None,
 ) -> tuple[AgentVersionRecord, bool]:
     """Congela el borrador (o `contenido`, para el backfill) en una versión inmutable.
-    Devuelve `(versión, creada)`; con el mismo hash que una existente, `creada = False`."""
+    Devuelve `(versión, creada)`; con el mismo hash que una existente, `creada = False`.
+
+    `modelo` reemplaza `model.primary` solo en la versión (HU-AOS-79): el borrador no cambia."""
     agente = await obtener_agente(tenant_id, agent_id)
     if agente.status != "active":
         raise Conflicto("El agente está archivado.")
@@ -434,6 +437,9 @@ async def publicar(
         contenido = borrador.content
         flujo = borrador.flow
     contrato = CONTRATO_POR_KIND[agente.kind]
+    if modelo and contrato == "agentspec/3" and isinstance(contenido, Mapping):
+        actual = contenido.get("model")
+        contenido = {**contenido, "model": {**(actual if isinstance(actual, Mapping) else {}), "primary": modelo}}
     normalizado = await _validar(tenant_id, contenido, contrato, catalogo)
     huella = content_hash(normalizado)
     # Flujo de atención (ADR-0195): se congela con la versión. Un agente sin flujo propio
