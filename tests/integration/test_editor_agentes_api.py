@@ -365,6 +365,32 @@ async def test_modelo_que_no_sirve_usa_el_del_negocio(app_client) -> None:
     assert r.status_code == 404, r.text
 
 
+async def test_cada_negocio_usa_su_modelo_por_defecto(app_client) -> None:
+    """HU-AOS-79 · aislamiento: dos negocios con modelos por defecto distintos. Cada agente con un
+    modelo que no sirve publica con el de SU negocio y el catálogo de cada uno dice el suyo."""
+    a, cid_a = await _negocio()
+    b, cid_b = await _negocio()
+    await _sql(a, "update app_settings set llm_model = 'deepseek-v4-pro' where tenant_id = :t", t=a)
+    ha, hb = await _dueno(app_client, a), await _dueno(app_client, b)
+    del_b = (await app_client.get("/api/v1/admin/agent-models", headers=hb)).json()["business_model"]
+    assert (await app_client.get("/api/v1/admin/agent-models", headers=ha)).json()["business_model"] == "deepseek-v4-pro"
+    assert del_b != "deepseek-v4-pro"
+
+    for h, cid, esperado in ((ha, cid_a, "deepseek-v4-pro"), (hb, cid_b, del_b)):
+        r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
+        assert r.status_code == 201, r.text
+        aid = r.json()["agent"]["id"]
+        await _poner_modelo(app_client, h, aid, "claude-haiku-4-5")
+        r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
+        assert r.status_code == 200, r.text
+        assert f"Se usó el modelo de tu negocio: {esperado}." in r.json()["warnings"]
+        tid = a if h is ha else b
+        [(contenido,)] = await _sql(
+            tid, "select content from agent_versions where id = :v", v=uuid.UUID(r.json()["version"]["id"])
+        )
+        assert contenido["model"]["primary"] == esperado
+
+
 async def test_superpoderes_por_enfoque(app_client) -> None:
     """Un agente de Ventas solo ve y solo publica lo de Ventas, aunque el negocio tenga Agenda."""
     tid, cid = await _negocio()
