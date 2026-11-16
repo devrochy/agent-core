@@ -52,6 +52,9 @@ def _ambiente(monkeypatch) -> list[str]:
             contestados.append(callback_query_id)
             return True
 
+        async def edit_message_reply_markup(self, chat_id: Any, message_id: int) -> bool:
+            return True
+
     monkeypatch.setattr(webhook, "TelegramClient", _Cliente)
     return contestados
 

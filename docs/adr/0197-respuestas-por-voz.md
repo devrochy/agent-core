@@ -1,6 +1,6 @@
 # ADR-0197 — Respuestas por voz con `pack-voice`
 
-- **Estado:** aceptado
+- **Estado:** aceptado; el punto 6 («solo `waweb`») está enmendado por ADR-0199 §13: la política decide por la capacidad `voz` del tipo de conexión
 - **Fecha:** 2026-11-14
 - **Usa:** ADR-0196 (media en `waweb`), ADR-0085 enmendado (controlador único de almacenamiento), ADR-0103 (anti-baneo del canal QR), ADR-0190 (habilidades por agente)
 

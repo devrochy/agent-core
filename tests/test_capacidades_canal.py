@@ -37,7 +37,8 @@ def test_todo_tipo_de_conexion_con_canal_declara_sus_capacidades() -> None:
     ("canal", "proveedor", "esperado"),
     [
         ("whatsapp", "meta", META),
-        ("whatsapp", "waweb", TEXTO_CON_MENU),
+        # Por QR: menú numerado y notas de voz (ADR-0197).
+        ("whatsapp", "waweb", CapacidadesCanal(respuesta_numerica=True, voz=True)),
         ("whatsapp", "twilio", META),  # botones y lista por Content de Twilio (ADR-0186, PR-7i)
         ("whatsapp", "plivo", SOLO_TEXTO),
         ("web", "web", TEXTO_CON_MENU),
@@ -45,6 +46,8 @@ def test_todo_tipo_de_conexion_con_canal_declara_sus_capacidades() -> None:
         ("messenger", "meta", TEXTO_CON_MENU),
         ("email", "smtp", SOLO_TEXTO),
         ("test", "internal", PLAYGROUND),
+        # Telegram (ADR-0199): teclado inline y notas de voz, sin ventana ni plantillas.
+        ("telegram", "telegram", CapacidadesCanal(botones=True, lista=True, voz=True)),
     ],
 )
 def test_capacidades_de_cada_canal_y_proveedor(canal: str, proveedor: str, esperado: CapacidadesCanal) -> None:
@@ -81,7 +84,7 @@ def test_capacidades_del_canal_es_lo_maximo_de_sus_proveedores() -> None:
     # El O lógico de los proveedores de WhatsApp (ojo: `respuesta_numerica` es del QR, NO de Meta; el consumer decide con
     # `capacidades_de(canal, proveedor)`, nunca con esta vista por canal).
     assert capacidades_del_canal("whatsapp") == CapacidadesCanal(
-        botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True, respuesta_numerica=True
+        botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True, respuesta_numerica=True, voz=True
     )
     assert capacidades_del_canal("test") == PLAYGROUND
     for canal in ("web", "instagram", "messenger"):
@@ -107,9 +110,10 @@ def test_admite_distingue_botones_y_lista() -> None:
 
 
 def test_canales_con_solo_lista_canales_de_clientes() -> None:
-    # El playground (`test`) tiene botones pero no es un canal de clientes. Telegram los tiene, pero está oculto para
-    # todos hasta el PR core 4 (ADR-0199): todavía no cuenta.
-    assert canales_con("botones") == ["whatsapp"]
+    # El playground (`test`) tiene botones pero no es un canal de clientes. Telegram los tiene como teclado inline
+    # (ADR-0199).
+    assert canales_con("botones") == ["whatsapp", "telegram"]
+    assert canales_con("voz") == ["whatsapp", "telegram"]
     # Atado a `core/events/core_handlers.py` (`_whatsapp_conversation_for`, los avisos por evento solo buscan
     # conversaciones `whatsapp`) y al catálogo de mensajes: si otro canal gana plantilla aprobada, este test obliga
     # a revisar los avisos por evento (D2) antes de que el catálogo diga que salen por ahí.
@@ -129,7 +133,7 @@ def test_la_tabla_cubre_los_canales_que_guardan_las_conversaciones() -> None:
 
 def test_el_modulo_no_deja_capacidades_sin_campo() -> None:
     assert set(CapacidadesCanal.__dataclass_fields__) == {
-        "botones", "lista", "plantilla_aprobada", "ventana_24h", "respuesta_numerica"
+        "botones", "lista", "plantilla_aprobada", "ventana_24h", "respuesta_numerica", "voz"
     }
     assert ct.SOLO_TEXTO is SOLO_TEXTO
 

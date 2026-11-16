@@ -249,7 +249,6 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         # Telegram con bot propio por negocio (ADR-0199, D-74). Lo arma el alta guiada (`core.gateway.telegram`): el
         # negocio pega el token de @BotFather y `external_id` es el `bot_id` que devuelve `getMe` (no sale del token).
         # Para todos los negocios, sin `bandera_negocio`; solo lo cierra su kill-switch de entorno (`core.gateway.telegram.habilitado`).
-        # Oculto (`available=False`, fuera del selector) hasta que entren y salgan mensajes (PR core 4).
         id="telegram",
         category=CATEGORY_COMMUNICATION,
         channel="telegram",
@@ -260,10 +259,9 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         credentials_schema=_TELEGRAM_SCHEMA,
         external_id_key="bot_id",
         produces_conversations=True,
-        available=False,
+        available=True,
         setup_kind=SETUP_WIZARD,
         sort_order=33,
-        en_selector=False,
     ),
     ConnectionType(
         id="whatsapp_plivo",
@@ -383,6 +381,9 @@ class CapacidadesCanal:
     # el consumer la resuelve ANTES del LLM (`kernel/opciones/respuesta_texto.py`, ADR-0172 adenda C2). Solo los
     # canales de texto donde el cliente contesta con un mensaje corto; el correo no (el cuerpo trae citado y firma).
     respuesta_numerica: bool = False
+    # El adaptador de salida sabe mandar una nota de voz (`send_audio`, ADR-0197). La política de voz de `pack-voice`
+    # elige voz en cualquier conexión con esta capacidad, sin atarse a un proveedor.
+    voz: bool = False
 
     def admite(self, tipo_interactivo: object) -> bool:
         """¿Admite este `interactive.type` (`button` | `list`)?"""
@@ -405,7 +406,7 @@ CAPACIDADES_POR_TIPO: dict[str, CapacidadesCanal] = {
         botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True
     ),
     # Por QR (neonize): solo texto entrante y saliente, sin plantillas ni ventana (ADR-0103).
-    "whatsapp_waweb": TEXTO_CON_MENU,
+    "whatsapp_waweb": CapacidadesCanal(respuesta_numerica=True, voz=True),
     # WhatsApp vía Twilio (ADR-0186): botones y lista dentro de la ventana de 24 h como Content `twilio/quick-reply` y
     # `twilio/list-picker` (PR-7i); fuera, plantilla aprobada de la Content API (PR-7a). Las opciones directas fuera de
     # la ventana buscan la contraparte de Meta, que una conversación de Twilio no tiene: no sale nada (`sin_plantilla`).
@@ -414,7 +415,7 @@ CAPACIDADES_POR_TIPO: dict[str, CapacidadesCanal] = {
     ),
     # Telegram (ADR-0199): botones y lista como teclado inline (una fila por opción; la lista no se degrada en el
     # adaptador, adenda §9 del ADR-0186). Sin ventana ni plantillas: Telegram no las tiene.
-    "telegram": CapacidadesCanal(botones=True, lista=True),
+    "telegram": CapacidadesCanal(botones=True, lista=True, voz=True),
     "whatsapp_plivo": SOLO_TEXTO,
     "instagram_meta": TEXTO_CON_MENU,
     "messenger_meta": TEXTO_CON_MENU,

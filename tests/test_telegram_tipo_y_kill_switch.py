@@ -12,7 +12,6 @@ from core.gateway.connection_types import (
     CapacidadesCanal,
     capacidades_de,
     disponible_para,
-    setup_url,
     tipo_de_conexion,
     types_by_category,
 )
@@ -50,15 +49,14 @@ def test_solo_el_booleano_true_lo_enciende(monkeypatch, valor, esperado):
     assert habilitado.habilitado() is esperado
 
 
-def test_tipo_telegram_oculto_hasta_que_funcione():
+def test_tipo_telegram_disponible_para_todos():
     tipo = BY_ID["telegram"]
     assert (tipo.channel, tipo.provider, tipo.category) == ("telegram", "telegram", "comunicacion")
     assert tipo.produces_conversations is True
-    # Sin bandera por negocio (D-74); oculto hasta el PR core 4.
+    # Sin bandera por negocio (D-74): visible en el selector desde el PR core 4, cuando ya entra y sale texto.
     assert tipo.bandera_negocio == ""
-    assert tipo.available is False and tipo.en_selector is False
-    assert setup_url(tipo) == ""
-    assert all(i.id != "telegram" for g in types_by_category() for i in g["items"])
+    assert tipo.available is True and tipo.en_selector is True
+    assert any(i.id == "telegram" for g in types_by_category() for i in g["items"])
     # Credenciales: el token y el secreto del webhook de solo escritura; el `bot_id` (de `getMe`) es la clave de ruteo.
     props = tipo.credentials_schema["properties"]
     assert set(props) == {"bot_token", "bot_id", "webhook_secret"}
@@ -66,30 +64,27 @@ def test_tipo_telegram_oculto_hasta_que_funcione():
     assert tipo.external_id_key == "bot_id"
 
 
-def test_oculto_no_entra_al_catalogo_de_mensajes():
+def test_entra_al_catalogo_de_mensajes_con_botones():
     from core.gateway.connection_types import canales_con
 
-    assert "telegram" not in canales_con("botones")
+    assert "telegram" in canales_con("botones")
 
 
 def test_capacidades_de_telegram():
-    assert CAPACIDADES_POR_TIPO["telegram"] == CapacidadesCanal(botones=True, lista=True)
+    assert CAPACIDADES_POR_TIPO["telegram"] == CapacidadesCanal(botones=True, lista=True, voz=True)
     assert capacidades_de("telegram", "telegram").ventana_24h is False
     assert capacidades_de("telegram").plantilla_aprobada is False
     assert tipo_de_conexion("telegram") == "telegram"
 
 
 def test_el_kill_switch_va_antes_que_available(monkeypatch):
-    """Cuando el PR core 4 encienda `available`, el kill-switch apagado lo sigue cerrando."""
-    from dataclasses import replace
-
+    """`available=True` desde el PR core 4: el kill-switch apagado lo sigue cerrando."""
     from core.config import get_settings
 
-    encendido = replace(BY_ID["telegram"], available=True)
+    tipo = BY_ID["telegram"]
     monkeypatch.setattr(get_settings(), "telegram_habilitado", True)
-    assert disponible_para(encendido, {}) is True
-    assert disponible_para(BY_ID["telegram"], {}) is False
+    assert disponible_para(tipo, {}) is True
     monkeypatch.setattr(get_settings(), "telegram_habilitado", False)
-    assert disponible_para(encendido, {}) is False
+    assert disponible_para(tipo, {}) is False
     # El kill-switch no toca a los demás tipos.
     assert disponible_para(BY_ID["whatsapp_meta"], {}) is True

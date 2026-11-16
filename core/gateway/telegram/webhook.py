@@ -161,14 +161,27 @@ def _evento(bot_id: str, public_id: str, update_: dict[str, Any]) -> FlattenedEv
 
 
 async def _contestar_toque(token: str, update_: dict[str, Any], tenant_id: uuid.UUID) -> None:
-    """Quita el reloj del botón. Best-effort con 2 s: si falla, el cliente ve el reloj un rato, nada más."""
+    """Quita el reloj del botón y el teclado del mensaje (para que no se toque dos veces). Best-effort con 2 s cada
+    uno: si falla, el cliente ve el reloj o el teclado un rato, nada más."""
     toque = callback_query_id(update_)
     if not toque:
         return
     try:
-        await asyncio.wait_for(TelegramClient(token).answer_callback_query(toque), _RESPUESTA_CALLBACK_S)
+        cliente = TelegramClient(token)
+        await asyncio.wait_for(cliente.answer_callback_query(toque), _RESPUESTA_CALLBACK_S)
     except (ProviderError, TimeoutError):
         log.info("telegram.callback.answer_fallo", tenant_id=str(tenant_id))
+        return
+    mensaje = update_["callback_query"].get("message")
+    chat = mensaje.get("chat") if isinstance(mensaje, dict) else None
+    if not isinstance(chat, dict) or not isinstance(mensaje.get("message_id"), int):
+        return
+    try:
+        await asyncio.wait_for(
+            cliente.edit_message_reply_markup(chat.get("id"), mensaje["message_id"]), _RESPUESTA_CALLBACK_S
+        )
+    except (ProviderError, TimeoutError):
+        log.info("telegram.callback.teclado_no_quitado", tenant_id=str(tenant_id))
 
 
 async def _marcar_actividad(tenant_id: uuid.UUID, fila_id: uuid.UUID) -> None:
@@ -273,6 +286,12 @@ async def _recibir(request: Request, public_id: str) -> tuple[str, Response]:
             await _mark_entry_processed(app_id, tenant_id, [evento])
             return "ignorado", Response(status_code=200)
 
+        for mensaje in mensajes:
+            if mensaje.interactive_id:
+                # Un id largo viajó como token en `callback_data` (PR core 4): se devuelve el original. Vencido: sin id.
+                from core.gateway.telegram import interactivos
+
+                mensaje.interactive_id = await interactivos.resolver(tenant_id, bot_id, mensaje.interactive_id)
         resultado = "aceptado"
         try:
             for mensaje in mensajes:

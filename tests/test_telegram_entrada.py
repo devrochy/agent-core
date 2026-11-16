@@ -76,7 +76,7 @@ def test_el_mismo_mensaje_en_dos_bots_da_ids_distintos():
     a = ADAPTADOR.parse_update(_update(message=_mensaje(text="x")), bot_id="111")[0]
     b = ADAPTADOR.parse_update(_update(message=_mensaje(text="x")), bot_id="222")[0]
     assert a.external_message_id != b.external_message_id
-    assert id_saliente("111", 555, 7) == "tg:111:555:7"
+    assert id_saliente("111", 555, 7) == "tg:111:out:555:7"
 
 
 def test_foto_toma_la_mas_grande_que_se_puede_descargar_y_su_caption():
