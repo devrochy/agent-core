@@ -45,6 +45,8 @@ _EXTRA_DENYLIST = [
     "bot_token", "webhook_secret", "creds",
     # El webhook de Telegram (y el de Twilio): el cuerpo crudo y el update llevan el texto y el nombre del cliente.
     "raw_body", "update_", "mensaje", "mensajes", "caption", "first_name", "last_name",
+    # El teléfono que el cliente comparte por Telegram (ADR-0199 §8).
+    "phone_number", "contact", "shared_phone", "telefono",
 ]
 _configured = False
 

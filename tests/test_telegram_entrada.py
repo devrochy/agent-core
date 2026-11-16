@@ -104,7 +104,7 @@ def test_nota_de_voz():
         _update(my_chat_member={"chat": CHAT}),
         _update(message=_mensaje(sticker={"file_id": "s"})),
         _update(message=_mensaje(document={"file_id": "d"})),
-        _update(message=_mensaje(contact={"phone_number": "+573001112233", "user_id": 555})),
+        _update(message=_mensaje(contact={"phone_number": "+573001112233", "user_id": 999})),  # reenviado
         _update(message=_mensaje(text="soy un bot", **{"from": {"id": 555, "is_bot": True}})),
         _update(message=_mensaje(text="chat de otro", chat={"id": 999, "type": "private"})),
         _update(message={**_mensaje(text="sin message_id"), "message_id": None}),

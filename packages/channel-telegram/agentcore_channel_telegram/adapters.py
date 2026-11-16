@@ -11,15 +11,17 @@ bots y entre negocios:
 - cliente: el id del usuario de Telegram (`customer_external_id`), que en un chat privado es también el `chat_id`.
 
 Solo chats privados con una persona. Lo demás (grupos, canales, mensajes editados, stickers, documentos, ubicaciones,
-contactos hasta el PR core 5) se ignora con una lista vacía: el webhook responde 200 y Telegram no reintenta.
+contactos de otra persona) se ignora con una lista vacía: el webhook responde 200 y Telegram no reintenta.
 
-Lo que acepta: texto (`/start` llega como texto), foto y nota de voz (con su caption) y el toque de un botón inline
-(`callback_query`). Los medios van en `media` con el `file_id` de Telegram; los descarga la ingesta del core.
+Lo que acepta: texto (`/start` llega como texto), foto y nota de voz (con su caption), el toque de un botón inline
+(`callback_query`) y el contacto que el cliente comparte de sí mismo (`contact.user_id` igual al remitente), que llega
+como `shared_phone` en E.164. Los medios van en `media` con el `file_id` de Telegram; los descarga la ingesta del core.
 """
 
 from __future__ import annotations
 
 import hmac
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -106,6 +108,20 @@ def _foto(mensaje: Mapping[str, Any]) -> dict[str, str] | None:
     return {"type": "image/jpeg", "id": str(mayor["file_id"])}
 
 
+_E164 = re.compile(r"^\+[1-9]\d{6,14}$")
+
+
+def telefono_propio(mensaje: Mapping[str, Any], persona: Mapping[str, Any]) -> str | None:
+    """El teléfono del contacto compartido, en E.164, solo si es del propio remitente: un contacto reenviado (de otra
+    persona) o sin `user_id` no cuenta. Telegram a veces lo manda sin `+`."""
+    contacto = mensaje.get("contact")
+    if not isinstance(contacto, Mapping) or contacto.get("user_id") != persona.get("id"):
+        return None
+    digitos = "".join(c for c in _texto(contacto.get("phone_number"), 32) if c.isdigit())
+    numero = f"+{digitos}"
+    return numero if _E164.match(numero) else None
+
+
 def _voz(mensaje: Mapping[str, Any]) -> dict[str, str] | None:
     voz = mensaje.get("voice")
     if not isinstance(voz, Mapping) or not isinstance(voz.get("file_id"), str):
@@ -172,9 +188,11 @@ class TelegramInbound(InboundAdapter):
         if persona is None or message_id is None or not _chat_privado(mensaje, persona):
             return None
         media = [m for m in (_foto(mensaje), _voz(mensaje)) if m is not None]
-        contenido = _texto(mensaje.get("text")) or _texto(mensaje.get("caption"), 1024)
+        telefono = telefono_propio(mensaje, persona)
+        # El número compartido es también lo que el cliente «dijo»: así el turno no llega vacío al agente.
+        contenido = _texto(mensaje.get("text")) or _texto(mensaje.get("caption"), 1024) or (telefono or "")
         if not contenido and not media:
-            return None  # sticker, documento, ubicación, contacto (PR core 5)…
+            return None  # sticker, documento, ubicación, contacto de otra persona…
         return InboundMessage(
             provider=PROVIDER,
             channel=CHANNEL,
@@ -184,6 +202,7 @@ class TelegramInbound(InboundAdapter):
             content=contenido,
             connection_external_id=bot_id,
             media=media,
+            shared_phone=telefono,
         )
 
     def _toque(self, toque: Mapping[str, Any], bot_id: str) -> InboundMessage | None:

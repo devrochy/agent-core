@@ -17,12 +17,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import socket
 import uuid
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import select, text, update
+from sqlalchemy import or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from core.billing.enforcement import QuotaExceeded, enforce_metric
@@ -562,6 +563,31 @@ async def _handle_inbound_scoped(fields: dict[str, str], *, opciones_habilitada:
 
 
 # ------------------------------------------------------------------ resolución
+_E164 = re.compile(r"^\+[1-9]\d{6,14}$")
+
+
+async def _guardar_telefono_compartido(session: Any, tenant_id: Any, customer: Any, telefono: str) -> None:
+    """El teléfono que el cliente compartió de sí mismo por Telegram (ADR-0199 §8) queda en `contact_phone`, sin
+    pisar otro número y sin fusionar clientes: un solo UPDATE condicionado. Otro número ya guardado es un conflicto
+    que se registra (sin el número). Se revalida el formato: el stream no es la fuente de verdad."""
+    if not _E164.match(telefono or ""):
+        log.warning("telegram.contacto.invalido", tenant_id=str(tenant_id), customer_id=str(customer.id))
+        return
+    resultado = await session.execute(
+        update(Customer)
+        .where(
+            Customer.tenant_id == tenant_id,
+            Customer.id == customer.id,
+            or_(Customer.contact_phone.is_(None), Customer.contact_phone == telefono),
+        )
+        .values(contact_phone=telefono)
+    )
+    evento = "telegram.contacto.compartido" if resultado.rowcount else "telegram.contacto.conflicto"
+    log.info(evento, tenant_id=str(tenant_id), customer_id=str(customer.id))
+    if resultado.rowcount:
+        customer.contact_phone = telefono
+
+
 class InboundSinConexion(Exception):
     """El entrante es de un proveedor que solo responde por su conexión (Twilio, Telegram) y esa conexión no está."""
 
@@ -650,6 +676,9 @@ async def _resolve_conversation(
                 ).scalar_one()
         elif name and not customer.name:
             customer.name = name
+
+        if fields.get("shared_phone") and fields.get("provider") == "telegram":
+            await _guardar_telefono_compartido(session, tenant_id, customer, fields["shared_phone"])
 
         # El nombre que manda el canal es el alias: si después el agente aprende el
         # nombre real, `name` cambia pero el alias queda para no perder cómo escribe

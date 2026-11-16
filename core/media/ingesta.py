@@ -490,9 +490,11 @@ async def procesar_media_entrante(
     external_id = fields.get("external_message_id", "")
     if tenant_id is None:
         return MediaOutcome.skipped()
-    # Meta Cloud (ADR-0151), WhatsApp vía Twilio (ADR-0186) y WhatsApp Web (ADR-0196).
+    # Meta Cloud (ADR-0151), WhatsApp vía Twilio (ADR-0186), WhatsApp Web (ADR-0196) y Telegram (ADR-0199).
     # Los demás canales conservan su camino actual.
-    if fields.get("provider") not in ("meta", "twilio", "waweb") or fields.get("channel") != "whatsapp":
+    es_whatsapp = fields.get("provider") in ("meta", "twilio", "waweb") and fields.get("channel") == "whatsapp"
+    es_telegram = fields.get("provider") == "telegram" and fields.get("channel") == "telegram"
+    if not (es_whatsapp or es_telegram):
         log.info(
             "media_canal_no_soportado",
             provider=fields.get("provider"),
@@ -533,7 +535,8 @@ async def procesar_media_entrante(
                 await _cache_set(clave, outcome)
             return outcome
     else:
-        # Credenciales de la conexión de la conversación (Meta o Twilio).
+        # Credenciales de la conexión de la conversación (Meta, Twilio o el bot de Telegram): la que el webhook validó,
+        # nunca una buscada por número o por bot.
         from core.gateway.sender import resolve_credentials
 
         try:
@@ -545,8 +548,10 @@ async def procesar_media_entrante(
         except Exception:
             log.warning("media_credenciales_failed", conversation_id=str(conversation.id), exc_info=True)
             return MediaOutcome.skipped()
-        con_credenciales = (provider == "meta" and creds.get("access_token")) or (
-            provider == "twilio" and creds.get("account_sid") and creds.get("auth_token")
+        con_credenciales = (
+            (provider == "meta" and creds.get("access_token"))
+            or (provider == "twilio" and creds.get("account_sid") and creds.get("auth_token"))
+            or (provider == "telegram" and creds.get("bot_token"))
         )
         if provider != provider_esperado or not con_credenciales:
             log.warning(
@@ -566,7 +571,7 @@ async def procesar_media_entrante(
                 await _cache_set(clave, outcome)
             return outcome
         media_url = str(item.get("url") or "")
-        if (provider == "meta" and not media_id) or (provider == "twilio" and not media_url):
+        if (provider in ("meta", "telegram") and not media_id) or (provider == "twilio" and not media_url):
             outcome = await _outcome_fijo(
                 "media_download_failed",
                 content=fields.get("content", "") or "[Archivo adjunto]",
@@ -580,7 +585,13 @@ async def procesar_media_entrante(
             return outcome
 
         try:
-            if provider == "twilio":
+            if provider == "telegram":
+                from core.media.telegram_media import descargar_media_telegram
+
+                media = await descargar_media_telegram(
+                    media_id, str(creds.get("bot_token") or ""), mime_esperado=mime_type
+                )
+            elif provider == "twilio":
                 from core.media.twilio_media import descargar_media_twilio
 
                 media = await descargar_media_twilio(
