@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -28,7 +29,7 @@ from sqlalchemy import select, text
 from core.db.models import ChannelConnection, TwilioConnection, utcnow
 from core.db.session import get_session
 from core.gateway.channels.base import ProviderError
-from core.gateway.twilio import alta, sandbox
+from core.gateway.twilio import alta, prueba, sandbox
 from core.shared.crypto import get_secret_box
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
@@ -411,6 +412,15 @@ async def enviar_prueba(
                 "número del negocio desde ese teléfono y vuelve a probar.",
             ) from None
         raise alta._traducir(exc) from None
+    try:
+        # Twilio aceptó el envío, pero el rechazo (63015, 63016…) llega después por el status callback.
+        await prueba.registrar_envio(tenant_id, connection_id, sid)
+    except Exception:
+        log.warning(
+            "twilio_prueba_sin_seguimiento",
+            tenant_id=str(tenant_id),
+            connection_id=str(connection_id),
+        )
     from core.shared.audit import record_audit
 
     await record_audit(
@@ -421,10 +431,59 @@ async def enviar_prueba(
     return sid
 
 
+@dataclass(frozen=True)
+class ResultadoPrueba:
+    sid: str
+    estado: str
+    provider_status: str
+    error_code: int | None
+    motivo: str | None
+    enviado_at: datetime
+    actualizado_at: datetime
+
+
+async def resultado_prueba(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID, sid: str
+) -> ResultadoPrueba | None:
+    """Estado de la última prueba de la conexión, con el motivo en palabras si no llegó. `None` si `sid` no es la
+    última prueba de esta conexión (o ya venció)."""
+    c = await _cargar(tenant_id, connection_id)
+    if c is None or sandbox.inerte(c.fila.modo):
+        return None
+    e = await prueba.obtener(tenant_id, connection_id, sid)
+    if e is None:
+        return None
+    motivo = _motivo_fallo(c, e.error_code, e.error_message) if e.estado == "failed" else None
+    return ResultadoPrueba(
+        sid=e.sid,
+        estado=e.estado,
+        provider_status=e.provider_status,
+        error_code=e.error_code,
+        motivo=motivo,
+        enviado_at=e.enviado_at,
+        actualizado_at=e.actualizado_at,
+    )
+
+
+def _motivo_fallo(c: _Conexion, codigo: int | None, mensaje_twilio: str) -> str:
+    if codigo == sandbox.CODIGO_NO_UNIDO:
+        return _motivo_no_unido(c)
+    if codigo == 63016:
+        return (
+            "WhatsApp solo deja mandar texto si ese número te escribió en las últimas 24 h. Escríbele primero al "
+            "número del negocio desde ese teléfono y vuelve a probar."
+        )
+    if codigo in (63003, 63024):
+        return "Ese número no tiene WhatsApp o no es válido. Revísalo, con el indicativo del país."
+    if codigo is None:
+        return "WhatsApp no entregó el mensaje y Twilio no dijo por qué."
+    detalle = f": {mensaje_twilio}" if mensaje_twilio else ""
+    return f"WhatsApp no entregó el mensaje (código {codigo} de Twilio{detalle})."
+
+
 def _no_unido(c: _Conexion) -> alta.AltaError:
     """63015: el destinatario no se unió al sandbox de la cuenta, o su unión de 3 días venció."""
-    codigo = c.fila.sandbox_join_code
-    union = f"join {codigo}" if codigo else "join <código de tu sandbox>"
+    union = _union(c)
     numero = c.fila.sender_e164
     return alta.AltaError(
         422,
@@ -433,6 +492,23 @@ def _no_unido(c: _Conexion) -> alta.AltaError:
         f"{numero} y vuelve a probar. La unión vence a los 3 días.",
         {"join": union, "sandbox_e164": numero},
     )
+
+
+def _union(c: _Conexion) -> str:
+    codigo = c.fila.sandbox_join_code
+    return f"join {codigo}" if codigo else "join <código de tu sandbox>"
+
+
+def _motivo_no_unido(c: _Conexion) -> str:
+    """El 63015 que llega por el status callback (la prueba ya se había aceptado)."""
+    return f"Ese número debe enviar «{_union(c)}» al {_legible(c.fila.sender_e164)} (la unión vence a los 3 días)."
+
+
+def _legible(e164: str) -> str:
+    """`+14155238886` → `+1 415 523 8886`; otros países quedan como están."""
+    if e164.startswith("+1") and len(e164) == 12 and e164[1:].isdigit():
+        return f"+1 {e164[2:5]} {e164[5:8]} {e164[8:]}"
+    return e164
 
 
 async def rotar_credenciales(

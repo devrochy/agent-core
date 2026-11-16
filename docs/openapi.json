@@ -13257,6 +13257,98 @@
         }
       }
     },
+    "/api/v1/admin/connections/twilio/{connection_id}/test-message/{message_sid}": {
+      "get": {
+        "tags": [
+          "api",
+          "connections"
+        ],
+        "summary": "Resultado De Prueba",
+        "description": "Resultado de la última prueba: Twilio acepta el envío y el rechazo (63015 del Sandbox, 63016 fuera de la\nventana…) llega después por el status callback. El panel lo consulta unos segundos tras enviar.",
+        "operationId": "resultado_de_prueba_api_v1_admin_connections_twilio__connection_id__test_message__message_sid__get",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "message_sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 34,
+              "maxLength": 34,
+              "pattern": "^(SM|MM)[0-9a-f]{32}$",
+              "title": "Message Sid"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwilioPruebaEstadoOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "La conexión no existe, o ese SID no es su última prueba (o ya pasó un día)."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/connections/twilio/{connection_id}/credentials": {
       "put": {
         "tags": [
@@ -78337,6 +78429,69 @@
           "aprobada_at"
         ],
         "title": "TwilioPlantillaOut"
+      },
+      "TwilioPruebaEstadoOut": {
+        "properties": {
+          "message_sid": {
+            "type": "string",
+            "title": "Message Sid"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado",
+            "description": "`queued` (Twilio la aceptó), `sent`, `delivered`, `read` o `failed`. Solo avanza."
+          },
+          "provider_status": {
+            "type": "string",
+            "title": "Provider Status",
+            "description": "El `MessageStatus` de Twilio (`undelivered`, `failed`…)."
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code",
+            "description": "Código de Twilio cuando no llegó (63015, 63016…)."
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo",
+            "description": "Por qué no llegó, en palabras, para mostrarlo tal cual."
+          },
+          "enviado_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Enviado At"
+          },
+          "actualizado_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Actualizado At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message_sid",
+          "estado",
+          "provider_status",
+          "error_code",
+          "motivo",
+          "enviado_at",
+          "actualizado_at"
+        ],
+        "title": "TwilioPruebaEstadoOut"
       },
       "TwilioPruebaIn": {
         "properties": {

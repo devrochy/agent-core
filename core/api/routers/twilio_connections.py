@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Path, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from core.api.deps import Principal, require, require_owner_or_master
@@ -378,6 +378,22 @@ class TwilioPruebaOut(BaseModel):
     message_sid: str
 
 
+class TwilioPruebaEstadoOut(BaseModel):
+    message_sid: str
+    estado: str = Field(
+        description="`queued` (Twilio la aceptó), `sent`, `delivered`, `read` o `failed`. Solo avanza."
+    )
+    provider_status: str = Field(
+        description="El `MessageStatus` de Twilio (`undelivered`, `failed`…)."
+    )
+    error_code: int | None = Field(description="Código de Twilio cuando no llegó (63015, 63016…).")
+    motivo: str | None = Field(
+        description="Por qué no llegó, en palabras, para mostrarlo tal cual."
+    )
+    enviado_at: datetime
+    actualizado_at: datetime
+
+
 class TwilioDesconectarIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -524,6 +540,42 @@ async def mensaje_de_prueba(
     except svc.AltaError as exc:
         raise _api_error(exc) from None
     return TwilioPruebaOut(message_sid=sid)
+
+
+@router.get(
+    "/{connection_id}/test-message/{message_sid}",
+    response_model=TwilioPruebaEstadoOut,
+    responses={
+        404: {
+            "description": "La conexión no existe, o ese SID no es su última prueba (o ya pasó un día)."
+        }
+    },
+)
+async def resultado_de_prueba(
+    connection_id: uuid.UUID,
+    message_sid: Annotated[
+        str, Path(min_length=34, max_length=34, pattern=r"^(SM|MM)[0-9a-f]{32}$")
+    ],
+    principal: Annotated[Principal, Depends(require("connections"))],
+) -> TwilioPruebaEstadoOut:
+    """Resultado de la última prueba: Twilio acepta el envío y el rechazo (63015 del Sandbox, 63016 fuera de la
+    ventana…) llega después por el status callback. El panel lo consulta unos segundos tras enviar."""
+    from core.gateway.twilio import operacion
+
+    tid = _tenant(principal)
+    await _exigir_bandera(tid)
+    r = await operacion.resultado_prueba(tid, connection_id, message_sid)
+    if r is None:
+        raise ApiError.not_found("No hay una prueba reciente con ese identificador.")
+    return TwilioPruebaEstadoOut(
+        message_sid=r.sid,
+        estado=r.estado,
+        provider_status=r.provider_status,
+        error_code=r.error_code,
+        motivo=r.motivo,
+        enviado_at=r.enviado_at,
+        actualizado_at=r.actualizado_at,
+    )
 
 
 class TwilioRotarIn(TwilioCredencialesIn):

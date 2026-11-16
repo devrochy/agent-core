@@ -305,6 +305,13 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
                 from core.tasks.twilio_costos import encolar_costo
 
                 encolar_costo(tenant_id, connection_id, message_sid)
+            try:
+                # El mensaje de prueba no está en `messages`: su resultado se sigue aparte para la ficha.
+                from core.gateway.twilio import prueba
+
+                await prueba.aplicar_estado(tenant_id, connection_id, update)
+            except Exception:
+                log.warning("twilio_prueba_estado_fallido", tenant_id=str(tenant_id))
             if twilio.modo == sandbox.MODO_SANDBOX and str(params.get("ErrorCode") or "") == str(
                 sandbox.CODIGO_NO_UNIDO
             ):
