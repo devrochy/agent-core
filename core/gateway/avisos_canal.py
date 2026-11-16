@@ -25,9 +25,11 @@ Este módulo es el único que sabe qué hacer con ellas; `send_event_notice` sol
 - *Messenger e Instagram.* El asistente nunca escribe fuera de la ventana de 24 h (`sender.validate_service_window`,
   ADR-0152): ventana desconocida o vencida = no se envía (como ADR-0108 para WhatsApp).
 - *Chat web.* Sin proveedor externo, ventana ni plantillas: el mensaje se guarda y el widget lo recoge.
+- *Telegram (ADR-0199).* Sin ventana de 24 h ni plantillas: el bot escribe a quien ya le escribió, y la salida es
+  inmediata (un 429 solo la demora segundos), así que la cobranza puede salir por aquí sin el riesgo de horario del QR.
 - *Horario legal de cobranza (HU-SUB-18).* Quien decide CUÁNDO se emite el aviso sigue siendo quien lo emite
   (`pack_subscriptions`: cron, diferido del cargo nuevo y reenvío del panel); este módulo no cambia esa hora y
-  solo permite la entrega inmediata (web, Messenger, Instagram).
+  solo permite la entrega inmediata (web, Messenger, Instagram, Telegram).
 """
 
 from __future__ import annotations
@@ -56,7 +58,9 @@ QR = "whatsapp_waweb"
 WEB = "webchat"
 MESSENGER = "messenger_meta"
 INSTAGRAM = "instagram_meta"
-TIPOS_DE_TEXTO: tuple[str, ...] = (QR, WEB, MESSENGER, INSTAGRAM)
+# Telegram (ADR-0199): texto sin ventana de 24 h ni plantillas, como el QR.
+TELEGRAM = "telegram"
+TIPOS_DE_TEXTO: tuple[str, ...] = (QR, WEB, MESSENGER, INSTAGRAM, TELEGRAM)
 # Canales de Meta con ventana de 24 h para el asistente aunque no tengan plantillas (la tabla de C1 no lo dice:
 # `ventana_24h` allí significa «ventana + plantilla»; `sender.validate_service_window` es lo que rige).
 CON_VENTANA = frozenset({MESSENGER, INSTAGRAM})
