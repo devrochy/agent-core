@@ -14,6 +14,8 @@ Create Date: 2026-11-15
 
 from __future__ import annotations
 
+import sqlalchemy as sa
+
 from alembic import op
 
 revision = "0138"
@@ -21,8 +23,17 @@ down_revision = "0137"
 branch_labels = None
 depends_on = None
 
+# Como 0122/0137: la función SECURITY DEFINER corre con el rol que la crea. Sin BYPASSRLS, la RLS forzada de
+# `telegram_connections` le dejaría ver 0 filas y el cron no revisaría nada, sin avisar.
+_PUEDE_SALTAR_RLS = "select rolsuper or rolbypassrls from pg_roles where rolname = current_user"
+
 
 def upgrade() -> None:
+    if not op.get_bind().execute(sa.text(_PUEDE_SALTAR_RLS)).scalar():
+        raise RuntimeError(
+            "0138: el rol de migraciones no es superusuario ni tiene BYPASSRLS. La función SECURITY DEFINER de la "
+            "salud de Telegram quedaría sujeta a la RLS forzada. Corre la migración con el dueño de la base."
+        )
     op.execute(
         """
         CREATE OR REPLACE FUNCTION admin_telegram_connection_ids()

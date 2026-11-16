@@ -16,7 +16,7 @@ Al pasar a `degraded` o `revoked` se alerta una vez al día por conexión. El cr
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -50,7 +50,8 @@ _NO_RESPONDE = ("TRANSIENT", "AMBIGUOUS", "RATE_LIMIT", "QUOTA")
 class _Conexion:
     connection: ChannelConnection
     fila: TelegramConnection
-    creds: dict[str, Any]
+    # Fuera del repr: llevan el token y el secreto del webhook (un traceback con locales los imprimiría).
+    creds: dict[str, Any] = field(repr=False)
 
     @property
     def token(self) -> str:
@@ -115,8 +116,8 @@ class _Revision:
 async def _guardar(
     tenant_id: uuid.UUID, connection_id: uuid.UUID, r: _Revision, *, desde: Any = None
 ) -> str | None:
-    """Persiste una revisión sobre la fila releída con candado. Devuelve el estado anterior, o `None` si la fila
-    cambió desde `desde` (un cambio de token en medio): esa revisión ya no vale."""
+    """Persiste una revisión sobre la fila releída con candado. Devuelve el estado anterior, o `None` si la fila ya
+    no existe o cambió desde `desde` (un cambio de token en medio): esa revisión ya no vale."""
     async with get_session() as session:
         fila = (
             await session.execute(
@@ -130,7 +131,7 @@ async def _guardar(
             )
         ).scalar_one_or_none()
         if fila is None:
-            return ""
+            return None
         if desde is not None and fila.updated_at != desde:
             log.info(
                 "telegram.salud.descartada_por_cambio",
@@ -268,8 +269,15 @@ async def reparar_webhook(
         raise alta.AltaError(409, "conexion_pausada", "La conexión está pausada.")
     alta.exigir_url_publica()
     estado = await alta.registrar_webhook(
-        _cliente_de(c, transport), tenant_id, connection_id, c.fila.webhook_url, c.secreto
+        _cliente_de(c, transport),
+        tenant_id,
+        connection_id,
+        c.fila.webhook_url,
+        c.secreto,
+        bot_id=c.connection.external_id or "",
     )
+    if not estado:
+        return None
     await _alertar(tenant_id, connection_id, c.fila.status, estado, "reparar el webhook")
     return await alta.obtener(tenant_id, connection_id)
 

@@ -419,6 +419,12 @@ async def test_rutas_kill_switch_permisos_y_otro_negocio(negocios, app_client, m
     r = await app_client.post(f"/api/v1/admin/connections/{hecha.connection_id}/action", headers=h_colab, json={"action": "deactivate"})
     assert r.status_code == 403, r.text
 
+    # El borrado genérico no quita el webhook: un bot se desconecta por su ruta.
+    r = await app_client.post(
+        f"/api/v1/admin/connections/{hecha.connection_id}/action", headers=h_a, json={"action": "delete"}
+    )
+    assert r.status_code == 409 and r.json()["error"]["code"] == "usar_desconectar_telegram", r.text
+
     monkeypatch.setattr(get_settings(), "telegram_habilitado", False)
     assert (await app_client.get(url, headers=h_a)).status_code == 404
     r = await app_client.post("/api/v1/admin/connections/telegram", headers=h_a, json={"bot_token": "1" * 25})

@@ -690,6 +690,15 @@ async def connection_action(
         # es del propietario o el master.
         require_owner_or_master(principal)
 
+    if payload.action == "delete" and existing.provider == "telegram":
+        # Borrar un bot sin quitarle el webhook lo deja apuntando a una dirección muerta: se desconecta por su ruta
+        # (ADR-0199), que llama a `deleteWebhook` antes del borrado lógico.
+        raise ApiError(
+            409,
+            "usar_desconectar_telegram",
+            "Desconecta el bot desde su ficha de Telegram.",
+            details={"ruta": f"/api/v1/admin/connections/telegram/{connection_id}/disconnect"},
+        )
     if payload.action == "delete":
         from core.api.step_up import confirmar_password
 

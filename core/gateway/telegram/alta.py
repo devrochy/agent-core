@@ -26,7 +26,7 @@ from datetime import datetime
 from typing import Any
 
 import httpx
-from agentcore_channel_telegram.client import TelegramClient
+from agentcore_channel_telegram.client import TelegramClient, redactar
 from agentcore_channel_telegram.limites import nuevo_secreto_webhook
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -258,7 +258,7 @@ async def conectar(
     if actual and not es_nuestra(actual):
         log.info("telegram.alta.webhook_ajeno", tenant_id=str(tenant_id), bot_id=bot_id)
     estado = await registrar_webhook(
-        client, tenant_id, connection_id, url_webhook(public_id), secreto
+        client, tenant_id, connection_id, url_webhook(public_id), secreto, bot_id=bot_id
     )
     resultado = await obtener(tenant_id, connection_id)
     assert resultado is not None
@@ -293,38 +293,48 @@ async def registrar_webhook(
     connection_id: uuid.UUID,
     url: str,
     secreto: str,
+    *,
+    bot_id: str,
 ) -> str:
     """`setWebhook` con el secreto y `getWebhookInfo` para confirmarlo. Guarda y devuelve el estado: `connected`
-    solo si Telegram quedó apuntando a `url`; `revoked` si el token dejó de valer; si no, `error`."""
-    mensaje: str | None = None
-    try:
-        await client.set_webhook(url, secreto)
-        info = await client.get_webhook_info()
-        estado = "connected" if str((info or {}).get("url") or "") == url else "error"
-        if estado == "error":
-            mensaje = "Telegram no devolvió la dirección registrada."
-    except ProviderError as exc:
-        estado = "revoked" if exc.category == "AUTH" else "error"
-        mensaje = str(exc)[:300]
-        log.warning(
-            "telegram.webhook.no_registrado",
-            connection_id=str(connection_id),
-            category=exc.category,
-            status=exc.http_status,
-        )
+    solo si Telegram quedó apuntando a `url`; `revoked` si el token dejó de valer; si no, `error`.
+
+    Todo bajo el candado `telegram_bot:<bot_id>` y solo si la fila sigue viva: un registro que llega tarde (el negocio
+    desconectó el bot y otro lo reclamó) no pisa el webhook del otro negocio. Devuelve `""` si la fila ya no existe."""
     async with get_session() as session:
+        await session.execute(
+            text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"telegram_bot:{bot_id}"}
+        )
         fila = await _fila(session, tenant_id, connection_id, para_actualizar=True)
-        if fila is not None:
-            ahora = utcnow()
-            fila.status = estado
-            fila.last_checked_at = ahora
-            if estado == "connected":
-                fila.webhook_confirmado_at = ahora
-                fila.last_error_message = None
-                fila.last_error_at = None
-            else:
-                fila.last_error_message = mensaje
-                fila.last_error_at = ahora
+        if fila is None:
+            log.info("telegram.webhook.fila_borrada", connection_id=str(connection_id))
+            return ""
+        mensaje: str | None = None
+        try:
+            await client.set_webhook(url, secreto)
+            info = await client.get_webhook_info()
+            estado = "connected" if str((info or {}).get("url") or "") == url else "error"
+            if estado == "error":
+                mensaje = "Telegram no devolvió la dirección registrada."
+        except ProviderError as exc:
+            estado = "revoked" if exc.category == "AUTH" else "error"
+            mensaje = redactar(str(exc))[:300]
+            log.warning(
+                "telegram.webhook.no_registrado",
+                connection_id=str(connection_id),
+                category=exc.category,
+                status=exc.http_status,
+            )
+        ahora = utcnow()
+        fila.status = estado
+        fila.last_checked_at = ahora
+        if estado == "connected":
+            fila.webhook_confirmado_at = ahora
+            fila.last_error_message = None
+            fila.last_error_at = None
+        else:
+            fila.last_error_message = mensaje
+            fila.last_error_at = ahora
     return estado
 
 
