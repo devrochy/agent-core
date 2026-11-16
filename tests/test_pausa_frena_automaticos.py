@@ -80,7 +80,7 @@ def _con_pausa(monkeypatch: pytest.MonkeyPatch, motivo: str | None) -> None:
         (None, None, True),
         ("human", None, False),
         ("human", "operador:123", False),
-        ("human", f"segmento:{uuid.uuid4()}:{uuid.uuid4()}", True),
+        ("human", "segmento:00000000-0000-0000-0000-000000000001:00000000-0000-0000-0000-000000000002", True),
     ],
 )
 def test_es_envio_automatico(sender_type, cmid, automatico) -> None:

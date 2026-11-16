@@ -1262,7 +1262,7 @@ class CalendarSkill(BaseSkill):
             return False
         try:
             # El sender frena la pausa del negocio o del cliente (HU-ARCH-37): se informa si salió.
-            return await send_to_conversation(conversation_id, message, sender_type="agent")
+            return bool(await send_to_conversation(conversation_id, message, sender_type="agent"))
         except Exception:
             return False
 

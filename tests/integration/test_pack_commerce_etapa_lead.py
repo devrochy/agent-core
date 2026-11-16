@@ -286,6 +286,7 @@ async def test_el_seguimiento_deja_al_sistema_como_actor(monkeypatch) -> None:
 
     async def _enviar(conversation_id, texto, *a, **k):
         enviados.append(texto)
+        return True  # encolado: solo así se marca el seguimiento (HU-ARCH-37)
 
     monkeypatch.setattr(sender, "send_to_conversation", _enviar)
     config = SimpleNamespace(follow_up_hours=1, follow_up_lead_message="Hola{name}, ¿seguimos con {interest}?")
@@ -316,6 +317,7 @@ async def test_el_seguimiento_no_pisa_lo_que_cambio_una_persona(monkeypatch) -> 
 
         async with get_session() as session:
             await cambiar_etapa(session, await session.get(Lead, lead), "convertido", actor="persona")
+        return True
 
     monkeypatch.setattr(sender, "send_to_conversation", _enviar)
     config = SimpleNamespace(follow_up_hours=1, follow_up_lead_message="Hola{name}")
