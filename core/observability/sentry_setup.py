@@ -42,7 +42,9 @@ _EXTRA_DENYLIST = [
     # el teléfono del cliente; `qr` es el código de vinculación vigente.
     "event", "qr", "job", "text", "sender", "jid", "to", "raw",
     # Canal Telegram (ADR-0199): el token del bot y el secreto del webhook.
-    "bot_token", "webhook_secret",
+    "bot_token", "webhook_secret", "creds",
+    # El webhook de Telegram (y el de Twilio): el cuerpo crudo y el update llevan el texto y el nombre del cliente.
+    "raw_body", "update_", "mensaje", "mensajes", "caption", "first_name", "last_name",
 ]
 _configured = False
 

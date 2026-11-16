@@ -4,16 +4,18 @@ Pública (`/webhooks` no pide sesión). Telegram manda un `Update` en JSON por c
 sea 2xx (descarta lo pendiente a las 24 h). Pasos:
 
 1. Kill-switch apagado: 503 sin leer nada, para que Telegram reintente cuando se vuelva a encender.
-2. Cuerpo crudo con tope (64 KiB): un update de texto pesa poco y los medios llegan como `file_id`. Más: 413.
+2. Sin el encabezado del secreto, o con una forma que Telegram no manda: 401 sin tocar la base (barato ante abuso).
 3. El negocio sale SOLO de la ruta: `telegram_route_connection(public_id)` (SECURITY DEFINER) devuelve
    `(tenant_id, channel_connection_id)`; nada del cuerpo decide el negocio. Un `public_id` desconocido es 404.
 4. Dentro del `tenant_scope`: el encabezado `X-Telegram-Bot-Api-Secret-Token` tiene que ser el secreto de ESTA
-   conexión (comparación en tiempo constante). Falla: 401 y cuenta para la alerta de firmas inválidas.
+   conexión (comparación en tiempo constante). Falla: 401 y cuenta para la alerta de firmas inválidas. Recién
+   entonces se lee el cuerpo, con tope (64 KiB): un update de texto pesa poco y los medios llegan como `file_id`.
 5. JSON inválido o un update que no se procesa (grupo, mensaje editado, sticker…): 200 «ignorado», para no trabar la
    cola de Telegram. Conexión pausada o negocio no operativo: 200 sin procesar.
 6. Auditoría en la tabla de webhooks (`telegram:<bot_id>` + `tg:<bot_id>:<update_id>`; solo campos de diagnóstico,
    nunca el texto). Si no se puede auditar: 500 y Telegram reintenta. No deduplica: la idempotencia son
-   `claim_message_once` (Redis), `ProcessedEvent` del consumer y el UNIQUE de `messages`, todos con la llave global.
+   `claim_message_once` (Redis), `ProcessedEvent` del consumer y el UNIQUE de `messages`, todos con la llave global
+   del mensaje (`tg:<bot_id>:in:<chat_id>:<message_id>` o `tg:<bot_id>:cb:<callback_query.id>`).
 7. `publish_inbound_message` con la conexión validada (`connection_id` viaja en el stream). Redis caído: 503.
 8. Un toque de botón (`callback_query`) se contesta después de publicar (`answerCallbackQuery`, 2 s, best-effort):
    quita el reloj del botón en el Telegram del cliente.
@@ -27,8 +29,9 @@ import time
 import uuid
 from typing import Any
 
-from agentcore_channel_telegram.adapters import TelegramInbound, callback_query_id
+from agentcore_channel_telegram.adapters import HEADER_SECRETO, TelegramInbound, callback_query_id
 from agentcore_channel_telegram.client import TelegramClient
+from agentcore_channel_telegram.limites import secreto_webhook_valido
 from fastapi import APIRouter, Request, Response
 from opentelemetry import metrics
 from sqlalchemy import func, select, text, update
@@ -55,7 +58,18 @@ _TIPOS = ("message", "edited_message", "callback_query", "channel_post", "my_cha
 
 # Observabilidad (ADR-0199 §6). Etiquetas cerradas: nunca negocio, bot ni chat.
 RESULTADOS = frozenset(
-    {"aceptado", "duplicado", "ignorado", "pausado", "secreto_invalido", "desconocido", "grande", "apagado", "error"}
+    {
+        "aceptado",
+        "duplicado",
+        "descartado",
+        "ignorado",
+        "pausado",
+        "secreto_invalido",
+        "desconocido",
+        "grande",
+        "apagado",
+        "error",
+    }
 )
 _meter = metrics.get_meter("agent-core")
 _total = _meter.create_counter(
@@ -190,10 +204,10 @@ async def _recibir(request: Request, public_id: str) -> tuple[str, Response]:
     if not habilitado():
         log.info("telegram.webhook.rechazado", motivo="kill_switch")
         return "apagado", Response(status_code=503)
-    raw_body = await _cuerpo_con_tope(request)
-    if raw_body is None:
-        log.info("telegram.webhook.rechazado", motivo="cuerpo_grande")
-        return "grande", Response(status_code=413)
+    if not secreto_webhook_valido(request.headers.get(HEADER_SECRETO)):
+        # Telegram siempre lo manda con la forma de nuestros secretos: sin él no se consulta la base.
+        log.info("telegram.webhook.rechazado", motivo="sin_secreto")
+        return "secreto_invalido", Response(status_code=401)
     ruta = await _ruta(public_id)
     if ruta is None:
         log.info("telegram.webhook.rechazado", motivo="public_id_desconocido")
@@ -206,13 +220,17 @@ async def _recibir(request: Request, public_id: str) -> tuple[str, Response]:
             return "desconocido", Response(status_code=404)
         connection, fila = par
         bot_id = connection.external_id or ""
+        if not bot_id:
+            # Sin `bot_id` no hay llaves globales: falla cerrado (no debería pasar, el alta lo exige).
+            log.error("telegram.webhook.conexion_sin_bot_id", tenant_id=str(tenant_id), connection_id=str(connection_id))
+            return "error", Response(status_code=500)
         creds: dict[str, Any] = (
             get_secret_box().decrypt_json(connection.credentials_encrypted)
             if connection.credentials_encrypted
             else {}
         )
         headers = {k.lower(): v for k, v in request.headers.items()}
-        if not _ADAPTADOR.verify_request(raw_body, headers, str(creds.get("webhook_secret") or "")):
+        if not _ADAPTADOR.verify_request(b"", headers, str(creds.get("webhook_secret") or "")):
             log.warning(
                 "telegram.webhook.rechazado",
                 motivo="secreto_invalido",
@@ -223,6 +241,10 @@ async def _recibir(request: Request, public_id: str) -> tuple[str, Response]:
             await _alert_on_invalid_signature(f"telegram:{bot_id}")
             return "secreto_invalido", Response(status_code=401)
 
+        raw_body = await _cuerpo_con_tope(request)
+        if raw_body is None:
+            log.info("telegram.webhook.rechazado", motivo="cuerpo_grande", tenant_id=str(tenant_id))
+            return "grande", Response(status_code=413)
         try:
             update_ = json.loads(raw_body)
         except ValueError:
@@ -255,7 +277,7 @@ async def _recibir(request: Request, public_id: str) -> tuple[str, Response]:
         try:
             for mensaje in mensajes:
                 publicado = await publish_inbound_message(tenant_id, mensaje, connection_id=connection_id)
-                resultado = "duplicado" if publicado == "duplicate" else "aceptado"
+                resultado = {"duplicate": "duplicado", "dropped": "descartado"}.get(publicado, "aceptado")
         except Exception:
             # Redis caído u otro fallo al publicar: el claim ya se liberó. 503 para que Telegram reintente.
             log.exception("telegram.webhook.publicacion_fallida", tenant_id=str(tenant_id))

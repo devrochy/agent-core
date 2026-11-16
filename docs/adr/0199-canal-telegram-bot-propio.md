@@ -42,11 +42,12 @@ Dos hechos de la Bot API (https://core.telegram.org/bots/api, v10.4, leída el 2
 
    `setWebhook` pide solo `allowed_updates=["message","callback_query"]`.
 5. **Ids globales (ADR-0007).** La llave de `ProcessedEvent` y de `messages` no lleva proveedor, y el `message_id` de Telegram es por chat. Por eso:
-   - entrantes: `tg:<bot_id>:<update_id>`;
+   - entrantes: `tg:<bot_id>:in:<chat_id>:<message_id>`; un toque de botón, `tg:<bot_id>:cb:<callback_query.id>`. No
+     `update_id`: tras una semana sin updates Telegram lo elige al azar y podría repetir uno ya visto, que la
+     idempotencia descartaría en silencio (cambio del PR core 3, tras la auditoría);
    - salientes: `tg:<bot_id>:<chat_id>:<message_id>`;
    - auditoría: `app_id="telegram:<bot_id>"`.
 
-   La deduplicación no depende del orden de `update_id`, que puede saltar al azar.
 6. **Errores (`agentcore_channel_telegram.errors`).** Se clasifican por estado HTTP y `description`, porque `error_code` «puede cambiar»:
 
    | Error | Categoría |

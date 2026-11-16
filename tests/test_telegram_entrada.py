@@ -14,6 +14,7 @@ from agentcore_channel_telegram.adapters import (
     callback_query_id,
     id_entrante,
     id_saliente,
+    id_toque,
 )
 
 from core.gateway import avisos_canal as ac
@@ -61,7 +62,7 @@ def test_el_secreto_del_webhook(headers, secreto, ok):
 def test_texto_con_ids_globales():
     m = _uno(_update(message=_mensaje(text="Hola, ¿tienen envíos?")))
     assert (m.provider, m.channel) == ("telegram", "telegram")
-    assert m.external_message_id == f"tg:{BOT}:9001" == id_entrante(BOT, 9001)
+    assert m.external_message_id == f"tg:{BOT}:in:555:1" == id_entrante(BOT, 555, 1)
     assert m.customer_external_id == "555" and m.connection_external_id == BOT
     assert m.customer_name == "Ana Gómez" and m.content == "Hola, ¿tienen envíos?"
     assert m.media == [] and m.interactive_id == ""
@@ -71,7 +72,7 @@ def test_start_llega_como_texto():
     assert _uno(_update(message=_mensaje(text="/start"))).content == "/start"
 
 
-def test_el_mismo_update_id_en_dos_bots_da_ids_distintos():
+def test_el_mismo_mensaje_en_dos_bots_da_ids_distintos():
     a = ADAPTADOR.parse_update(_update(message=_mensaje(text="x")), bot_id="111")[0]
     b = ADAPTADOR.parse_update(_update(message=_mensaje(text="x")), bot_id="222")[0]
     assert a.external_message_id != b.external_message_id
@@ -106,6 +107,7 @@ def test_nota_de_voz():
         _update(message=_mensaje(contact={"phone_number": "+573001112233", "user_id": 555})),
         _update(message=_mensaje(text="soy un bot", **{"from": {"id": 555, "is_bot": True}})),
         _update(message=_mensaje(text="chat de otro", chat={"id": 999, "type": "private"})),
+        _update(message={**_mensaje(text="sin message_id"), "message_id": None}),
         {"update_id": "9001", "message": _mensaje(text="id que no es entero")},
         {"message": _mensaje(text="sin update_id")},
         "no es un dict",
@@ -140,7 +142,7 @@ def test_el_toque_lleva_el_titulo_visible_y_el_id():
     update = _toque("plan:premium")
     m = _uno(update)
     assert m.content == "Plan Premium" and m.interactive_id == "plan:premium"
-    assert m.external_message_id == f"tg:{BOT}:9001"
+    assert m.external_message_id == f"tg:{BOT}:cb:cbq-1" == id_toque(BOT, "cbq-1")
     assert callback_query_id(update) == "cbq-1"
 
 
@@ -154,6 +156,7 @@ def test_un_toque_sin_boton_conocido_usa_su_data():
         _toque(""),
         _toque("plan:premium", **{"from": {"id": 1, "is_bot": True}}),
         _update(callback_query={"id": "c", "from": PERSONA, "data": "x"}),  # sin mensaje (inline mode)
+        _update(callback_query={"from": PERSONA, "data": "x", "message": _mensaje(text="Elige")}),  # sin id
     ],
 )
 def test_toques_que_no_se_procesan(update):
