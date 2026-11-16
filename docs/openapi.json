@@ -19120,7 +19120,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MatrizOut"
+                  "$ref": "#/components/schemas/PlantillasNegocioMatrizOut"
                 }
               }
             }
@@ -19186,7 +19186,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CopiarIn"
+                "$ref": "#/components/schemas/PlantillasNegocioCopiarIn"
               }
             }
           }
@@ -19199,7 +19199,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/ResultadoOut"
+                    "$ref": "#/components/schemas/PlantillasNegocioResultadoOut"
                   },
                   "title": "Response Copiar Api V1 Admin Whatsapp Templates Copy Post"
                 }
@@ -19266,7 +19266,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CopiarTodasIn"
+                "$ref": "#/components/schemas/PlantillasNegocioCopiarTodasIn"
               }
             }
           }
@@ -19277,7 +19277,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResumenOut"
+                  "$ref": "#/components/schemas/PlantillasNegocioResumenOut"
                 }
               }
             }
@@ -49309,40 +49309,6 @@
         ],
         "title": "AvisoDatosUpdate"
       },
-      "AvisoFaltanteOut": {
-        "properties": {
-          "evento": {
-            "type": "string",
-            "title": "Evento"
-          },
-          "nombre": {
-            "type": "string",
-            "title": "Nombre"
-          },
-          "idioma": {
-            "type": "string",
-            "title": "Idioma"
-          },
-          "conexion": {
-            "type": "string",
-            "title": "Conexion",
-            "description": "`clave` de la conexión por la que el aviso no saldrá con plantilla."
-          },
-          "estado": {
-            "type": "string",
-            "title": "Estado"
-          }
-        },
-        "type": "object",
-        "required": [
-          "evento",
-          "nombre",
-          "idioma",
-          "conexion",
-          "estado"
-        ],
-        "title": "AvisoFaltanteOut"
-      },
       "AvisoOut": {
         "properties": {
           "evento": {
@@ -51688,45 +51654,6 @@
         ],
         "title": "CategorySave"
       },
-      "CeldaOut": {
-        "properties": {
-          "estado": {
-            "type": "string",
-            "title": "Estado",
-            "description": "`aprobada`, `pendiente`, `sin_enviar`, `rechazada`, `pausada`, `falta` o `no_replicable`."
-          },
-          "distinta": {
-            "type": "boolean",
-            "title": "Distinta",
-            "description": "Mismo nombre e idioma con otro texto que el de la fila."
-          },
-          "plantilla_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Plantilla Id"
-          },
-          "motivo": {
-            "type": "string",
-            "title": "Motivo",
-            "description": "Motivo del rechazo o de por qué no se puede copiar."
-          }
-        },
-        "type": "object",
-        "required": [
-          "estado",
-          "distinta",
-          "plantilla_id",
-          "motivo"
-        ],
-        "title": "CeldaOut"
-      },
       "ChecklistOut": {
         "properties": {
           "steps": {
@@ -52795,92 +52722,6 @@
           "plantillas"
         ],
         "title": "ConexionDeEnvioOut"
-      },
-      "ConexionOut": {
-        "properties": {
-          "clave": {
-            "type": "string",
-            "title": "Clave",
-            "description": "`proveedor:id`, la llave de las celdas."
-          },
-          "proveedor": {
-            "type": "string",
-            "enum": [
-              "meta",
-              "twilio"
-            ],
-            "title": "Proveedor"
-          },
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Id"
-          },
-          "etiqueta": {
-            "type": "string",
-            "title": "Etiqueta"
-          },
-          "activa": {
-            "type": "boolean",
-            "title": "Activa"
-          },
-          "motivo_pausa": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Motivo Pausa"
-          },
-          "sandbox": {
-            "type": "boolean",
-            "title": "Sandbox"
-          },
-          "destinable": {
-            "type": "boolean",
-            "title": "Destinable",
-            "description": "Activa y fuera del Sandbox: se puede copiar a ella."
-          }
-        },
-        "type": "object",
-        "required": [
-          "clave",
-          "proveedor",
-          "id",
-          "etiqueta",
-          "activa",
-          "motivo_pausa",
-          "sandbox",
-          "destinable"
-        ],
-        "title": "ConexionOut"
-      },
-      "ConexionRef": {
-        "properties": {
-          "proveedor": {
-            "type": "string",
-            "enum": [
-              "meta",
-              "twilio"
-            ],
-            "title": "Proveedor"
-          },
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Id"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "proveedor",
-          "id"
-        ],
-        "title": "ConexionRef"
       },
       "ConexionTwilioOut": {
         "properties": {
@@ -54930,60 +54771,6 @@
           "turns"
         ],
         "title": "ConversationUsage"
-      },
-      "CopiarIn": {
-        "properties": {
-          "origen": {
-            "$ref": "#/components/schemas/ConexionRef"
-          },
-          "nombre": {
-            "type": "string",
-            "maxLength": 512,
-            "minLength": 1,
-            "title": "Nombre"
-          },
-          "idioma": {
-            "type": "string",
-            "maxLength": 16,
-            "minLength": 2,
-            "title": "Idioma"
-          },
-          "destinos": {
-            "items": {
-              "$ref": "#/components/schemas/ConexionRef"
-            },
-            "type": "array",
-            "maxItems": 20,
-            "minItems": 1,
-            "title": "Destinos"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "origen",
-          "nombre",
-          "idioma",
-          "destinos"
-        ],
-        "title": "CopiarIn"
-      },
-      "CopiarTodasIn": {
-        "properties": {
-          "origen": {
-            "$ref": "#/components/schemas/ConexionRef"
-          },
-          "destino": {
-            "$ref": "#/components/schemas/ConexionRef"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "origen",
-          "destino"
-        ],
-        "title": "CopiarTodasIn"
       },
       "CostsResponse": {
         "properties": {
@@ -57851,43 +57638,6 @@
           "repetida"
         ],
         "title": "FilaDeFoto"
-      },
-      "FilaOut": {
-        "properties": {
-          "nombre": {
-            "type": "string",
-            "title": "Nombre"
-          },
-          "idioma": {
-            "type": "string",
-            "title": "Idioma"
-          },
-          "categoria": {
-            "type": "string",
-            "title": "Categoria"
-          },
-          "cuerpo": {
-            "type": "string",
-            "title": "Cuerpo"
-          },
-          "celdas": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/CeldaOut"
-            },
-            "type": "object",
-            "title": "Celdas",
-            "description": "Por `clave` de conexión."
-          }
-        },
-        "type": "object",
-        "required": [
-          "nombre",
-          "idioma",
-          "categoria",
-          "cuerpo",
-          "celdas"
-        ],
-        "title": "FilaOut"
       },
       "FilaPrecarga": {
         "properties": {
@@ -62593,38 +62343,6 @@
         },
         "type": "object",
         "title": "MarkReadRequest"
-      },
-      "MatrizOut": {
-        "properties": {
-          "conexiones": {
-            "items": {
-              "$ref": "#/components/schemas/ConexionOut"
-            },
-            "type": "array",
-            "title": "Conexiones"
-          },
-          "filas": {
-            "items": {
-              "$ref": "#/components/schemas/FilaOut"
-            },
-            "type": "array",
-            "title": "Filas"
-          },
-          "avisos_faltantes": {
-            "items": {
-              "$ref": "#/components/schemas/AvisoFaltanteOut"
-            },
-            "type": "array",
-            "title": "Avisos Faltantes"
-          }
-        },
-        "type": "object",
-        "required": [
-          "conexiones",
-          "filas",
-          "avisos_faltantes"
-        ],
-        "title": "MatrizOut"
       },
       "MePlanSummary": {
         "properties": {
@@ -68566,6 +68284,375 @@
           "importa_fotos"
         ],
         "title": "PlantillaImportacionOut"
+      },
+      "PlantillasNegocioAvisoFaltanteOut": {
+        "properties": {
+          "evento": {
+            "type": "string",
+            "title": "Evento"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "idioma": {
+            "type": "string",
+            "title": "Idioma"
+          },
+          "conexion": {
+            "type": "string",
+            "title": "Conexion",
+            "description": "`clave` de la conexión por la que el aviso no saldrá con plantilla."
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "evento",
+          "nombre",
+          "idioma",
+          "conexion",
+          "estado"
+        ],
+        "title": "PlantillasNegocioAvisoFaltanteOut"
+      },
+      "PlantillasNegocioCeldaOut": {
+        "properties": {
+          "estado": {
+            "type": "string",
+            "title": "Estado",
+            "description": "`aprobada`, `pendiente`, `sin_enviar`, `rechazada`, `pausada`, `falta` o `no_replicable`."
+          },
+          "distinta": {
+            "type": "boolean",
+            "title": "Distinta",
+            "description": "Mismo nombre e idioma con otro texto que el de la fila."
+          },
+          "plantilla_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plantilla Id"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo",
+            "description": "Motivo del rechazo o de por qué no se puede copiar."
+          }
+        },
+        "type": "object",
+        "required": [
+          "estado",
+          "distinta",
+          "plantilla_id",
+          "motivo"
+        ],
+        "title": "PlantillasNegocioCeldaOut"
+      },
+      "PlantillasNegocioConexionOut": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave",
+            "description": "`proveedor:id`, la llave de las celdas."
+          },
+          "proveedor": {
+            "type": "string",
+            "enum": [
+              "meta",
+              "twilio"
+            ],
+            "title": "Proveedor"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "etiqueta": {
+            "type": "string",
+            "title": "Etiqueta"
+          },
+          "activa": {
+            "type": "boolean",
+            "title": "Activa"
+          },
+          "motivo_pausa": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Pausa"
+          },
+          "sandbox": {
+            "type": "boolean",
+            "title": "Sandbox"
+          },
+          "destinable": {
+            "type": "boolean",
+            "title": "Destinable",
+            "description": "Activa y fuera del Sandbox: se puede copiar a ella."
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "proveedor",
+          "id",
+          "etiqueta",
+          "activa",
+          "motivo_pausa",
+          "sandbox",
+          "destinable"
+        ],
+        "title": "PlantillasNegocioConexionOut"
+      },
+      "PlantillasNegocioConexionRef": {
+        "properties": {
+          "proveedor": {
+            "type": "string",
+            "enum": [
+              "meta",
+              "twilio"
+            ],
+            "title": "Proveedor"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "proveedor",
+          "id"
+        ],
+        "title": "PlantillasNegocioConexionRef"
+      },
+      "PlantillasNegocioCopiarIn": {
+        "properties": {
+          "origen": {
+            "$ref": "#/components/schemas/PlantillasNegocioConexionRef"
+          },
+          "nombre": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Nombre"
+          },
+          "idioma": {
+            "type": "string",
+            "maxLength": 16,
+            "minLength": 2,
+            "title": "Idioma"
+          },
+          "destinos": {
+            "items": {
+              "$ref": "#/components/schemas/PlantillasNegocioConexionRef"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Destinos"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "origen",
+          "nombre",
+          "idioma",
+          "destinos"
+        ],
+        "title": "PlantillasNegocioCopiarIn"
+      },
+      "PlantillasNegocioCopiarTodasIn": {
+        "properties": {
+          "origen": {
+            "$ref": "#/components/schemas/PlantillasNegocioConexionRef"
+          },
+          "destino": {
+            "$ref": "#/components/schemas/PlantillasNegocioConexionRef"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "origen",
+          "destino"
+        ],
+        "title": "PlantillasNegocioCopiarTodasIn"
+      },
+      "PlantillasNegocioFilaOut": {
+        "properties": {
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "idioma": {
+            "type": "string",
+            "title": "Idioma"
+          },
+          "categoria": {
+            "type": "string",
+            "title": "Categoria"
+          },
+          "cuerpo": {
+            "type": "string",
+            "title": "Cuerpo"
+          },
+          "celdas": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PlantillasNegocioCeldaOut"
+            },
+            "type": "object",
+            "title": "Celdas",
+            "description": "Por `clave` de conexión."
+          }
+        },
+        "type": "object",
+        "required": [
+          "nombre",
+          "idioma",
+          "categoria",
+          "cuerpo",
+          "celdas"
+        ],
+        "title": "PlantillasNegocioFilaOut"
+      },
+      "PlantillasNegocioMatrizOut": {
+        "properties": {
+          "conexiones": {
+            "items": {
+              "$ref": "#/components/schemas/PlantillasNegocioConexionOut"
+            },
+            "type": "array",
+            "title": "Conexiones"
+          },
+          "filas": {
+            "items": {
+              "$ref": "#/components/schemas/PlantillasNegocioFilaOut"
+            },
+            "type": "array",
+            "title": "Filas"
+          },
+          "avisos_faltantes": {
+            "items": {
+              "$ref": "#/components/schemas/PlantillasNegocioAvisoFaltanteOut"
+            },
+            "type": "array",
+            "title": "Avisos Faltantes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conexiones",
+          "filas",
+          "avisos_faltantes"
+        ],
+        "title": "PlantillasNegocioMatrizOut"
+      },
+      "PlantillasNegocioResultadoOut": {
+        "properties": {
+          "conexion": {
+            "type": "string",
+            "title": "Conexion"
+          },
+          "resultado": {
+            "type": "string",
+            "enum": [
+              "creada",
+              "ya_existia",
+              "distinta",
+              "no_replicable",
+              "error"
+            ],
+            "title": "Resultado"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo"
+          },
+          "nombre": {
+            "type": "string",
+            "title": "Nombre"
+          },
+          "idioma": {
+            "type": "string",
+            "title": "Idioma"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conexion",
+          "resultado",
+          "motivo",
+          "nombre",
+          "idioma"
+        ],
+        "title": "PlantillasNegocioResultadoOut"
+      },
+      "PlantillasNegocioResumenOut": {
+        "properties": {
+          "creadas": {
+            "type": "integer",
+            "title": "Creadas"
+          },
+          "ya_existian": {
+            "type": "integer",
+            "title": "Ya Existian"
+          },
+          "distintas": {
+            "type": "integer",
+            "title": "Distintas"
+          },
+          "no_replicables": {
+            "type": "integer",
+            "title": "No Replicables"
+          },
+          "errores": {
+            "type": "integer",
+            "title": "Errores"
+          },
+          "restantes": {
+            "type": "integer",
+            "title": "Restantes",
+            "description": "Las que faltan por copiar (hasta 10 por pedido): repetir el pedido."
+          },
+          "detalle": {
+            "items": {
+              "$ref": "#/components/schemas/PlantillasNegocioResultadoOut"
+            },
+            "type": "array",
+            "title": "Detalle"
+          }
+        },
+        "type": "object",
+        "required": [
+          "creadas",
+          "ya_existian",
+          "distintas",
+          "no_replicables",
+          "errores",
+          "restantes",
+          "detalle"
+        ],
+        "title": "PlantillasNegocioResumenOut"
       },
       "PlatformMetaApp": {
         "properties": {
@@ -74587,46 +74674,6 @@
         "title": "RespuestaPosible",
         "description": "Una opción que el dueño puede elegir y lo que cambia en el registro."
       },
-      "ResultadoOut": {
-        "properties": {
-          "conexion": {
-            "type": "string",
-            "title": "Conexion"
-          },
-          "resultado": {
-            "type": "string",
-            "enum": [
-              "creada",
-              "ya_existia",
-              "distinta",
-              "no_replicable",
-              "error"
-            ],
-            "title": "Resultado"
-          },
-          "motivo": {
-            "type": "string",
-            "title": "Motivo"
-          },
-          "nombre": {
-            "type": "string",
-            "title": "Nombre"
-          },
-          "idioma": {
-            "type": "string",
-            "title": "Idioma"
-          }
-        },
-        "type": "object",
-        "required": [
-          "conexion",
-          "resultado",
-          "motivo",
-          "nombre",
-          "idioma"
-        ],
-        "title": "ResultadoOut"
-      },
       "ResultadoSeccion": {
         "properties": {
           "seccion": {
@@ -74652,53 +74699,6 @@
           "items"
         ],
         "title": "ResultadoSeccion"
-      },
-      "ResumenOut": {
-        "properties": {
-          "creadas": {
-            "type": "integer",
-            "title": "Creadas"
-          },
-          "ya_existian": {
-            "type": "integer",
-            "title": "Ya Existian"
-          },
-          "distintas": {
-            "type": "integer",
-            "title": "Distintas"
-          },
-          "no_replicables": {
-            "type": "integer",
-            "title": "No Replicables"
-          },
-          "errores": {
-            "type": "integer",
-            "title": "Errores"
-          },
-          "restantes": {
-            "type": "integer",
-            "title": "Restantes",
-            "description": "Las que faltan por copiar (hasta 10 por pedido): repetir el pedido."
-          },
-          "detalle": {
-            "items": {
-              "$ref": "#/components/schemas/ResultadoOut"
-            },
-            "type": "array",
-            "title": "Detalle"
-          }
-        },
-        "type": "object",
-        "required": [
-          "creadas",
-          "ya_existian",
-          "distintas",
-          "no_replicables",
-          "errores",
-          "restantes",
-          "detalle"
-        ],
-        "title": "ResumenOut"
       },
       "ResumenPorAgente": {
         "properties": {

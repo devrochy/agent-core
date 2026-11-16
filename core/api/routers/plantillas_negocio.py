@@ -24,14 +24,14 @@ from core.api.errors import ApiError
 router = APIRouter(prefix="/admin/whatsapp-templates", tags=["connections"])
 
 
-class ConexionRef(BaseModel):
+class PlantillasNegocioConexionRef(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     proveedor: Literal["meta", "twilio"]
     id: uuid.UUID
 
 
-class ConexionOut(BaseModel):
+class PlantillasNegocioConexionOut(BaseModel):
     clave: str = Field(description="`proveedor:id`, la llave de las celdas.")
     proveedor: Literal["meta", "twilio"]
     id: uuid.UUID
@@ -42,7 +42,7 @@ class ConexionOut(BaseModel):
     destinable: bool = Field(description="Activa y fuera del Sandbox: se puede copiar a ella.")
 
 
-class CeldaOut(BaseModel):
+class PlantillasNegocioCeldaOut(BaseModel):
     estado: str = Field(
         description="`aprobada`, `pendiente`, `sin_enviar`, `rechazada`, `pausada`, `falta` o `no_replicable`."
     )
@@ -51,15 +51,15 @@ class CeldaOut(BaseModel):
     motivo: str = Field(description="Motivo del rechazo o de por qué no se puede copiar.")
 
 
-class FilaOut(BaseModel):
+class PlantillasNegocioFilaOut(BaseModel):
     nombre: str
     idioma: str
     categoria: str
     cuerpo: str
-    celdas: dict[str, CeldaOut] = Field(description="Por `clave` de conexión.")
+    celdas: dict[str, PlantillasNegocioCeldaOut] = Field(description="Por `clave` de conexión.")
 
 
-class AvisoFaltanteOut(BaseModel):
+class PlantillasNegocioAvisoFaltanteOut(BaseModel):
     evento: str
     nombre: str
     idioma: str
@@ -67,29 +67,29 @@ class AvisoFaltanteOut(BaseModel):
     estado: str
 
 
-class MatrizOut(BaseModel):
-    conexiones: list[ConexionOut]
-    filas: list[FilaOut]
-    avisos_faltantes: list[AvisoFaltanteOut]
+class PlantillasNegocioMatrizOut(BaseModel):
+    conexiones: list[PlantillasNegocioConexionOut]
+    filas: list[PlantillasNegocioFilaOut]
+    avisos_faltantes: list[PlantillasNegocioAvisoFaltanteOut]
 
 
-class CopiarIn(BaseModel):
+class PlantillasNegocioCopiarIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    origen: ConexionRef
+    origen: PlantillasNegocioConexionRef
     nombre: str = Field(min_length=1, max_length=512)
     idioma: str = Field(min_length=2, max_length=16)
-    destinos: list[ConexionRef] = Field(min_length=1, max_length=20)
+    destinos: list[PlantillasNegocioConexionRef] = Field(min_length=1, max_length=20)
 
 
-class CopiarTodasIn(BaseModel):
+class PlantillasNegocioCopiarTodasIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    origen: ConexionRef
-    destino: ConexionRef
+    origen: PlantillasNegocioConexionRef
+    destino: PlantillasNegocioConexionRef
 
 
-class ResultadoOut(BaseModel):
+class PlantillasNegocioResultadoOut(BaseModel):
     conexion: str
     resultado: Literal["creada", "ya_existia", "distinta", "no_replicable", "error"]
     motivo: str
@@ -97,7 +97,7 @@ class ResultadoOut(BaseModel):
     idioma: str
 
 
-class ResumenOut(BaseModel):
+class PlantillasNegocioResumenOut(BaseModel):
     creadas: int
     ya_existian: int
     distintas: int
@@ -106,7 +106,7 @@ class ResumenOut(BaseModel):
     restantes: int = Field(
         description=f"Las que faltan por copiar (hasta {svc.LIMITE_COPIAR_TODAS} por pedido): repetir el pedido."
     )
-    detalle: list[ResultadoOut]
+    detalle: list[PlantillasNegocioResultadoOut]
 
 
 _ERRORES = {
@@ -126,8 +126,8 @@ def _error(exc: svc.PlantillasNegocioError) -> ApiError:
     return ApiError(exc.http_status, exc.code, exc.message)
 
 
-def _conexion_out(c: svc.Conexion) -> ConexionOut:
-    return ConexionOut(
+def _conexion_out(c: svc.Conexion) -> PlantillasNegocioConexionOut:
+    return PlantillasNegocioConexionOut(
         clave=c.clave,
         proveedor=c.proveedor,  # type: ignore[arg-type]
         id=c.id,
@@ -139,8 +139,8 @@ def _conexion_out(c: svc.Conexion) -> ConexionOut:
     )
 
 
-def _resultado_out(r: svc.ResultadoDestino) -> ResultadoOut:
-    return ResultadoOut(**r.__dict__)
+def _resultado_out(r: svc.ResultadoDestino) -> PlantillasNegocioResultadoOut:
+    return PlantillasNegocioResultadoOut(**r.__dict__)
 
 
 async def _auditar(principal: Principal, accion: str, datos: dict[str, str]) -> None:
@@ -149,34 +149,34 @@ async def _auditar(principal: Principal, accion: str, datos: dict[str, str]) -> 
     await record_audit(f"admin:{principal.admin.email}", accion, input_data=datos)
 
 
-@router.get("", response_model=MatrizOut)
+@router.get("", response_model=PlantillasNegocioMatrizOut)
 async def matriz(
     principal: Annotated[Principal, Depends(require("connections"))],
-) -> MatrizOut:
+) -> PlantillasNegocioMatrizOut:
     """Cada plantilla del negocio una vez (nombre e idioma) con su estado en cada conexión de WhatsApp, y los avisos
     por evento cuya plantilla falta o no está aprobada en una conexión activa."""
     m = await svc.matriz(_tenant(principal))
-    return MatrizOut(
+    return PlantillasNegocioMatrizOut(
         conexiones=[_conexion_out(c) for c in m.conexiones],
         filas=[
-            FilaOut(
+            PlantillasNegocioFilaOut(
                 nombre=f.nombre,
                 idioma=f.idioma,
                 categoria=f.categoria,
                 cuerpo=f.cuerpo,
-                celdas={k: CeldaOut(**c.__dict__) for k, c in f.celdas.items()},
+                celdas={k: PlantillasNegocioCeldaOut(**c.__dict__) for k, c in f.celdas.items()},
             )
             for f in m.filas
         ],
-        avisos_faltantes=[AvisoFaltanteOut(**a.__dict__) for a in m.avisos_faltantes],
+        avisos_faltantes=[PlantillasNegocioAvisoFaltanteOut(**a.__dict__) for a in m.avisos_faltantes],
     )
 
 
-@router.post("/copy", response_model=list[ResultadoOut], responses=_ERRORES)
+@router.post("/copy", response_model=list[PlantillasNegocioResultadoOut], responses=_ERRORES)
 async def copiar(
-    payload: CopiarIn,
+    payload: PlantillasNegocioCopiarIn,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
-) -> list[ResultadoOut]:
+) -> list[PlantillasNegocioResultadoOut]:
     """Copia una plantilla aprobada a otras conexiones (crea y envía a aprobación). Resultado por destino; repetirla
     no duplica."""
     try:
@@ -201,11 +201,11 @@ async def copiar(
     return [_resultado_out(r) for r in resultados]
 
 
-@router.post("/copy-all", response_model=ResumenOut, responses=_ERRORES)
+@router.post("/copy-all", response_model=PlantillasNegocioResumenOut, responses=_ERRORES)
 async def copiar_todas(
-    payload: CopiarTodasIn,
+    payload: PlantillasNegocioCopiarTodasIn,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
-) -> ResumenOut:
+) -> PlantillasNegocioResumenOut:
     """Copia a otra conexión las plantillas aprobadas del origen que le falten. Si quedan `restantes`, repetir."""
     try:
         resumen = await svc.copiar_todas(
@@ -225,7 +225,7 @@ async def copiar_todas(
             "errores": str(resumen.errores),
         },
     )
-    return ResumenOut(
+    return PlantillasNegocioResumenOut(
         creadas=resumen.creadas,
         ya_existian=resumen.ya_existian,
         distintas=resumen.distintas,

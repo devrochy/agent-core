@@ -124,6 +124,8 @@ class Conexion:
     sandbox: bool
     # Meta: id externo de la WABA, para no copiar dos veces a la misma cuenta colgada de dos conexiones.
     waba_id: str | None = None
+    # Meta: la fila de `waba_accounts` que se lee y donde se crea (la primera viva, como `resolve_waba_and_credentials`).
+    waba_row_id: uuid.UUID | None = None
 
     @property
     def clave(self) -> str:
@@ -261,7 +263,7 @@ async def conexiones(tenant_id: uuid.UUID) -> list[Conexion]:
         pausa = motivo_pausa(mc)
         etiqueta = " · ".join(x for x in (waba.name, numeros.get(mc.id)) if x) or "WhatsApp (Meta)"
         salida.append(
-            Conexion("meta", mc.id, etiqueta, pausa is None, pausa, False, waba_id=waba.waba_id)
+            Conexion("meta", mc.id, etiqueta, pausa is None, pausa, False, waba_id=waba.waba_id, waba_row_id=waba.id)
         )
     for tc, cc in twilios:
         es_sandbox = tc.modo == sandbox.MODO_SANDBOX
@@ -274,7 +276,7 @@ async def conexiones(tenant_id: uuid.UUID) -> list[Conexion]:
 async def fuentes(tenant_id: uuid.UUID, conns: list[Conexion]) -> list[Fuente]:
     """Las plantillas vivas de esas conexiones, en forma común."""
     alta._exigir_scope(tenant_id)
-    metas = {c.id for c in conns if c.proveedor == "meta"}
+    metas = {c.waba_row_id for c in conns if c.proveedor == "meta" and c.waba_row_id is not None}
     twilios = {c.id for c in conns if c.proveedor == "twilio"}
     salida: list[Fuente] = []
     async with get_session() as session:
@@ -287,7 +289,7 @@ async def fuentes(tenant_id: uuid.UUID, conns: list[Conexion]) -> list[Fuente]:
                         MessageTemplate.tenant_id == tenant_id,
                         WabaAccount.tenant_id == tenant_id,
                         WabaAccount.deleted_at.is_(None),
-                        WabaAccount.connection_id.in_(metas),
+                        WabaAccount.id.in_(metas),
                         MessageTemplate.status.not_in(_META_AUSENTE),
                     )
                     .order_by(MessageTemplate.name, MessageTemplate.language)
@@ -503,7 +505,7 @@ async def _existente_twilio(tenant_id: uuid.UUID, conexion_id: uuid.UUID, nombre
     return _fuente_twilio(fila) if fila is not None else None
 
 
-async def _existente_meta(tenant_id: uuid.UUID, conexion_id: uuid.UUID, nombre: str, idioma: str) -> Fuente | None:
+async def _existente_meta(tenant_id: uuid.UUID, destino: Conexion, nombre: str, idioma: str) -> Fuente | None:
     async with get_session() as session:
         fila = (
             await session.execute(
@@ -512,7 +514,7 @@ async def _existente_meta(tenant_id: uuid.UUID, conexion_id: uuid.UUID, nombre: 
                 .where(
                     MessageTemplate.tenant_id == tenant_id,
                     WabaAccount.tenant_id == tenant_id,
-                    WabaAccount.connection_id == conexion_id,
+                    WabaAccount.id == destino.waba_row_id,
                     WabaAccount.deleted_at.is_(None),
                     MessageTemplate.name == nombre,
                     MessageTemplate.language == idioma,
@@ -520,7 +522,7 @@ async def _existente_meta(tenant_id: uuid.UUID, conexion_id: uuid.UUID, nombre: 
                 )
             )
         ).scalars().first()
-    return _fuente_meta(fila, conexion_id) if fila is not None else None
+    return _fuente_meta(fila, destino.id) if fila is not None else None
 
 
 async def _comparar(
@@ -612,7 +614,7 @@ async def _crear_meta(tenant_id: uuid.UUID, fuente: Fuente, destino: Conexion) -
     except TemplateRateLimitError as exc:
         return _res(destino, fuente, ERROR, str(exc)[:300])
     except IntegrityError:  # otra copia la guardó a la vez (único por WABA, nombre e idioma)
-        existente = await _existente_meta(tenant_id, destino.id, fuente.nombre, fuente.idioma)
+        existente = await _existente_meta(tenant_id, destino, fuente.nombre, fuente.idioma)
         if existente is not None:
             return await _comparar(tenant_id, fuente, destino, existente)
         return _res(destino, fuente, YA_EXISTIA)
@@ -645,7 +647,7 @@ async def _copiar_a(tenant_id: uuid.UUID, fuente: Fuente, destino: Conexion) -> 
     if destino.proveedor == "twilio":
         existente = await _existente_twilio(tenant_id, destino.id, fuente.nombre)
     else:
-        existente = await _existente_meta(tenant_id, destino.id, fuente.nombre, fuente.idioma)
+        existente = await _existente_meta(tenant_id, destino, fuente.nombre, fuente.idioma)
     if existente is not None:
         return await _comparar(tenant_id, fuente, destino, existente)
     if destino.proveedor == "twilio":

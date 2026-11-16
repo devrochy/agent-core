@@ -491,6 +491,13 @@ async def test_aislamiento_entre_negocios(negocios, twilio, meta) -> None:
         destinos=[_ref("twilio", tw_b)],
     )
     assert r.resultado == "error" and r.motivo == "Conexión no encontrada."
+    # …ni a una cuenta de Meta de B.
+    meta_b, _, graph_b = await _conectar_meta(tid_b, meta)
+    [r] = await _en(
+        tid_a, svc.copiar, tid_a, origen=_ref("meta", meta_a), nombre="privada_a", idioma="es",
+        destinos=[_ref("meta", meta_b)],
+    )
+    assert r.resultado == "error" and r.motivo == "Conexión no encontrada." and not graph_b.creadas
     # Y el servicio exige el tenant_scope del mismo negocio.
     with pytest.raises(PermissionError):
         await _en(tid_b, svc.matriz, tid_a)
@@ -530,3 +537,44 @@ async def test_api_lectura_y_copia(app_client, negocios, twilio, meta) -> None:
         json={"origen": {"proveedor": "meta", "id": str(meta_id)}, "destino": {"proveedor": "meta", "id": str(meta_id)}},
     )
     assert r.status_code == 422 and r.json()["error"]["code"] == "mismo_destino", r.text
+
+    # Un colaborador con Conexiones en lectura ve la matriz pero no copia.
+    lector = await _headers_colaborador(app_client, tid, {"connections": "read"})
+    assert (await app_client.get("/api/v1/admin/whatsapp-templates", headers=lector)).status_code == 200
+    copia = {
+        "origen": {"proveedor": "meta", "id": str(meta_id)},
+        "nombre": "por_api",
+        "idioma": "es",
+        "destinos": [{"proveedor": "twilio", "id": str(tw_id)}],
+    }
+    r = await app_client.post("/api/v1/admin/whatsapp-templates/copy", headers=lector, json=copia)
+    assert r.status_code == 403, r.text
+    r = await app_client.post(
+        "/api/v1/admin/whatsapp-templates/copy-all",
+        headers=lector,
+        json={"origen": copia["origen"], "destino": copia["destinos"][0]},
+    )
+    assert r.status_code == 403, r.text
+
+
+_CLAVE_COLABORADOR = "Plantillas-Negocio-2026!"
+
+
+async def _headers_colaborador(client, tid: uuid.UUID, secciones: dict[str, str]) -> dict[str, str]:
+    from _api_helpers import api_headers, uniq
+
+    from core.admin.auth import hash_password
+    from core.db.models import Admin, AdminPermission, TenantUser
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    email = f"{uniq('lector')}@example.test"
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            admin = Admin(email=email, password_hash=hash_password(_CLAVE_COLABORADOR), role="colaborador")
+            session.add(admin)
+            await session.flush()
+            session.add(TenantUser(tenant_id=tid, admin_id=admin.id, role="colaborador"))
+            for seccion, acceso in secciones.items():
+                session.add(AdminPermission(admin_id=admin.id, section=seccion, access=acceso, tenant_id=tid))
+    return await api_headers(client, tid, email=email, password=_CLAVE_COLABORADOR)
