@@ -818,6 +818,29 @@ def interactivo_valido(interactive: dict[str, Any]) -> bool:
     )
 
 
+_MAX_ETIQUETA_CONTACTO = 64
+
+
+def contacto_valido(interactive: dict[str, Any]) -> bool:
+    """`{"type": "contacto", "body", "button"}`: el botón que pide el teléfono (ADR-0199 §10). No son topes de Meta
+    (Meta no tiene este tipo y `interactivo_valido` lo rechaza): cuerpo no vacío con el tope de siempre y la etiqueta
+    del botón no vacía y corta. Sin opciones: el único botón lo arma el adaptador."""
+    if interactive.get("type") != "contacto":
+        return False
+    cuerpo, etiqueta = interactive.get("body"), interactive.get("button")
+    if not isinstance(cuerpo, str) or not cuerpo.strip() or len(cuerpo) > _MAX_CUERPO_INTERACTIVO:
+        return False
+    if not isinstance(etiqueta, str) or not etiqueta.strip() or len(etiqueta) > _MAX_ETIQUETA_CONTACTO:
+        return False
+    return "buttons" not in interactive and "rows" not in interactive
+
+
+def _interactivo_enviable(interactive: dict[str, Any]) -> bool:
+    if interactive.get("type") == "contacto":
+        return contacto_valido(interactive)
+    return interactivo_valido(interactive)
+
+
 async def send_interactive_to_conversation(
     conversation_id: uuid.UUID,
     interactive: dict[str, Any],
@@ -827,7 +850,8 @@ async def send_interactive_to_conversation(
     sin_degradar: bool = False,
     client_message_id: str | None = None,
 ) -> bool:
-    """Encola un mensaje con botones de respuesta o con lista (HU-AOS-09, HU-INMO-03).
+    """Encola un mensaje con botones de respuesta, con lista (HU-AOS-09, HU-INMO-03) o con el botón que pide el
+    teléfono (`contacto`, ADR-0199 §10; solo donde la capacidad `pedir_contacto` lo permite).
 
     La capacidad del canal se decide aquí, no por excepción en el adaptador: solo WhatsApp
     Cloud (`meta`) con la ventana de 24 h abierta envía interactivos. En cualquier otro caso (web,
@@ -859,7 +883,7 @@ async def send_interactive_to_conversation(
         ventana_abierta = expira is None or expira >= utcnow()
     else:
         ventana_abierta = True  # sin ventana de 24 h (playground) siempre se puede escribir
-    if not capacidad.admite(interactive.get("type")) or not ventana_abierta or not interactivo_valido(interactive):
+    if not capacidad.admite(interactive.get("type")) or not ventana_abierta or not _interactivo_enviable(interactive):
         if sin_degradar:
             return False
         return await send_to_conversation(conversation_id, fallback_text, sender_type=sender_type)

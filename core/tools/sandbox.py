@@ -37,4 +37,14 @@ async def simular_plantilla_opciones(arguments: dict[str, Any], context: ToolCon
     }
 
 
-__all__ = ["simular_email", "simular_escalar", "simular_plantilla_opciones"]
+async def simular_pedir_telefono(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    return {
+        "status": "simulado",
+        "message": (
+            "Pedido de teléfono SIMULADO en la prueba del panel: no se envió ningún botón. En Telegram el cliente "
+            "vería el botón para compartir su número."
+        ),
+    }
+
+
+__all__ = ["simular_email", "simular_escalar", "simular_pedir_telefono", "simular_plantilla_opciones"]

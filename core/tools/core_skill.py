@@ -21,7 +21,7 @@ from sqlalchemy import func, select
 from core.agents.playbooks import load_playbook
 from core.agents.spec import load_active_spec
 from core.datos_cliente.guardar import guardar as guardar_datos
-from core.db.models import Conversation, UsageLedger
+from core.db.models import Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
 from core.kernel.opciones.bandera import oferta_habilitada
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
@@ -31,6 +31,7 @@ from core.memory import vector as vector_memory
 from core.memory.facts import HechoInvalido, NamespaceNoConcedido
 from core.orchestrator.escalation import escalate
 from core.orchestrator.motivos_escalacion import MOTIVOS_TOOL, motivo_de_tool
+from core.shared.tenant import get_current_tenant_id
 from core.tools import sandbox as sandbox_prueba
 
 
@@ -45,6 +46,35 @@ async def conversation_spent(conversation_id: uuid.UUID) -> float:
             )
         ).scalar()
         return float(total or 0)
+
+
+async def hay_canal_que_pide_contacto(tipos_de_conexion: set[str]) -> bool:
+    """Predicado de oferta de `pedir_telefono` (ADR-0199 §10): el negocio tiene activa una conexión con la capacidad
+    `pedir_contacto` (hoy solo Telegram) y, si es Telegram, el kill-switch del canal está encendido. Es por negocio: en
+    las conversaciones de otro canal del mismo negocio la tool se ofrece y responde que no aplica."""
+    from core.gateway.connection_types import CAPACIDADES_POR_TIPO, SOLO_TEXTO, TELEGRAM
+    from core.gateway.telegram.habilitado import habilitado
+
+    return any(
+        CAPACIDADES_POR_TIPO.get(t, SOLO_TEXTO).pedir_contacto and (t != TELEGRAM or habilitado())
+        for t in tipos_de_conexion
+    )
+
+
+async def _pedido_de_contacto_en_cola(id_mensaje: str) -> bool:
+    """Ya hay un pedido de teléfono de esta llamada que salió o está en cola (un reintento no lo duplica). Uno
+    `failed` no salió: se puede volver a intentar."""
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                select(Message.id).where(
+                    Message.tenant_id == get_current_tenant_id(),
+                    Message.client_message_id == id_mensaje,
+                    Message.status != "failed",
+                )
+            )
+        ).first()
+    return fila is not None
 
 
 class CoreSkill(BaseSkill):
@@ -199,6 +229,55 @@ class CoreSkill(BaseSkill):
             actor="agent",
         )
         return para_el_agente(resultado)
+
+    async def _pedir_telefono(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+        """Envía al cliente de esta conversación un botón para compartir su teléfono (HU-CONN-26, ADR-0199 §10). El
+        texto y la etiqueta los pone el agente. No envía nada en un canal sin la capacidad `pedir_contacto` (el agente
+        decide su playbook si lo pide de otra forma) ni si el cliente ya tiene teléfono (el consumer no pisa uno distinto). El
+        número que comparta lo guarda el consumer en `contact_phone`; esta tool nunca lo lee ni lo devuelve."""
+        from sqlalchemy.exc import IntegrityError
+
+        from core.gateway.connection_types import capacidades_del_canal
+        from core.gateway.sender import send_interactive_to_conversation
+
+        texto = str(args.get("texto") or "").strip()
+        etiqueta = str(args.get("etiqueta") or "").strip()
+        if not texto or not etiqueta:
+            return {"error": "texto_o_etiqueta_vacios"}
+        if not capacidades_del_canal(ctx.channel).pedir_contacto:
+            return {
+                "error": "canal_sin_pedir_contacto",
+                "mensaje": "Este canal no permite pedir el teléfono con un botón.",
+            }
+        async with get_session() as session:
+            # El cliente sale de la conversación del turno, a la que va el botón.
+            conversacion = await session.get(Conversation, ctx.conversation_id)
+            cliente = await session.get(Customer, conversacion.customer_id) if conversacion is not None else None
+            if cliente is None or cliente.tenant_id != get_current_tenant_id():
+                return {"error": "cliente_no_encontrado"}
+            if cliente.contact_phone:
+                return {"status": "ya_tiene_telefono"}
+        id_mensaje = f"pedir_tel:{ctx.idempotency_key}"
+        if await _pedido_de_contacto_en_cola(id_mensaje):
+            return {"status": "ya_enviado"}
+        interactivo = {"type": "contacto", "body": texto, "button": etiqueta}
+        try:
+            enviado = await send_interactive_to_conversation(
+                ctx.conversation_id,
+                interactivo,
+                fallback_text=texto,
+                sin_degradar=True,
+                client_message_id=id_mensaje,
+            )
+        except IntegrityError as exc:
+            # Dos llamadas con la misma clave a la vez: la otra ya lo encoló. Cualquier otra violación (un CHECK) es
+            # un defecto y se propaga.
+            if "uq_messages_tenant_client_message_id" not in str(exc.orig):
+                raise
+            return {"status": "ya_enviado"}
+        if not enviado:
+            return {"error": "no_enviado", "mensaje": "No se pudo enviar el botón para pedir el teléfono."}
+        return {"status": "enviado"}
 
     # ------------------------------------------------------------ definición
     def get_tools(self) -> list[MCPTool]:
@@ -385,6 +464,37 @@ class CoreSkill(BaseSkill):
                 connection_predicate=oferta_habilitada,
                 # NO `apta_para_opcion` (default False): una opción no puede enviar otra plantilla de opciones
                 # (evita bucles de botón que envía botones), y el lint la rechaza como `tool_no_apta`.
+            ),
+            MCPTool(
+                name="pedir_telefono",
+                description=(
+                    "Envía al cliente un botón para que comparta su teléfono con un toque (hoy solo en Telegram). "
+                    "Úsala cuando necesites su número y no lo tengas. El texto ya hace el pedido: no lo repitas en tu "
+                    "respuesta. En otros canales no envía nada."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "texto": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1024,
+                            "description": "Mensaje al cliente que explica para qué necesitas su teléfono",
+                        },
+                        "etiqueta": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "description": "Texto del botón, por ejemplo «Compartir mi teléfono»",
+                        },
+                    },
+                    "required": ["texto", "etiqueta"],
+                    "additionalProperties": False,
+                },
+                handler=self._pedir_telefono,
+                side_effects=True,
+                simular=sandbox_prueba.simular_pedir_telefono,
+                connection_predicate=hay_canal_que_pide_contacto,
             ),
         ]
 

@@ -279,6 +279,20 @@ def teclado_inline(interactive: Mapping[str, Any]) -> dict[str, Any]:
     return {"inline_keyboard": filas}
 
 
+def teclado_contacto(interactive: Mapping[str, Any]) -> dict[str, Any]:
+    """`contacto` del kernel → teclado de respuesta con un solo botón `request_contact` (ADR-0199 §10). De un solo uso:
+    Telegram lo oculta cuando el cliente lo toca. Si el cliente escribe en vez de tocarlo, el teclado sigue visible
+    hasta que lo toque o lo cierre (aceptado en v1)."""
+    etiqueta = _texto(interactive.get("button"))
+    if not etiqueta.strip():
+        raise ProviderError("Botón de contacto sin etiqueta", provider=PROVIDER, category="CONTENT")
+    return {
+        "keyboard": [[{"text": etiqueta, "request_contact": True}]],
+        "one_time_keyboard": True,
+        "resize_keyboard": True,
+    }
+
+
 class TelegramOutbound(OutboundAdapter):
     """Salida por la Bot API. Credenciales: `bot_token` y `bot_id` (las arma `resolve_credentials`). Devuelve el id
     global `tg:<bot_id>:out:<chat_id>:<message_id>`: el `message_id` de Telegram es por chat y la llave de `messages`
@@ -332,6 +346,8 @@ class TelegramOutbound(OutboundAdapter):
         if not cuerpo:
             raise ProviderError("Mensaje interactivo sin cuerpo", provider=PROVIDER, category="CONTENT")
         enviado = await self._cliente(credentials).send_message(
-            chat_id, cuerpo, reply_markup=teclado_inline(interactive)
+            chat_id,
+            cuerpo,
+            reply_markup=teclado_contacto(interactive) if interactive.get("type") == "contacto" else teclado_inline(interactive),
         )
         return self._id(credentials, chat_id, enviado)
