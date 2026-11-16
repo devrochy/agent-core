@@ -87,10 +87,16 @@ class RecorridoOut(BaseModel):
         description="El recorrido es del negocio (si no, el panel no muestra nada)."
     )
     abrir: bool = Field(
-        description="El panel debe abrir el asistente solo: nunca se tocó y quien consulta es propietario del negocio."
+        description=(
+            "El panel debe abrir el asistente solo: nunca se tocó, el negocio no tiene agente creado "
+            "y quien consulta es propietario del negocio."
+        )
     )
     avisar: bool = Field(
-        description="Aviso persistente: empezó o saltó el recorrido y no lo terminó."
+        description=(
+            "Aviso persistente: empezó o saltó el recorrido, no lo terminó y el negocio no tiene "
+            "agente creado."
+        )
     )
     omitido_en: datetime | None = None
     completado_en: datetime | None = None

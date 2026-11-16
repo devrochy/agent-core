@@ -7,6 +7,8 @@ Gherkin:
   abrirlo (`abrir`) solo al propietario; el master lo ve sin bloqueo. Uno anterior al corte `no_aplica`.
 - «Omitir deja el aviso»: omitir guarda quién y cuándo, `avisar` queda encendido y `abrir` apagado;
   reanudar o avanzar lo retoma.
+- «Sin agente propio»: el Coordinador del alta (`kind='core'`) no cuenta; en cuanto el negocio crea un
+  agente, `avisar` y `abrir` se apagan aunque el recorrido siga en curso o pendiente.
 - «Terminar lo valida el servidor»: `finalizar` responde 409 `faltan_pasos` con lo que falta.
 - «Dejar listo»: crea el chat web CERRADO, publica el agente del guion y activa su versión, sin duplicar
   nada al repetir; con un chat web que ya atiende clientes, 409 `canal_en_vivo`.
@@ -167,6 +169,40 @@ async def test_avanzar_omitir_y_reanudar_dejan_rastro_y_solo_los_mueve_el_propie
     # Un colaborador con permiso de escribir no mueve el recorrido del negocio.
     r = await app_client.post("/api/v1/admin/onboarding/omitir", headers=colaborador)
     assert r.status_code == 403, r.text
+
+
+async def test_el_aviso_y_la_apertura_solo_insisten_sin_agente_propio(app_client) -> None:
+    """Un negocio recién creado solo tiene el Coordinador (`kind='core'`), que no cuenta como agente."""
+    tid = await _negocio()
+    h = await _persona(app_client, tid, "owner")
+
+    r = await app_client.post("/api/v1/admin/onboarding/avanzar", headers=h, json={"paso": 2})
+    assert r.status_code == 200, r.text
+    assert (r.json()["avisar"], r.json()["abrir"]) == (True, False)
+
+    # Al crear un especialista el recorrido deja de insistir aunque siga en curso.
+    r = await app_client.post(
+        "/api/v1/admin/agents/from-script", headers=h, json={"template_key": "ventas", "answers": {}}
+    )
+    assert r.status_code == 201, r.text
+    actual = await _recorrido(app_client, h)
+    assert (actual["estado"], actual["avisar"], actual["abrir"]) == ("en_curso", False, False)
+
+    # Tampoco se abre solo si el recorrido nunca se tocó y el negocio ya tiene agente.
+    tid_nuevo = await _negocio()
+    h_nuevo = await _persona(app_client, tid_nuevo, "owner")
+    r = await app_client.post(
+        "/api/v1/admin/agents/from-script",
+        headers=h_nuevo,
+        json={"template_key": "ventas", "answers": {}},
+    )
+    assert r.status_code == 201, r.text
+    pendiente = await _recorrido(app_client, h_nuevo)
+    assert (pendiente["estado"], pendiente["avisar"], pendiente["abrir"]) == (
+        "pendiente",
+        False,
+        False,
+    )
 
 
 async def test_finalizar_lo_valida_el_servidor_y_dejar_listo_publica_y_activa_sin_duplicar(
