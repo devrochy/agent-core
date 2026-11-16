@@ -118,6 +118,13 @@ class PrimerosPasosResponse(BaseModel):
 
 class AvanzarIn(BaseModel):
     paso: int = Field(ge=1, le=rec.TOTAL_PASOS, description="Paso al que llega la persona.")
+    pasos: int | None = Field(
+        default=None,
+        description=(
+            "Total de pasos con que el cliente numera `paso` (9 desde SPEC-47). Sin él, el paso es del "
+            "asistente de 6 (panel o APK anteriores) y se guarda traducido a su equivalente de 9."
+        ),
+    )
 
 
 def _puede_ver(principal: Principal, seccion: str | None) -> bool:
@@ -245,7 +252,8 @@ async def avanzar_recorrido(
     require_owner_or_master(principal)
     actual = await _leer_recorrido(principal)
     try:
-        cambios = rec.cambios_de_avanzar(actual, payload.paso)
+        paso = payload.paso if payload.pasos == rec.TOTAL_PASOS else rec.paso_de_6_a_9(payload.paso)
+        cambios = rec.cambios_de_avanzar(actual, paso)
     except rec.TransicionInvalida as exc:
         raise _transicion_invalida(exc) from None
     return await _mover(principal, "avanzar", cambios)
@@ -425,6 +433,7 @@ async def dejar_listo(
     if actual.agente_id != cambios["agente_id"]:
         cambios["probado_en"] = None  # otro agente: la prueba anterior no cuenta
     if actual.estado == "pendiente":
+        # Al dejarlo listo sigue «Habilidades» (paso 5 de 9, SPEC-47).
         cambios.update(estado="en_curso", paso=5)
     try:
         nuevo = await rec.fijar(tid, cambios, actor=actor, accion="dejar-listo")
