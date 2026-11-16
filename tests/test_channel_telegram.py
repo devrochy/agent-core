@@ -271,5 +271,6 @@ def test_secreto_del_webhook():
     secreto = nuevo_secreto_webhook()
     assert secreto_webhook_valido(secreto) and secreto != nuevo_secreto_webhook()
     assert not secreto_webhook_valido("a" * 257)
+    assert not secreto_webhook_valido("a" * 31) and secreto_webhook_valido("a" * 32)
     assert not secreto_webhook_valido("con.punto")
     assert not secreto_webhook_valido(None)

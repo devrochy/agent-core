@@ -26,10 +26,11 @@ Dos hechos de la Bot API (https://core.telegram.org/bots/api, v10.4, leída el 2
 
    Lleva FK compuesta `(tenant_id, channel_connection_id)`, RLS forzada y sin DELETE para `app_runtime`, como 0121. El `bot_id` NO se duplica en la tabla: la fuente de verdad es `channel_connections.external_id`.
 2. **Un bot, un negocio.** Índice parcial único GLOBAL `uq_channel_connections_telegram_bot_viva` sobre `channel_connections (external_id) WHERE provider='telegram' AND deleted_at IS NULL`. Un bot solo admite un webhook. El alta traduce el `IntegrityError` a 409 `bot_en_otro_negocio` sin decir cuál; el borrado lógico libera el bot.
+   - Es un índice que no empieza por `tenant_id`: una excepción deliberada a la invariante 1, como `uq_channel_connections_twilio_sender_viva` (0121). El 409 revela que el bot está en otro negocio, pero solo a quien ya tiene su token.
    - No hay una función que mire otros negocios. En Twilio, `twilio_account_en_otro_negocio` existe porque la cuenta y el número son cosas distintas; aquí el bot ES la clave del índice.
    - **El alta reclama la conexión (inserta y confirma) ANTES de llamar a `setWebhook`.** Si no, pisaría el webhook del bot de otro negocio antes de devolver el 409. El candado advisory por `bot_id` serializa dos altas del mismo bot.
 3. **Ruteo del webhook.** `telegram_route_connection(public_id)`, SECURITY DEFINER, devuelve solo `(tenant_id, channel_connection_id)` de una conexión no borrada. Como Twilio, no filtra `active`: el webhook lo comprueba ya dentro del negocio.
-4. **Webhook `POST /webhooks/telegram/{public_id}`.** Principal anónimo; se autentica con `public_id` más el secreto por conexión, comparado con `hmac.compare_digest`. El negocio sale solo de la ruta. Respuestas:
+4. **Webhook `POST /webhooks/telegram/{public_id}`.** Principal anónimo; se autentica con `public_id` más el secreto por conexión (al menos 32 caracteres, aleatorio), comparado con `hmac.compare_digest`. El negocio sale solo de la ruta. Respuestas:
 
    | Caso | Respuesta |
    |---|---|

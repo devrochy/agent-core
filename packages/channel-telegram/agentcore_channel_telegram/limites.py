@@ -21,8 +21,9 @@ CALLBACK_ANSWER_MAX = 200
 ARCHIVO_DESCARGA_MAX = 20 * 1024 * 1024
 # `sendVoice`: hasta 50 MB (OGG con Opus, MP3 o M4A).
 VOZ_MAX = 50 * 1024 * 1024
-# `setWebhook.secret_token`: 1-256 caracteres, solo `A-Z`, `a-z`, `0-9`, `_` y `-`.
-SECRETO_WEBHOOK = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+# `setWebhook.secret_token`: Telegram admite 1-256 caracteres de `A-Z`, `a-z`, `0-9`, `_` y `-`. Es lo único que
+# autentica el webhook (el `public_id` va en la URL), así que se exigen al menos 32.
+SECRETO_WEBHOOK = re.compile(r"^[A-Za-z0-9_-]{32,256}$")
 # Ritmo de salida: Telegram admite unos 30 mensajes por segundo por bot y 1 por segundo por chat. Se deja margen.
 RITMO_BOT_POR_SEGUNDO = 25
 RITMO_CHAT_POR_SEGUNDO = 1

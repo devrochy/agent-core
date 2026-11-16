@@ -26,7 +26,7 @@ from core.gateway.channels.base import ErrorCategory, ProviderError, category_fo
 
 _MAX_MENSAJE = 300
 # El token del bot (`<bot_id>:<secreto>`) nunca va en un mensaje de error, aunque la Bot API no lo devuelve.
-_TOKEN = re.compile(r"\d+:[A-Za-z0-9_-]{30,}")
+_TOKEN = re.compile(r"\d+:[A-Za-z0-9_-]{20,}")
 
 # Frases de la `description` que dicen que el problema es el destinatario, no el contenido ni el bot.
 _FRASES_DESTINATARIO = (

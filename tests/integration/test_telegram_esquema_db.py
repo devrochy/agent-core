@@ -93,11 +93,12 @@ async def _fila(tid: uuid.UUID, connection_id: uuid.UUID, **campos: Any) -> str:
     from core.shared.tenant import tenant_scope
 
     public_id = campos.pop("public_id", secrets.token_urlsafe(18))
+    dueno = campos.pop("tenant_id", tid)
     async with tenant_scope(tid):
         async with get_session() as session:
             session.add(
                 TelegramConnection(
-                    tenant_id=tid,
+                    tenant_id=dueno,
                     channel_connection_id=connection_id,
                     public_id=public_id,
                     bot_username="mi_bot",
@@ -151,9 +152,14 @@ async def test_rls_un_negocio_no_ve_ni_escribe_la_fila_de_otro(negocios) -> None
     await _sql(b, "update telegram_connections set status = 'error' where public_id = :p", p=public_id)
     [(estado,)] = await _sql(a, "select status from telegram_connections where public_id = :p", p=public_id)
     assert estado == "pending"
-    # Escribir una fila con el `tenant_id` de otro negocio también se rechaza (WITH CHECK y FK compuesta).
-    with pytest.raises(DBAPIError):
+    # Desde otro negocio, una fila con el `tenant_id` del dueño la rechaza la policy (WITH CHECK)...
+    with pytest.raises(DBAPIError) as exc:
+        await _fila(b, cid, tenant_id=a)
+    assert "row-level security" in str(exc.value.orig)
+    # ...y una con su propio `tenant_id` que apunta a la conexión ajena, la FK compuesta.
+    with pytest.raises(IntegrityError) as exc_fk:
         await _fila(b, cid)
+    assert _restriccion(exc_fk) == "fk_telegram_connections_conexion"
 
 
 async def test_una_fila_viva_por_conexion(negocios) -> None:
