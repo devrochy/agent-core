@@ -132,6 +132,12 @@ def desde_crudo(
     return Recorrido(estado="pendiente", paso=1, aplica=True, con_agente=con_agente)
 
 
+def paso_de_6_a_9(paso: int) -> int:
+    """El paso de 9 que corresponde a uno del asistente de 6. Uno fuera de 1..6 llega ya numerado sobre 9
+    (un cliente viejo que reenvía lo que leyó del servidor) y se deja como está."""
+    return PASO_DE_6_A_9.get(paso, paso)
+
+
 def paso_guardado(datos: dict[str, Any]) -> int:
     """El paso guardado, entre 1 y `TOTAL_PASOS`. Uno guardado con el recorrido de 6 pasos (sin `pasos`)
     se lleva a su equivalente de 9; «Crea tu agente» (4) vuelve a «Horario y reglas», que es donde ahora
@@ -142,7 +148,7 @@ def paso_guardado(datos: dict[str, Any]) -> int:
     if datos.get("estado") == "completo":
         return TOTAL_PASOS
     if datos.get("pasos") != TOTAL_PASOS:
-        paso = PASO_DE_6_A_9.get(min(max(paso, 1), 6), 1)
+        paso = paso_de_6_a_9(min(max(paso, 1), 6))
     return min(max(paso, 1), TOTAL_PASOS)
 
 
@@ -326,5 +332,6 @@ __all__ = [
     "fijar",
     "leer",
     "marcar_prueba",
+    "paso_de_6_a_9",
     "paso_guardado",
 ]

@@ -6,3 +6,6 @@
   equivalente de 9 (`PASO_DE_6_A_9`) y, al escribirse otra vez, queda guardado con los 9 sin perder el
   paso. `POST /admin/onboarding/avanzar` admite pasos del 1 al 9. La APK sigue con sus 6 pasos: recorta
   el paso al suyo.
+- `AvanzarIn` suma `pasos` (opcional): los clientes de 9 pasos mandan `pasos: 9`; sin él, el paso viene
+  del asistente de 6 (panel o APK anteriores) y se guarda traducido. Así desplegar el backend antes que
+  el panel, o una APK sin OTA, no deja pasos corridos guardados en la base.

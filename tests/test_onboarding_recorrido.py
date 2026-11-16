@@ -89,6 +89,8 @@ def test_el_recorrido_de_6_pasos_se_lee_en_su_equivalente_de_9() -> None:
     assert _r(_9(estado="en_curso", paso=5)).paso == 5
     assert _r({"estado": "completo", "paso": 6}).paso == r.TOTAL_PASOS
     assert r.paso_guardado({"estado": "en_curso", "paso": True}) == 1
+    # Lo que manda un cliente de 6 se traduce; lo que ya viene sobre 9 (7 u 8) se deja.
+    assert [r.paso_de_6_a_9(p) for p in (1, 2, 3, 4, 5, 6, 7, 8, 9)] == [1, 3, 4, 4, 7, 8, 7, 8, 9]
 
 
 def test_avanzar_empieza_y_retoma() -> None:

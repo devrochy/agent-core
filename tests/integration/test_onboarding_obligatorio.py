@@ -143,7 +143,7 @@ async def test_avanzar_omitir_y_reanudar_dejan_rastro_y_solo_los_mueve_el_propie
     dueno = await _persona(app_client, tid, "owner")
     colaborador = await _persona(app_client, tid, "colaborador")
 
-    r = await app_client.post("/api/v1/admin/onboarding/avanzar", headers=dueno, json={"paso": 3})
+    r = await app_client.post("/api/v1/admin/onboarding/avanzar", headers=dueno, json={"paso": 3, "pasos": 9})
     assert r.status_code == 200, r.text
     assert (r.json()["estado"], r.json()["paso"], r.json()["avisar"], r.json()["abrir"]) == ("en_curso", 3, True, False)
 
@@ -163,7 +163,7 @@ async def test_avanzar_omitir_y_reanudar_dejan_rastro_y_solo_los_mueve_el_propie
     assert (r.status_code, r.json()["error"]["code"]) == (409, "transicion_invalida")
 
     # Fuera de rango: lo frena el esquema.
-    r = await app_client.post("/api/v1/admin/onboarding/avanzar", headers=dueno, json={"paso": 10})
+    r = await app_client.post("/api/v1/admin/onboarding/avanzar", headers=dueno, json={"paso": 10, "pasos": 9})
     assert r.status_code == 422
 
     # Un colaborador con permiso de escribir no mueve el recorrido del negocio.
@@ -194,13 +194,20 @@ async def test_un_recorrido_de_6_pasos_se_retoma_en_su_equivalente_de_9(app_clie
     assert (guardado["paso"], guardado["pasos"]) == (7, 9)
     assert (await _recorrido(app_client, dueno))["paso"] == 7
 
+    # Un panel o una APK de antes (sin `pasos`) avanza con su numeración de 6: «Probar» (6) es el 8.
+    r = await app_client.post("/api/v1/admin/onboarding/avanzar", headers=dueno, json={"paso": 6})
+    assert (r.status_code, r.json()["paso"]) == (200, 8), r.text
+    # Uno nuevo manda `pasos: 9` y su número se guarda tal cual.
+    r = await app_client.post("/api/v1/admin/onboarding/avanzar", headers=dueno, json={"paso": 6, "pasos": 9})
+    assert (r.status_code, r.json()["paso"]) == (200, 6), r.text
+
 
 async def test_el_aviso_y_la_apertura_solo_insisten_sin_agente_propio(app_client) -> None:
     """Un negocio recién creado solo tiene el Coordinador (`kind='core'`), que no cuenta como agente."""
     tid = await _negocio()
     h = await _persona(app_client, tid, "owner")
 
-    r = await app_client.post("/api/v1/admin/onboarding/avanzar", headers=h, json={"paso": 2})
+    r = await app_client.post("/api/v1/admin/onboarding/avanzar", headers=h, json={"paso": 2, "pasos": 9})
     assert r.status_code == 200, r.text
     assert (r.json()["avisar"], r.json()["abrir"]) == (True, False)
 
