@@ -58,13 +58,24 @@ def _ambiente(monkeypatch) -> list[str]:
 
 @pytest.fixture(scope="module")
 async def conexion() -> AsyncIterator[dict[str, Any]]:
+    async for c in _negocio_con_bot("tlw"):
+        yield c
+
+
+@pytest.fixture(scope="module")
+async def otra_conexion() -> AsyncIterator[dict[str, Any]]:
+    async for c in _negocio_con_bot("tlx"):
+        yield c
+
+
+async def _negocio_con_bot(prefijo: str) -> AsyncIterator[dict[str, Any]]:
     from core.alta_negocio import onboard_tenant
     from core.config import get_settings
     from core.gateway.telegram import alta
     from core.shared.tenant import tenant_scope
     from core.tenants import deactivate_tenant, purge_tenant
 
-    slug = f"tlw-{uuid.uuid4().hex[:8]}"
+    slug = f"{prefijo}-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"Telegram {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
     settings = get_settings()
     antes = (settings.public_base_url, settings.telegram_habilitado)
@@ -93,10 +104,11 @@ def _update_id() -> int:
 
 
 def _mensaje(update_id: int, texto: str = "Hola", **extra: Any) -> dict[str, Any]:
+    """Un update con un mensaje cuyo `message_id` es el mismo número: así cada prueba usa un id propio."""
     persona = {"id": 4242, "is_bot": False, "first_name": "Ana"}
     return {
         "update_id": update_id,
-        "message": {"message_id": 1, "from": persona, "chat": {"id": 4242, "type": "private"}, "text": texto, **extra},
+        "message": {"message_id": update_id, "from": persona, "chat": {"id": 4242, "type": "private"}, "text": texto, **extra},
     }
 
 
@@ -106,6 +118,10 @@ async def _post(app_client, c: dict[str, Any], cuerpo: Any, *, secreto: str | No
         headers["X-Telegram-Bot-Api-Secret-Token"] = c["secreto"] if secreto is None else secreto
     contenido = cuerpo if isinstance(cuerpo, bytes) else json.dumps(cuerpo).encode()
     return await app_client.post(f"/webhooks/telegram/{public_id or c['public_id']}", content=contenido, headers=headers)
+
+
+def _id(c: dict[str, Any], uid: int) -> str:
+    return f"tg:{c['bot_id']}:in:4242:{uid}"
 
 
 async def _encolados(external_id: str) -> list[dict[str, str]]:
@@ -133,8 +149,8 @@ async def test_mensaje_se_publica_una_vez_con_ids_globales(conexion, app_client)
     assert r.status_code == 200, r.text
     assert (await _post(app_client, conexion, cuerpo)).status_code == 200  # reintento de Telegram
 
+    [campos] = await _encolados(f"tg:{conexion['bot_id']}:in:4242:{uid}")
     external_id = f"tg:{conexion['bot_id']}:{uid}"
-    [campos] = await _encolados(external_id)
     assert campos["provider"] == "telegram" and campos["channel"] == "telegram"
     assert campos["customer_external_id"] == "4242" and campos["customer_name"] == "Ana"
     assert campos["connection_external_id"] == conexion["bot_id"]
@@ -157,12 +173,27 @@ async def test_mensaje_se_publica_una_vez_con_ids_globales(conexion, app_client)
     assert ultimo is not None
 
 
-@pytest.mark.parametrize(("secreto", "esperado"), [("otro-secreto-" + "x" * 30, 401), ("", 401)])
-async def test_secreto_malo_es_401_y_no_publica(conexion, app_client, secreto, esperado) -> None:
+@pytest.mark.parametrize("secreto", ["otro-secreto-" + "x" * 30, "", "corto", "con espacios " + "x" * 40])
+async def test_secreto_malo_es_401_no_publica_ni_audita(conexion, app_client, secreto) -> None:
     uid = _update_id()
     r = await _post(app_client, conexion, _mensaje(uid), secreto=secreto)
-    assert r.status_code == esperado
-    assert await _encolados(f"tg:{conexion['bot_id']}:{uid}") == []
+    assert r.status_code == 401
+    assert await _encolados(_id(conexion, uid)) == []
+    assert await _sql(
+        None, "select 1 from webhook_events where external_id = :e", e=f"tg:{conexion['bot_id']}:{uid}"
+    ) == []
+
+
+async def test_el_secreto_de_otro_negocio_no_abre_esta_conexion(conexion, otra_conexion, app_client) -> None:
+    """Con el `public_id` de A y el secreto de B (otro negocio, otro bot): 401, nada publicado ni auditado."""
+    uid = _update_id()
+    r = await _post(app_client, conexion, _mensaje(uid), secreto=otra_conexion["secreto"])
+    assert r.status_code == 401
+    assert await _encolados(_id(conexion, uid)) == [] and await _encolados(_id(otra_conexion, uid)) == []
+    r = await _post(app_client, otra_conexion, _mensaje(uid))
+    assert r.status_code == 200
+    [campos] = await _encolados(_id(otra_conexion, uid))
+    assert campos["tenant_id"] == str(otra_conexion["tid"]) != str(conexion["tid"])
 
 
 async def test_public_id_desconocido_cuerpo_grande_y_kill_switch(conexion, app_client, monkeypatch) -> None:
@@ -174,7 +205,7 @@ async def test_public_id_desconocido_cuerpo_grande_y_kill_switch(conexion, app_c
     monkeypatch.setattr(get_settings(), "telegram_habilitado", False)
     uid = _update_id()
     assert (await _post(app_client, conexion, _mensaje(uid))).status_code == 503
-    assert await _encolados(f"tg:{conexion['bot_id']}:{uid}") == []
+    assert await _encolados(_id(conexion, uid)) == []
 
 
 @pytest.mark.parametrize(
@@ -189,7 +220,7 @@ async def test_lo_no_soportado_es_200_sin_publicar(conexion, app_client, cuerpo)
     uid = _update_id()
     r = await _post(app_client, conexion, cuerpo(uid))
     assert r.status_code == 200
-    assert await _encolados(f"tg:{conexion['bot_id']}:{uid}") == []
+    assert await _encolados(_id(conexion, uid)) == []
 
 
 async def test_json_invalido_es_200(conexion, app_client) -> None:
@@ -201,7 +232,7 @@ async def test_conexion_pausada_no_publica(conexion, app_client) -> None:
     try:
         uid = _update_id()
         assert (await _post(app_client, conexion, _mensaje(uid))).status_code == 200
-        assert await _encolados(f"tg:{conexion['bot_id']}:{uid}") == []
+        assert await _encolados(_id(conexion, uid)) == []
     finally:
         await _sql(conexion["tid"], "update channel_connections set active = true where id = :c", c=conexion["connection_id"])
 
@@ -220,7 +251,7 @@ async def test_toque_de_boton_se_publica_y_se_contesta(conexion, app_client, _am
         },
     }
     assert (await _post(app_client, conexion, cuerpo)).status_code == 200
-    [campos] = await _encolados(f"tg:{conexion['bot_id']}:{uid}")
+    [campos] = await _encolados(f"tg:{conexion['bot_id']}:cb:cbq-77")
     assert campos["interactive_id"] == "confirmar:si" and campos["content"] == "Sí, confirmar"
     assert _ambiente == ["cbq-77"]
 

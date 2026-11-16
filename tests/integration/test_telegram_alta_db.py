@@ -96,9 +96,11 @@ class TelegramFalso:
             if self.falla_set_webhook:
                 return httpx.Response(500, json={"ok": False, "error_code": 500, "description": "Internal"})
             bot["url"], bot["secret"] = cuerpo["url"], cuerpo["secret_token"]
+            bot.setdefault("descartes", []).append(("setWebhook", cuerpo.get("drop_pending_updates")))
             resultado = True
         elif metodo == "deleteWebhook":
             bot["url"], bot["secret"] = "", ""
+            bot.setdefault("descartes", []).append(("deleteWebhook", cuerpo.get("drop_pending_updates")))
             resultado = True
         elif metodo == "sendMessage":
             if cuerpo["chat_id"] == 404:
@@ -212,6 +214,8 @@ async def test_alta_conecta_y_es_idempotente(negocios) -> None:
     assert otra_vez.created is False and otra_vez.connection_id == hecha.connection_id
     assert otra_vez.webhook_url == hecha.webhook_url, "mismo public_id"
     assert bot["secret"] != primer_secreto, "cada alta rota el secreto del webhook"
+    # Repetir el alta sobre la misma conexión conserva lo pendiente: es de este negocio.
+    assert bot["descartes"] == [("setWebhook", True), ("setWebhook", False)]
 
 
 @pytest.mark.parametrize("token", ["no-es-un-token", "123456789:" + "x" * 35])
@@ -238,6 +242,8 @@ async def test_un_bot_en_un_solo_negocio_sin_pisar_su_webhook(negocios) -> None:
     assert tg.bots[token]["url"] == ""
     de_b = await _conectar(b, tg, token)
     assert de_b.status == "connected" and de_b.connection_id != hecha.connection_id
+    # Lo que Telegram tenía pendiente para A se descarta al desconectar y al conectar en B: nunca le llega a B.
+    assert tg.bots[token]["descartes"] == [("setWebhook", True), ("deleteWebhook", True), ("setWebhook", True)]
 
 
 async def test_webhook_ajeno_pide_confirmacion(negocios) -> None:

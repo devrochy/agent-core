@@ -5,7 +5,9 @@ webhook del core le pasa el update JUNTO con el `bot_id` de la conexión que ya 
 no son globales: `update_id` es del bot y `message_id` es del chat. Así los ids que viajan al core son únicos entre
 bots y entre negocios:
 
-- mensaje entrante: `tg:<bot_id>:<update_id>` (`external_message_id`, la llave de idempotencia);
+- mensaje entrante: `tg:<bot_id>:in:<chat_id>:<message_id>`; toque de botón: `tg:<bot_id>:cb:<callback_query.id>`
+  (`external_message_id`, la llave de idempotencia). No se usa `update_id`: tras una semana sin updates Telegram lo
+  elige al azar y podría repetir uno viejo, que la idempotencia descartaría en silencio;
 - cliente: el id del usuario de Telegram (`customer_external_id`), que en un chat privado es también el `chat_id`.
 
 Solo chats privados con una persona. Lo demás (grupos, canales, mensajes editados, stickers, documentos, ubicaciones,
@@ -45,12 +47,16 @@ _MAX_TEXTO = 4096
 _MAX_INTERACTIVE_ID = 256
 
 
-def id_entrante(bot_id: str, update_id: int) -> str:
-    return f"tg:{bot_id}:{update_id}"
+def id_entrante(bot_id: str, chat_id: int | str, message_id: int) -> str:
+    return f"tg:{bot_id}:in:{chat_id}:{message_id}"
+
+
+def id_toque(bot_id: str, callback_query_id: str) -> str:
+    return f"tg:{bot_id}:cb:{callback_query_id}"
 
 
 def id_saliente(bot_id: str, chat_id: int | str, message_id: int) -> str:
-    return f"tg:{bot_id}:{chat_id}:{message_id}"
+    return f"tg:{bot_id}:out:{chat_id}:{message_id}"
 
 
 def _entero(valor: object) -> int | None:
@@ -152,17 +158,18 @@ class TelegramInbound(InboundAdapter):
         if update_id is None:
             return []
         if isinstance(update.get("message"), Mapping):
-            mensaje = self._mensaje(update["message"], bot_id, update_id)
+            mensaje = self._mensaje(update["message"], bot_id)
         elif isinstance(update.get("callback_query"), Mapping):
-            mensaje = self._toque(update["callback_query"], bot_id, update_id)
+            mensaje = self._toque(update["callback_query"], bot_id)
         else:
             # edited_message, channel_post, my_chat_member…: no se procesan.
             mensaje = None
         return [mensaje] if mensaje is not None else []
 
-    def _mensaje(self, mensaje: Mapping[str, Any], bot_id: str, update_id: int) -> InboundMessage | None:
+    def _mensaje(self, mensaje: Mapping[str, Any], bot_id: str) -> InboundMessage | None:
         persona = _persona(mensaje.get("from"))
-        if persona is None or not _chat_privado(mensaje, persona):
+        message_id = _entero(mensaje.get("message_id"))
+        if persona is None or message_id is None or not _chat_privado(mensaje, persona):
             return None
         media = [m for m in (_foto(mensaje), _voz(mensaje)) if m is not None]
         contenido = _texto(mensaje.get("text")) or _texto(mensaje.get("caption"), 1024)
@@ -171,7 +178,7 @@ class TelegramInbound(InboundAdapter):
         return InboundMessage(
             provider=PROVIDER,
             channel=CHANNEL,
-            external_message_id=id_entrante(bot_id, update_id),
+            external_message_id=id_entrante(bot_id, persona["id"], message_id),
             customer_external_id=str(persona["id"]),
             customer_name=_nombre(persona),
             content=contenido,
@@ -179,15 +186,16 @@ class TelegramInbound(InboundAdapter):
             media=media,
         )
 
-    def _toque(self, toque: Mapping[str, Any], bot_id: str, update_id: int) -> InboundMessage | None:
+    def _toque(self, toque: Mapping[str, Any], bot_id: str) -> InboundMessage | None:
         persona = _persona(toque.get("from"))
         data = _texto(toque.get("data"), _MAX_INTERACTIVE_ID)
-        if persona is None or not data or not _chat_privado(toque.get("message"), persona):
+        toque_id = _texto(toque.get("id"), 64)
+        if persona is None or not data or not toque_id or not _chat_privado(toque.get("message"), persona):
             return None
         return InboundMessage(
             provider=PROVIDER,
             channel=CHANNEL,
-            external_message_id=id_entrante(bot_id, update_id),
+            external_message_id=id_toque(bot_id, toque_id),
             customer_external_id=str(persona["id"]),
             customer_name=_nombre(persona),
             # Lo que el cliente ve en el botón; el id va aparte para el motor de procedimientos (HU-AOS-05).
@@ -246,7 +254,7 @@ def teclado_inline(interactive: Mapping[str, Any]) -> dict[str, Any]:
 
 class TelegramOutbound(OutboundAdapter):
     """Salida por la Bot API. Credenciales: `bot_token` y `bot_id` (las arma `resolve_credentials`). Devuelve el id
-    global `tg:<bot_id>:<chat_id>:<message_id>`: el `message_id` de Telegram es por chat y la llave de `messages`
+    global `tg:<bot_id>:out:<chat_id>:<message_id>`: el `message_id` de Telegram es por chat y la llave de `messages`
     no lleva proveedor."""
 
     provider = PROVIDER
