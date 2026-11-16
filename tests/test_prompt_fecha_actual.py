@@ -14,6 +14,7 @@ from agentcore_contracts import AgentSpec
 
 from core.agents.responses import load_response
 from core.llm.prompt_builder import PromptContext, build_system_blocks
+from core.memory.entity import profile_to_prompt
 
 # 2026-10-06 15:00 UTC = martes 10:00 en Bogotá (UTC-5).
 MARTES_10_BOGOTA = datetime(2026, 10, 6, 15, 0, tzinfo=UTC)
@@ -75,7 +76,7 @@ async def test_la_fecha_actual_es_la_ultima_parte_del_prompt() -> None:
 
 async def test_la_fecha_va_despues_del_resto_del_contexto_dinamico() -> None:
     blocks = await build_system_blocks(
-        _spec(), _ctx(entity_profile="Nombre: Rob", recalled_memories=["Pidió una demo"])
+        _spec(), _ctx(entity_profile=profile_to_prompt({"nombre": "Rob"}), recalled_memories=["Pidió una demo"])
     )
 
     assert "## Lo que sabes de este cliente" in blocks[-1]

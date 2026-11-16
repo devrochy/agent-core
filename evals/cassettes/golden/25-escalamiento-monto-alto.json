@@ -530,25 +530,26 @@
       },
       "respuestas": [
         {
-          "content": "Hola, gracias por escribir 😊 Te cuento: un pedido que supera los dos millones necesita la aprobación de un asesor de nuestro equipo, así que lo mejor es que te atienda una persona directamente.\n\nDame un momento que te comunico con alguien ahora mismo.",
+          "content": "Con gusto te ayudo con eso. Déjame revisar el catálogo y el perfil para ver qué tenemos disponible.",
           "model": "deepseek-flash",
           "stop_reason": "tool_use",
           "tool_calls": [
             {
-              "arguments": {
-                "detalle": "Pedido de catálogo completo por más de $2.000.000, por encima del umbral de aprobación.",
-                "reason": "monto_alto",
-                "summary": "El cliente quiere comprar el catálogo completo; el monto del pedido supera los dos millones y requiere aprobación humana."
-              },
-              "id": "call_00_UEhp8ghrgAtmCbaZDpa68130",
-              "name": "escalate_to_human"
+              "arguments": {},
+              "id": "call_00_E0gyhAsW3EvYZIjcQolK4244",
+              "name": "get_customer_profile"
+            },
+            {
+              "arguments": {},
+              "id": "call_01_bHn6YfwHMyVtvubuxBr92792",
+              "name": "consultar_inventario"
             }
           ],
           "usage": {
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
-            "input_tokens": 7794,
-            "output_tokens": 190
+            "input_tokens": 7793,
+            "output_tokens": 64
           }
         }
       ],

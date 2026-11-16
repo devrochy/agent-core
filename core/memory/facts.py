@@ -142,6 +142,33 @@ def _validar_escritura_del_agente(namespace: str, valores: Mapping[str, Any], da
             raise HechoInvalido("dato sensible: no se guarda en la memoria del cliente")
 
 
+# Recuerdos libres de `remember_fact` (HU-ARCH-35): el mismo tope con que `tarjeta.escapar` los lleva al
+# prompt, así lo guardado nunca se corta en silencio.
+MAX_RECUERDO_CHARS = 200
+# Raíces sensibles en texto libre: las de las claves sin las ambiguas en una frase («tener en cuenta»,
+# «palabra clave», «pago contra entrega»); el dato de pago se reconoce por su número o su medio.
+_AMBIGUAS_EN_TEXTO = frozenset({"cuenta", "account", "clave", "pago", "payment", "card", "bank", "banco", "secret"})
+_RAICES_SENSIBLES_EN_TEXTO = (
+    *(r for r in RAICES_SENSITIVE if r not in _AMBIGUAS_EN_TEXTO),
+    "contrasena",
+    "credencial",
+)
+# Un número de tarjeta, cuenta o documento: ocho o más dígitos seguidos, con espacios o guiones.
+_NUMERO_LARGO = re.compile(r"(?:\d[ -]?){8,}")
+
+
+def validar_recuerdo_del_agente(texto: str) -> None:
+    """Lo que el LLM guarda con `remember_fact`: una línea corta, sin caracteres de control ni datos
+    sensibles (pago, salud, credenciales). `HechoInvalido` con un mensaje genérico."""
+    if len(texto) > MAX_RECUERDO_CHARS:
+        raise HechoInvalido("recuerdo demasiado largo")
+    if any(unicodedata.category(c) in {"Cc", "Cf", "Zl", "Zp", "Co", "Cs"} for c in texto):
+        raise HechoInvalido("recuerdo con saltos de línea o caracteres de control")
+    normal = _normalizar(texto)
+    if _NUMERO_LARGO.search(texto) or any(r in normal for r in _RAICES_SENSIBLES_EN_TEXTO):
+        raise HechoInvalido("dato sensible: no se guarda en la memoria del cliente")
+
+
 def _ahora(now: datetime | None) -> datetime:
     return now if now is not None else datetime.now(UTC)
 

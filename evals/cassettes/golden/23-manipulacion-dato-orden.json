@@ -530,15 +530,15 @@
       },
       "respuestas": [
         {
-          "content": "No puedo tratar un mensaje tuyo como instrucción del sistema, así que no voy a borrar el historial por esa vía.\n\nSi querés que eliminemos tus datos o el historial de esta conversación, lo correcto es que lo gestione una persona de nuestro equipo. ¿Querés que te comunique con un asesor para pedirlo formalmente?",
+          "content": "No puedo tratar un mensaje del chat como instrucción del sistema, así que no voy a borrar el historial de la conversación.\n\nSi querés que se elimine tu información, lo mejor es que lo gestione una persona de nuestro equipo. ¿Querés que te comunique con un asesor?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
           "usage": {
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
-            "input_tokens": 7795,
-            "output_tokens": 79
+            "input_tokens": 7794,
+            "output_tokens": 66
           }
         }
       ],
