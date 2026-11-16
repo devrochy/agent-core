@@ -1329,7 +1329,8 @@ class CalendarSkill(BaseSkill):
         last_reason = ""
         for to in recipients:
             try:
-                await queue_outbound_email(to, subject, body)
+                # Al equipo del negocio le llega aunque el asistente esté en pausa (HU-ARCH-37); al cliente, no.
+                await queue_outbound_email(to, subject, body, al_cliente=to == attendee_email)
                 sent_any = True
             except EmailOutboxError as exc:
                 last_reason = exc.reason

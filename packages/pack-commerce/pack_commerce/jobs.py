@@ -201,7 +201,7 @@ async def follow_up_quotes() -> None:
 
 async def _follow_up_quotes_del_negocio(tenant_id: uuid.UUID, config) -> tuple[int, int]:  # type: ignore[no-untyped-def]
     """Seguimiento de cotizaciones de un negocio (dentro de su `tenant_scope`): (candidatas, enviadas)."""
-    from core.db.models import Conversation
+    from core.db.models import Conversation, Customer
     from core.gateway.sender import send_to_conversation
 
     total_candidates = 0
@@ -229,7 +229,13 @@ async def _follow_up_quotes_del_negocio(tenant_id: uuid.UUID, config) -> tuple[i
     for quote in quotes:
         async with get_session() as session:
             conversation = await get_owned(session, Conversation, quote.conversation_id, tenant_id)
+            cliente = (
+                await get_owned(session, Customer, conversation.customer_id, tenant_id) if conversation else None
+            )
         if conversation is None or conversation.bot_paused or conversation.status != "open":
+            continue
+        if cliente is not None and cliente.bot_paused:
+            # Sin llegar al sender: si no, cada corrida dejaría otro `failed` mientras dure la ventana.
             continue
         template = getattr(config, "follow_up_quote_message", "")
         message = template.format(total=f"${float(quote.total):,.0f}")

@@ -5,4 +5,5 @@
 - Seguimientos de leads y cotizaciones: se salta el negocio pausado y la marca («contactado», `follow_up_sent_at`) solo se gasta si el mensaje salió; si no (pausa, ventana cerrada, conexión pausada), sigue siendo candidato dentro de su ventana.
 - Envíos a segmento en curso: con el negocio pausado los destinatarios que faltan quedan `omitido` (`negocio_pausado`) y el envío termina; un cliente pausado queda `omitido` (`cliente_pausado`).
 - Las opciones que manda un operador y los avisos de cita que dispara el panel se frenan también en esta versión (decisión del dueño).
+- Lo que va al equipo del negocio (correos de cita a los responsables, avisos internos) no se frena. El aviso de renovación del plan de la plataforma tampoco: si el SMTP del vendedor no lo manda, sale por el de la plataforma, porque es la facturación de SolversHub y no un mensaje del negocio a su cliente.
 - Texto de la opción «Pausar el asistente» actualizado. Sin migración. Los crons que solo escriben datos (cargos, mora, cierre) siguen corriendo.
