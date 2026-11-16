@@ -600,6 +600,9 @@ async def _guardar_en_perfil(
         log.info("ventas_perfil_no_concedido", n=len(valores))
     except HechoInvalido:
         log.warning("ventas_perfil_dato_no_admitido", claves=sorted(valores))
+    except Exception:
+        # El lead o el pedido ya quedó guardado y es la fuente: una falla de la copia no lo deshace.
+        log.warning("ventas_perfil_no_guardado", exc_info=True)
 
 
 async def _sobre_faltan_datos(

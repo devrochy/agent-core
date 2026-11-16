@@ -70,7 +70,7 @@ async def test_sin_nada_que_guardar_no_llama(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", [NamespaceNoConcedido("namespace no concedido: perfil"), HechoInvalido("x")])
+@pytest.mark.parametrize("error", [NamespaceNoConcedido("namespace no concedido: perfil"), HechoInvalido("x"), RuntimeError("bd")])
 async def test_la_negativa_no_rompe_la_tool(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
     monkeypatch.setattr(skills, "guardar_datos", _Guardar(error))
     await _guardar_en_perfil(_ctx(frozenset()), {"name": "Ana"})

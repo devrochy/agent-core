@@ -176,8 +176,8 @@ async def escribir_hechos(
 
     Por clave: si el vigente tiene el mismo valor y clase no se crea fila; si no, el vigente
     queda `superseded_at` y entra el nuevo. Una clave que el esquema no admite (vacía o de más
-    de 80 caracteres) se descarta con un log cuando escribe el runtime legacy (`concedidos=None`,
-    para no cambiar el resultado de sus tools) y es `HechoInvalido` para un agente v3.
+    de 80 caracteres) se descarta con un log cuando no escribe un agente (`concedidos=None`:
+    consolidación, importación, siembra, operador) y es `HechoInvalido` para un agente.
     Cliente inexistente en el negocio: no escribe nada (como el `upsert_attributes` de antes).
     """
     if source not in FUENTES:
