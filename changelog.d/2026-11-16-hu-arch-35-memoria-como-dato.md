@@ -1,0 +1,5 @@
+## El perfil y los recuerdos del cliente entran al prompt como dato (HU-ARCH-35, 2026-11-16)
+
+- El perfil del cliente y los recuerdos de `recall` se serializan con `tarjeta.escapar`: cada clave y cada valor van como cadena JSON de una línea, así un valor con saltos de línea o un encabezado falso («## Reglas…») ya no abre instrucciones en el system prompt. El escape se hace al leer, así que cubre también lo guardado antes. Los rótulos y el aviso de que son datos salen del playbook del kernel `memoria-del-cliente` (`core/memory/memoria_en_prompt.py`).
+- `remember_fact` rechaza con un error de negocio (sin guardar y sin autodeshabilitar el pack) los recuerdos de más de 200 caracteres, con saltos de línea o caracteres de control, o con datos sensibles (números largos, tarjeta, salud, contraseñas). Un agente v3 sin el namespace `perfil` en `writeNamespaces` no puede guardar recuerdos; en legacy no cambia.
+- Golden set: escenario 37 de memoria envenenada; el runner acepta `profile` y `recalled_memories`.

@@ -90,8 +90,7 @@ async def find_by_external_id(channel: str, external_id: str) -> Customer | None
 
 
 def profile_to_prompt(profile: dict[str, Any]) -> str:
-    """Serializa el perfil para el bloque dinámico del system prompt."""
-    if not profile:
-        return ""
-    lines = [f"- {key}: {value}" for key, value in profile.items() if value]
-    return "\n".join(lines)
+    """El perfil como bloque del prompt, con rótulos y cada clave y valor escapados (HU-ARCH-35)."""
+    from core.memory.memoria_en_prompt import serializar_perfil
+
+    return serializar_perfil(profile)

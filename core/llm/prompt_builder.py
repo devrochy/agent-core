@@ -165,13 +165,18 @@ def bloque_dinamico(ctx: PromptContext) -> str:
     if ctx.active_skills_summary:
         dynamic_parts.append(f"## Capacidades activas en este turno\n{ctx.active_skills_summary}")
     if ctx.entity_profile:
-        dynamic_parts.append(f"## Lo que sabes de este cliente\n{ctx.entity_profile}")
+        # Ya serializado y escapado por `core/memory/memoria_en_prompt.py` (rótulos en su playbook).
+        dynamic_parts.append(ctx.entity_profile)
     if ctx.relacion:
         # Ya serializada y escapada por `core/memory/relacion.py` (rótulos en su playbook del kernel).
         dynamic_parts.append(ctx.relacion)
     if ctx.recalled_memories:
-        recalled = "\n".join(f"- {m}" for m in ctx.recalled_memories)
-        dynamic_parts.append(f"## Hechos relevantes de interacciones pasadas\n{recalled}")
+        # Se escapan al leer: protege también lo guardado antes de HU-ARCH-35 (invariante 7).
+        from core.memory.memoria_en_prompt import serializar_recuerdos
+
+        recuerdos = serializar_recuerdos(ctx.recalled_memories)
+        if recuerdos:
+            dynamic_parts.append(recuerdos)
     if ctx.referencias:
         # Ya saneadas por el core (`core/orchestrator/referencias.py`): solo datos.
         referencias = "\n".join(ctx.referencias)
