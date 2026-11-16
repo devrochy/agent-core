@@ -103,6 +103,33 @@ def test_modelo_de_otro_proveedor_o_retirado() -> None:
     assert problema("modelo-propio-del-negocio", "deepseek") is None  # fuera de la tabla: pasa
 
 
+def test_modelo_del_negocio() -> None:
+    """HU-AOS-79: BYOK si lo hay; si no, el del despliegue cuando el proveedor lo sirve; si no, el
+    primer modelo vigente de ese proveedor."""
+    assert editor.modelo_del_negocio("deepseek", "deepseek-v4-pro", "deepseek-flash") == "deepseek-v4-pro"
+    assert editor.modelo_del_negocio("deepseek", None, "deepseek-flash") == "deepseek-flash"
+    assert editor.modelo_del_negocio("anthropic", None, "deepseek-flash") == "claude-haiku-4-5"
+    assert editor.modelo_del_negocio("deepseek", None, "deepseek-chat") == "deepseek-flash"  # retirado
+    assert editor.modelo_del_negocio("deepseek", None, "modelo-propio") == "modelo-propio"  # fuera de la tabla
+
+
+def test_modelo_efectivo_del_agente() -> None:
+    def efectivo(primario: str | None, provider: str = "deepseek", byok: str | None = None) -> tuple[str, str]:
+        contexto = editor.ContextoDeModelos(
+            provider, byok, None, None, 0, [],
+            business_model=editor.modelo_del_negocio(provider, byok, "deepseek-flash"),
+        )
+        return editor.modelo_efectivo({"model": {"primary": primario}}, contexto)
+
+    assert efectivo("deepseek-v4-pro") == ("deepseek-v4-pro", "agente")
+    assert efectivo("claude-haiku-4-5") == ("deepseek-flash", "negocio")  # otro proveedor
+    assert efectivo("deepseek-reasoner") == ("deepseek-flash", "negocio")  # retirado
+    assert efectivo("") == ("deepseek-flash", "negocio")
+    assert efectivo(None) == ("deepseek-flash", "negocio")
+    assert efectivo("deepseek-v4-pro", byok="deepseek-flash") == ("deepseek-flash", "negocio")  # BYOK manda (runtime)
+    assert efectivo("deepseek-flash", provider="anthropic") == ("claude-haiku-4-5", "negocio")
+
+
 def test_tabla_de_precios_sale_de_las_del_core() -> None:
     from core.llm.anthropic_provider import PRICING as ANTHROPIC
     from core.llm.openai_compatible import PRICING as COMPATIBLES

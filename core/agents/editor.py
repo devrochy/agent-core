@@ -36,7 +36,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import text
 
@@ -443,6 +443,8 @@ class ContextoDeModelos:
     avg_output_tokens: float | None
     sample_turns: int
     models: list[Modelo] = field(default_factory=list)
+    # El que usa un agente cuyo modelo ya no sirve (HU-AOS-79): ver `modelo_del_negocio`.
+    business_model: str = ""
 
 
 def _familia(model: str) -> str:
@@ -486,6 +488,34 @@ def problema_de_modelo(contenido: Mapping[str, Any], provider: str) -> Issue | N
                 "Tu negocio usa otro proveedor de IA: elige un modelo de ese proveedor.",
             )
     return None
+
+
+def modelo_del_negocio(provider: str, byok_model: str | None, env_model: str) -> str:
+    """El modelo por defecto del negocio (HU-AOS-79, D-75): el que fijó en «Cuenta y proveedor»;
+    si no fijó ninguno, el del despliegue cuando su proveedor lo sirve; si tampoco, el primer
+    modelo vigente de la tabla que ese proveedor sirve. Un modelo fuera de la tabla se respeta,
+    igual que en `problema_de_modelo`."""
+    if byok_model:
+        return byok_model
+    if problema_de_modelo({"model": {"primary": env_model}}, provider) is None:
+        return env_model
+    for familia, nombre, _i, _o, retirado in tabla_de_precios():
+        if sirve(provider, familia) and not retirado:
+            return nombre
+    return env_model
+
+
+def modelo_efectivo(contenido: Mapping[str, Any], contexto: ContextoDeModelos) -> tuple[str, Literal["negocio", "agente"]]:
+    """El modelo con el que atenderá el agente y de dónde sale. Misma prioridad que el runtime
+    (`_resolved_model`: BYOK del negocio > modelo del agente > despliegue), salvo que un modelo del
+    agente que el proveedor no sirve o ya se retiró cede al del negocio en vez de fallar."""
+    if contexto.byok_model:
+        return contexto.byok_model, "negocio"
+    modelo = contenido.get("model")
+    primario = modelo.get("primary") if isinstance(modelo, Mapping) else None
+    if isinstance(primario, str) and primario.strip() and problema_de_modelo(contenido, contexto.provider) is None:
+        return primario, "agente"
+    return contexto.business_model, "negocio"
 
 
 def estimado(entrada: float, salida: float, avg_in: float | None, avg_out: float | None) -> float | None:
@@ -539,7 +569,15 @@ async def contexto_de_modelos(tenant_id: uuid.UUID) -> ContextoDeModelos:
         )
         for familia, nombre, entrada, salida, retirado in tabla_de_precios()
     ]
-    return ContextoDeModelos(provider, byok, avg_in, avg_out, turnos, modelos)
+    return ContextoDeModelos(
+        provider,
+        byok,
+        avg_in,
+        avg_out,
+        turnos,
+        modelos,
+        business_model=modelo_del_negocio(provider, byok, get_settings().llm_model),
+    )
 
 
 # ------------------------------------------------------------------ conexiones destino
@@ -714,9 +752,13 @@ async def publicar_en_conexiones(
         contenido, {s.id: s for s in superpoderes(habilitados)}, procedimientos_del_enfoque(agente.key)
     )
     contexto = await contexto_de_modelos(tenant_id)
-    modelo = problema_de_modelo(contenido, contexto.provider)
-    if modelo is not None:
-        issues.append(modelo)
+    # HU-AOS-79: el dueño ya no elige el modelo. Uno retirado o de otro proveedor no bloquea:
+    # la versión se congela con el del negocio y queda anotado.
+    modelo_reemplazo: str | None = None
+    nota_de_modelo = ""
+    if problema_de_modelo(contenido, contexto.provider) is not None:
+        modelo_reemplazo = contexto.business_model
+        nota_de_modelo = f"Se usó el modelo de tu negocio: {modelo_reemplazo}."
     # HU-AOS-59: lo que el binario ya retiró, en palabras simples, ANTES de publicar la versión.
     issues += problemas_de_publicacion(contenido, binario_de(plugin_manager.list_modules()))
     disponibles = {
@@ -758,11 +800,12 @@ async def publicar_en_conexiones(
         agent_id,
         catalogo=catalogo,  # type: ignore[arg-type]
         actor=admin_id,
-        notes=notes,
+        notes="\n".join(n for n in (notes.strip(), nota_de_modelo) if n),
         label=label,
         lock_version=borrador.lock_version,
+        modelo=modelo_reemplazo,
     )
-    avisos: list[str] = []
+    avisos: list[str] = [nota_de_modelo] if nota_de_modelo else []
     if contexto.byok_model:
         avisos.append(
             f"Tu negocio fija el modelo {contexto.byok_model} en Configuración: ese manda sobre el del agente."
