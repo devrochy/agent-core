@@ -52,6 +52,7 @@ from core.api.routers import (
     notifications,
     onboarding,
     plan,
+    plantillas_negocio,
     plantillas_opciones,
     platform,
     platform_altas,
@@ -107,6 +108,7 @@ api_router.include_router(connection_agents.router)
 api_router.include_router(connection_releases.router)
 api_router.include_router(a2a.router)
 api_router.include_router(meta_ops.router)
+api_router.include_router(plantillas_negocio.router)
 api_router.include_router(meta_wizard.router)
 api_router.include_router(meta_messenger.router)
 api_router.include_router(meta_instagram.router)
