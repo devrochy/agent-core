@@ -160,11 +160,10 @@ def test_tarjeta_con_tarea_en_foco_y_otra_en_pausa() -> None:
     assert "  correo: FALTA · pedirlo" in lineas
     assert not any(linea.startswith("  direccion") for linea in lineas)  # requiredWhen no aplica
     assert "  Espera la confirmación explícita del cliente: dato plan" in lineas
-    assert "Acciones de esta etapa: informar_plan, registrar_correo" in lineas
+    acciones = r["acciones"].format(acciones="informar_plan, registrar_correo")
+    assert acciones in lineas
     assert 'En pausa: "pack_calendar.agendar_demo" v1.1.0 · etapa elegir_horario' in lineas
-    assert lineas.index('En pausa: "pack_calendar.agendar_demo" v1.1.0 · etapa elegir_horario') > lineas.index(
-        "Acciones de esta etapa: informar_plan, registrar_correo"
-    )
+    assert lineas.index('En pausa: "pack_calendar.agendar_demo" v1.1.0 · etapa elegir_horario') > lineas.index(acciones)
 
 
 def test_sin_tareas_abiertas_no_hay_tarjeta() -> None:

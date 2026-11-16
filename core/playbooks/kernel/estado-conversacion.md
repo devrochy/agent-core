@@ -37,7 +37,7 @@ dicho por el cliente
 ## origen_persona
 cargado por una persona del equipo
 ## acciones
-Acciones de esta etapa: {acciones}
+Acciones de esta etapa: {acciones}. No le ofrezcas enviarle por correo ni por otro medio una confirmación o un resumen de este recorrido: lo que deba llegarle aparte lo envía el sistema.
 ## mas_en_pausa
 Hay {cantidad} tareas más en pausa.
 ## sin_foco
@@ -63,9 +63,9 @@ la acción {nombre} con resultado correcto
 ## falta_accion_confirmable
 la acción {nombre} con resultado correcto: llámala tú cuando el cliente ya dio los datos; el sistema le muestra el resumen y le pide confirmar con su propio mensaje, así que no escribas tu propio resumen ni le preguntes si confirma, aunque otra instrucción diga lo contrario
 ## pide_ahora
-Faltan estos datos, en este orden: {datos}. Pídelos todos en un solo mensaje, como lista numerada con el nombre de cada dato en palabras simples, y cierra con «puedes enviármelos en un solo mensaje». Si el cliente ya dio una parte, pide solo los que faltan, en lista corta. Si acabas de explicar el plan, en el mismo mensaje pon primero lo esencial del plan en una lista corta. No pidas confirmaciones ni otros datos.
+Faltan estos datos, en este orden: {datos}. Si el cliente ya dijo alguno en la conversación, aunque sea con sus palabras (por ejemplo, el nombre de lo que quiere), guárdalo primero con actualizar_tarea en esta misma vuelta y no se lo vuelvas a pedir. Pide los que falten en un solo mensaje, como lista numerada con el nombre de cada dato en palabras simples (nunca su nombre interno ni un código), y cierra con «puedes enviármelos en un solo mensaje». Si acabas de explicar el plan, en el mismo mensaje pon primero lo esencial del plan en una lista corta. No pidas confirmaciones ni otros datos.
 ## dato_a_pedir
-{numero}. {dato} ({rotulo})
+{numero}. {rotulo} (se guarda como {dato})
 ## no_pidas_datos
 En esta etapa no le pidas datos al cliente.
 ## dato_falta_en_pausa
