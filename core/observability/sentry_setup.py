@@ -1,7 +1,7 @@
 """Sentry: integración OPCIONAL, mismo patrón que `tracing.py` (OTel) --
 sin `SENTRY_ENABLED`/`SENTRY_DSN`, `configure_sentry()` es no-op.
 
-`_before_send` redacta tokens de Meta (`EAA...`) como RED DE ÚLTIMA
+`_before_send` redacta tokens de Meta (`EAA...`) y de bots de Telegram como RED DE ÚLTIMA
 INSTANCIA -- el código de este repo ya no debería mandarle un token a
 Sentry por construcción (`graph_fetch` solo pone el token en el header
 Authorization, nunca en un valor que termine en un evento capturado), pero
@@ -17,6 +17,9 @@ from typing import Any
 from core.config import get_settings
 
 _META_TOKEN_RE = re.compile(r"EAA[A-Za-z0-9]{20,}")
+# Token de un bot de Telegram (`<bot_id>:<secreto>`, ADR-0199): va en la ruta de cada llamada a la Bot API, así que la
+# URL de un breadcrumb de httpx o el mensaje de una excepción lo pueden arrastrar.
+_TELEGRAM_TOKEN_RE = re.compile(r"\d+:[A-Za-z0-9_-]{30,}")
 # Claves que se tapan además de las de sentry-sdk (`token`, `secret`, `password`...), en el
 # cuerpo del request y en las variables de cada frame, también dentro de dicts anidados: el
 # PIN de verificación en dos pasos de un número viaja en el cuerpo de
@@ -38,12 +41,14 @@ _EXTRA_DENYLIST = [
     # Conector de WhatsApp Web (ADR-0188): el evento entrante y el trabajo de salida llevan el texto y
     # el teléfono del cliente; `qr` es el código de vinculación vigente.
     "event", "qr", "job", "text", "sender", "jid", "to", "raw",
+    # Canal Telegram (ADR-0199): el token del bot y el secreto del webhook.
+    "bot_token", "webhook_secret",
 ]
 _configured = False
 
 
 def _redact_meta_tokens(text: str) -> str:
-    return _META_TOKEN_RE.sub("[redacted]", text)
+    return _TELEGRAM_TOKEN_RE.sub("[redacted]", _META_TOKEN_RE.sub("[redacted]", text))
 
 
 def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:

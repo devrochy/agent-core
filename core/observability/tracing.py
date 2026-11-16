@@ -20,6 +20,7 @@ Autoinstrumentación (ADR-0188), solo con `OTEL_ENABLED`:
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -147,6 +148,11 @@ _ATRIBUTOS_URL = ("http.url", "url.full")
 _ATRIBUTOS_RUTA = ("http.target", "url.path")
 # Rutas cuyo último segmento es la autorización (token firmado de un archivo, HU de archivos).
 _RUTAS_CON_SECRETO = ("/api/v1/files/",)
+# La Bot API de Telegram lleva el token del bot EN la ruta (`/bot<token>/método` y `/file/bot<token>/<archivo>`,
+# ADR-0199). Solo se tapa en su host: un prefijo `/bot` genérico taparía rutas ajenas.
+_TELEGRAM_HOST = "api.telegram.org"
+_TELEGRAM_TOKEN_EN_RUTA = re.compile(r"^(/(?:file/)?bot)[^/]+")
+_ATRIBUTOS_HOST = ("server.address", "net.peer.name", "http.host")
 _httpx_instrumentado = False
 
 
@@ -171,18 +177,45 @@ def sin_secreto_en_ruta(texto: str) -> str:
     return texto
 
 
+def sin_token_de_telegram(url: str) -> str:
+    """Tapa el token del bot en una URL de `api.telegram.org`; las de otros hosts salen igual."""
+    try:
+        partes = urlsplit(url)
+    except ValueError:
+        return url
+    if partes.hostname != _TELEGRAM_HOST:
+        return url
+    return urlunsplit(partes._replace(path=_ruta_sin_token_de_telegram(partes.path)))
+
+
+def _ruta_sin_token_de_telegram(ruta: str) -> str:
+    return _TELEGRAM_TOKEN_EN_RUTA.sub(rf"\1{_QUERY_TAPADA}", ruta, count=1)
+
+
+def _es_de_telegram(atributos: Any) -> bool:
+    if any(atributos.get(clave) == _TELEGRAM_HOST for clave in _ATRIBUTOS_HOST):
+        return True
+    for clave in _ATRIBUTOS_URL:
+        valor = atributos.get(clave)
+        if isinstance(valor, str) and sin_token_de_telegram(valor) != valor:
+            return True
+    return False
+
+
 def _tapar_url(span: Any) -> None:
     if span is None or not span.is_recording():
         return
     atributos = getattr(span, "attributes", None) or {}
+    telegram = _es_de_telegram(atributos)
     for clave in _ATRIBUTOS_URL:
         valor = atributos.get(clave)
         if isinstance(valor, str):
-            span.set_attribute(clave, sin_secreto_en_ruta(sin_query(valor)))
+            span.set_attribute(clave, sin_token_de_telegram(sin_secreto_en_ruta(sin_query(valor))))
     for clave in _ATRIBUTOS_RUTA:
         valor = atributos.get(clave)
         if isinstance(valor, str):
-            span.set_attribute(clave, sin_secreto_en_ruta(valor.split("?", 1)[0]))
+            ruta = sin_secreto_en_ruta(valor.split("?", 1)[0])
+            span.set_attribute(clave, _ruta_sin_token_de_telegram(ruta) if telegram else ruta)
     if atributos.get("url.query"):
         span.set_attribute("url.query", _QUERY_TAPADA)
 

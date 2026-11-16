@@ -1,0 +1,17 @@
+# agentcore-channel-telegram
+
+Canal Telegram con bot propio por negocio (ADR-0199) para agent-core.
+
+Aporta lo propio de la Bot API, sin estado y sin base de datos:
+
+- `client.py`: cliente HTTP solo contra `api.telegram.org`. El token va en la ruta (`/bot<token>/método`), así que
+  nunca se registra ni sale en un error: `redactar()` y `mascara()` lo tapan.
+- `errors.py`: estado HTTP y `description` de la Bot API → categoría de `ProviderError` (la que lee `decide_retry`).
+  Un 403 «bot was blocked» es `RECIPIENT`, nunca `OPT_OUT`: el bloqueo es reversible.
+- `limites.py`: límites de la Bot API (texto, caption, `callback_data`, archivos, secreto del webhook) y el ritmo.
+
+Llegan en los PR siguientes: `adapters.py` (`InboundAdapter` y `OutboundAdapter`) en el PR core 3 y 4. Hasta entonces
+el entry point solo expone `PROVIDER` y el registry no registra adaptadores.
+
+El webhook, las tablas, el alta, la salud y el kill-switch (`TELEGRAM_HABILITADO`) viven en el core
+(`core/gateway/telegram/`).

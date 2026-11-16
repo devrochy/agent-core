@@ -107,7 +107,9 @@ def test_admite_distingue_botones_y_lista() -> None:
 
 
 def test_canales_con_solo_lista_canales_de_clientes() -> None:
-    assert canales_con("botones") == ["whatsapp"]  # el playground (`test`) tiene botones pero no es un canal de clientes
+    # El playground (`test`) tiene botones pero no es un canal de clientes. Telegram los tiene, pero está oculto para
+    # todos hasta el PR core 4 (ADR-0199): todavía no cuenta.
+    assert canales_con("botones") == ["whatsapp"]
     # Atado a `core/events/core_handlers.py` (`_whatsapp_conversation_for`, los avisos por evento solo buscan
     # conversaciones `whatsapp`) y al catálogo de mensajes: si otro canal gana plantilla aprobada, este test obliga
     # a revisar los avisos por evento (D2) antes de que el catálogo diga que salen por ahí.

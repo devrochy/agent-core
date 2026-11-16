@@ -149,6 +149,23 @@ _TWILIO_SCHEMA: dict[str, Any] = {
     "required": ["account_sid", "auth_token", "sender_e164"],
 }
 
+# El alta (`core.gateway.telegram`) arma las claves: el token que pega el negocio, el `bot_id` que devuelve `getMe` (no
+# es secreto; es la clave de ruteo y de «un bot, un negocio») y el secreto aleatorio del webhook.
+_TELEGRAM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "bot_id": {"type": "string", "title": "ID del bot", "pattern": "^[1-9][0-9]{0,19}$"},
+        "bot_token": {
+            "type": "string",
+            "title": "Token del bot",
+            "format": "password",
+            "writeOnly": True,
+        },
+        "webhook_secret": {"type": "string", "format": "password", "writeOnly": True},
+    },
+    "required": ["bot_token", "bot_id"],
+}
+
 
 CONNECTION_TYPES: tuple[ConnectionType, ...] = (
     ConnectionType(
@@ -227,6 +244,26 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         bandera_negocio="whatsapp_twilio",
         setup_kind=SETUP_WIZARD,
         sort_order=31,
+    ),
+    ConnectionType(
+        # Telegram con bot propio por negocio (ADR-0199, D-74). Lo arma el alta guiada (`core.gateway.telegram`): el
+        # negocio pega el token de @BotFather y `external_id` es el `bot_id` que devuelve `getMe` (no sale del token).
+        # Para todos los negocios, sin `bandera_negocio`; solo lo cierra su kill-switch de entorno (`core.gateway.telegram.habilitado`).
+        # Oculto (`available=False`, fuera del selector) hasta que entren y salgan mensajes (PR core 4).
+        id="telegram",
+        category=CATEGORY_COMMUNICATION,
+        channel="telegram",
+        label="Telegram",
+        provider="telegram",
+        icon="bi-telegram",
+        description="Bot propio de Telegram",
+        credentials_schema=_TELEGRAM_SCHEMA,
+        external_id_key="bot_id",
+        produces_conversations=True,
+        available=False,
+        setup_kind=SETUP_WIZARD,
+        sort_order=33,
+        en_selector=False,
     ),
     ConnectionType(
         id="whatsapp_plivo",
@@ -318,6 +355,7 @@ WHATSAPP_META = "whatsapp_meta"
 MESSENGER_META = "messenger_meta"
 INSTAGRAM_META = "instagram_meta"
 WHATSAPP_TWILIO = "whatsapp_twilio"
+TELEGRAM = "telegram"
 WEBCHAT = "webchat"
 PLAYGROUND = "playground"
 
@@ -374,6 +412,9 @@ CAPACIDADES_POR_TIPO: dict[str, CapacidadesCanal] = {
     "whatsapp_twilio": CapacidadesCanal(
         botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True
     ),
+    # Telegram (ADR-0199): botones y lista como teclado inline (una fila por opción; la lista no se degrada en el
+    # adaptador, adenda §9 del ADR-0186). Sin ventana ni plantillas: Telegram no las tiene.
+    "telegram": CapacidadesCanal(botones=True, lista=True),
     "whatsapp_plivo": SOLO_TEXTO,
     "instagram_meta": TEXTO_CON_MENU,
     "messenger_meta": TEXTO_CON_MENU,
@@ -436,6 +477,9 @@ def canales_con(capacidad: str) -> list[str]:
         if (
             t.channel
             and t.produces_conversations
+            # Un tipo oculto para todos (sin bandera por negocio, como Telegram hasta el PR core 4, ADR-0199) todavía
+            # no recibe conversaciones: el catálogo de mensajes no lo ofrece.
+            and (t.available or t.bandera_negocio)
             and getattr(CAPACIDADES_POR_TIPO[t.id], capacidad)
         ):
             if t.channel not in canales:
@@ -484,7 +528,13 @@ def types_by_category(include_unavailable: bool = True) -> list[dict[str, Any]]:
 
 def disponible_para(ctype: ConnectionType, tenant_settings: object) -> bool:
     """¿El tipo está disponible para este negocio? Los tipos con `bandera_negocio` lo están solo con su bandera
-    encendida en `tenants.settings` (ADR-0186 §12); los demás, según `available`."""
+    encendida en `tenants.settings` (ADR-0186 §12); los demás, según `available`. Telegram, además, solo con su
+    kill-switch encendido (ADR-0199): se mira ANTES de `available` para que encender el tipo no lo salte."""
+    if ctype.id == TELEGRAM:
+        from core.gateway.telegram.habilitado import habilitado
+
+        if not habilitado():
+            return False
     if ctype.available:
         return True
     if not ctype.bandera_negocio:
@@ -611,6 +661,7 @@ __all__ = [
     "PLAYGROUND",
     "SETUP_MANUAL",
     "SETUP_WIZARD",
+    "TELEGRAM",
     "WEBCHAT",
     "WHATSAPP_META",
     "WHATSAPP_TWILIO",

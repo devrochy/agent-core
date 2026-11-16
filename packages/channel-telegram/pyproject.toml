@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentcore-channel-telegram"
+version = "0.1.0"
+description = "Canal Telegram con bot propio por negocio para agent-core (ADR-0199)"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.entry-points."agent_core.channels"]
+telegram = "agentcore_channel_telegram"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agentcore_channel_telegram*"]

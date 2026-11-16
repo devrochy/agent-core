@@ -161,7 +161,7 @@ async def test_pausar_la_cuenta_de_meta_queda_auditado(app_client) -> None:
 
 async def test_desactivar_una_conexion_manual_queda_auditado(app_client) -> None:
     tid, _c, _p, _cid = await _con_agentes()
-    manual = await _conexion(tid, None, channel="telegram", provider="telegram")
+    manual = await _conexion(tid, None, channel="canal_inexistente", provider="canal_inexistente")
     h = await api_headers(app_client, tid)
     r = await app_client.post(f"/api/v1/admin/connections/{manual}/action", headers=h, json={"action": "deactivate"})
     assert r.status_code == 204, r.text

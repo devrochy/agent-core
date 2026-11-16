@@ -54,7 +54,7 @@ def test_solo_el_literal_true_abre_el_canal(settings, esperado):
 
 async def test_canal_desconocido():
     with pytest.raises(bandera.CanalDesconocido):
-        await bandera.leer(uuid.uuid4(), "telegram")
+        await bandera.leer(uuid.uuid4(), "canal_inexistente")
 
 
 def test_nadie_fuera_de_la_ruta_master_fija_la_bandera():

@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     twilio_sandbox_permitido: bool = Field(default=False, alias="TWILIO_SANDBOX_PERMITIDO")
     # Número compartido del sandbox (el `From` de cada mensaje). Configurable por si Twilio lo cambia.
     twilio_sandbox_e164: str = Field(default="+14155238886", alias="TWILIO_SANDBOX_E164")
+    # Kill-switch del canal Telegram (ADR-0199, D-74): encendido por defecto, para todos los negocios. Apagado cierra
+    # alta, webhook, salida y salud. Se lee únicamente en `core/gateway/telegram/habilitado.py`.
+    telegram_habilitado: bool = Field(default=True, alias="TELEGRAM_HABILITADO")
     # URL del panel nuevo: a donde vuelve el navegador tras el OAuth de Google.
     # En producción suele coincidir con el origen público; en dev apunta al :3200.
     panel_base_url: str = Field(default="", alias="PANEL_BASE_URL")
