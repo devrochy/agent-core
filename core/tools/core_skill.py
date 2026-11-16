@@ -233,7 +233,7 @@ class CoreSkill(BaseSkill):
     async def _pedir_telefono(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         """Envía al cliente de esta conversación un botón para compartir su teléfono (HU-CONN-26, ADR-0199 §10). El
         texto y la etiqueta los pone el agente. No envía nada en un canal sin la capacidad `pedir_contacto` (el agente
-        lo pide por texto en su respuesta) ni si el cliente ya tiene teléfono (el consumer no pisa uno distinto). El
+        decide su playbook si lo pide de otra forma) ni si el cliente ya tiene teléfono (el consumer no pisa uno distinto). El
         número que comparta lo guarda el consumer en `contact_phone`; esta tool nunca lo lee ni lo devuelve."""
         from sqlalchemy.exc import IntegrityError
 
@@ -247,7 +247,7 @@ class CoreSkill(BaseSkill):
         if not capacidades_del_canal(ctx.channel).pedir_contacto:
             return {
                 "error": "canal_sin_pedir_contacto",
-                "mensaje": "Este canal no permite pedir el teléfono con un botón; si lo necesitas, pídelo por texto.",
+                "mensaje": "Este canal no permite pedir el teléfono con un botón.",
             }
         async with get_session() as session:
             # El cliente sale de la conversación del turno, a la que va el botón.
@@ -276,7 +276,7 @@ class CoreSkill(BaseSkill):
                 raise
             return {"status": "ya_enviado"}
         if not enviado:
-            return {"error": "no_enviado", "mensaje": "No se pudo enviar el botón; si lo necesitas, pídelo por texto."}
+            return {"error": "no_enviado", "mensaje": "No se pudo enviar el botón para pedir el teléfono."}
         return {"status": "enviado"}
 
     # ------------------------------------------------------------ definición
@@ -470,7 +470,7 @@ class CoreSkill(BaseSkill):
                 description=(
                     "Envía al cliente un botón para que comparta su teléfono con un toque (hoy solo en Telegram). "
                     "Úsala cuando necesites su número y no lo tengas. El texto ya hace el pedido: no lo repitas en tu "
-                    "respuesta. NO la uses si el canal no lo permite: pídelo por texto."
+                    "respuesta. En otros canales no envía nada."
                 ),
                 parameters={
                     "type": "object",
