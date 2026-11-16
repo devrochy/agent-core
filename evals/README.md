@@ -43,7 +43,7 @@ grabaciones se puede cambiar con `--grabaciones DIR` o `LLM_CASSETTE_DIR`.
 
 ```bash
 # Reproducir el gate del CI, sin clave
-python evals/runner.py "06,07,08,21,22,23,24,25,26" --grabacion replay
+python evals/runner.py "06,07,08,21,22,23,24,25,26,37,38" --grabacion replay
 python evals/journeys.py "01,05" --grabacion replay
 
 # Regrabar UN escenario o journey (LLM real: pedir OK al dueño antes)

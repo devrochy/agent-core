@@ -18,7 +18,7 @@ if [ "$modo" = "replay" ]; then
   export LLM_API_KEY=""  # replay nunca usa la clave: si algo la pidiera, falla
 fi
 
-GOLDEN="06,07,08,21,22,23,24,25,26"
+GOLDEN="06,07,08,21,22,23,24,25,26,37,38"
 JOURNEYS="01,05"
 
 if [ "$modo" = "record" ]; then

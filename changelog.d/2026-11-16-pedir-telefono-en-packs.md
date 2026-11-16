@@ -16,5 +16,5 @@
 - **Evals:**
   - El golden admite `spec` (otro spec de `evals/specs/`) y `connection_types` por escenario.
   - Escenarios nuevos: `37-cobranza-pide-telefono-telegram` (`must_call_tool: pedir_telefono`) y `38-cobranza-sin-boton-no-pide-numero`.
-  - Sin grabación todavía y fuera del gate hasta el OK del dueño. El gate en replay no cambia.
+  - Grabados con el LLM real (OK del dueño) y sumados al gate en replay (`scripts/gate_evals.sh`). El gate con LLM real de la release no cambia.
 - Las reglas de citas y suscripciones van en la etapa del procedimiento y no en `citas.md` ni en `planes.md`, para no cambiar el prompt de los journeys grabados.
