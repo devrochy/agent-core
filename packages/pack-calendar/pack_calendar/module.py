@@ -76,6 +76,14 @@ _AGENDA = (
 )
 # Los dos en la misma oración (acotado: sin backtracking largo).
 _MISMA_ORACION = r"[^.!?\n]{0,120}?"
+# Lo que se cancela en otros módulos (suscripciones, pedidos, cobros): «tu suscripción quedó
+# cancelada» no habla de una cita y no exige `cancel_calendar_event` (D-76, 2026-11-16).
+_NO_ES_CITA = (
+    r"\b(?:suscripci[oó]n|suscripciones|plan|planes|membres[ií]a|pedido|pedidos|orden|[oó]rdenes|"
+    r"compra|compras|pago|pagos|cobro|cobros|factura|facturas|promesa|promesas|renovaci[oó]n)\b"
+)
+# El resto de la oración antes del verbo, sin pasar por un sujeto de otro módulo.
+_ANTES_SIN_OTRO_SUJETO = rf"(?:^|(?<=[.!?\n]))(?:(?!{_NO_ES_CITA})[^.!?\n]){{0,160}}?"
 
 
 # Un paso futuro o condicionado no es una afirmación: "cuando confirmes el resumen, la cita queda
@@ -164,14 +172,15 @@ _CLAIMS: dict[str, _Claim] = {
     "cancelada": _Claim(
         tools=frozenset({"cancel_calendar_event"}),
         affirm=re.compile(
-            rf"\b{_QUEDO}\s+(?:cancelad|anulad)\w*|\b(?:fue|fueron)\s+cancelad\w*|"
+            rf"{_ANTES_SIN_OTRO_SUJETO}\b{_QUEDO}\s+(?:cancelad|anulad)\w*|"
+            rf"{_ANTES_SIN_OTRO_SUJETO}\b(?:fue|fueron)\s+cancelad\w*|"
             r"\bcancel(?:é|ó|amos)\s+(?:la\s+|tu\s+|esa\s+)?(?:cita|demo)",
-            re.IGNORECASE,
+            re.IGNORECASE | re.MULTILINE,
         ),
         deny=re.compile(
             r"no\s+pud\w*\s+(?:cancel\w*(?:la|lo)\b|cancelar\s+(?:la|tu|esa)\s+(?:cita|demo))|"
             r"no\s+(?:la\s+)?(?:encontr|hall|figur|aparec)\w+.{0,60}cancel\w*|"
-            rf"no\s+{_QUEDO}\s+cancelad\w*",
+            rf"{_ANTES_SIN_OTRO_SUJETO}no\s+{_QUEDO}\s+cancelad\w*",
             re.IGNORECASE,
         ),
     ),

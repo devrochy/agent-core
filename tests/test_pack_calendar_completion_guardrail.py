@@ -227,3 +227,39 @@ async def test_no_aparece_cita_sin_listar_bloquea():
         "Mmm, revisé tu agenda y no me aparece ninguna cita registrada.", []
     )
     assert not verdict.passed
+
+
+# D-76 (2026-11-16): una cancelación de otro módulo no es una cita cancelada.
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Listo, tu suscripción quedó cancelada. Ya no se te cobrará el próximo mes.",
+        "Tu pedido #123 fue cancelado y el reembolso sale en 3 días.",
+        "Tu plan Básico quedó cancelado desde hoy.",
+        "La promesa de pago quedó anulada.",
+        "Perfecto. Tu suscripción no quedó cancelada todavía: falta tu confirmación.",
+    ],
+)
+async def test_cancelacion_de_otro_modulo_no_exige_cancel_calendar_event(texto):
+    module = GoogleCalendarModule()
+    verdict = await module._completion_guardrail(texto, [])
+    assert verdict.passed, verdict.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Tu cita quedó cancelada. ✅",
+        "Listo, la demo del jueves fue cancelada.",
+        "Ya quedó cancelada.",
+        "Cancelé tu demo del martes.",
+        "Tu suscripción sigue activa. Tu cita quedó cancelada.",
+    ],
+)
+async def test_cancelacion_de_cita_sigue_exigiendo_cancel_calendar_event(texto):
+    module = GoogleCalendarModule()
+    verdict = await module._completion_guardrail(texto, [])
+    assert not verdict.passed
+    assert "cancelada" in verdict.reason
