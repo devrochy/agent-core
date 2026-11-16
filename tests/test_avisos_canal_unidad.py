@@ -57,7 +57,8 @@ def test_las_claves_validas_son_tipos_sin_plantillas() -> None:
     """Un texto por canal solo tiene sentido donde NO hay plantilla aprobada: la tabla de C1 lo garantiza."""
     for tipo in ac.TIPOS_DE_TEXTO:
         canal, proveedor = {"whatsapp_waweb": ("whatsapp", "waweb"), "webchat": ("web", ""),
-                            "messenger_meta": ("messenger", ""), "instagram_meta": ("instagram", "")}[tipo]
+                            "messenger_meta": ("messenger", ""), "instagram_meta": ("instagram", ""),
+                            "telegram": ("telegram", "")}[tipo]
         assert tipo_de_conexion(canal, proveedor) == tipo
         assert capacidades_de(canal, proveedor).plantilla_aprobada is False
 

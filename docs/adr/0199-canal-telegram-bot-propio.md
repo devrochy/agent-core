@@ -124,7 +124,7 @@ Dos hechos de la Bot API (https://core.telegram.org/bots/api, v10.4, leída el 2
   - `TELEGRAM_HABILITADO` y `core/gateway/telegram/habilitado.py`;
   - redacción en `tracing.py` y `sentry_setup.py`.
 - **PR core 2:** `core/gateway/telegram/alta.py` y `operacion.py`, `core/api/routers/telegram_connections.py`, el cron de salud `core.telegram_health_check` con la migración 0138 (`admin_telegram_connection_ids()`, SECURITY DEFINER como `admin_twilio_connection_ids`), y `docs/openapi.json`. El mensaje de prueba va a un `chat_id` que ya le escribió al bot: Telegram no deja que un bot inicie la conversación.
-- **PR core 3:** webhook, `InboundAdapter`, ids globales, consumer y `avisos_canal`.
+- **PR core 3:** `core/gateway/telegram/webhook.py` (montado en `core/main.py`), `agentcore_channel_telegram.adapters.TelegramInbound`, ids globales, auditoría `telegram:<bot_id>`, `answerCallbackQuery` del toque, consumer fail-closed sin conexión y `avisos_canal` (`telegram` en `TIPOS_DE_TEXTO`, sin ventana). Los medios entran como `file_id`; la ingesta los descarga en el PR core 5.
 - **PR core 4:** `OutboundAdapter`, `sender.py`, `outbound_send.py`, `callback_query`, ritmo y voz saliente. Enciende `available` y `en_selector`.
 - **PR core 5:** `media/ingesta.py`, `request_contact` y `shared_phone`.
 - **Panel y APK:** HU-CONN-27 y HU-CONN-28.
