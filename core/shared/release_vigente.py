@@ -144,7 +144,7 @@ class Inicio:
 class _Ranura:
     valor: ArtefactosDeRelease | None = None
     # Negocio v3 cuyo turno no encontró release activa (HU-AOS-15): sin agente en foco, pero
-    # `write_namespaces_del_turno` niega toda escritura de memoria en vez de no chequear.
+    # `exige_concesion` y `write_namespaces_del_turno` niegan toda escritura en vez de no chequear.
     v3_sin_release: uuid.UUID | None = None
     # HU-AOS-17: procedimiento que una regla `start` del router pide iniciar en este turno
     # (lo consume el motor activo al empezar el turno, con sus guardas). Negocio + id.
@@ -260,16 +260,13 @@ def kernel_del_turno() -> AgenteCongelado | None:
 
 def write_namespaces_del_turno() -> frozenset[str] | None:
     """`memory.writeNamespaces` del agente en foco (ADR-0114 §3). None = runtime legacy:
-    `ToolContext.write_namespaces` queda None y no se chequea nada. Un negocio v3 sin release
-    activa (`marcar_v3_sin_release`) recibe `frozenset()`: ninguna escritura (fail-closed)."""
+    `ToolContext.write_namespaces` queda None y no se chequea nada. Todo turno que `exige_concesion`
+    sin agente en foco del negocio actual (v3 sin release, release sin foco o ranura de otro negocio)
+    recibe `frozenset()`: ninguna escritura (fail-closed)."""
     agente = agente_del_turno()
     if agente is not None:
         return agente.write_namespaces
-    ranura = _ranura.get()
-    actual = get_current_tenant_id()
-    if ranura is not None and actual is not None and ranura.v3_sin_release == actual:
-        return frozenset()
-    return None
+    return frozenset() if exige_concesion() else None
 
 
 def procedimientos_del_agente() -> Mapping[str, Any] | None:
