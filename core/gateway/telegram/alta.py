@@ -257,8 +257,16 @@ async def conectar(
 
     if actual and not es_nuestra(actual):
         log.info("telegram.alta.webhook_ajeno", tenant_id=str(tenant_id), bot_id=bot_id)
+    # Los updates que Telegram tiene pendientes (hasta 24 h) son de quien tenía el webhook. Si no era ESTA conexión
+    # (otro negocio, otra integración, una conexión borrada), se descartan: no pueden llegarle a este negocio.
     estado = await registrar_webhook(
-        client, tenant_id, connection_id, url_webhook(public_id), secreto, bot_id=bot_id
+        client,
+        tenant_id,
+        connection_id,
+        url_webhook(public_id),
+        secreto,
+        bot_id=bot_id,
+        descartar_pendientes=actual != url_webhook(public_id),
     )
     resultado = await obtener(tenant_id, connection_id)
     assert resultado is not None
@@ -295,6 +303,7 @@ async def registrar_webhook(
     secreto: str,
     *,
     bot_id: str,
+    descartar_pendientes: bool = False,
 ) -> str:
     """`setWebhook` con el secreto y `getWebhookInfo` para confirmarlo. Guarda y devuelve el estado: `connected`
     solo si Telegram quedó apuntando a `url`; `revoked` si el token dejó de valer; si no, `error`.
@@ -311,7 +320,7 @@ async def registrar_webhook(
             return ""
         mensaje: str | None = None
         try:
-            await client.set_webhook(url, secreto)
+            await client.set_webhook(url, secreto, drop_pending_updates=descartar_pendientes)
             info = await client.get_webhook_info()
             estado = "connected" if str((info or {}).get("url") or "") == url else "error"
             if estado == "error":
