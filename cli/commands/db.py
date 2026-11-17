@@ -125,6 +125,57 @@ def backfill_conexiones(
         )
 
 
+@app.command("copiar-leads")
+def copiar_leads(
+    dry_run: bool = typer.Option(False, "--dry-run", help="No escribe: reporta lo que copiaría y los leads ocultos."),
+    tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
+    lote: int = typer.Option(500, "--lote", min=1, help="Filas por transacción."),
+) -> None:
+    """Leads en el core (ADR-0193, HU-AOS-70): copia los leads de commerce, su historia de etapa, sus seguimientos y
+    la config de intake a las tablas del core, sin borrar los originales. Idempotente; correr primero con
+    `--dry-run` y revisar los leads que quedarían ocultos (otro lead del mismo cliente es más reciente)."""
+    import asyncio
+
+    from rich.table import Table
+
+    from cli.tenant_ref import resolve_tenant
+    from core.leads.copia import ReporteCopia
+    from core.leads.copia import copiar_leads as correr
+
+    async def _run() -> ReporteCopia:
+        tenant_id = await resolve_tenant(tenant) if tenant else None
+        return await correr(dry_run=dry_run, tenant_id=tenant_id, lote=lote)
+
+    reporte = asyncio.run(_run())
+    if reporte.sin_tablas_de_commerce:
+        console.print("No hay tablas de leads de commerce en esta base: nada que copiar.")
+        return
+    tabla = Table(title="Copia de leads al core" + (" (dry-run: no se escribió nada)" if dry_run else ""))
+    tabla.add_column("Concepto")
+    tabla.add_column("Cantidad", justify="right")
+    for concepto, cantidad in (
+        ("Negocios", reporte.negocios),
+        ("Leads", reporte.leads),
+        ("Cambios de etapa", reporte.cambios),
+        ("Seguimientos cerrados", reporte.seguimientos),
+        ("Configuraciones de Captar leads", reporte.configs),
+        ("Leads que quedan ocultos (revisar)", len(reporte.ocultos)),
+        ("Leads copiados que cambiaron después en commerce", reporte.desactualizados),
+        ("Configuraciones ilegibles (no copiadas)", len(reporte.configs_ilegibles)),
+    ):
+        tabla.add_row(concepto, str(cantidad))
+    console.print(tabla)
+    for oculto in reporte.ocultos:
+        console.print(
+            f"[yellow]Oculto:[/yellow] negocio {oculto.tenant_id}, lead {oculto.lead_id} del cliente "
+            f"{oculto.customer_id} (etapa {oculto.etapa}"
+            + (", con seguimiento vigente" if oculto.seguimiento_vigente else "")
+            + "): otro lead del mismo cliente queda vivo."
+        )
+    for negocio in reporte.configs_ilegibles:
+        console.print(f"[red]Config ilegible:[/red] negocio {negocio}: no se copió (clave rotada o esquema roto).")
+
+
 @app.command("sync-packs")
 def sync_packs(
     database_url: str | None = typer.Option(

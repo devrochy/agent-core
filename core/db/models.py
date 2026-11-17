@@ -3183,3 +3183,127 @@ class MensajeGuardado(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class Lead(Base):
+    """El enriquecimiento de embudo de un `Customer` (ADR-0022): etapa, puntaje, interés, seguimiento, motivo de
+    pérdida, valor y origen. Vive en el core desde ADR-0193 (migración 0144); ningún pack lo importa: lo leen y
+    escriben por `core.leads`. Un lead vivo por cliente (único parcial). `status` es texto libre a propósito: los
+    leads anteriores a HU-CRM-18 traen etapas viejas. Borrado lógico (invariante 8)."""
+
+    __tablename__ = "leads"
+    __table_args__ = (
+        Index(
+            "uq_leads_tenant_idem",
+            "tenant_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key is not null and deleted_at is null"),
+        ),
+        Index(
+            "uq_leads_tenant_cliente",
+            "tenant_id",
+            "customer_id",
+            unique=True,
+            postgresql_where=text("customer_id is not null and deleted_at is null"),
+        ),
+        Index("ix_leads_etapa", "tenant_id", "status", "last_activity_at", postgresql_where=text("deleted_at is null")),
+        Index(
+            "ix_leads_seguimiento",
+            "tenant_id",
+            "next_action_at",
+            postgresql_where=text("next_action_at is not null and deleted_at is null"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))  # FK lógica a customers
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    name: Mapped[str | None] = mapped_column(Text)
+    phone: Mapped[str | None] = mapped_column(Text)
+    email: Mapped[str | None] = mapped_column(Text)
+    interest: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="nuevo")
+    # Catálogo cerrado (CHECK en 0144); sale del canal. NULL = lead anterior a ADR-0193 (copiado de commerce).
+    origen: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
+    custom: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    stage_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_action_note: Mapped[str | None] = mapped_column(Text)
+    loss_reason: Mapped[str | None] = mapped_column(Text)
+    loss_note: Mapped[str | None] = mapped_column(Text)
+    estimated_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LeadStageChange(Base):
+    """Un cambio de etapa de un lead con su actor (HU-CRM-18) y, si se perdió, el motivo (HU-CRM-23). `customer_id`
+    va copiado del lead porque la línea de tiempo de la ficha consulta por cliente (0144)."""
+
+    __tablename__ = "lead_stage_changes"
+    __table_args__ = (
+        Index(
+            "uq_lead_stage_changes_tenant_idem",
+            "tenant_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key is not null and deleted_at is null"),
+        ),
+        Index("ix_lead_stage_changes_cliente", "tenant_id", "customer_id", "changed_at", "id"),
+        Index("ix_lead_stage_changes_lead", "tenant_id", "lead_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica a leads
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    from_stage: Mapped[str] = mapped_column(Text, nullable=False)
+    to_stage: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)  # agente | persona | sistema
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    loss_reason: Mapped[str | None] = mapped_column(Text)
+    loss_note: Mapped[str | None] = mapped_column(Text)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LeadFollowup(Base):
+    """Un seguimiento del lead que dejó de estar vigente: hecho, reprogramado o cancelado (HU-CRM-21). El vigente vive
+    en `Lead.next_action_at/_note` (0144)."""
+
+    __tablename__ = "lead_followups"
+    __table_args__ = (
+        Index("ix_lead_followups_cliente", "tenant_id", "customer_id", "closed_at", "id"),
+        Index("ix_lead_followups_lead", "tenant_id", "lead_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # FK lógica a leads
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    note: Mapped[str | None] = mapped_column(Text)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)  # hecho | reprogramado | cancelado
+    actor: Mapped[str] = mapped_column(Text, nullable=False, default="persona")  # persona | sistema
+    closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LeadSettings(Base):
+    """Configuración de Captar leads del negocio (ADR-0193 §6, 0144): intake público y seguimiento. Cifrada entera
+    con la caja de secretos (lleva el secreto del intake y la llave de Turnstile); el esquema vive en
+    `core.leads.config`. Sin fila, Captar leads no está configurado y sus crons no hacen nada."""
+
+    __tablename__ = "lead_settings"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    config_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
