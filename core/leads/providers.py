@@ -7,7 +7,7 @@ cliente, sus filtros, sus sumas y su historia (cambios de etapa y seguimientos c
 `PROVIDER_ID` ya no es un pack: `providers_for` lo incluye siempre (`lead_registry.SIEMPRE`). El panel y la APK
 instalados editan por `PATCH /admin/leads/{id}/pack/pack_commerce`: el router lo atiende como alias de este provider.
 
-Importar este módulo registra el provider (lo hace `core.leads.registro`).
+Importar este módulo registra el provider (lo hace `core.tools.core_skill.register_core_skills`).
 """
 
 from __future__ import annotations

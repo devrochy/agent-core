@@ -28,6 +28,7 @@ from core.admin.lead_registry import (
 )
 from core.db.models import Customer
 from core.db.session import get_session
+from core.leads import servicio as leads_core
 from core.shared.tenant import get_current_tenant_id
 from pack_commerce import ficha as _ficha
 from pack_commerce.models import Order, Quote
@@ -189,8 +190,9 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
 
 
 async def _con_datos(ids: list[uuid.UUID] | None) -> Select[Any]:
-    """Clientes con pedido o cotización. No usa `_resolver`: ahí todo cliente trae «Nuevo» y 0 pedidos, que no son
-    datos. El lead con contenido lo cuenta el provider de leads del core (ADR-0193)."""
+    """Clientes con pedido, cotización o un lead con contenido. No usa `_resolver`: ahí todo cliente trae «Nuevo» y 0
+    pedidos, que no son datos. El lead es del core (ADR-0193): se suma por su servicio, sin el modelo, para que el
+    cliente que solo dejó sus datos siga siendo de Ventas (filtro `?agente=ventas`, botón de plantilla de la APK)."""
     tid = get_current_tenant_id()
     fuentes = []
     for modelo in (Order, Quote):
@@ -200,6 +202,7 @@ async def _con_datos(ids: list[uuid.UUID] | None) -> Select[Any]:
         if ids is not None:
             q = q.where(modelo.customer_id.in_(ids))
         fuentes.append(q)
+    fuentes.append(leads_core.clientes_con_datos(tid, ids))
     return select(union(*fuentes).subquery().c.customer_id)
 
 

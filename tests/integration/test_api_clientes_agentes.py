@@ -355,16 +355,15 @@ async def test_el_lead_vacio_no_cuenta_como_dato_del_cliente(app_client) -> None
 
     lista = (await app_client.get(URL, headers=headers)).json()
     por_id = {i["id"]: i["agentes"] for i in lista["items"]}
-    # El lead que nace vacío con la conversación no es un dato; el que ya trae contacto o interés, sí. Desde
-    # ADR-0193 el lead lo aporta el provider `leads` del core, no Ventas.
+    # El lead que nace vacío con la conversación no es un dato; el que ya trae contacto o interés, sí. Desde ADR-0193
+    # el lead lo aporta el provider `leads` del core, y Ventas lo sigue contando (por el servicio de leads) para que
+    # `?agente=ventas` y el botón de plantilla de la APK instalada no pierdan al cliente que solo dejó sus datos.
     assert por_id[str(vacio)] == ["general"]
     assert por_id[str(en_blanco)] == ["general"]
-    assert por_id[str(con_correo)] == ["general", "leads"]
-    assert por_id[str(con_interes)] == ["general", "leads"]
+    assert set(por_id[str(con_correo)]) == {"general", "ventas", "leads"}
+    assert set(por_id[str(con_interes)]) == {"general", "ventas", "leads"}
 
-    leads = (await app_client.get(URL, headers=headers, params={"agente": "leads"})).json()
-    assert {i["id"] for i in leads["items"]} == {str(con_correo), str(con_interes)}
-    assert str(ajeno) not in {i["id"] for i in leads["items"]}
-    # Un lead solo no hace al cliente «de Ventas»: eso lo deciden los pedidos y las cotizaciones.
-    ventas = (await app_client.get(URL, headers=headers, params={"agente": "ventas"})).json()
-    assert not {str(vacio), str(en_blanco), str(con_correo), str(con_interes)} & {i["id"] for i in ventas["items"]}
+    for agente in ("leads", "ventas"):
+        lista_agente = (await app_client.get(URL, headers=headers, params={"agente": agente})).json()
+        assert {i["id"] for i in lista_agente["items"]} == {str(con_correo), str(con_interes)}, agente
+        assert str(ajeno) not in {i["id"] for i in lista_agente["items"]}

@@ -289,3 +289,21 @@ async def marcar_seguimiento_hecho(
     zona = await seguimiento.zona_del_negocio(session, tenant_id)
     siguiente = seguimiento.parsear_fecha(siguiente_en, zona) if siguiente_en else None
     seguimiento.completar(session, lead, siguiente_fecha=siguiente, siguiente_nota=siguiente_nota)
+
+
+def clientes_con_datos(tenant_id: uuid.UUID, ids: list[uuid.UUID] | None = None) -> Any:
+    """`SELECT customer_id` de los clientes cuyo lead vivo tiene contenido (nombre, teléfono, correo o interés). Para
+    que un pack sume a sus «clientes con datos» los que solo tienen lead sin importar el modelo (ADR-0193 §4): así
+    `?agente=ventas` y el botón de plantilla de la APK instalada siguen viendo al cliente que solo dejó sus datos."""
+    def _con_texto(columna: Any) -> Any:
+        return func.length(func.trim(func.coalesce(columna, ""))) > 0
+
+    q = select(Lead.customer_id.label("customer_id")).where(
+        Lead.tenant_id == tenant_id,
+        Lead.customer_id.is_not(None),
+        Lead.deleted_at.is_(None),
+        _con_texto(Lead.name) | _con_texto(Lead.phone) | _con_texto(Lead.email) | _con_texto(Lead.interest),
+    )
+    if ids is not None:
+        q = q.where(Lead.customer_id.in_(ids))
+    return q
