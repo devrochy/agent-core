@@ -149,6 +149,10 @@ class _Ranura:
     # HU-AOS-17: procedimiento que una regla `start` del router pide iniciar en este turno
     # (lo consume el motor activo al empezar el turno, con sus guardas). Negocio + id.
     inicio_de_regla: Inicio | None = None
+    # HU-ARCH-38: agentes del negocio en pausa en este turno (`agents.paused_at`, estado vivo). A2A no les
+    # pasa la conversación ni les consulta.
+    pausados: frozenset[uuid.UUID] = frozenset()
+    pausados_de: uuid.UUID | None = None  # negocio al que pertenecen
 
 
 _ranura: ContextVar[_Ranura | None] = ContextVar("release_vigente", default=None)
@@ -166,6 +170,8 @@ def cerrar(token: Token[_Ranura | None]) -> None:
         ranura.valor = None
         ranura.v3_sin_release = None
         ranura.inicio_de_regla = None
+        ranura.pausados = frozenset()
+        ranura.pausados_de = None
     _ranura.reset(token)
 
 
@@ -176,6 +182,22 @@ def fijar(valor: ArtefactosDeRelease) -> bool:
         return False
     ranura.valor = valor
     return True
+
+
+def fijar_pausados(tenant_id: uuid.UUID, agent_ids: frozenset[uuid.UUID]) -> None:
+    """Los agentes en pausa del negocio del turno (HU-ARCH-38). No hace nada fuera de un turno."""
+    ranura = _ranura.get()
+    if ranura is not None:
+        ranura.pausados = frozenset(agent_ids)
+        ranura.pausados_de = tenant_id
+
+
+def pausados_del_turno() -> frozenset[uuid.UUID]:
+    """`agent_id` de los agentes en pausa del turno, del negocio del `tenant_scope` (vacío si no coincide)."""
+    ranura = _ranura.get()
+    if ranura is None or ranura.pausados_de is None or ranura.pausados_de != get_current_tenant_id():
+        return frozenset()
+    return ranura.pausados
 
 
 def marcar_v3_sin_release(tenant_id: uuid.UUID) -> None:
@@ -343,12 +365,14 @@ __all__ = [
     "efimera",
     "fijar",
     "fijar_inicio",
+    "fijar_pausados",
     "idle_minutes",
     "kernel_del_turno",
     "marcar_v3_sin_release",
     "max_questions",
     "max_stack",
     "nombre_de_agente",
+    "pausados_del_turno",
     "procedimientos_del_agente",
     "sin_release",
     "tomar_inicio",
