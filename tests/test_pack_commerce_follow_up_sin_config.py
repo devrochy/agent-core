@@ -65,7 +65,7 @@ async def test_salta_el_negocio_sin_config_y_sigue_con_los_demas(
         return 3, 2
 
     async def debe_correr(tenant_id: uuid.UUID, cron_name: str) -> bool:
-        # ADR-0200: la política por negocio se prueba aparte; aquí solo importa el recorrido.
+        # ADR-0201: la política por negocio se prueba aparte; aquí solo importa el recorrido.
         return True
 
     async def registrar(*args, **kwargs) -> None:

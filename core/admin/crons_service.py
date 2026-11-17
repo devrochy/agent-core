@@ -159,7 +159,7 @@ async def mantenimiento(ahora: datetime | None = None) -> dict[str, int]:
         borradas = await session.execute(
             delete(CronRun).where(CronRun.started_at < ahora - timedelta(days=RETENCION_DIAS))
         )
-    # ADR-0200: el historial por negocio se purga con su propia función (RLS).
+    # ADR-0201: el historial por negocio se purga con su propia función (RLS).
     from core.admin import crons_negocio_service
 
     borradas_negocio = await crons_negocio_service.mantenimiento()
@@ -206,7 +206,7 @@ class CronView:
     failures_24h: int
     acciones: list[str]
     updated_at: datetime | None = None
-    # `plataforma` (solo master) o `negocio` (también en Configuración › Automatizaciones, ADR-0200).
+    # `plataforma` (solo master) o `negocio` (también en Configuración › Automatizaciones, ADR-0201).
     ambito: str = "plataforma"
 
 

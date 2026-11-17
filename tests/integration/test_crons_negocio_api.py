@@ -1,4 +1,4 @@
-"""Crons por negocio (ADR-0200) contra Postgres real.
+"""Crons por negocio (ADR-0201) contra Postgres real.
 
 `/api/v1/admin/automatizaciones`: lista los crons de ámbito `negocio`, enciende/apaga, guarda
 hora y ventana, y rechaza lo que el catálogo no admite. La política se prueba también por el

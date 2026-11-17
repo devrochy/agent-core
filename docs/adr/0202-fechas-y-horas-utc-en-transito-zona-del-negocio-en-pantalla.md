@@ -1,9 +1,9 @@
-# ADR-0201 — Fechas y horas: UTC en tránsito, zona del negocio en pantalla
+# ADR-0202 — Fechas y horas: UTC en tránsito, zona del negocio en pantalla
 
 - **Estado:** aceptado (plan aprobado por el dueño el 2026-11-16).
 - **Fecha:** 2026-11-16
 - **Usa:** ADR-0091 (zona horaria del negocio), ADR-0183 (historial de crons).
-- **Relacionado:** ADR-0200 (crons por negocio).
+- **Relacionado:** ADR-0201 (crons por negocio).
 
 ## Contexto
 

@@ -9,6 +9,7 @@ import pytest
 from core.agents.playbooks import load_core_playbook
 from core.llm.prompt_builder import PromptContext, bloque_dinamico
 from core.memory import notas
+from core.memory.entity import profile_to_prompt
 
 
 def test_el_playbook_del_kernel_tiene_todos_los_rotulos() -> None:
@@ -43,7 +44,7 @@ def test_el_bloque_va_antes_de_la_tarjeta_y_la_fecha() -> None:
     ctx = PromptContext(
         assistant_name="A",
         business_description="B",
-        entity_profile="- ciudad: Medellín",
+        entity_profile=profile_to_prompt({"ciudad": "Medellín"}),
         team_notes="## Notas del equipo sobre este cliente\n- 2026-10-21: \"x\"",
         state_card="## Estado",
         now=datetime(2026, 10, 21, 15, tzinfo=UTC),

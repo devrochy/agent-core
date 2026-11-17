@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select, text
 
 from core.db.session import get_owned, get_session
+from core.gateway import pausa_automatica
 from core.shared.exceptions import PluginConfigError
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
@@ -88,6 +89,10 @@ async def follow_up_leads() -> None:
     total_sent = 0
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
+            # Con el asistente en pausa no sale ningún seguimiento (HU-ARCH-37) y no se gasta la marca.
+            if await pausa_automatica.negocio_pausado(tenant_id):
+                log.info("follow_up_negocio_pausado", kind="lead", tenant_id=str(tenant_id))
+                continue
             if not await debe_correr(tenant_id, CRON_LEADS):
                 continue
             config = await _config_del_negocio(tenant_id, "lead")
@@ -148,6 +153,8 @@ async def _follow_up_leads_del_negocio(tenant_id: uuid.UUID, config) -> tuple[in
             )
         if conversation is None or conversation.bot_paused or conversation.status != "open":
             continue
+        if cliente is not None and cliente.bot_paused:
+            continue
         nombre = (cliente.name if cliente else None) or lead.name
         template = getattr(config, "follow_up_lead_message", "")
         message = template.format(
@@ -155,7 +162,10 @@ async def _follow_up_leads_del_negocio(tenant_id: uuid.UUID, config) -> tuple[in
             interest=lead.interest or "nuestros productos",
         )
         try:
-            await send_to_conversation(lead.conversation_id, message)
+            # Solo se marca si salió (HU-ARCH-37): si no (pausa, ventana cerrada, conexión pausada), el lead sigue
+            # siendo candidato mientras esté dentro de su ventana.
+            if not await send_to_conversation(lead.conversation_id, message):
+                continue
             async with get_session() as session:
                 fresh = await get_owned(session, Lead, lead.id, tenant_id)
                 if fresh is not None:
@@ -186,6 +196,10 @@ async def follow_up_quotes() -> None:
     total_sent = 0
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
+            # Con el asistente en pausa no sale ningún seguimiento (HU-ARCH-37) y no se gasta la marca.
+            if await pausa_automatica.negocio_pausado(tenant_id):
+                log.info("follow_up_negocio_pausado", kind="quote", tenant_id=str(tenant_id))
+                continue
             if not await debe_correr(tenant_id, CRON_QUOTES):
                 continue
             config = await _config_del_negocio(tenant_id, "quote")
@@ -204,7 +218,7 @@ async def follow_up_quotes() -> None:
 
 async def _follow_up_quotes_del_negocio(tenant_id: uuid.UUID, config) -> tuple[int, int]:  # type: ignore[no-untyped-def]
     """Seguimiento de cotizaciones de un negocio (dentro de su `tenant_scope`): (candidatas, enviadas)."""
-    from core.db.models import Conversation
+    from core.db.models import Conversation, Customer
     from core.gateway.sender import send_to_conversation
 
     total_candidates = 0
@@ -232,12 +246,20 @@ async def _follow_up_quotes_del_negocio(tenant_id: uuid.UUID, config) -> tuple[i
     for quote in quotes:
         async with get_session() as session:
             conversation = await get_owned(session, Conversation, quote.conversation_id, tenant_id)
+            cliente = (
+                await get_owned(session, Customer, conversation.customer_id, tenant_id) if conversation else None
+            )
         if conversation is None or conversation.bot_paused or conversation.status != "open":
+            continue
+        if cliente is not None and cliente.bot_paused:
+            # Sin llegar al sender: si no, cada corrida dejaría otro `failed` mientras dure la ventana.
             continue
         template = getattr(config, "follow_up_quote_message", "")
         message = template.format(total=f"${float(quote.total):,.0f}")
         try:
-            await send_to_conversation(quote.conversation_id, message)
+            # Solo se marca `follow_up_sent_at` si salió (HU-ARCH-37); el guardián del envío frena al cliente en pausa.
+            if not await send_to_conversation(quote.conversation_id, message):
+                continue
             async with get_session() as session:
                 fresh = await get_owned(session, Quote, quote.id, tenant_id)
                 if fresh is not None:

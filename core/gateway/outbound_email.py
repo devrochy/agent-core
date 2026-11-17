@@ -30,11 +30,12 @@ class EmailOutboxError(RuntimeError):
         self.reason = reason
 
 
-async def queue_outbound_email(to: str, subject: str, body: str) -> str:
+async def queue_outbound_email(to: str, subject: str, body: str, *, al_cliente: bool = True) -> str:
     """Encola un correo saliente para `to` en el tenant actual.
 
     `reason` posibles (EmailOutboxError): `no_tenant`, `invalid_recipient`,
-    `no_connection`.
+    `no_connection`, `negocio_pausado` (HU-ARCH-37: con el asistente en pausa no sale nada automático al
+    cliente). `al_cliente=False`: un aviso al equipo del negocio, que la pausa no frena.
     """
     from core.gateway.channels.email import single_recipient
 
@@ -51,6 +52,11 @@ async def queue_outbound_email(to: str, subject: str, body: str) -> str:
     if not body:
         raise EmailOutboxError("empty_body")
     subject = (subject or "").strip().replace("\r", " ").replace("\n", " ")
+
+    from core.gateway.pausa_automatica import motivo_pausa_negocio
+
+    if al_cliente and (motivo_pausa := await motivo_pausa_negocio(tenant_id)):
+        raise EmailOutboxError(motivo_pausa)
 
     from core.gateway.connections import get_active_connection
 

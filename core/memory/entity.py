@@ -47,7 +47,7 @@ async def upsert_attributes(
     """Fusiona atributos nuevos con los existentes (los plugins llaman esto).
 
     Escribe hechos `perfil` con procedencia y su proyección en una sola transacción.
-    `concedidos` = `writeNamespaces` del agente v3 que escribe (None en el runtime legacy).
+    `concedidos` = `writeNamespaces` del agente que escribe (None si no escribe un agente).
     """
     tenant_id = get_current_tenant_id()
     if tenant_id is None:
@@ -90,8 +90,7 @@ async def find_by_external_id(channel: str, external_id: str) -> Customer | None
 
 
 def profile_to_prompt(profile: dict[str, Any]) -> str:
-    """Serializa el perfil para el bloque dinámico del system prompt."""
-    if not profile:
-        return ""
-    lines = [f"- {key}: {value}" for key, value in profile.items() if value]
-    return "\n".join(lines)
+    """El perfil como bloque del prompt, con rótulos y cada clave y valor escapados (HU-ARCH-35)."""
+    from core.memory.memoria_en_prompt import serializar_perfil
+
+    return serializar_perfil(profile)

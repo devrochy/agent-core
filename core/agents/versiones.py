@@ -31,7 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from core.agents.claves import KEYS_RESERVADAS
 from core.agents.contrato_v3 import Contrato, revisar_spec, validar_spec
 from core.agents.credenciales import referencias_de_tool
-from core.db.models import AgentDraftRecord, AgentRecord, AgentVersionRecord
+from core.db.models import AgentDraftRecord, AgentRecord, AgentVersionRecord, utcnow
 from core.db.session import get_session
 from core.kernel.procedures import Catalogo, Issue
 from core.shared.tenant import get_current_tenant_id
@@ -294,6 +294,54 @@ async def actualizar_agente(
             agente.description = description
         if status is not None:
             agente.status = status
+    return agente
+
+
+async def pausar_agente(
+    tenant_id: uuid.UUID, agent_id: uuid.UUID, *, pausar: bool, admin_id: uuid.UUID | None, motivo: str | None
+) -> AgentRecord:
+    """Pausa o reanuda un agente (HU-ARCH-38, ADR-0200). Estado vivo, sin publicar: un especialista pausado no
+    atiende y el turno pasa al agente por defecto. El Coordinador no se pausa (para eso está la pausa del negocio)
+    y un agente archivado tampoco → `Conflicto`. Queda en la auditoría del negocio."""
+    from core.shared.audit import record_audit
+
+    _exigir_scope(tenant_id)
+    razon = " ".join((motivo or "").split())[:300] or None
+    async with get_session() as session:
+        agente = (
+            await session.execute(
+                select(AgentRecord)
+                .where(AgentRecord.tenant_id == tenant_id, AgentRecord.id == agent_id, AgentRecord.deleted_at.is_(None))
+                .with_for_update(key_share=True)
+            )
+        ).scalar_one_or_none()
+        if agente is None:
+            raise AgenteNoEncontrado(str(agent_id))
+        if pausar and agente.key in KEYS_RESERVADAS:
+            raise Conflicto(
+                "El Coordinador no se pausa: para detener al asistente, pausa el negocio.", codigo="agent_reserved"
+            )
+        if pausar and agente.status == "archived":
+            raise Conflicto("Un agente archivado no atiende: no hace falta pausarlo.", codigo="agent_archived")
+        if pausar:
+            agente.paused_at = agente.paused_at or utcnow()
+            agente.paused_by = admin_id
+            agente.paused_reason = razon
+        else:
+            agente.paused_at = None
+            agente.paused_by = None
+            agente.paused_reason = None
+    accion = "agent.paused" if pausar else "agent.resumed"
+    await record_audit(f"admin:{admin_id}" if admin_id else "sistema", accion, input_data={"agent_id": str(agent_id), "motivo": razon})
+    try:
+        from core.observability.metricas_negocio import kill_switch_cambio
+
+        kill_switch_cambio("agent", "activated" if pausar else "deactivated")
+    except Exception:  # la métrica nunca rompe la acción
+        pass
+    from core.shared.logger import get_logger
+
+    get_logger(__name__).info("agente_pausa", agent_id=str(agent_id), pausado=pausar)
     return agente
 
 

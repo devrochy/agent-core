@@ -14,8 +14,8 @@ datos de clientes):
 `app_runtime`: SELECT e INSERT en `tenant_cron_runs`; el borrado va por la función. `tenant_cron_configs`
 ya existe (0140).
 
-Revision ID: 0141
-Revises: 0140
+Revision ID: 0143
+Revises: 0142
 Create Date: 2026-11-16
 """
 
@@ -23,8 +23,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0141"
-down_revision = "0140"
+revision = "0143"
+down_revision = "0142"
 branch_labels = None
 depends_on = None
 

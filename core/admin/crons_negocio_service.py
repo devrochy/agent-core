@@ -1,4 +1,4 @@
-"""Política por negocio de los crons (ADR-0200).
+"""Política por negocio de los crons (ADR-0201).
 
 Único punto de lectura y escritura de `tenant_cron_configs` (tabla de NEGOCIO con RLS). Tres
 usuarios:
@@ -42,7 +42,7 @@ SIN_CAMBIO: Any = object()
 
 # Throttle del resumen de la última ejecución en barridos sin efecto.
 RESUMEN_MIN_INTERVALO = timedelta(hours=1)
-# Retención del historial detallado (ADR-0200).
+# Retención del historial detallado (ADR-0201).
 RETENCION_DIAS = 90
 
 
@@ -634,7 +634,7 @@ class NegocioCronResumen:
 
 
 async def resumen_por_negocio(cron_name: str) -> list[NegocioCronResumen]:
-    """Por negocio que tenga fila, su política y su última ejecución (master, ADR-0200).
+    """Por negocio que tenga fila, su política y su última ejecución (master, ADR-0201).
 
     La lectura cruza tenants: la hace `admin_tenant_cron_resumen` (SECURITY DEFINER) y solo
     devuelve metadatos operativos. Los nombres salen de `tenants` (tabla de sistema).

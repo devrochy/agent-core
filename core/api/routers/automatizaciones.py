@@ -1,4 +1,4 @@
-"""Automatizaciones del negocio: `/api/v1/admin/automatizaciones` (ADR-0200).
+"""Automatizaciones del negocio: `/api/v1/admin/automatizaciones` (ADR-0201).
 
 Lista los crons de ámbito `negocio` de los packs habilitados, con su política (encendido/apagado,
 hora local y ventana), la última ejecución y la próxima. El dueño y el master escriben; un
@@ -196,7 +196,7 @@ async def listar_ejecuciones(
     params: Annotated[PageParams, Depends(page_params)],
     status: Annotated[EstadoEjecucion | None, Query()] = None,
 ) -> Page[CronNegocioRunOut]:
-    """Ejecuciones con efecto, fallos y manuales del negocio (ADR-0200)."""
+    """Ejecuciones con efecto, fallos y manuales del negocio (ADR-0201)."""
     tenant_id = _tenant(principal)
     try:
         filas, total = await svc.historial(

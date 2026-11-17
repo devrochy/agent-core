@@ -12,8 +12,8 @@ No guarda datos de clientes ni mensajes: solo configuración operativa y un resu
 Permisos de `app_runtime`: SELECT, INSERT y UPDATE. Sin DELETE: apagar/reiniciar es borrado
 lógico (`deleted_at`), invariante 8. Solo la toca `core/admin/crons_negocio_service.py`.
 
-Revision ID: 0140
-Revises: 0139
+Revision ID: 0142
+Revises: 0141
 Create Date: 2026-11-16
 """
 
@@ -21,8 +21,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0140"
-down_revision = "0139"
+revision = "0142"
+down_revision = "0141"
 branch_labels = None
 depends_on = None
 

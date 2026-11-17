@@ -558,18 +558,18 @@
           "tool_calls": [
             {
               "arguments": {
-                "context": "Hamburguesa clásica para llevar",
+                "context": "Cliente pide hamburguesa clásica para llevar, busca complementos",
                 "product_id": "<uuid:1>"
               },
-              "id": "call_00_l0jSTy2iCk9bDOSTJ9J73385",
+              "id": "call_00_7rXpvMt0gJq4msy4BzOs0850",
               "name": "recomendar_producto"
             }
           ],
           "usage": {
             "cache_read_tokens": 7680,
             "cache_write_tokens": 0,
-            "input_tokens": 8049,
-            "output_tokens": 100
+            "input_tokens": 8048,
+            "output_tokens": 107
           }
         }
       ],

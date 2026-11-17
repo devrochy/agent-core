@@ -58,6 +58,9 @@ class CronMeta:
     # Toca dinero o escribe a clientes: la pantalla pide una confirmación reforzada.
     sensitive: bool = False
     reprogramable: bool = True
+    # Escribe a los clientes de un negocio: con el interruptor global activo no corre programado (HU-ARCH-38,
+    # ADR-0200). A mano sí corre, pero lo que intente enviar lo frena el guardián del envío.
+    writes_to_customers: bool = False
     # False = no se guarda cada ejecución exitosa (latido, outbox: miles al día); los fallos y las
     # ejecuciones manuales siempre se guardan.
     record_success: bool = True
@@ -65,7 +68,7 @@ class CronMeta:
     # ------------------------------------------------------------------ política por negocio
     # `plataforma`: solo master; recorre los negocios por dentro (salud de canales, cobros de la
     # plataforma, retenciones legales). `negocio`: el dueño puede verlo y configurarlo en
-    # Automatizaciones (ADR-0198).
+    # Automatizaciones (ADR-0201).
     ambito: str = "plataforma"
     # El negocio puede encenderlo/apagarlo y configurarlo. Un cron de negocio sin esta bandera es
     # visible pero siempre está encendido (p. ej. una tarea interna de corrección).
@@ -85,6 +88,8 @@ class CronMeta:
     def __post_init__(self) -> None:
         if (self.default is None) == (self.interval_s is None):
             raise ValueError(f"{self.name}: define `default` o `interval_s`, uno solo")
+        if self.writes_to_customers and not self.sensitive:
+            raise ValueError(f"{self.name}: un cron que escribe a clientes es sensible")
         if self.interval_s is not None and self.reprogramable:
             raise ValueError(f"{self.name}: un cron por intervalo no es reprogramable")
         if self.ambito not in AMBITOS:
@@ -166,7 +171,7 @@ CATALOGO: dict[str, CronMeta] = dict(
            hora_local_por_defecto=22),
         _m("pack_subscriptions.avisos_de_cobro", "Suscripciones", "Avisos de cobro",
            "Envía los avisos de cobro a los clientes, respetando el horario legal de cada negocio.",
-           "5 * * * *", sensitive=True,
+           "5 * * * *", sensitive=True, writes_to_customers=True,
            ambito="negocio", configurable=True, pack="pack_subscriptions", ventana=True),
         # ---- Cobranza (pack)
         _m("pack_cobranza.marcar_mora", "Cobranza", "Marcar mora",
@@ -184,11 +189,12 @@ CATALOGO: dict[str, CronMeta] = dict(
         # ---- Comercio y CRM (pack)
         _m("pack_commerce.follow_up_leads", "Comercio y CRM", "Seguimiento de leads",
            "Escribe a los leads que quedaron sin respuesta.", "0 * * * *", sensitive=True,
-           ambito="negocio", configurable=True, pack="pack_commerce", hora_local=True,
-           hora_local_por_defecto=9, parametros=("follow_up_hours",)),
+           writes_to_customers=True, ambito="negocio", configurable=True, pack="pack_commerce",
+           hora_local=True, hora_local_por_defecto=9, parametros=("follow_up_hours",)),
         _m("pack_commerce.follow_up_quotes", "Comercio y CRM", "Seguimiento de cotizaciones",
            "Escribe a los clientes con cotizaciones sin cerrar.", "30 9,15,20 * * *", sensitive=True,
-           ambito="negocio", configurable=True, pack="pack_commerce", ventana=True),
+           writes_to_customers=True, ambito="negocio", configurable=True, pack="pack_commerce",
+           ventana=True),
         _m("pack_commerce.recordar_seguimientos", "Comercio y CRM", "Recordatorios de seguimiento",
            "Avisa al equipo de los seguimientos de leads que vencen.", "*/5 * * * *",
            ambito="negocio", configurable=True, pack="pack_commerce", ventana=True,
@@ -198,8 +204,8 @@ CATALOGO: dict[str, CronMeta] = dict(
         # ---- Calendario (pack)
         _m("pack_calendar.recordatorios_de_citas", "Calendario", "Recordatorios de citas",
            "Envía el recordatorio de las citas próximas.", "*/15 * * * *", sensitive=True,
-           ambito="negocio", configurable=True, pack="pack_calendar", ventana=True,
-           parametros=("recordatorios_horas",)),
+           writes_to_customers=True, ambito="negocio", configurable=True, pack="pack_calendar",
+           ventana=True, parametros=("recordatorios_horas",)),
         # ---- Memoria e IA
         _m("core.memory_consolidation", "Memoria e IA", "Consolidación de la memoria",
            "Convierte los datos de las tareas cerradas en hechos de memoria.", "30 * * * *",

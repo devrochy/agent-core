@@ -76,6 +76,16 @@ class AgentSummary(BaseModel):
     status: str
     latest_version: int | None
     created_at: datetime
+    # HU-ARCH-38: en pausa no atiende (el turno pasa al agente por defecto). Estado vivo, sin publicar.
+    paused: bool = False
+    paused_at: datetime | None = None
+    paused_reason: str | None = None
+
+
+class AgentPauseIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(default=None, max_length=300)
 
 
 class AgentDraft(BaseModel):
@@ -219,6 +229,9 @@ def _summary(agente: Any, ultima: int | None) -> AgentSummary:
         status=agente.status,
         latest_version=ultima,
         created_at=agente.created_at,
+        paused=getattr(agente, "paused_at", None) is not None,
+        paused_at=getattr(agente, "paused_at", None),
+        paused_reason=getattr(agente, "paused_reason", None),
     )
 
 
@@ -434,6 +447,38 @@ async def patch_agent(
     except svc.Conflicto as exc:
         raise ApiError(409, exc.codigo, str(exc)) from None
     return _summary(agente, versiones[0].version if versiones else None)
+
+
+async def _pausa(principal: Principal, agent_id: uuid.UUID, *, pausar: bool, motivo: str | None) -> AgentSummary:
+    tid = await _puede_escribir(principal)
+    try:
+        agente = await svc.pausar_agente(tid, agent_id, pausar=pausar, admin_id=principal.admin.id, motivo=motivo)
+        versiones = await svc.listar_versiones(tid, agent_id)
+    except svc.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    except svc.Conflicto as exc:
+        raise ApiError(409, exc.codigo, str(exc)) from None
+    return _summary(agente, versiones[0].version if versiones else None)
+
+
+@router.post("/{agent_id}/pause", response_model=AgentSummary)
+async def pause_agent(
+    agent_id: uuid.UUID,
+    payload: AgentPauseIn,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> AgentSummary:
+    """Pausa un especialista (HU-ARCH-38): deja de atender en segundos, sin publicar; atiende el agente por
+    defecto y A2A no le pasa conversaciones."""
+    return await _pausa(principal, agent_id, pausar=True, motivo=payload.reason)
+
+
+@router.post("/{agent_id}/resume", response_model=AgentSummary)
+async def resume_agent(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> AgentSummary:
+    """Reanuda un especialista pausado (HU-ARCH-38): vuelve a atender sus conversaciones."""
+    return await _pausa(principal, agent_id, pausar=False, motivo=None)
 
 
 @router.get("/{agent_id}/draft", response_model=AgentDraft)

@@ -1261,8 +1261,8 @@ class CalendarSkill(BaseSkill):
         if not message:
             return False
         try:
-            await send_to_conversation(conversation_id, message, sender_type="agent")
-            return True
+            # El sender frena la pausa del negocio o del cliente (HU-ARCH-37): se informa si salió.
+            return bool(await send_to_conversation(conversation_id, message, sender_type="agent"))
         except Exception:
             return False
 
@@ -1329,7 +1329,8 @@ class CalendarSkill(BaseSkill):
         last_reason = ""
         for to in recipients:
             try:
-                await queue_outbound_email(to, subject, body)
+                # Al equipo del negocio le llega aunque el asistente esté en pausa (HU-ARCH-37); al cliente, no.
+                await queue_outbound_email(to, subject, body, al_cliente=to == attendee_email)
                 sent_any = True
             except EmailOutboxError as exc:
                 last_reason = exc.reason

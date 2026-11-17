@@ -47,7 +47,7 @@ log = get_logger(__name__)
 
 PACK_ID = "pack_subscriptions"
 
-# Nombres del catálogo (ADR-0200): la política por negocio se consulta con el nombre de la tarea.
+# Nombres del catálogo (ADR-0201): la política por negocio se consulta con el nombre de la tarea.
 CRON_EXPIRAR = f"{PACK_ID}.expirar_inscripciones"
 CRON_PRECIOS = f"{PACK_ID}.sincronizar_precios_de_plan"
 CRON_CARGOS = f"{PACK_ID}.generar_cargos"

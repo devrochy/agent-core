@@ -10,9 +10,10 @@ siempre en la misma transacción (un test estático lo vigila).
   así los lectores ven exactamente lo mismo. Los demás namespaces (los datos de las tareas,
   `ventas`, `cobranza`…) viven solo en `memory_facts`: los leerá el runtime v3 filtrando por
   `readScopes` y `data_class`, nunca a ciegas en cada prompt.
-- **Permisos:** `concedidos` son los `writeNamespaces` del agente que escribe. `None` = quien
-  escribe no es un agente v3 (tools de los packs, runtime legacy, consolidación, importación) y
-  no se chequea; con un conjunto, escribir fuera de él es `NamespaceNoConcedido`.
+- **Permisos:** `concedidos` son los `writeNamespaces` del agente que escribe; las tools del core
+  y de los packs pasan los de su `ToolContext` (por `datos_cliente.guardar`). `None` = quien
+  escribe no es un agente (consolidación, importación, siembra de pruebas, operador) y no se
+  chequea; con un conjunto, escribir fuera de él es `NamespaceNoConcedido`.
 - **data_class** la asigna el código por namespace y clave (`clasificar`); si quien escribe
   declara otra, gana la más estricta. Los hechos nunca se embeben en `memory_vectors`.
 - **Olvido:** `purgar_de_cliente` borra (lógico) sus hechos, vacía su proyección y anota
@@ -141,6 +142,33 @@ def _validar_escritura_del_agente(namespace: str, valores: Mapping[str, Any], da
             raise HechoInvalido("dato sensible: no se guarda en la memoria del cliente")
 
 
+# Recuerdos libres de `remember_fact` (HU-ARCH-35): el mismo tope con que `tarjeta.escapar` los lleva al
+# prompt, así lo guardado nunca se corta en silencio.
+MAX_RECUERDO_CHARS = 200
+# Raíces sensibles en texto libre: las de las claves sin las ambiguas en una frase («tener en cuenta»,
+# «palabra clave», «pago contra entrega»); el dato de pago se reconoce por su número o su medio.
+_AMBIGUAS_EN_TEXTO = frozenset({"cuenta", "account", "clave", "pago", "payment", "card", "bank", "banco", "secret"})
+_RAICES_SENSIBLES_EN_TEXTO = (
+    *(r for r in RAICES_SENSITIVE if r not in _AMBIGUAS_EN_TEXTO),
+    "contrasena",
+    "credencial",
+)
+# Un número de tarjeta, cuenta o documento: ocho o más dígitos seguidos, con espacios o guiones.
+_NUMERO_LARGO = re.compile(r"(?:\d[ -]?){8,}")
+
+
+def validar_recuerdo_del_agente(texto: str) -> None:
+    """Lo que el LLM guarda con `remember_fact`: una línea corta, sin caracteres de control ni datos
+    sensibles (pago, salud, credenciales). `HechoInvalido` con un mensaje genérico."""
+    if len(texto) > MAX_RECUERDO_CHARS:
+        raise HechoInvalido("recuerdo demasiado largo")
+    if any(unicodedata.category(c) in {"Cc", "Cf", "Zl", "Zp", "Co", "Cs"} for c in texto):
+        raise HechoInvalido("recuerdo con saltos de línea o caracteres de control")
+    normal = _normalizar(texto)
+    if _NUMERO_LARGO.search(texto) or any(r in normal for r in _RAICES_SENSIBLES_EN_TEXTO):
+        raise HechoInvalido("dato sensible: no se guarda en la memoria del cliente")
+
+
 def _ahora(now: datetime | None) -> datetime:
     return now if now is not None else datetime.now(UTC)
 
@@ -175,8 +203,8 @@ async def escribir_hechos(
 
     Por clave: si el vigente tiene el mismo valor y clase no se crea fila; si no, el vigente
     queda `superseded_at` y entra el nuevo. Una clave que el esquema no admite (vacía o de más
-    de 80 caracteres) se descarta con un log cuando escribe el runtime legacy (`concedidos=None`,
-    para no cambiar el resultado de sus tools) y es `HechoInvalido` para un agente v3.
+    de 80 caracteres) se descarta con un log cuando no escribe un agente (`concedidos=None`:
+    consolidación, importación, siembra, operador) y es `HechoInvalido` para un agente.
     Cliente inexistente en el negocio: no escribe nada (como el `upsert_attributes` de antes).
     """
     if source not in FUENTES:

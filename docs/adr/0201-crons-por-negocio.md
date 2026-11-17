@@ -1,9 +1,9 @@
-# ADR-0200 — Crons por negocio: política, ventana y parámetros
+# ADR-0201 — Crons por negocio: política, ventana y parámetros
 
 - **Estado:** aceptado (plan aprobado por el dueño el 2026-11-16).
 - **Fecha:** 2026-11-16
 - **Usa:** ADR-0183 (gestión de crons), ADR-0019 (packs por negocio), ADR-0091 (zona horaria del negocio), ADR-0047 (RBAC).
-- **Relacionado:** ADR-0201 (fechas y horas).
+- **Relacionado:** ADR-0202 (fechas y horas).
 
 ## Contexto
 

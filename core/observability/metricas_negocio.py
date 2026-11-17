@@ -14,6 +14,8 @@ proveedor lo fija `core.observability.metricas.configure_metrics()`.
 | `agentcore_graph_api_errors_total` | `category` (rate_limit, auth, transient…) | `graph_fetch` |
 | `agentcore_http_server_duration_seconds` | `route_group` (webhooks, api, admin, other), `status_class` | middleware de la API |
 | `agentcore_twilio_sandbox_events_total` | `evento` (conjunto cerrado de `core/gateway/twilio/sandbox.py`) | alta, webhook, envío y operación del Sandbox de Twilio (HU-CONN-20) |
+| `agentcore_kill_switch_changes_total` | `level` (global, agent), `action` (activated, deactivated, denied) | interruptor global y pausa por agente (HU-ARCH-38) |
+| `agentcore_kill_switch_read_failures_total` | — | lectura fallida del interruptor global (se trata como activo) |
 
 **Etiquetas prohibidas** (cada valor es una serie y el plan gratis da 10k): `tenant_id`,
 `agent_id`, `conversation_id`, teléfonos, correos y rutas sin agrupar. Las etiquetas son conjuntos
@@ -64,6 +66,13 @@ _http = _meter.create_histogram(
     unit="s",
     description="Duración de las peticiones HTTP de la API por grupo de ruta y clase de estado",
     explicit_bucket_boundaries_advisory=[0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+)
+
+_kill_switch_cambios = _meter.create_counter(
+    "agentcore_kill_switch_changes_total", description="Cambios del interruptor global y de la pausa por agente"
+)
+_kill_switch_fallos = _meter.create_counter(
+    "agentcore_kill_switch_read_failures_total", description="Lecturas fallidas del interruptor global (falla cerrado)"
 )
 
 
@@ -178,3 +187,12 @@ class MetricasHttpMiddleware:
             _seguro(
                 lambda: _http.record(time.monotonic() - inicio, {"route_group": grupo, "status_class": clase})
             )
+
+
+# ------------------------------------------------------------------------- interruptor (HU-ARCH-38)
+def kill_switch_cambio(nivel: str, accion: str) -> None:
+    _seguro(lambda: _kill_switch_cambios.add(1, {"level": _etiqueta(nivel), "action": _etiqueta(accion)}))
+
+
+def kill_switch_lectura_fallida() -> None:
+    _seguro(lambda: _kill_switch_fallos.add(1))

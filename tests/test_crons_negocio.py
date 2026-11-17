@@ -1,4 +1,4 @@
-"""Política por negocio de los crons (ADR-0200): funciones puras.
+"""Política por negocio de los crons (ADR-0201): funciones puras.
 
 La lectura/escritura de `tenant_cron_configs` y el aislamiento RLS se prueban en
 `tests/integration/test_crons_negocio.py` (requiere Postgres y Redis).

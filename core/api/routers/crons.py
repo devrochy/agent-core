@@ -70,7 +70,7 @@ class CronOut(BaseModel):
     reprogramable: bool
     record_success: bool = Field(description="False: no se guarda cada ejecución exitosa.")
     ambito: Literal["plataforma", "negocio"] = Field(
-        description="`negocio`: también se configura en Configuración / Automatizaciones (ADR-0200)."
+        description="`negocio`: también se configura en Configuración / Automatizaciones (ADR-0201)."
     )
     estado: CronEstado
     next_run_at: datetime | None
@@ -216,7 +216,7 @@ async def reset_cron_schedule(
 
 
 class CronNegocioResumenOut(BaseModel):
-    """Un negocio con fila de configuración para este cron (ADR-0200). Solo metadatos operativos."""
+    """Un negocio con fila de configuración para este cron (ADR-0201). Solo metadatos operativos."""
 
     tenant_id: uuid.UUID
     tenant_name: str

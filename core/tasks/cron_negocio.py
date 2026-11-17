@@ -1,4 +1,4 @@
-"""Ayudas para los crons de negocio (ADR-0200).
+"""Ayudas para los crons de negocio (ADR-0201).
 
 Cada cron de negocio, dentro de su `tenant_scope`, pregunta `debe_correr()` y, si hizo trabajo,
 deja el resumen con `registrar()`. La política (encendido/apagado, hora local y ventana) vive en

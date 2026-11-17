@@ -1,4 +1,4 @@
-"""Reloj del negocio (ADR-0201): zona horaria y fecha/hora locales.
+"""Reloj del negocio (ADR-0202): zona horaria y fecha/hora locales.
 
 La base guarda instantes en UTC y las fechas de calendario en `date`. La lógica de negocio que
 depende de «hoy» o de la hora local (mora, cierres, ventanas de envío) debe usar este módulo y no

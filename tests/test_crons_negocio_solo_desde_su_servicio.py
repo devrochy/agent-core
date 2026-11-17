@@ -1,4 +1,4 @@
-"""`tenant_cron_configs` es una tabla de NEGOCIO con RLS (ADR-0200).
+"""`tenant_cron_configs` es una tabla de NEGOCIO con RLS (ADR-0201).
 
 La garantía es que solo la toque `core/admin/crons_negocio_service.py`; el helper de los crons
 (`core/tasks/cron_negocio.py`) y la ruta de Automatizaciones pasan por ese servicio.
@@ -58,7 +58,7 @@ def test_el_servicio_solo_lo_importan_el_helper_y_la_ruta():
 
 
 def test_las_migraciones_declaran_rls_y_tenant_id():
-    for nombre in ("0140_crons_por_negocio.py", "0141_historial_crons_negocio.py"):
+    for nombre in ("0142_crons_por_negocio.py", "0143_historial_crons_negocio.py"):
         migracion = (ROOT / "alembic" / "versions" / nombre).read_text(encoding="utf-8")
         assert "tenant_id" in migracion, nombre
         assert "ENABLE ROW LEVEL SECURITY" in migracion, nombre
