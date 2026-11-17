@@ -116,11 +116,23 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
         {"crear_pedido", "consultar_estado_pedido", "confirmar_pago_pedido"},
     ),
     "link_de_pago": (
-        # Cualquier mención de "link de/para pago(ar)" en el texto LIBRE del
-        # modelo (nunca en el _safe_append, que corre después de los
-        # guardrails) implica que se está anunciando -- si no llamó la tool,
-        # es una promesa vacía sin importar el verbo que haya usado.
-        re.compile(r"link\s+(?:de\s+pago|para\s+pagar)", re.IGNORECASE),
+        # Anunciar o presentar un link en el texto LIBRE del modelo (nunca en el
+        # _safe_append, que corre después de los guardrails): "te envío el link de pago",
+        # "aquí tienes tu link de pago", "link de pago: …", "tu link de pago está listo".
+        # Nombrar la forma de pago no es anunciar un link: con «Pago en línea» entre las
+        # formas del agente (SPEC-48), "lo pagas con link de pago" o "pago por link de
+        # pago" son un resumen del pedido; antes escalaban la venta (journeys de pagos,
+        # 2026-11-17).
+        re.compile(
+            r"\b(?:env[ií]\w*|mand[eéoa]\w*|compart\w*|pas[eéo]\b|paso|dej[eéo]\b|dejo|gener[eéoa]\w*|"
+            r"adjunt\w*|reenv[ií]\w*|aqu[ií]\s+(?:est[aá]|tienes|va|te\s+dejo))\s+(?:\w+\s+){0,3}?"
+            r"link\s+(?:de\s+pago|para\s+pagar)|"
+            r"link\s+(?:de\s+pago|para\s+pagar)\s*:|"
+            r"\blink\s+(?:de\s+pago|para\s+pagar)\b(?:\W+\w+){0,3}\W+"
+            r"(?:es\s+(?:este|[eé]ste|el\s+siguiente)|est[aá]\s+(?:list|aqu)|qued[oó]\s+(?:list|gener|cread)|"
+            r"(?:enviad|generad|compartid|cread)\w*)",
+            re.IGNORECASE,
+        ),
         # Además de `confirmar_pago_pedido`, lo respalda cualquier tool del turno que
         # haya devuelto un link (`_LINK_CON_URL`): el de una suscripción, el de un
         # cambio de plan o el de pagos en línea. Así el pack no lista tools de otros

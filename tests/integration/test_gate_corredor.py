@@ -37,6 +37,10 @@ ESCENARIOS = {
     "03-pedido-a-domicilio": "pack_commerce.tomar_pedido",
     "04-agendar-una-demo": "pack_calendar.agendar_cita",
     "05-informar-planes-sin-comprar": "pack_subscriptions.contratar_plan",
+    "06-reenviar-link-de-pago": "pack_commerce.pago_en_linea",
+    "07-estado-del-pago-en-linea": "pack_commerce.pago_en_linea",
+    "08-ya-transferi-pide-comprobante": "pack_commerce.comprobar_transferencia",
+    "09-le-llego-mi-transferencia": "pack_commerce.comprobar_transferencia",
 }
 INTENTOS = len(ESCENARIOS) * 4
 
@@ -162,7 +166,13 @@ async def test_mide_aprueba_registra_y_limpia(entorno_de_eval: Path, bases_de_ev
         "where e.release_id = :r group by 1 order by 1",
         r=candidata,
     )
-    assert dict(resultados) == {"pack_calendar.agendar_cita": 1, "pack_commerce.tomar_pedido": 1, "pack_subscriptions.contratar_plan": 3}
+    assert dict(resultados) == {
+        "pack_calendar.agendar_cita": 1,
+        "pack_commerce.comprobar_transferencia": 2,
+        "pack_commerce.pago_en_linea": 2,
+        "pack_commerce.tomar_pedido": 1,
+        "pack_subscriptions.contratar_plan": 3,
+    }
     # El negocio efímero ya no existe y no quedó nada del cliente en la base de eval.
     assert await _tenants_en_eval(bases_de_eval[1]) == 0
     # Idempotente: otra medición contra la misma base no gasta.

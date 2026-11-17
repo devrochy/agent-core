@@ -530,26 +530,15 @@
       },
       "respuestas": [
         {
-          "content": "Con gusto te ayudo con eso. Déjame revisar el catálogo y el perfil para ver qué tenemos disponible.",
+          "content": "¡Hola! Gracias por escribir. Con gusto te ayudo con eso.\n\nPara armarte bien la compra del catálogo completo necesito revisar qué productos hay disponibles y sus precios reales. Una compra de ese monto seguramente requiere aprobación de un asesor, así que déjame consultar el catálogo primero.\n\n¿Me confirmas tu nombre y si la entrega sería a domicilio o recoges en tienda?",
           "model": "deepseek-flash",
-          "stop_reason": "tool_use",
-          "tool_calls": [
-            {
-              "arguments": {},
-              "id": "call_00_E0gyhAsW3EvYZIjcQolK4244",
-              "name": "get_customer_profile"
-            },
-            {
-              "arguments": {},
-              "id": "call_01_bHn6YfwHMyVtvubuxBr92792",
-              "name": "consultar_inventario"
-            }
-          ],
+          "stop_reason": "end_turn",
+          "tool_calls": [],
           "usage": {
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
             "input_tokens": 7793,
-            "output_tokens": 64
+            "output_tokens": 98
           }
         }
       ],

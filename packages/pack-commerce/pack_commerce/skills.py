@@ -1575,7 +1575,9 @@ class OrderSkill(BaseSkill):
                 "status": "faltan_datos_cliente",
                 "error": "Faltan datos del cliente",
                 "missing_fields": missing,
-                "existing_data": {k: v for k, v in customer_data.items() if str(v or "").strip()},
+                # Ordenado: según el camino, los datos llegan con el orden del modelo o el de
+                # JSONB, y la salida de la tool es parte del prompt (replay de journeys).
+                "existing_data": {k: customer_data[k] for k in sorted(customer_data) if str(customer_data[k] or "").strip()},
                 "hint": "Pide los datos que faltan uno a uno, sin repetir los que ya tenés.",
             }
             sobre = await _sobre_faltan_datos(
@@ -1902,8 +1904,9 @@ class OrderSkill(BaseSkill):
         return {
             "error": "pago_pendiente",
             "detail": f"El pago del pedido {numero} todavía no se ha confirmado.",
-            "hint": "Si ya pagó, puede tardar unos minutos. Si el link venció, confirmar_pago_pedido "
-            "genera uno nuevo.",
+            "hint": "Si ya pagó, puede tardar unos minutos. Si el cliente pide el link (no le llegó, "
+            "venció o lo quiere de nuevo), llama confirmar_pago_pedido: es la única forma de enviárselo; "
+            "nunca escribas que lo reenvías sin llamarla.",
         }
 
     async def _minimo_pago_en_linea(self, config: Any) -> float:
