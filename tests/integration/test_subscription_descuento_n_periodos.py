@@ -30,18 +30,6 @@ from test_subscription_promociones import CODIGO, _canjes, _con_codigo, _promo
 from core.shared.tenant import tenant_scope
 from core.subscriptions import SubscriptionError
 
-
-@pytest.fixture(autouse=True)
-def _cron_sin_politica_de_hora(monkeypatch):
-    """ADR-0201: estos tests prueban la lógica del job, no el planificador."""
-    from pack_subscriptions import jobs
-
-    async def _siempre(*_a, **_k):
-        return True
-
-    monkeypatch.setattr(jobs, "debe_correr", _siempre)
-
-
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
     pytest.mark.aislamiento,

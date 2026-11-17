@@ -208,6 +208,27 @@ def _stub_llm_and_outbound(recorded: list[str], monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.fixture(autouse=True)
+def _crons_sin_politica_de_hora(monkeypatch: pytest.MonkeyPatch):
+    """ADR-0201: los crons de negocio corren cada hora y `debe_correr` deja pasar solo la hora local
+    del negocio, leída del reloj real (no del `now` que el test le pasa al job). Sin esto, los tests de
+    jobs dependen de la hora a la que corre el CI. La política se prueba aparte, con `svc.politica`
+    (`test_crons_negocio_api.py`); aquí se prueba la lógica de cada job."""
+
+    async def _siempre(*_a, **_k):
+        return True
+
+    for modulo in (
+        "pack_subscriptions.jobs",
+        "pack_cobranza.jobs",
+        "pack_commerce.jobs",
+        "pack_calendar.jobs",
+        "core.tasks.cliente_esperando",
+        "core.tasks.memory_consolidation",
+    ):
+        monkeypatch.setattr(f"{modulo}.debe_correr", _siempre)
+
+
+@pytest.fixture(autouse=True)
 async def _clean_redis():
     """Limpia streams/colas/contadores de Redis antes de cada test (los smokes y
     ejecuciones previas dejan entradas que contaminan los conteos)."""
