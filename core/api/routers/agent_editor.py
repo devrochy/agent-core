@@ -797,6 +797,82 @@ async def save_agent_flow(
     )
 
 
+# ------------------------------------------------------------------ horario por agente (HU-AOS-82)
+class AgentScheduleOut(BaseModel):
+    schedule: dict[str, Any] | None = Field(
+        description="Horario propio del agente (`{tz, ranges}`); `null` = hereda el del negocio.",
+    )
+    business_hours: dict[str, Any] | None = Field(description="El horario del negocio (lo que hereda).")
+    source: Literal["agente", "negocio"]
+    lock_version: int
+
+
+class AgentScheduleIn(BaseModel):
+    schedule: dict[str, Any] | None = Field(description="`null` vuelve a heredar el horario del negocio.")
+    lock_version: int
+
+
+async def _horario_del_negocio(tid: uuid.UUID) -> dict[str, Any] | None:
+    from sqlalchemy import select
+
+    from core.db.models import AppSettings
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        escalation_cfg = (
+            await session.execute(select(AppSettings.escalation_config).where(AppSettings.tenant_id == tid))
+        ).scalar_one_or_none() or {}
+    horario = escalation_cfg.get("business_hours")
+    return horario if isinstance(horario, dict) else None
+
+
+@router.get("/agents/{agent_id}/schedule", response_model=AgentScheduleOut)
+async def get_agent_schedule(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> AgentScheduleOut:
+    """Horario del borrador del agente y el del negocio que hereda si no tiene uno propio."""
+    tid = _tenant(principal)
+    try:
+        borrador = await versiones.obtener_borrador(tid, agent_id)
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    return AgentScheduleOut(
+        schedule=borrador.schedule,
+        business_hours=await _horario_del_negocio(tid),
+        source="agente" if borrador.schedule is not None else "negocio",
+        lock_version=borrador.lock_version,
+    )
+
+
+@router.put("/agents/{agent_id}/schedule", response_model=AgentScheduleOut)
+async def save_agent_schedule(
+    agent_id: uuid.UUID,
+    payload: AgentScheduleIn,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> AgentScheduleOut:
+    """Guarda el horario propio (o `null` para heredar) con el `lock_version` del borrador. Vale al publicar."""
+    from core.agents.horario_agente import HorarioInvalido
+
+    tid = await _puede_escribir(principal)
+    try:
+        borrador = await versiones.guardar_horario(
+            tid, agent_id, payload.schedule, payload.lock_version, actor=principal.admin.id
+        )
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    except HorarioInvalido as exc:
+        raise ApiError.bad_request(str(exc), "invalid_schedule") from None
+    except versiones.Conflicto as exc:
+        raise ApiError(409, "stale_lock_version", str(exc), fields={"lock_version": str(exc.lock_version)}) from None
+    return AgentScheduleOut(
+        schedule=borrador.schedule,
+        business_hours=await _horario_del_negocio(tid),
+        source="agente" if borrador.schedule is not None else "negocio",
+        lock_version=borrador.lock_version,
+    )
+
+
 @router.get("/agents/{agent_id}/flow/options", response_model=AgentFlowOptionsOut)
 async def get_agent_flow_options(
     agent_id: uuid.UUID,

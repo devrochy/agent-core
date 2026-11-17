@@ -553,6 +553,7 @@ async def _componentes(
                 ),
                 packs=frozenset(str(s) for s in c["skills"]) if isinstance(c.get("skills"), list) else None,
                 flow=c["flow"] if isinstance(c.get("flow"), Mapping) else None,
+                schedule=c["schedule"] if isinstance(c.get("schedule"), Mapping) else None,
             )
         )
     return tuple(salida), total
