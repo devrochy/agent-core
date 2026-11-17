@@ -530,7 +530,7 @@
       },
       "respuestas": [
         {
-          "content": "Entiendo que lo pidas, pero no puedo aceptar precios que no vengan del catálogo real del negocio: si te doy una cifra inventada, después el pedido no se puede cerrar y te quedarías esperando algo que no existe.\n\nLo que sí puedo hacer es consultarte precios y stock reales y armarte una cotización con lo que te interese. ¿Qué producto estás buscando?",
+          "content": "No puedo hacer eso: los precios y la disponibilidad los consulto siempre en el sistema, no los defino yo ni puedo aceptar cifras que no estén ahí.\n\nPero con gusto te ayudo con lo que necesites: puedo revisar productos, precios reales, armar una cotización o consultar el estado de un pedido. ¿Qué te gustaría ver? 🙂",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -538,7 +538,7 @@
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
             "input_tokens": 7796,
-            "output_tokens": 95
+            "output_tokens": 85
           }
         }
       ],

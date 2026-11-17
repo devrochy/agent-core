@@ -20,8 +20,8 @@ fi
 
 GOLDEN="06,07,08,21,22,23,24,25,26,38,39"
 JOURNEYS="01,05"
-# Formas de pago (SPEC-48): pago en línea y comprobar transferencia, con su propio negocio.
-JOURNEYS_PAGOS="pagos"
+# Formas de pago (SPEC-48): pago en línea y comprobar transferencia, del set procedimientos.
+JOURNEYS_PAGOS="06,07,08,09"
 
 if [ "$modo" = "record" ]; then
   # Grabar gasta saldo. Un escenario que falla por la respuesta del modelo (exit 1) igual queda
@@ -39,12 +39,12 @@ if [ "$modo" = "record" ]; then
     exit 4
   fi
   python evals/journeys.py "$JOURNEYS" --umbral 1.0 || { e=$?; [ "$estado" -eq 0 ] && estado=$e; }
-  python evals/journeys.py "" --set "$JOURNEYS_PAGOS" --umbral 1.0 || { e=$?; [ "$estado" -eq 0 ] && estado=$e; }
+  python evals/journeys.py "$JOURNEYS_PAGOS" --set procedimientos --umbral 1.0 || { e=$?; [ "$estado" -eq 0 ] && estado=$e; }
   exit "$estado"
 fi
 
 estado=0
 python evals/runner.py "$GOLDEN" || estado=$?
 python evals/journeys.py "$JOURNEYS" --umbral 1.0 || { e=$?; [ "$estado" -eq 0 ] && estado=$e; }
-python evals/journeys.py "" --set "$JOURNEYS_PAGOS" --umbral 1.0 || { e=$?; [ "$estado" -eq 0 ] && estado=$e; }
+python evals/journeys.py "$JOURNEYS_PAGOS" --set procedimientos --umbral 1.0 || { e=$?; [ "$estado" -eq 0 ] && estado=$e; }
 exit "$estado"

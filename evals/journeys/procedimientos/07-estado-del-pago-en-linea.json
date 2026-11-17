@@ -1,15 +1,15 @@
 {
-  "nombre": "reenviar-link-de-pago",
-  "semilla": 11,
+  "nombre": "estado-del-pago-en-linea",
+  "semilla": 12,
   "procedimientos": [
     "pack_commerce.pago_en_linea"
   ],
-  "descripcion": "HU-COM-23: con un pedido ya creado con pago en línea, el cliente dice que no le llegó el link; el agente lo reenvía sin crear otro pedido.",
+  "descripcion": "HU-COM-23: el cliente dice que ya pagó por el link; el agente verifica el pago con el servidor y no lo da por hecho.",
   "pasos": [
     {
       "nota": "el cliente hace un pedido con pago en línea",
       "simulado": {
-        "objetivo": "Pedir dos hamburguesas a domicilio y pagar con link de pago. Da tus datos solo cuando te los pidan. Tu objetivo se cumple cuando te confirman el pedido.",
+        "objetivo": "Pedir dos combos familiares a domicilio y pagar con link de pago. Da tus datos solo cuando te los pidan. Tu objetivo se cumple cuando te confirman el pedido.",
         "datos": {
           "nombre": "Ana Gómez",
           "celular": "3001234567",
@@ -24,10 +24,10 @@
       ]
     },
     {
-      "nota": "no le llegó el link",
-      "usuario": "No me llegó el link de pago, ¿me lo reenvías?",
+      "nota": "dice que ya pagó",
+      "usuario": "Ya pagué por el link, ¿cuál es el estado del pago de mi pedido?",
       "hasta_herramienta": [
-        "confirmar_pago_pedido"
+        "verificar_pago_pedido"
       ],
       "max_turnos": 3
     },

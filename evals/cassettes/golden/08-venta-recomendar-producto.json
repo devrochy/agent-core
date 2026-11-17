@@ -558,10 +558,10 @@
           "tool_calls": [
             {
               "arguments": {
-                "context": "Cliente pide hamburguesa clásica para llevar",
+                "context": "Cliente pide una Hamburguesa Clásica para llevar",
                 "product_id": "<uuid:1>"
               },
-              "id": "call_00_64wj1FEz5b0QxcIb4VEP5606",
+              "id": "call_00_I3jnWY725wURdZF4EA5q0255",
               "name": "recomendar_producto"
             }
           ],
