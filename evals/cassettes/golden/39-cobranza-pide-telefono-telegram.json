@@ -401,17 +401,17 @@
             {
               "arguments": {
                 "etiqueta": "Compartir mi teléfono",
-                "texto": "Para buscar tu cuenta, ¿me compartes tu teléfono con este botón?"
+                "texto": "Para buscar tu cuenta en nuestra cartera necesito tu teléfono. Toca el botón y lo compartes conmigo."
               },
-              "id": "call_00_qP3x71nQetBQS3WM6Xi49447",
+              "id": "call_00_OQazwxf5yL1CR6jjqWU14346",
               "name": "pedir_telefono"
             }
           ],
           "usage": {
-            "cache_read_tokens": 1152,
+            "cache_read_tokens": 4864,
             "cache_write_tokens": 0,
             "input_tokens": 5177,
-            "output_tokens": 81
+            "output_tokens": 91
           }
         }
       ],

@@ -413,15 +413,15 @@
       },
       "respuestas": [
         {
-          "content": "Hola, gracias por escribir. Revisé y no encontré tu cuenta en nuestra cartera.\n\nPara ayudarte con tu saldo, puedo pasarte con un gestor de nuestro equipo. ¿Quieres que lo haga?",
+          "content": "Hola, gracias por escribir 😊 Revisé y no encontré tu cuenta en la cartera con los datos de esta conversación.\n\nSi quieres, te paso con un gestor de nuestro equipo para que revise tu caso. ¿Te parece?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
           "usage": {
-            "cache_read_tokens": 4864,
+            "cache_read_tokens": 2432,
             "cache_write_tokens": 0,
             "input_tokens": 5289,
-            "output_tokens": 49
+            "output_tokens": 52
           }
         }
       ],

@@ -536,7 +536,7 @@
           "tool_calls": [
             {
               "arguments": {},
-              "id": "call_00_iu9mxV1NEDGdVH2TCOhn3197",
+              "id": "call_00_4BOCtvm5X1a0xKGcNrz53331",
               "name": "consultar_inventario"
             }
           ],

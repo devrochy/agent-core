@@ -320,7 +320,7 @@ async def simular_verificar_pago_pedido(arguments: dict[str, Any], context: Tool
     return {
         "error": "pago_pendiente",
         "detail": f"El pago del pedido {order['public_order_number']} todavía no se ha confirmado.",
-        "hint": "Si ya pagó, puede tardar unos minutos. Si el link venció, confirmar_pago_pedido genera uno nuevo.",
+        "hint": "Si ya pagó, puede tardar unos minutos. Si el cliente pide el link (no le llegó, venció o lo quiere de nuevo), llama confirmar_pago_pedido: es la única forma de enviárselo; nunca escribas que lo reenvías sin llamarla.",
     }
 
 

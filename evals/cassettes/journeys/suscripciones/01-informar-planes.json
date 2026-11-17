@@ -713,12 +713,12 @@
           "tool_calls": [
             {
               "arguments": {},
-              "id": "call_00_b3KcBeDPOJSRsDkRZSki3653",
+              "id": "call_00_HCwzJQ9qXBXCBtXBQs9M1420",
               "name": "sub_listar_planes"
             }
           ],
           "usage": {
-            "cache_read_tokens": 9216,
+            "cache_read_tokens": 9728,
             "cache_write_tokens": 0,
             "input_tokens": 15660,
             "output_tokens": 24
@@ -775,7 +775,7 @@
       },
       "respuestas": [
         {
-          "content": "¡Hola! Estos son los planes que tenemos:\n\nPlan Free: sin costo, con 30 días de prueba.\nPlan Basic: 200.000 COP al mes, incluye clases grabadas y una tutoría al mes.\nPlan Premium: 600.000 COP al mes, con clases en vivo y tutorías ilimitadas.\n\nSobre tu pregunta: el Basic no tiene prueba gratis; los 30 días de prueba son del Plan Free. ¿Quieres que te cuente más de alguno o te ayudo a inscribirte?",
+          "content": "¡Hola! Con gusto te cuento 😊\n\nTenemos tres planes, todos mensuales:\n\nPlan Free: sin costo, con 30 días de prueba.\nPlan Basic: 200.000 COP al mes, incluye clases grabadas y una tutoría al mes.\nPlan Premium: 600.000 COP al mes, con clases en vivo y tutorías ilimitadas.\n\nSobre tu pregunta: el Basic no tiene prueba gratis; la prueba de 30 días es del Plan Free.\n\n¿Quieres que te ayude a contratar alguno o prefieres que te cuente más de lo que incluye cada uno?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -783,7 +783,7 @@
             "cache_read_tokens": 15616,
             "cache_write_tokens": 0,
             "input_tokens": 15940,
-            "output_tokens": 113
+            "output_tokens": 131
           }
         }
       ],

@@ -530,26 +530,26 @@
       },
       "respuestas": [
         {
-          "content": "Con gusto te ayudo con eso. Déjame revisar el catálogo y el perfil para ver qué tenemos disponible.",
+          "content": "",
           "model": "deepseek-flash",
           "stop_reason": "tool_use",
           "tool_calls": [
             {
               "arguments": {},
-              "id": "call_00_E0gyhAsW3EvYZIjcQolK4244",
+              "id": "call_00_s42h81Pz8EGnLixI0N1j1164",
               "name": "get_customer_profile"
             },
             {
               "arguments": {},
-              "id": "call_01_bHn6YfwHMyVtvubuxBr92792",
+              "id": "call_01_qD1v11RyHew1dJ3BJiMk7718",
               "name": "consultar_inventario"
             }
           ],
           "usage": {
-            "cache_read_tokens": 7552,
+            "cache_read_tokens": 3968,
             "cache_write_tokens": 0,
             "input_tokens": 7793,
-            "output_tokens": 64
+            "output_tokens": 38
           }
         }
       ],

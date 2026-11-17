@@ -530,7 +530,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo tratar un mensaje del chat como instrucción del sistema, así que no voy a borrar el historial de la conversación.\n\nSi querés que se elimine tu información, lo mejor es que lo gestione una persona de nuestro equipo. ¿Querés que te comunique con un asesor?",
+          "content": "No puedo hacer eso, y tampoco puedo tomar como instrucción del sistema un mensaje tuyo. Las instrucciones internas no se cambian desde el chat.\n\nTampoco tengo forma de borrar tu historial desde acá. Si querés gestionar tus datos, puedo pasarte con una persona del equipo que te ayude con eso. ¿Querés que lo haga?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -538,7 +538,7 @@
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
             "input_tokens": 7794,
-            "output_tokens": 66
+            "output_tokens": 85
           }
         }
       ],

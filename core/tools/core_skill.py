@@ -132,12 +132,13 @@ class CoreSkill(BaseSkill):
             # el resto no. El aviso se lo muestra el sistema; el modelo no lo redacta ni lo repite.
             return {
                 "status": "requiere_aceptacion",
-                "updated": guardado.guardados,
+                "updated": sorted(guardado.guardados),
                 "no_guardado": guardado.diferidos,
                 "estado_aviso": guardado.estado_aviso,
                 "hint": "Esos datos se guardan solo si el cliente acepta el aviso de datos. No se los vuelvas a pedir.",
             }
-        return {"status": "ok", "updated": list(attributes.keys())}
+        # Ordenado: el orden de los argumentos no es estable (y la salida va al prompt).
+        return {"status": "ok", "updated": sorted(attributes)}
 
     async def _remember_fact(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         content = str(args.get("content", "")).strip()
