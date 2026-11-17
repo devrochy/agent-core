@@ -220,3 +220,50 @@ async def test_otro_cliente_u_otro_negocio_no_comprueban(vision) -> None:  # typ
     assert (await _comprobar(tid2, aid2, p))["error"] == "pedido_no_encontrado"
     assert vision["llamadas"] == 0
     assert (await _estado(tid, p["order_id"]))[:2] == ("pendiente", 0)
+
+
+async def test_aislamiento_del_comprobante(vision) -> None:  # type: ignore[no-untyped-def]
+    """Auditor multitenant: (a) el mismo archivo en un pedido de OTRO negocio no es duplicado;
+    (b) una imagen de otra conversación del mismo cliente no se usa; (c) una `media_url` que apunta a
+    la carpeta de otro negocio no se abre."""
+    from core.db.models import Conversation, Message
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    imagen = _JPEG + b"compartida-entre-negocios"
+    vision["leido"] = FUERTE
+    tid, aid = await _negocio_con_agente()
+    p = await _pedido(tid, imagen=imagen)
+    assert (await _comprobar(tid, aid, p))["resultado"] == "pagado"
+    tid2, aid2 = await _negocio_con_agente()
+    q = await _pedido(tid2, imagen=imagen)
+    assert (await _comprobar(tid2, aid2, q))["resultado"] == "pagado"  # (a) no es duplicado
+
+    # (b) La foto llega por otra conversación del mismo cliente: no cuenta.
+    r = await _pedido(tid, con_imagen=False)
+    async with tenant_scope(tid), get_session() as session:
+        otra = Conversation(tenant_id=tid, customer_id=r["customer_id"])
+        session.add(otra)
+        await session.flush()
+        session.add(Message(
+            tenant_id=tid, conversation_id=otra.id, direction="inbound", sender_type="customer",
+            content="[imagen]", media_type="image/jpeg", media_url="x/media/otra.jpg", created_at=datetime.now(UTC),
+        ))
+    assert (await _comprobar(tid, aid, r))["error"] == "sin_comprobante"
+
+    # (c) Una key limpia de la carpeta de otro negocio no se abre.
+    from core import almacenamiento
+    from core.shared.tenant import tenant_slug
+
+    s = await _pedido(tid, con_imagen=False)
+    async with tenant_scope(tid2):
+        slug2 = await tenant_slug(tid2)
+    ajena = almacenamiento.guardar("media", _JPEG + b"ajena", mimetype="image/jpeg", tenant_slug=slug2)
+    async with tenant_scope(tid), get_session() as session:
+        session.add(Message(
+            tenant_id=tid, conversation_id=s["conversation_id"], direction="inbound", sender_type="customer",
+            content="[imagen]", media_type="image/jpeg", media_url=ajena.key, created_at=datetime.now(UTC),
+        ))
+    llamadas = vision["llamadas"]
+    assert (await _comprobar(tid, aid, s))["error"] == "sin_comprobante"
+    assert vision["llamadas"] == llamadas

@@ -115,6 +115,8 @@ def test_las_puertas_de_los_procedimientos_publicados() -> None:
         "pack_subscriptions.contratar_plan": {"sub_confirmar_inscripcion"},
         # SPEC-48: cobra un pedido que ya existe (reenvía el link o verifica): nada que confirmar.
         "pack_commerce.pago_en_linea": frozenset(),
+        # El servidor decide con la regla D4: el cliente no confirma nada antes de comprobar.
+        "pack_commerce.comprobar_transferencia": frozenset(),
     }
 
 
