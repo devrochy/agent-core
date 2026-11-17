@@ -326,3 +326,34 @@ def list_admins(
         console.print(table)
 
     asyncio.run(_run())
+
+
+@app.command("kill-switch")
+def kill_switch(
+    activar: bool | None = typer.Option(
+        None, "--activar/--desactivar", help="Activa o desactiva el interruptor global de la plataforma"
+    ),
+    motivo: str = typer.Option("", "--motivo", help="Por qué (obligatorio al activar; queda en el historial)"),
+) -> None:
+    """Interruptor global (HU-ARCH-38, ADR-0200): detiene todos los agentes y los envíos automáticos de todos los
+    negocios en segundos, sin desplegar. Lo que escribe una persona sigue saliendo. Sin opciones, muestra el estado
+    y los últimos cambios."""
+    if activar and not motivo.strip():
+        console.print("[red]✗ Indica --motivo al activar.[/red]")
+        raise typer.Exit(1)
+
+    async def _run():  # type: ignore[no-untyped-def]
+        from core.admin import kill_switch_service as svc
+
+        if activar is None:
+            return await svc.estado()
+        return await svc.fijar(activar, motivo, admin_id=None, etiqueta="cli", fuente="cli")
+
+    estado = asyncio.run(_run())
+    texto = "[red bold]ACTIVO[/red bold]" if estado.active else "[green]apagado[/green]"
+    console.print(f"Interruptor global {texto} {estado.reason or ''}")
+    if estado.history:
+        table = Table("Cuándo", "Acción", "Quién", "Fuente", "Motivo")
+        for e in estado.history[:10]:
+            table.add_row(f"{e.created_at:%Y-%m-%d %H:%M}", e.action, e.actor_label or "—", e.source, e.reason or "")
+        console.print(table)

@@ -59,6 +59,12 @@ async def conversacion_bloqueada(conversation: Any, customer: Any) -> bool:
     (la atiende una persona o el negocio la pausó)."""
     if customer is None:
         return True
+    # Interruptor global (HU-ARCH-38, ADR-0200): también frena los turnos diferidos y los que ya estaban en cola.
+    from core.shared import kill_switch
+
+    if await kill_switch.global_activo():
+        await bloquear(conversation, "kill_switch", status="silent")
+        return True
     if conversation.status == "escalated":
         await bloquear(conversation, "escalated_conversation", status="silent")
         return True
@@ -137,6 +143,13 @@ async def politicas_de_entrada(
     from core.agents.spec import load_active_spec
     from core.gateway.sender import send_to_conversation
     from core.orchestrator.escalation import escalate
+
+    # ---------------- interruptor global (HU-ARCH-38, ADR-0200): primero de todo, sin LLM ni respuesta
+    from core.shared import kill_switch
+
+    if await kill_switch.global_activo():
+        await bloquear(conversation, "kill_switch", status="silent")
+        return True
 
     # ---------------- conexión pausada (ADR-0122): ni horario ni keywords, que también responden
     if await conexion_pausada(conversation):

@@ -267,10 +267,18 @@ async def recover_orphaned_conversations() -> None:
     """
     from sqlalchemy import text
 
+    from core.admin.kill_switch_service import ultima_reactivacion
     from core.db.session import get_session
+    from core.shared import kill_switch
 
+    # Interruptor global (HU-ARCH-38, ADR-0200): activo (o ilegible) no se recupera nada; reactivado, no se
+    # responde en lote lo que llegó antes: queda en la bandeja para una persona.
+    if await kill_switch.global_activo():
+        log.warning("orphan_recovery_omitida_kill_switch")
+        return
     r = get_redis()
     try:
+        desde = await ultima_reactivacion()
         async with get_session() as session:
             tenant_ids = (
                 await session.execute(
@@ -291,9 +299,13 @@ async def recover_orphaned_conversations() -> None:
                                 FROM messages m
                                 JOIN conversations c ON c.id = m.conversation_id
                                 WHERE c.status = 'open' AND c.bot_paused = false
+                                  AND m.tenant_id = :tid AND c.tenant_id = :tid
+                                  AND (CAST(:desde AS timestamptz) IS NULL
+                                       OR m.created_at > CAST(:desde AS timestamptz))
                                 ORDER BY m.conversation_id, m.created_at DESC
                                 """
-                            )
+                            ),
+                            {"desde": desde, "tid": tenant_id},
                         )
                     ).all()
                 # DENTRO del tenant_scope (bug encontrado por auditor-multitenant,

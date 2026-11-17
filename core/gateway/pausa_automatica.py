@@ -24,9 +24,10 @@ from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
+MOTIVO_KILL_SWITCH = "kill_switch"  # interruptor global (HU-ARCH-38, ADR-0200): = `core.shared.kill_switch`
 MOTIVO_NEGOCIO_PAUSADO = "negocio_pausado"
 MOTIVO_CLIENTE_PAUSADO = "cliente_pausado"
-MOTIVOS = frozenset({MOTIVO_NEGOCIO_PAUSADO, MOTIVO_CLIENTE_PAUSADO})
+MOTIVOS = frozenset({MOTIVO_KILL_SWITCH, MOTIVO_NEGOCIO_PAUSADO, MOTIVO_CLIENTE_PAUSADO})
 # = `core.admin.envios_segmento.PREFIJO` (un test fija que coinciden; aquí sin importar el módulo).
 _PREFIJO_SEGMENTO = "segmento:"
 
@@ -38,8 +39,21 @@ def es_envio_automatico(sender_type: str | None, client_message_id: str | None =
     return bool(client_message_id) and str(client_message_id).startswith(_PREFIJO_SEGMENTO)
 
 
+async def motivo_pausa_negocio(tenant_id: uuid.UUID) -> str | None:
+    """`kill_switch` (interruptor global), `negocio_pausado` o None, para el bucle por negocio de los crons."""
+    from core.shared import kill_switch
+
+    if motivo := await kill_switch.motivo_global():
+        return motivo
+    return MOTIVO_NEGOCIO_PAUSADO if await _bot_paused(tenant_id) else None
+
+
 async def negocio_pausado(tenant_id: uuid.UUID) -> bool:
-    """`app_settings.bot_paused` del negocio (una lectura; para el bucle por negocio de los crons)."""
+    """Si no sale nada automático para el negocio: interruptor global o `app_settings.bot_paused`."""
+    return await motivo_pausa_negocio(tenant_id) is not None
+
+
+async def _bot_paused(tenant_id: uuid.UUID) -> bool:
     async with get_session() as session:
         pausado = (
             await session.execute(
@@ -52,14 +66,19 @@ async def negocio_pausado(tenant_id: uuid.UUID) -> bool:
 
 
 async def motivo_pausa_automatica(conversation: Conversation, customer: Customer | None = None) -> str | None:
-    """`negocio_pausado`, `cliente_pausado` o None. Primero el negocio, después el cliente."""
+    """`kill_switch`, `negocio_pausado`, `cliente_pausado` o None. Primero el interruptor global (ADR-0200),
+    después el negocio y el cliente."""
+    from core.shared import kill_switch
+
+    if motivo := await kill_switch.motivo_global():
+        return motivo
     tenant_id = conversation.tenant_id
     actual = get_current_tenant_id()
     if actual is not None and actual != tenant_id:
         # Defensa en profundidad (además de RLS): nunca se decide con datos de otro negocio.
         log.error("pausa_automatica_tenant_distinto", conversation_id=str(conversation.id))
         return None
-    if await negocio_pausado(tenant_id):
+    if await _bot_paused(tenant_id):
         return MOTIVO_NEGOCIO_PAUSADO
     if customer is None or customer.id != conversation.customer_id:
         async with get_session() as session:

@@ -171,8 +171,9 @@ def rl_redis(monkeypatch: pytest.MonkeyPatch, rl_clock: RateLimitClock) -> FakeR
 
 @pytest.fixture(autouse=True)
 def _sin_pausa_automatica(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """HU-ARCH-37: los tests unitarios que parchean el envío no tienen base para leer la pausa del negocio y del
-    cliente; aquí se supone sin pausa. La integración y los tests marcados `pausa_real` la leen de verdad."""
+    """HU-ARCH-37/38: los tests unitarios que parchean el envío no tienen base para leer la pausa del negocio, del
+    cliente ni el interruptor global; aquí se supone sin pausa. La integración y los tests marcados `pausa_real`
+    los leen de verdad."""
     if request.node.get_closest_marker("pausa_real") or "integration" in request.node.path.parts:
         return
     from core.gateway import pausa_automatica
@@ -183,6 +184,15 @@ def _sin_pausa_automatica(request: pytest.FixtureRequest, monkeypatch: pytest.Mo
     async def _no_pausado(*_args: object, **_kwargs: object) -> bool:
         return False
 
+    from core.shared import kill_switch
+
+    async def _apagado(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    # HU-ARCH-38: el interruptor global falla cerrado sin base; en los unitarios se supone apagado.
+    monkeypatch.setattr(kill_switch, "global_activo", _apagado)
+    monkeypatch.setattr(kill_switch, "motivo_global", _sin_pausa)
     monkeypatch.setattr(pausa_automatica, "motivo_pausa_automatica", _sin_pausa)
     monkeypatch.setattr(pausa_automatica, "motivo_pausa_por_id", _sin_pausa)
     monkeypatch.setattr(pausa_automatica, "negocio_pausado", _no_pausado)
+    monkeypatch.setattr(pausa_automatica, "motivo_pausa_negocio", _sin_pausa)
