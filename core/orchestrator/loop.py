@@ -330,7 +330,11 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     spec = await load_active_spec()
     # Release del turno, sticky por episodio (ADR-0117 §4). El turno (HU-AOS-15) ejecuta la versión congelada del especialista en foco y el
     # KernelSpec de la release, en la forma v2 que lee este loop; sin release, el mismo v2.
-    await fijar_release_del_turno(conversation, texto=latest_message)  # texto: router de HU-AOS-17
+    asignacion = await fijar_release_del_turno(conversation, texto=latest_message)  # texto: router de HU-AOS-17
+    if asignacion is not None and asignacion.bloqueo is not None:
+        # HU-ARCH-38: el especialista y el de por defecto están en pausa: sin LLM y sin respuesta.
+        await bloquear(conversation, asignacion.bloqueo, status="silent")
+        return None
     if release_vigente.sin_release():
         # v3 sin release activa: falla cerrado, sin respuesta (ADR-0191). Ya se registró
         # `release_missing`; la release 1 llega al alta de la conexión.

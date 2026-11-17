@@ -28,7 +28,12 @@ from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
 from core.memory import perfil as perfil_cliente
 from core.memory import vector as vector_memory
-from core.memory.facts import HechoInvalido, NamespaceNoConcedido
+from core.memory.facts import (
+    PERFIL,
+    HechoInvalido,
+    NamespaceNoConcedido,
+    validar_recuerdo_del_agente,
+)
 from core.orchestrator.escalation import escalate
 from core.orchestrator.motivos_escalacion import MOTIVOS_TOOL, motivo_de_tool
 from core.shared.tenant import get_current_tenant_id
@@ -138,6 +143,18 @@ class CoreSkill(BaseSkill):
         content = str(args.get("content", "")).strip()
         if not content:
             return {"error": "content vacío"}
+        # HU-ARCH-35: un agente v3 solo guarda recuerdos con el namespace del perfil concedido (en
+        # legacy `write_namespaces` es None y no se chequea), y lo guardado es corto y no sensible.
+        # Errores de negocio, no excepciones: el pack no se autodeshabilita.
+        if ctx.write_namespaces is not None and PERFIL not in ctx.write_namespaces:
+            return {"error": "este agente no puede guardar recuerdos del cliente"}
+        try:
+            validar_recuerdo_del_agente(content)
+        except HechoInvalido:
+            return {
+                "error": "recuerdo no admitido: una sola línea de hasta 200 caracteres, sin datos de pago, "
+                "salud ni contraseñas"
+            }
         await vector_memory.store_memory(
             content=content,
             customer_id=ctx.customer_id,

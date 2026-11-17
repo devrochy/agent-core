@@ -24,7 +24,7 @@ from core.db.models import Conversation
 from core.db.session import get_owned, get_session
 from core.kernel.oferta import solo_con_motor_activo
 from core.mcp.types import BaseSkill, MCPTool, Referencia, RegistroCreado, ToolContext
-from core.memory import entity as entity_memory
+from core.memory.facts import HechoInvalido, NamespaceNoConcedido
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.shared.test_mode import is_panel_test
@@ -573,6 +573,38 @@ def _accion_de_datos(delivery_method: str) -> str:
     return ACCION_POR_ENTREGA.get(delivery_method, ACCION_POR_ENTREGA["domicilio"])
 
 
+async def _guardar_en_perfil(
+    context: ToolContext,
+    valores: dict[str, Any],
+    *,
+    accion: str | None = None,
+    operativos: tuple[str, ...] = (),
+) -> None:
+    """Copia datos del cliente a su perfil por la puerta de los agentes (ADR-0179 §10), con los
+    `writeNamespaces` del agente (ADR-0114 §3). El registro del pack (lead, pedido) ya quedó guardado:
+    si el agente no tiene `perfil` concedido o el dato no se admite, solo se omite la copia."""
+    valores = {k: v for k, v in valores.items() if v is not None and str(v).strip()}
+    if not valores:
+        return
+    try:
+        await guardar_datos(
+            context.customer_id,
+            valores,
+            accion=accion,
+            operativos=operativos,
+            source="tool",
+            concedidos=context.write_namespaces,
+            agent_id=context.agent_id,
+        )
+    except NamespaceNoConcedido:
+        log.info("ventas_perfil_no_concedido", n=len(valores))
+    except HechoInvalido:
+        log.warning("ventas_perfil_dato_no_admitido", claves=sorted(valores))
+    except Exception:
+        # El lead o el pedido ya quedó guardado y es la fuente: una falla de la copia no lo deshace.
+        log.warning("ventas_perfil_no_guardado", exc_info=True)
+
+
 async def _sobre_faltan_datos(
     accion: str,
     customer_data: dict[str, Any],
@@ -834,9 +866,7 @@ class LeadSkill(BaseSkill):
         telefono = _ESPACIOS.sub(" ", str(arguments.get("phone") or "")).strip()[:40]
         if telefono:
             perfil["phone"] = telefono
-        await guardar_datos(
-            context.customer_id, perfil, operativos=OPERATIVOS_DE_LEAD, source="tool", agent_id=context.agent_id
-        )
+        await _guardar_en_perfil(context, perfil, operativos=OPERATIVOS_DE_LEAD)
         return {"lead_id": lead_id, "status": "created"}
 
     async def calificar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
@@ -900,10 +930,7 @@ class LeadSkill(BaseSkill):
             if arguments.get(k)
         }
         contacto = {k: v for k, v in contacto.items() if v}
-        if contacto:
-            await guardar_datos(
-                context.customer_id, contacto, operativos=OPERATIVOS_DE_LEAD, source="tool", agent_id=context.agent_id
-            )
+        await _guardar_en_perfil(context, contacto, operativos=OPERATIVOS_DE_LEAD)
         return {"lead_id": str(lead.id), "status": "actualizado"}
 
 
@@ -1652,7 +1679,7 @@ class OrderSkill(BaseSkill):
                 "existing_data": {},
                 "hint": "Pide los datos que faltan uno a uno.",
             }
-        guardar_datos = bool(arguments.get("guardar_datos_cliente", False))
+        consiente_guardar = bool(arguments.get("guardar_datos_cliente", False))
         config = await _plugin_config()
 
         if payment_method not in PAYMENT_METHODS:
@@ -1784,22 +1811,6 @@ class OrderSkill(BaseSkill):
             if sobre is not None:
                 faltan["faltan_datos"] = sobre
             return faltan
-        # Guardar datos de entrega en la memoria de entidad del core (Capa 2)
-        # SOLO con consentimiento (Ley 1581, D17): sin él, el pedido se crea
-        # igual pero nada queda en el perfil para la próxima compra.
-        if guardar_datos:
-            await entity_memory.upsert_attributes(
-                context.customer_id,
-                {
-                    "name": customer_data.get("full_name"),
-                    "id_document": customer_data.get("id_document"),
-                    "address": customer_data.get("address"),
-                    "municipio": customer_data.get("municipality") or customer_data.get("city"),
-                    "phone": customer_data.get("phone"),
-                    "email": customer_data.get("email"),
-                },
-            )
-
         async with get_session() as session:
             quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             # Numeración por tenant (ADR-0018): contador atómico por tenant.
@@ -1865,6 +1876,24 @@ class OrderSkill(BaseSkill):
                             order_id=order.id,
                         )
                     )
+
+        # Guardar datos de entrega en el perfil SOLO con consentimiento (Ley 1581, D17): sin él, el
+        # pedido se crea igual pero nada queda para la próxima compra. Va por la puerta del aviso de
+        # datos (ADR-0179 §10) y con los `writeNamespaces` del agente. Después de crear el pedido: si el
+        # pedido falla, el perfil no cambia.
+        if consiente_guardar:
+            await _guardar_en_perfil(
+                context,
+                {
+                    "name": customer_data.get("full_name"),
+                    "id_document": customer_data.get("id_document"),
+                    "address": customer_data.get("address"),
+                    "municipio": customer_data.get("municipality") or customer_data.get("city"),
+                    "phone": customer_data.get("phone"),
+                    "email": customer_data.get("email"),
+                },
+                accion=accion_datos,
+            )
 
         result: dict[str, Any] = {
             "order_id": order_id,

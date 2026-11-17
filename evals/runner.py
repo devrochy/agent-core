@@ -245,6 +245,13 @@ async def run_scenario(
         from core.memory import notas
 
         ctx.team_notes = notas.serializar([(n["fecha"], n["texto"]) for n in scenario["team_notes"]])
+    # Perfil y recuerdos del cliente (HU-ARCH-35): entran como dato escapado, igual que en el loop.
+    if scenario.get("profile"):
+        from core.memory.entity import profile_to_prompt
+
+        ctx.entity_profile = profile_to_prompt(scenario["profile"])
+    if scenario.get("recalled_memories"):
+        ctx.recalled_memories = list(scenario["recalled_memories"])
     # Fidelidad con producción (ADR-0054/#155): el eval debe ver el MISMO subconjunto
     # de tools que el asistente real — packs habilitados por el spec + flujo resuelto.
     # Antes se pasaban TODAS las skills del host, así que un escenario podía pasar

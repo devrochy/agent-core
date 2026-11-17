@@ -463,11 +463,14 @@ async def _handle_inbound_scoped(fields: dict[str, str], *, opciones_habilitada:
 
     # Si el bot está pausado o la conversación escalada, no se gasta en descargar ni
     # transcribir: se persiste el marcador y `politicas_de_entrada` cierra el turno.
+    from core.shared import kill_switch
+
     pausado = bool(
         (app_settings.bot_paused if app_settings else False)
         or customer.bot_paused
         or conversation.bot_paused
         or conversation.status == "escalated"
+        or await kill_switch.global_activo()  # interruptor global (HU-ARCH-38): no se gasta en STT/OCR
     )
     if pausado:
         from core.media.ingesta import MediaOutcome

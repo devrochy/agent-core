@@ -78,12 +78,14 @@ class ContextoA2A:
         grafo = a2a.GrafoCongelado.desde_manifiesto(
             release.a2a_graph, {c.instance_id: c.agent_id for c in release.agentes}
         )
+        pausados = release_vigente.pausados_del_turno()
         estado = a2a.EstadoDelTurno(
             release.tenant_id,
             release.connection_id,
             conversation_id,
             turno.turno_id(),
             release_id=release.release_id,
+            pausados=frozenset(c.instance_id for c in release.agentes if c.agent_id in pausados),
         )
         return cls(
             grafo,
@@ -101,6 +103,8 @@ class ContextoA2A:
         salida: dict[str, Any] = {}
         for c in self.agentes:
             if c.role != "specialist" or c.instance_id == self.agente.instance_id:
+                continue
+            if c.instance_id in self.estado.pausados:  # HU-ARCH-38: el modelo ni lo ve
                 continue
             enlace = self.grafo.enlace(self.agente.instance_id, c.instance_id)
             if enlace is not None and modo in enlace.modes:

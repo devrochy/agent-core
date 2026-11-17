@@ -10744,6 +10744,170 @@
         }
       }
     },
+    "/api/v1/admin/agents/{agent_id}/pause": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Pause Agent",
+        "description": "Pausa un especialista (HU-ARCH-38): deja de atender en segundos, sin publicar; atiende el agente por\ndefecto y A2A no le pasa conversaciones.",
+        "operationId": "pause_agent_api_v1_admin_agents__agent_id__pause_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentPauseIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/resume": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · agentes"
+        ],
+        "summary": "Resume Agent",
+        "description": "Reanuda un especialista pausado (HU-ARCH-38): vuelve a atender sus conversaciones.",
+        "operationId": "resume_agent_api_v1_admin_agents__agent_id__resume_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/agents/{agent_id}/draft": {
       "get": {
         "tags": [
@@ -30238,6 +30402,146 @@
         }
       }
     },
+    "/api/v1/admin/platform/kill-switch": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Obtener",
+        "operationId": "obtener_api_v1_admin_platform_kill_switch_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KillSwitchOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Fijar",
+        "operationId": "fijar_api_v1_admin_platform_kill_switch_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KillSwitchIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KillSwitchOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/qa/catalog": {
       "get": {
         "tags": [
@@ -47716,6 +48020,34 @@
             "format": "date-time",
             "title": "Created At"
           },
+          "paused": {
+            "type": "boolean",
+            "title": "Paused",
+            "default": false
+          },
+          "paused_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused At"
+          },
+          "paused_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused Reason"
+          },
           "draft": {
             "$ref": "#/components/schemas/AgentDraft"
           },
@@ -48039,6 +48371,25 @@
         "additionalProperties": false,
         "type": "object",
         "title": "AgentPatch"
+      },
+      "AgentPauseIn": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AgentPauseIn"
       },
       "AgentRecordItem": {
         "properties": {
@@ -48389,6 +48740,34 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "paused": {
+            "type": "boolean",
+            "title": "Paused",
+            "default": false
+          },
+          "paused_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused At"
+          },
+          "paused_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused Reason"
           }
         },
         "type": "object",
@@ -49950,10 +50329,22 @@
         "properties": {
           "paso": {
             "type": "integer",
-            "maximum": 6.0,
+            "maximum": 9.0,
             "minimum": 1.0,
             "title": "Paso",
             "description": "Paso al que llega la persona."
+          },
+          "pasos": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pasos",
+            "description": "Total de pasos con que el cliente numera `paso` (9 desde SPEC-47). Sin él, el paso es del asistente de 6 (panel o APK anteriores) y se guarda traducido a su equivalente de 9."
           }
         },
         "type": "object",
@@ -61031,6 +61422,162 @@
           "subtitulo"
         ],
         "title": "ItemBusqueda"
+      },
+      "KillSwitchEventOut": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "activated",
+              "deactivated",
+              "denied"
+            ],
+            "title": "Action"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "actor_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Label"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "api",
+              "cli"
+            ],
+            "title": "Source"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "action",
+          "reason",
+          "actor_label",
+          "source",
+          "created_at"
+        ],
+        "title": "KillSwitchEventOut"
+      },
+      "KillSwitchIn": {
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "active"
+        ],
+        "title": "KillSwitchIn"
+      },
+      "KillSwitchOut": {
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "changed_by_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changed By Label"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "api",
+                  "cli"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "changed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changed At"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/KillSwitchEventOut"
+            },
+            "type": "array",
+            "title": "History"
+          }
+        },
+        "type": "object",
+        "required": [
+          "active",
+          "reason",
+          "changed_by_label",
+          "source",
+          "changed_at",
+          "history"
+        ],
+        "title": "KillSwitchOut"
       },
       "KpiOut": {
         "properties": {

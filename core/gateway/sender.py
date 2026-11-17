@@ -449,6 +449,36 @@ async def _registrar_si_pausada(conversation: Conversation, content: str, sender
     return True
 
 
+async def _registrar_si_frenada(
+    conversation: Conversation,
+    content: str,
+    sender_type: str,
+    *,
+    customer: Customer | None = None,
+    client_message_id: str | None = None,
+) -> str | None:
+    """La pausa del negocio o del cliente frena lo automático (HU-ARCH-37, D-76): deja el mensaje `failed` con
+    el motivo y lo devuelve (`negocio_pausado` o `cliente_pausado`), sin encolar; None si sale. Lo que escribe una persona sigue. Va antes del canal de prueba, así
+    el Centro de pruebas también la ve."""
+    from core.gateway.pausa_automatica import es_envio_automatico, motivo_pausa_automatica
+
+    if not es_envio_automatico(sender_type, client_message_id):
+        return None
+    motivo = await motivo_pausa_automatica(conversation, customer)
+    if motivo is None:
+        return None
+    log.info("envio_frenado_por_pausa", conversation_id=str(conversation.id), motivo=motivo)
+    async with get_session() as session:
+        session.add(
+            Message(
+                tenant_id=conversation.tenant_id, conversation_id=conversation.id,
+                direction="outbound", sender_type=sender_type, content=content,
+                status="failed", error_reason=motivo,
+            )
+        )
+    return motivo
+
+
 async def _guardar_saliente_de_prueba(
     conversation: Conversation,
     content: str,
@@ -519,6 +549,12 @@ async def send_to_conversation(
         customer = await session.get(Customer, conversation.customer_id)
         if customer is None:
             return False
+
+    if await _registrar_si_frenada(
+        conversation, text, sender_type, customer=customer,
+        client_message_id=f"{client_message_id_prefix}:0" if client_message_id_prefix else None,
+    ):
+        return False
 
     if is_test_channel(conversation.channel):
         return await _guardar_saliente_de_prueba(
@@ -635,6 +671,9 @@ async def send_voice_to_conversation(
         if conversation is None:
             return False
 
+    if await _registrar_si_frenada(conversation, text, sender_type):
+        return False
+
     try:
         provider, _credentials = await resolve_credentials(
             conversation.connection_id,
@@ -703,6 +742,9 @@ async def send_template_to_conversation(
         conversation = await session.get(Conversation, conversation_id)
         if conversation is None or conversation.channel == "web":
             return False
+
+    if await _registrar_si_frenada(conversation, preview_text, sender_type, client_message_id=client_message_id):
+        return False
 
     if await _registrar_si_pausada(conversation, preview_text, sender_type):
         return False
@@ -873,6 +915,12 @@ async def send_interactive_to_conversation(
     if conversation.tenant_id != get_current_tenant_id():
         # Defensa en profundidad (además de RLS): la fila sale con el negocio de la conversación.
         log.error("envio_interactivo_tenant_distinto", conversation_id=str(conversation_id))
+        return False
+    # Antes de degradar a texto: así lo frenado queda registrado una sola vez (HU-ARCH-37).
+    if await _registrar_si_frenada(
+        conversation, str(interactive.get("body") or fallback_text), sender_type,
+        customer=customer, client_message_id=client_message_id,
+    ):
         return False
 
     # Qué admite el canal sale de `connection_types.CAPACIDADES_POR_TIPO`. Antes de conocer el proveedor se usa lo

@@ -806,7 +806,7 @@ async def test_panel_mueve_y_cancela_con_aviso_por_correo_y_whatsapp(app_client,
 
     async def _fake_send(conversation_id, text, *args, **kwargs):
         whatsapps.append((conversation_id, text))
-        return None
+        return True  # encolado: el aviso informa si salió (HU-ARCH-37)
 
     monkeypatch.setattr("core.gateway.outbound_email.queue_outbound_email", _fake_queue)
     monkeypatch.setattr("core.gateway.sender.send_to_conversation", _fake_send)

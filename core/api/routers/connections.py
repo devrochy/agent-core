@@ -67,10 +67,15 @@ async def list_connections_endpoint(
     connections = await list_connections()
 
     identidades: dict[uuid.UUID, Any] = {}
+    bots: dict[uuid.UUID, str] = {}
     if tenant_id is not None and connections:
         from core.waweb.connections import identities_by_connection
 
         identidades = await identities_by_connection(tenant_id, [c.id for c in connections])
+        from core.gateway.telegram.alta import usuarios_por_conexion
+
+        # Telegram (ADR-0199): el @usuario del bot es su nombre visible (el `external_id` es el id del bot).
+        bots = await usuarios_por_conexion(tenant_id, [c.id for c in connections if c.provider == "telegram"])
 
     rows = [
         ConnectionItem(
@@ -84,7 +89,7 @@ async def list_connections_endpoint(
             active=c.active,
             is_primary=c.is_primary,
             created_at=c.created_at,
-            display_name=(identidades.get(c.id).display_name if identidades.get(c.id) else None),
+            display_name=(identidades.get(c.id).display_name if identidades.get(c.id) else None) or bots.get(c.id),
             display_phone_number=(identidades.get(c.id).phone if identidades.get(c.id) else None),
         )
         for c in connections

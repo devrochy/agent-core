@@ -7,8 +7,9 @@ admin_sessions, tenant_user) no llevan RLS: se consultan antes de conocer el ten
 
 Decisiones de diseño heredadas de agent-sale (probadas en producción):
 - Identidad por canal: UNIQUE (tenant_id, channel, external_id) en customers.
-- Kill-switch en 3 niveles: settings.bot_paused (por tenant) → customers.bot_paused
-  → conversations.bot_paused. El nivel global pasa a scope de sistema (Redis/env).
+- Niveles de pausa (ADR-0200): interruptor global (`platform_kill_switch`, tabla de sistema) →
+  conexión (ADR-0122) → negocio (`app_settings.bot_paused`) → cliente (`customers.bot_paused`) →
+  conversación (`conversations.bot_paused`) → agente (`agents.paused_at`, HU-ARCH-38).
 - audit_log inmutable (trigger en la migración impide UPDATE/DELETE).
 - usage_ledger append-only (ADR-0008).
 - processed_events: claim de idempotencia revocable (ADR-0013).
@@ -2318,6 +2319,51 @@ class CronJobConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class PlatformKillSwitch(Base):
+    """Interruptor global de la plataforma (HU-ARCH-38, ADR-0200): una sola fila (`id = 1`).
+
+    Tabla de SISTEMA (sin RLS, sin `tenant_id`): detiene todos los agentes de todos los negocios y se lee
+    fuera de cualquier `tenant_scope`. Solo la escribe `core/admin/kill_switch_service.py` (API master y CLI);
+    la lee `core/shared/kill_switch.py` con caché de pocos segundos y fallo cerrado."""
+
+    __tablename__ = "platform_kill_switch"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_platform_kill_switch_una_fila"),
+        CheckConstraint("source is null or source in ('api','cli')", name="ck_platform_kill_switch_source"),
+    )
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    reason: Mapped[str | None] = mapped_column(Text)
+    changed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    changed_by_label: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str | None] = mapped_column(Text)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PlatformKillSwitchEvent(Base):
+    """Historial del interruptor global (HU-ARCH-38): cada cambio y cada intento denegado. Solo inserciones.
+
+    Tabla de SISTEMA (sin RLS, sin `tenant_id`), mismo criterio que `PlatformKillSwitch`."""
+
+    __tablename__ = "platform_kill_switch_events"
+    __table_args__ = (
+        CheckConstraint(
+            "action in ('activated','deactivated','denied')", name="ck_platform_kill_switch_events_action"
+        ),
+        CheckConstraint("source in ('api','cli')", name="ck_platform_kill_switch_events_source"),
+        Index("ix_platform_kill_switch_events_created", text("created_at desc")),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    actor_admin_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    actor_label: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class CronRun(Base):
     """Una ejecución de un cron (ADR-0183): quién la disparó, cuánto tardó y cómo terminó.
 
@@ -2503,6 +2549,10 @@ class AgentRecord(Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    # Pausa por agente (HU-ARCH-38, ADR-0200): estado vivo, fuera de la release; no lo copia el snapshot.
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paused_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    paused_reason: Mapped[str | None] = mapped_column(Text)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

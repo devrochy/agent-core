@@ -22,6 +22,13 @@ async def entregar(conversation_id: uuid.UUID, result: Any) -> None:
 
     if result is None or not result.text:
         return
+    # El negocio o el cliente se pausó con el turno en curso (HU-ARCH-37): el texto queda registrado como no
+    # enviado una sola vez (sin probar voz ni botones) y no se escala: la pausa es a propósito, no un fallo.
+    from core.gateway.pausa_automatica import motivo_pausa_por_id
+
+    if await motivo_pausa_por_id(conversation_id) is not None:
+        await send_to_conversation(conversation_id, result.text, image_url=result.image_url)
+        return
     confirmacion = getattr(result, "confirmacion", None)
     if confirmacion is not None:
         # HU-AOS-09: la confirmación ES el mensaje del turno (`result.text` es su versión de

@@ -134,7 +134,8 @@ async def _enviar(
     antes_de_enviar: Callable[[], Awaitable[str]] | None = None,
 ) -> ev.ResultadoEnvio:
     from core.gateway.sender import (
-        _registrar_si_pausada,
+        _registrar_si_frenada,
+    _registrar_si_pausada,
         interactivo_valido,
         resolve_credentials,
         send_interactive_to_conversation,
@@ -224,6 +225,9 @@ async def _enviar(
         return ev.ResultadoEnvio(False, ev.ERROR_INTERNO, send_id=send_id, motivo="payload_invalido")
     interactivo = mapeo.a_interactivo(definicion, cuerpo, payloads)
 
+    # La pausa del negocio o del cliente frena las opciones, también las que manda un operador (D-76, v1).
+    if motivo_pausa := await _registrar_si_frenada(conversation, cuerpo, "agent"):
+        return ev.ResultadoEnvio(False, ev.PAUSADA, send_id=send_id, motivo=motivo_pausa)
     if await _registrar_si_pausada(conversation, cuerpo, "agent"):
         return ev.ResultadoEnvio(False, ev.PAUSADA, send_id=send_id)
 
