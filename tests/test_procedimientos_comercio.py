@@ -58,7 +58,8 @@ def test_el_pack_publica_un_procedimiento_valido_contra_el_binario() -> None:
 
     catalogo = catalogo_de_acciones(plugin_manager.scan())
     crudos = de_pack.crudos("pack_commerce")
-    assert [c["id"] for c in crudos] == ["pack_commerce.tomar_pedido"]  # contratar_plan es de Suscripciones
+    # contratar_plan es de Suscripciones; pago_en_linea es del dominio Formas de pago (HU-COM-23).
+    assert [c["id"] for c in crudos] == ["pack_commerce.pago_en_linea", "pack_commerce.tomar_pedido"]
     for crudo in crudos:
         assert revisar(crudo, catalogo) == [], crudo["id"]
     assert set(_procs()) == {c["id"] for c in crudos}
@@ -70,7 +71,7 @@ def test_el_manifiesto_congela_los_procedimientos_que_se_registran() -> None:
 
     modulos = {m.id: m for m in plugin_manager.scan()}
     comercio = manifiesto_de_pack(modulos["pack_commerce"])
-    assert comercio.version == "3.4.0"
+    assert comercio.version == "3.5.0"
     assert comercio.manifest["provides"]["procedures"] == de_pack.crudos("pack_commerce")
     assert manifiesto_de_pack(modulos["pack_payments"]).manifest["provides"]["procedures"] == []
 
@@ -79,6 +80,8 @@ def test_en_confirmar_ninguna_accion_cambia_el_total_sin_cambiar_el_id() -> None
     """La confirmación se ata a los args (`quote_id`), no al total: en `confirmar` no puede haber
     una acción que mute la cotización vigente (`aplicar_promocion`)."""
     for proc in _procs().values():
+        if proc.id != "pack_commerce.tomar_pedido":
+            continue  # pago_en_linea no confirma una cotización: cobra un pedido que ya existe
         confirmar = motor.etapa(proc, "confirmar")
         assert confirmar is not None and confirmar.confirmation == "interactive_button"
         assert "aplicar_promocion" not in confirmar.actions
