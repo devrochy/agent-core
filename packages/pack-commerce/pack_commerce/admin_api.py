@@ -48,7 +48,7 @@ from .models import (
 router = APIRouter(prefix="/api/v1/pack/commerce", tags=["pack · comercio"])
 
 ORDER_STATUSES = ("abierto", "despachado", "entregado", "cancelado", "expirado")
-PAYMENT_STATUSES = ("pendiente", "pagado", "rechazado")
+PAYMENT_STATUSES = ("pendiente", "en_revision", "pagado", "rechazado")
 
 # HU-CRM-01: la foto del producto es un link público. Solo https (WhatsApp la descarga
 # por el link) y con tope de largo.
@@ -1088,7 +1088,7 @@ async def list_orders(
     principal: Annotated[Principal, Depends(require("pack_commerce"))],
     response: Response,
     estado: Annotated[str | None, Query(description="Estado del pedido.")] = None,
-    pago: Annotated[str | None, Query(description="Estado del pago: pendiente, pagado o rechazado.")] = None,
+    pago: Annotated[str | None, Query(description="Estado del pago: pendiente, en_revision, pagado o rechazado.")] = None,
     q: Annotated[
         str | None,
         Query(max_length=120, description="Número de pedido o nombre del cliente."),
@@ -1510,3 +1510,145 @@ async def guardar_formas_de_pago(
     ).model_dump(mode="json", exclude_unset=True)
     await guardar_config_del_agente(principal.tenant_id, agent_id, "pack_commerce", valores)
     return await _formas_out(agent_id)
+
+
+# ------------------------------------------------------------------ comprobantes (SPEC-48, HU-COM-22)
+class ComprobanteOut(BaseModel):
+    id: uuid.UUID
+    status: Literal["pagado", "en_revision", "rechazado"]
+    image_url: str | None = Field(description="URL firmada de vida corta; `null` si la imagen no está.")
+    extracted: dict[str, Any] = Field(description="Lo que leyó la visión: monto, fecha, estado, banco, cuenta (últimos 4)…")
+    match: dict[str, Any] = Field(description="Resultado de la comparación con el pedido y sus motivos.")
+    reviewed_at: datetime | None
+    review_note: str | None
+    created_at: datetime
+
+
+class ComprobantesOut(BaseModel):
+    order_id: uuid.UUID
+    payment_status: str
+    payment_method: str
+    payment_status_changed_at: datetime | None
+    payment_status_reason: str | None
+    items: list[ComprobanteOut]
+
+
+class EstadoDePagoIn(BaseModel):
+    accion: Literal["confirmar", "rechazar", "marcar_pagado"] = Field(
+        description="`confirmar`: el comprobante en revisión es válido. `rechazar`: no lo es. "
+        "`marcar_pagado`: el pago se verificó por fuera (sin comprobante).",
+    )
+    proof_id: uuid.UUID | None = Field(default=None, description="Comprobante que se confirma o rechaza.")
+    nota: str = Field(default="", max_length=300)
+
+
+def _comprobante_out(p: Any) -> ComprobanteOut:
+    url_imagen = almacenamiento.url(p.image_key) if almacenamiento.key_limpia(p.image_key) else None
+    return ComprobanteOut(
+        id=p.id,
+        status=p.status,
+        image_url=url_imagen,
+        extracted=dict(p.extracted or {}),
+        match=dict(p.match or {}),
+        reviewed_at=p.reviewed_at,
+        review_note=p.review_note,
+        created_at=p.created_at,
+    )
+
+
+async def _comprobantes_out(session: Any, order: Any) -> ComprobantesOut:
+    from .models import PaymentProof
+
+    filas = (
+        await session.execute(
+            select(PaymentProof)
+            .where(
+                PaymentProof.tenant_id == order.tenant_id,
+                PaymentProof.order_id == order.id,
+                PaymentProof.deleted_at.is_(None),
+            )
+            .order_by(PaymentProof.created_at.desc())
+            .limit(20)
+        )
+    ).scalars().all()
+    return ComprobantesOut(
+        order_id=order.id,
+        payment_status=order.payment_status,
+        payment_method=order.payment_method,
+        payment_status_changed_at=order.payment_status_changed_at,
+        payment_status_reason=order.payment_status_reason,
+        items=[_comprobante_out(p) for p in filas],
+    )
+
+
+@router.get("/orders/{order_id}/payment-proofs", response_model=ComprobantesOut)
+async def comprobantes_del_pedido(
+    order_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> ComprobantesOut:
+    """Comprobantes del pedido (los 20 más recientes) con su imagen firmada y el resultado."""
+    async with get_session() as session:
+        order = await get_owned(session, Order, order_id, principal.tenant_id)
+        if order is None:
+            raise ApiError.not_found("Pedido no encontrado.")
+        return await _comprobantes_out(session, order)
+
+
+@router.post("/orders/{order_id}/payment-status", response_model=ComprobantesOut)
+async def cambiar_estado_de_pago(
+    order_id: uuid.UUID,
+    payload: EstadoDePagoIn,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> ComprobantesOut:
+    """Revisión manual del pago. Queda quién, cuándo y la nota. Un pedido pagado no se vuelve a
+    rechazar desde aquí (un reembolso no es un rechazo); rechazar un comprobante deja el pedido
+    `rechazado` y el agente deja de presentarlo como pagado."""
+    from datetime import UTC
+
+    from .models import PaymentProof
+
+    nota = payload.nota.strip()
+    if payload.accion == "rechazar" and not nota:
+        raise ApiError.bad_request("Escribe el motivo del rechazo.", "missing_reason")
+    async with get_session() as session:
+        order = (
+            await session.execute(
+                select(Order).where(Order.tenant_id == principal.tenant_id, Order.id == order_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if order is None:
+            raise ApiError.not_found("Pedido no encontrado.")
+        proof = None
+        if payload.proof_id is not None:
+            proof = (
+                await session.execute(
+                    select(PaymentProof).where(
+                        PaymentProof.tenant_id == principal.tenant_id,
+                        PaymentProof.id == payload.proof_id,
+                        PaymentProof.order_id == order.id,
+                        PaymentProof.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if proof is None:
+                raise ApiError.not_found("Comprobante no encontrado.")
+        elif payload.accion != "marcar_pagado":
+            raise ApiError.bad_request("Elige el comprobante que confirmas o rechazas.", "missing_proof")
+        if order.payment_status == "pagado" and payload.accion == "rechazar":
+            raise ApiError(409, "already_paid", "El pedido ya está pagado: no se rechaza desde aquí.")
+        nuevo = "rechazado" if payload.accion == "rechazar" else "pagado"
+        ahora = datetime.now(UTC)
+        actor = getattr(principal.admin, "id", None)
+        if proof is not None:
+            proof.status = nuevo
+            proof.reviewed_by = actor
+            proof.reviewed_at = ahora
+            proof.review_note = nota or None
+        order.payment_status = nuevo
+        order.payment_status_changed_by = actor
+        order.payment_status_changed_at = ahora
+        order.payment_status_reason = nota or {"confirmar": "Comprobante confirmado", "marcar_pagado": "Marcado pagado"}.get(
+            payload.accion
+        )
+        await session.flush()
+        return await _comprobantes_out(session, order)

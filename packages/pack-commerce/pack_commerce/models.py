@@ -304,7 +304,7 @@ class Order(TenantMixin, Base):
     conversation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     status: Mapped[str] = mapped_column(Text, default="abierto")  # abierto|despachado|entregado|cancelado|expirado
-    payment_status: Mapped[str] = mapped_column(Text, default="pendiente")  # pendiente|pagado|rechazado
+    payment_status: Mapped[str] = mapped_column(Text, default="pendiente")  # pendiente|en_revision|pagado|rechazado
     payment_method: Mapped[str] = mapped_column(Text, default="efectivo_contraentrega")  # efectivo_contraentrega|transferencia
     delivery_method: Mapped[str] = mapped_column(Text, default="domicilio")  # domicilio|recoger_en_tienda
     total: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
@@ -327,6 +327,10 @@ class Order(TenantMixin, Base):
     delivery_city: Mapped[str | None] = mapped_column(Text, default=None)
     status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     status_reason: Mapped[str | None] = mapped_column(Text, default=None)
+    # Revisión manual del pago (SPEC-48, HU-COM-22, crm_0020): quién lo cambió, cuándo y por qué.
+    payment_status_changed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    payment_status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    payment_status_reason: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -352,3 +356,32 @@ class OrderItemBatch(TenantMixin, Base):
     order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     idempotency_key: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PaymentProof(TenantMixin, Base):
+    """Comprobante de una transferencia (SPEC-48, HU-COM-22, crm_0020). Registro del negocio: no se borra.
+
+    `extracted` es lo que leyó la visión (dato no confiable hasta compararlo); `match` es el resultado
+    determinista de `evaluar_comprobante` con sus motivos. Idempotente por `(order_id, image_sha256)`."""
+
+    __tablename__ = "pack_commerce_payment_proofs"
+    __table_args__ = (
+        Index("ix_pack_commerce_payment_proofs_tenant_order", "tenant_id", "order_id", "created_at"),
+        Index("ix_pack_commerce_payment_proofs_tenant_sha256", "tenant_id", "image_sha256"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    image_key: Mapped[str] = mapped_column(Text, nullable=False)
+    image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    extracted: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    match: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(Text, nullable=False)  # pagado|en_revision|rechazado
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    review_note: Mapped[str | None] = mapped_column(Text, default=None)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
