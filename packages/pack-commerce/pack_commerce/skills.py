@@ -163,12 +163,15 @@ def _parse_uuid(value: str) -> uuid.UUID | None:
         return None
 
 
-async def _plugin_config() -> Any:  # type: ignore[no-untyped-def]
-    """Config del plugin con fallback a None (robusto en pruebas/activación parcial)."""
+async def _plugin_config(agent_id: Any = None) -> Any:  # type: ignore[no-untyped-def]
+    """Config del plugin con fallback a None (robusto en pruebas/activación parcial).
+
+    Con `agent_id` (SPEC-48, HU-COM-21), los campos de `config_agente` (formas de pago y
+    cuentas) de ese agente pisan a los del negocio; el resto sigue siendo del negocio."""
     try:
         from core.plugin_manager import plugin_manager
 
-        return await plugin_manager.load_config("pack_commerce")
+        return await plugin_manager.load_config("pack_commerce", agent_id=agent_id)
     except Exception:
         return None
 
@@ -362,7 +365,20 @@ async def referencias_vigentes(conversation_id: uuid.UUID, customer_id: uuid.UUI
                 ),
             )
         )
-    return referencias
+    return referencias + await _referencia_de_formas()
+
+
+async def _referencia_de_formas() -> list[Referencia]:
+    """Las formas de pago que el agente en foco puede ofrecer (SPEC-48, HU-COM-21): solo los ids
+    y si están activas, nunca cuentas ni instrucciones (invariante 7). Sin agente en foco, nada."""
+    from core.shared import release_vigente
+    from pack_commerce.formas_de_pago import METODOS, metodos_del_agente
+
+    agente = release_vigente.agente_del_turno()
+    if agente is None:
+        return []
+    activos = set(await metodos_del_agente(agente.agent_id))
+    return [Referencia(tipo="formas_de_pago", datos=tuple((m, "si" if m in activos else "no") for m in METODOS))]
 
 
 async def _referencias_del_sandbox(conversation_id: uuid.UUID) -> list[Referencia]:
@@ -401,7 +417,7 @@ async def _referencias_del_sandbox(conversation_id: uuid.UUID) -> list[Referenci
                 ),
             )
         )
-    return referencias
+    return referencias + await _referencia_de_formas()
 
 
 async def _order_del_cliente(session, order_id, customer_id) -> Order | None:  # type: ignore[no-untyped-def]
@@ -487,11 +503,14 @@ def _sin_cotizacion_vigente() -> dict[str, Any]:
     }
 
 
-async def _transfer_safe_append() -> str:
-    """Arma el bloque de datos de transferencia (nunca lo escribe el LLM)."""
+async def _transfer_safe_append(agent_id: Any = None) -> str:
+    """Arma el bloque de datos de transferencia (nunca lo escribe el LLM). Con `agent_id`, las
+    cuentas propias del agente pisan a las del negocio (SPEC-48, HU-COM-21)."""
     from core.payments.transferencia import formatear_cuentas
+    from pack_commerce.formas_de_pago import config_del_agente
 
-    config = await _plugin_config()
+    # El mismo camino que `metodos_del_agente`: si transferencia está activa, sus cuentas salen.
+    config = await (config_del_agente(agent_id) if agent_id is not None else _plugin_config())
     return formatear_cuentas(getattr(config, "transfer_accounts", None))
 
 
@@ -1680,11 +1699,21 @@ class OrderSkill(BaseSkill):
                 "hint": "Pide los datos que faltan uno a uno.",
             }
         consiente_guardar = bool(arguments.get("guardar_datos_cliente", False))
-        config = await _plugin_config()
+        config = await _plugin_config(context.agent_id)
 
         if payment_method not in PAYMENT_METHODS:
             return {
                 "error": "Método de pago no válido. Usa 'efectivo_contraentrega', 'transferencia' o 'pago_en_linea'."
+            }
+        # SPEC-48, HU-COM-21: solo una forma de pago activa del agente (encendida y configurada).
+        from pack_commerce.formas_de_pago import ETIQUETAS, metodos_del_agente
+
+        activos = await metodos_del_agente(context.agent_id)
+        if payment_method not in activos:
+            return {
+                "error": "Esa forma de pago no está habilitada.",
+                "formas_disponibles": activos,
+                "hint": "Ofrecele una de estas: " + ", ".join(ETIQUETAS[m].lower() for m in activos),
             }
         if delivery_method and delivery_method not in DELIVERY_METHODS:
             return {"error": "Método de entrega no válido. Usa 'domicilio' o 'recoger_en_tienda'."}
@@ -1905,7 +1934,7 @@ class OrderSkill(BaseSkill):
             "entregado_en": f"{customer_data.get('address')}, {customer_data.get('municipality')}, {customer_data.get('city')}",
         }
         if payment_method == "transferencia":
-            transfer_block = await _transfer_safe_append()
+            transfer_block = await _transfer_safe_append(context.agent_id)
             template = getattr(config, "order_confirmed_transfer_message", "") or ""
             if transfer_block:
                 default = (
