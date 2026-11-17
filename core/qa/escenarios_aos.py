@@ -33,7 +33,7 @@ from core.qa.escenarios import (
 from core.shared.audit import record_audit
 
 COMERCIO = "pack_commerce"
-CONTRATAR_PLAN = ("pack_subscriptions.contratar_plan", "2.0.1")
+CONTRATAR_PLAN = ("pack_subscriptions.contratar_plan", "2.1.0")
 TOMAR_PEDIDO = ("pack_commerce.tomar_pedido", "1.1.0")
 
 
@@ -448,7 +448,7 @@ async def calidad_con_muestra(ctx: Contexto) -> Resultado:
     turnos = escalados = rechazos = 0
     recorridos: dict[str, int] = {"completed": 0, "escalated": 0, "failed": 0, "active": 0}
     # Patrón fijo: el turno i de cada agente escala si i % 9 == 8, el verificador rechaza si i % 6 == 5.
-    for agente, proc, etapa in ((chat.ventas, TOMAR_PEDIDO, "armar"), (chat.agenda, ("pack_calendar.agendar_cita", "1.0.0"), "elegir_horario")):
+    for agente, proc, etapa in ((chat.ventas, TOMAR_PEDIDO, "armar"), (chat.agenda, ("pack_calendar.agendar_cita", "1.1.0"), "elegir_horario")):
         convs = [
             await _conversacion(ctx, chat, f"Cliente de calidad {agente.nombre} {n + 1} · {ctx.sufijo}", dueno=agente)
             for n in range(CONVERSACIONES_POR_AGENTE)

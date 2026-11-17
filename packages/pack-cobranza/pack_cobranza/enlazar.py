@@ -16,9 +16,12 @@ carrera); dos o más no enlazan (`ambiguo`): se prefiere no enlazar a enlazar ma
 tiene otro `Cliente` enlazado no se vuelve a enlazar. El resultado se cuenta en el log
 `cobranza_enlace{resultado, origen}` **sin PII** (ni teléfono, ni documento, ni nombre).
 
-Limitaciones declaradas: `contact_phone` solo existe en WhatsApp, así que los clientes de Instagram u
-otros canales no se enlazan; y un número local sin prefijo solo cruza con un `wa_id` internacional si el
-prefijo es el del país por defecto (`PAIS_POR_DEFECTO`, hoy CO: no hay país por negocio).
+Solo enlazan teléfonos verificados por el canal: el `wa_id` de WhatsApp y, en el camino perezoso, el que el cliente
+de Telegram compartió de sí mismo con el botón de `pedir_telefono` (`request_contact`, ADR-0199 §8; adenda de
+ADR-0179 §7). El alta (`enlazar_cliente`) sigue solo con WhatsApp: con el mismo número en WhatsApp y Telegram habría
+dos `Customer` y el alta quedaría `ambiguo`. En el perezoso gana el primer canal que consulta (D-SPEC-33-5).
+Limitaciones declaradas: los clientes de Instagram u otros canales no se enlazan; y un número local sin
+prefijo solo cruza con un `wa_id` internacional si el prefijo es el del país por defecto (`PAIS_POR_DEFECTO`, hoy CO: no hay país por negocio).
 """
 
 from __future__ import annotations
@@ -50,12 +53,17 @@ MIN_DIGITOS = 7
 TTL_CACHE_NEGATIVO_S = 600
 LOTE_POR_DEFECTO = 500
 _NO_DIGITOS = re.compile(r"\D+")
+# Canales cuyo `contact_phone` verifica el propio canal (ver `enlazar_customer`).
+CANALES_VERIFICADOS = ("whatsapp", "telegram")
 
 
 class Resultado(StrEnum):
     ENLAZADO = "enlazado"
     AMBIGUO = "ambiguo"
     SIN_MATCH = "sin_match"
+    # El `Customer` aún no tiene teléfono verificado (un cliente de Telegram que no lo compartió). No se cachea:
+    # compartirlo con `pedir_telefono` debe enlazar en el turno siguiente.
+    SIN_TELEFONO = "sin_telefono"
     YA_ENLAZADO = "ya_enlazado"
 
 
@@ -133,18 +141,23 @@ async def enlazar_customer(
 ) -> Resultado:
     """Del `Customer` al `Cliente`: busca el deudor sin enlazar cuyo teléfono coincide."""
     tid = _tenant_actual()
-    # Solo WhatsApp: el teléfono de un Customer de otro canal (p. ej. el intake web de commerce) lo declara el
-    # propio visitante, sin verificar, y enlazarlo le daría los datos del deudor.
-    telefono = (
+    # Solo canales que verifican el número: WhatsApp (`wa_id`) y Telegram (`contact_phone` solo lo escribe el consumer
+    # desde un `request_contact` del propio remitente, ADR-0199 §8). El de otro canal (p. ej. el intake web de commerce)
+    # lo declara el propio visitante, sin verificar, y enlazarlo le daría los datos del deudor.
+    fila = (
         await session.execute(
-            select(Customer.contact_phone).where(
+            select(Customer.channel, Customer.contact_phone).where(
                 Customer.tenant_id == tid,
                 Customer.id == customer_id,
-                Customer.channel == "whatsapp",
                 Customer.deleted_at.is_(None),
             )
         )
-    ).scalar_one_or_none()
+    ).one_or_none()
+    if fila is None or fila.channel not in CANALES_VERIFICADOS:
+        return _registrar(Resultado.SIN_MATCH, origen)
+    telefono = fila.contact_phone
+    if not telefono:
+        return _registrar(Resultado.SIN_TELEFONO, origen)
     cands = candidatos(telefono, pais_por_defecto)
     if not cands:
         return _registrar(Resultado.SIN_MATCH, origen)

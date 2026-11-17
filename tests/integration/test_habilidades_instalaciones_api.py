@@ -214,7 +214,7 @@ async def test_el_build_congela_solo_las_de_la_conexion_y_falla_cerrado(app_clie
     r = await app_client.get(f"/api/v1/admin/agents/{agente}/versions/{version}", headers=master)
     assert r.status_code == 200, r.text
     resueltos = {p["id"]: p for p in r.json()["procedures"]}
-    assert resueltos[CITA]["resolved_version"] == "1.0.0" and resueltos[CITA]["problem"] is None
+    assert resueltos[CITA]["resolved_version"] == "1.1.0" and resueltos[CITA]["problem"] is None
     assert resueltos[PLAN]["resolved_version"] is None and resueltos[PLAN]["problem"]
 
     # Versión 2 de Agenda solo con `agendar_cita`.
@@ -240,7 +240,7 @@ async def test_el_build_congela_solo_las_de_la_conexion_y_falla_cerrado(app_clie
     assert await _skills(tid, build.release_id) == ["pack_calendar"]  # reemplazo entero, sin merge
     ((manifest,),) = await _sql(tid, "select manifest from connection_releases where id = :r", r=build.release_id)
     (agenda,) = [c for c in manifest["components"] if c["agent_key"] == "agenda"]
-    assert agenda["is_default"] and agenda["procedures"] == [{"id": CITA, "version": "1.0.0"}]
+    assert agenda["is_default"] and agenda["procedures"] == [{"id": CITA, "version": "1.1.0"}]
 
     # Una instalación de conexión de un pack que el negocio no habilita (escrita por fuera de la
     # API) hace fallar el build: la activación del código sigue colgando de `spec.packs`.
