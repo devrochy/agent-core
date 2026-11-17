@@ -64,7 +64,7 @@ async def _pedido_con_comprobante(tid: uuid.UUID, estado: str = "en_revision") -
         await session.flush()
         proof = PaymentProof(
             tenant_id=tid, order_id=order.id, image_key=f"t/{uuid.uuid4().hex}.jpg", image_sha256=SHA,
-            extracted={"monto": 50_000, "cuenta_destino": "8901"}, match={"motivos": ["sin_cuenta"]}, status=estado,
+            extracted={"monto": 50_000, "cuenta_destino": "8901"}, match={"motivos": ["sin_cuenta"]}, status="en_revision",
         )
         session.add(proof)
         await session.flush()
