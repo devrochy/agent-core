@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 
 # Importar `jobs` a nivel de módulo registra los `@register_cron` en Celery
 # (worker y beat) apenas se escanea el plugin -- no dentro de `on_activate()`,
@@ -29,9 +29,10 @@ from sqlalchemy import func, or_, select
 # plugin esté activo (guard del decorador).
 import pack_commerce.jobs  # noqa: F401
 from core.db.session import get_owned, get_session
+from core.leads import servicio as leads_core
 from core.mcp.types import Afirmacion, BaseModule, config_de_agente
 from core.shared.dinero import MONEY_IN_TEXT, MONEY_KEYS, parse_money  # noqa: F401 (API del pack)
-from core.shared.events import ON_CONVERSATION_STARTED, ON_PROCEDURE_SLOTS_SET
+from core.shared.events import ON_PROCEDURE_SLOTS_SET
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.shared.test_mode import TEST_CHANNEL
@@ -46,7 +47,6 @@ from pack_commerce.models import (
     Category,
     CategoryComplement,
     Inventory,
-    Lead,
     Order,
     OrderItem,
     Product,
@@ -56,9 +56,7 @@ from pack_commerce.models import (
 )
 from pack_commerce.skills import (
     CatalogSkill,
-    LeadSkill,
     OrderSkill,
-    _avisar_lead_nuevo,
     classify_customer,
     referencias_vigentes,
 )
@@ -313,14 +311,7 @@ async def crm_dashboard(request: Request):
         de_prueba = select(Customer.id).where(
             Customer.tenant_id == tenant_id, Customer.channel == TEST_CHANNEL
         )
-        leads = (
-            await session.execute(
-                select(Lead).where(
-                    Lead.tenant_id == tenant_id,
-                    or_(Lead.customer_id.is_(None), ~Lead.customer_id.in_(de_prueba)),
-                )
-            )
-        ).scalars().all()
+        cantidad_de_leads = await leads_core.contar_vivos(session, tenant_id, excluir_canal=TEST_CHANNEL)
         products = (
             await session.execute(
                 select(Product).where(Product.tenant_id == tenant_id, Product.deleted_at.is_(None))
@@ -339,7 +330,7 @@ async def crm_dashboard(request: Request):
         ).scalars().all()
     ctx.update(
         kpi={
-            "leads": len(leads),
+            "leads": cantidad_de_leads,
             "productos": len(products),
             "promociones": len(promotions),
             "pedidos": len(orders),
@@ -441,15 +432,7 @@ async def _leads_list() -> list[dict[str, Any]]:
                 )
             ).all()
         }
-        leads_by_customer = {
-            lead.customer_id: lead
-            for lead in (
-                await session.execute(select(Lead).where(Lead.tenant_id == tenant_id))
-            )
-            .scalars()
-            .all()
-            if lead.customer_id is not None
-        }
+        leads_by_customer = await leads_core.por_cliente(session, tenant_id)
 
     rows: list[dict[str, Any]] = []
     for c in customers:
@@ -480,45 +463,22 @@ async def _leads_list() -> list[dict[str, Any]]:
 
 
 async def _leads_save(record_id: str | None, values: dict[str, Any]) -> None:
-    """`record_id` es el `customer.id` (no un `lead.id`): estado/segmento ya se
-    calculan solos, lo único editable a mano es el enriquecimiento de
-    nombre/interés — se crea la fila de `Lead` si todavía no existía."""
+    """`record_id` es el `customer.id` (no un `lead.id`): estado/segmento ya se calculan solos, lo único editable a mano
+    es el enriquecimiento de nombre/interés. El lead es del core (ADR-0193): lo asegura su servicio."""
     if record_id is None:
         return
     try:
         customer_uuid = uuid.UUID(record_id)
     except ValueError:
         return
-    from core.db.models import Customer
-
-    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        # customer_id es FK lógica (sin constraint física) — validar que el
-        # customer exista y sea de este tenant antes de crear/tocar el Lead,
-        # para no dejar una referencia colgante hacia otro tenant.
-        customer = (
-            await session.execute(
-                select(Customer).where(
-                    Customer.id == customer_uuid, Customer.tenant_id == tenant_id
-                )
-            )
-        ).scalar_one_or_none()
-        if customer is None:
-            return
-
-        lead = (
-            await session.execute(
-                select(Lead).where(Lead.customer_id == customer_uuid, Lead.tenant_id == tenant_id)
-            )
-        ).scalar_one_or_none()
-        if lead is None:
-            lead = Lead(customer_id=customer_uuid, idempotency_key=f"manual:{customer_uuid}")
-            session.add(lead)
-        if "name" in values:
-            lead.name = str(values["name"]) or None
-        if "interest" in values:
-            lead.interest = str(values["interest"] or "")
-        lead.last_activity_at = datetime.now(UTC)
+        await leads_core.fijar_datos(
+            session,
+            get_current_tenant_id(),
+            customer_uuid,
+            name=values.get("name") if "name" in values else None,
+            interest=values.get("interest") if "interest" in values else None,
+        )
 
 
 # ------------------------------------------------------------------ productos
@@ -1095,20 +1055,17 @@ class CRMModule(BaseModule):
         "aplicar_promocion": "catalogo",
         "generar_cotizacion": "cotizaciones",
         "confirmar_cotizacion": "cotizaciones",
-        "crear_lead": "leads",
-        "actualizar_lead": "leads",
-        "calificar_lead": "leads",
     }
     # Lo que es de CADA agente de este tipo; el resto de `CRMConfig` es del negocio (SPEC-44, design.md §2).
     config_agente = config_de_agente(CRMConfig, ("scoring_mode", "monto_alto_threshold", "order_status_visible", "order_confirmed_message", "order_confirmed_transfer_message", "completion_claims_disabled", "completion_claims_custom", "payment_forms", "transfer_accounts", "transfer_proof_required", "transfer_ocr_enabled",), "ConfigDeAgenteDeVentas")
     id = PLUGIN_ID
     name = "CRM"
-    version = "3.6.0"
-    description = "Leads, catálogo (menú), promociones y pedidos para el negocio"
+    version = "4.0.0"  # ADR-0193: los leads pasan al core (LeadSkill, crons y provider de leads salen del pack)
+    description = "Catálogo (menú), promociones, cotizaciones y pedidos para el negocio"
     display_name = "Comercio"
     category = "Ventas"
     min_plan = "basic"
-    action_summary: ClassVar[list[str]] = ["Cotizar", "Tomar pedidos", "Aplicar promociones", "Gestionar leads"]
+    action_summary: ClassVar[list[str]] = ["Cotizar", "Tomar pedidos", "Aplicar promociones"]
     # Dominios de superpoderes (SPEC-48, HU-AOS-83): "Pago en línea" y "Comprobar transferencia"
     # no son poderes sueltos, son del dominio Formas de pago. Los dos nacen en HU-COM-23/24.
     grupos_de_procedimientos: ClassVar[dict[str, str]] = {
@@ -1139,7 +1096,6 @@ class CRMModule(BaseModule):
         """API admin consumida por el panel nuevo (ADR-0079)."""
         return [admin_api_router]
     declared_skills: list[type] = [  # noqa: RUF012
-        LeadSkill,
         CatalogSkill,
         OrderSkill,
     ]
@@ -1232,7 +1188,6 @@ class CRMModule(BaseModule):
         return ContenidoCargado(tipo="catalogo", cantidad=int(cantidad or 0), primero_en=primero, seccion=PLUGIN_ID)
 
     def on_activate(self, host: MCPHost) -> None:
-        host.register_skill(LeadSkill())
         host.register_skill(CatalogSkill())
         host.register_skill(OrderSkill())
         # Montos y afirmaciones de cierre los verifica el core (ADR-0119, HU-ARCH-29);
@@ -1257,10 +1212,7 @@ class CRMModule(BaseModule):
         # genérico — cero plantillas/rutas propias del pack.
         self._register_views()
 
-        # La suscripción se registra SIEMPRE: la decisión de auto_create_lead se
-        # evalúa por tenant en el evento (la config activada no es global — vive
-        # en plugin_configs y un tenant puede desactivarla sin afectar al resto).
-        host.subscribe(ON_CONVERSATION_STARTED, self._on_conversation_started)
+        # El lead de cada conversación lo asegura el core en el turno (ADR-0193 §2): ya no hay `auto_create_lead`.
         # Datos que el cliente dio en un recorrido de este pack (smoke de test 2026-10-20).
         host.subscribe(ON_PROCEDURE_SLOTS_SET, self._on_procedure_slots_set)
 
@@ -1335,58 +1287,6 @@ class CRMModule(BaseModule):
         )
 
     # ------------------------------------------------------------ eventos
-    async def _on_conversation_started(self, conversation_id: uuid.UUID, customer_id: uuid.UUID) -> None:
-        """Crea un lead borrador cuando arranca una conversación nueva.
-
-        Solo si el pack está habilitado para el tenant (ADR-0019) y su config
-        tiene auto_create_lead activo (decisión por tenant, no global): sin esto,
-        un tenant sin el pack o con la config apagada recibiría leads fantasma.
-        """
-        from core.agents.spec import enabled_packs, load_active_spec
-        from core.db.models import Conversation
-        from core.plugin_manager import plugin_manager
-        from core.shared.tenant import get_current_tenant_id
-        from core.shared.test_mode import is_panel_test
-
-        tenant_id = get_current_tenant_id()
-        if tenant_id is None:
-            return
-        async with get_session() as session:
-            if is_panel_test(await session.get(Conversation, conversation_id)):
-                return
-        spec = await load_active_spec(tenant_id)
-        if self.id not in enabled_packs(spec):
-            return
-        config = await plugin_manager.load_config(self.id)
-        if config is None or not getattr(config, "auto_create_lead", True):
-            return
-
-        from sqlalchemy import select
-
-        from pack_commerce.models import Lead
-
-        async with get_session() as session:
-            existing = (
-                await session.execute(
-                    select(Lead).where(
-                        Lead.customer_id == customer_id, Lead.tenant_id == tenant_id
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing is None:
-                lead = Lead(
-                    customer_id=customer_id,
-                    conversation_id=conversation_id,
-                    status="nuevo",
-                    idempotency_key=f"auto:{conversation_id}",
-                )
-                session.add(lead)
-                await session.flush()
-                # Con `auto_create_lead` el borrador es SIEMPRE el primer lead del cliente: `crear_lead`
-                # lo encuentra y responde `ya_existe`, así que el aviso solo puede salir de aquí.
-                await _avisar_lead_nuevo(session, lead.id, customer_id)
-                log.info("lead_draft_created", conversation_id=str(conversation_id))
-
     async def _on_procedure_slots_set(
         self,
         tenant_id: uuid.UUID,
@@ -1411,14 +1311,15 @@ class CRMModule(BaseModule):
         async with get_session() as session:
             if is_panel_test(await session.get(Conversation, conversation_id)):
                 return
-        from pack_commerce.skills import completar_lead
+        from core.leads import servicio as leads
 
         try:
             if self.id not in enabled_packs(await load_active_spec(actual)):
                 return
             async with get_session() as session:
-                await completar_lead(
+                await leads.completar_contacto(
                     session,
+                    actual,
                     customer_id,
                     nombre=datos.get("full_name"),
                     email=datos.get("email"),

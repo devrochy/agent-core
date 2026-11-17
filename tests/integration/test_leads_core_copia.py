@@ -53,30 +53,43 @@ async def _cliente(tid: uuid.UUID) -> uuid.UUID:
             return c.id
 
 
-async def _lead_de_commerce(tid: uuid.UUID, cliente: uuid.UUID | None, **campos) -> uuid.UUID:
-    from pack_commerce.models import Lead, LeadFollowup, LeadStageChange
+# Columnas de `pack_commerce_leads` que un test puede fijar (packages/pack-commerce/alembic/versions/0001..0019). Los
+# modelos ORM de commerce ya no existen (ADR-0193): se siembra con SQL crudo, como lo lee `core.leads.copia`.
+_COLUMNAS_DEL_LEAD = frozenset({
+    "conversation_id", "phone", "email", "interest", "score", "status", "idempotency_key", "last_activity_at",
+    "stage_changed_at", "next_action_at", "next_action_note", "loss_reason", "loss_note", "estimated_value",
+})
 
+
+async def _lead_de_commerce(tid: uuid.UUID, cliente: uuid.UUID | None, **campos) -> uuid.UUID:
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
+    assert set(campos) <= _COLUMNAS_DEL_LEAD, set(campos) - _COLUMNAS_DEL_LEAD
+    lead_id = uuid.uuid4()
+    valores = {"id": lead_id, "tenant_id": tid, "customer_id": cliente, "name": "Ana", **campos}
+    columnas = ", ".join(valores)
+    marcas = ", ".join(f":{c}" for c in valores)
     async with tenant_scope(tid):
         async with get_session() as session:
-            lead = Lead(tenant_id=tid, customer_id=cliente, name="Ana", **campos)
-            session.add(lead)
-            await session.flush()
-            session.add(
-                LeadStageChange(
-                    tenant_id=tid, lead_id=lead.id, customer_id=cliente, from_stage="nuevo",
-                    to_stage="calificado", actor="agente", idempotency_key=uniq("idem"),
-                )
+            await session.execute(text(f"insert into pack_commerce_leads ({columnas}) values ({marcas})"), valores)
+            await session.execute(
+                text(
+                    "insert into pack_commerce_lead_stage_changes "
+                    "(id, tenant_id, lead_id, customer_id, from_stage, to_stage, actor, idempotency_key) "
+                    "values (:id, :t, :l, :c, 'nuevo', 'calificado', 'agente', :k)"
+                ),
+                {"id": uuid.uuid4(), "t": tid, "l": lead_id, "c": cliente, "k": uniq("idem")},
             )
-            session.add(
-                LeadFollowup(
-                    tenant_id=tid, lead_id=lead.id, customer_id=cliente, note="llamar", due_at=AHORA,
-                    outcome="hecho", actor="persona",
-                )
+            await session.execute(
+                text(
+                    "insert into pack_commerce_lead_followups "
+                    "(id, tenant_id, lead_id, customer_id, note, due_at, outcome, actor) "
+                    "values (:id, :t, :l, :c, 'llamar', :due, 'hecho', 'persona')"
+                ),
+                {"id": uuid.uuid4(), "t": tid, "l": lead_id, "c": cliente, "due": AHORA},
             )
-            return lead.id
+    return lead_id
 
 
 async def _leads_del_core(tid: uuid.UUID) -> dict[uuid.UUID, tuple[uuid.UUID | None, bool]]:

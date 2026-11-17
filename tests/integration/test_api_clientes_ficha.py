@@ -94,9 +94,9 @@ async def _conexion(tid: uuid.UUID, label: str) -> uuid.UUID:
 
 
 async def _leads_de_venta(tid: uuid.UUID, customer_id: uuid.UUID) -> None:
-    """Dos leads del mismo cliente: manda el de actividad más reciente."""
-    from pack_commerce.models import Lead
-
+    """Dos leads del mismo cliente: manda el vivo (desde ADR-0193 hay uno solo vivo por cliente; el viejo queda
+    borrado)."""
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -104,7 +104,7 @@ async def _leads_de_venta(tid: uuid.UUID, customer_id: uuid.UUID) -> None:
     async with tenant_scope(tid):
         async with get_session() as session:
             session.add(Lead(tenant_id=tid, customer_id=customer_id, status="nuevo", score=2, interest="viejo",
-                             last_activity_at=ahora - timedelta(days=30)))
+                             last_activity_at=ahora - timedelta(days=30), deleted_at=ahora - timedelta(days=1)))
             session.add(Lead(tenant_id=tid, customer_id=customer_id, status="calificado", score=7,
                              interest="plan basic", last_activity_at=ahora))
 
@@ -222,7 +222,7 @@ async def test_filtros_por_conexion_y_clasificacion(app_client) -> None:
     extras_fiel = next(i["extras"] for i in cuerpo["items"] if i["id"] == str(fiel))
     assert (extras_fiel["estado_lead"], extras_fiel["puntaje"], extras_fiel["interes"]) == ("Calificado", 7, "plan basic")
     assert await ids(filtro="estado_lead:calificado") == {str(fiel)}
-    assert await ids(filtro="estado_lead:nuevo") == set()  # el lead viejo ya no es el último
+    assert await ids(filtro="estado_lead:nuevo") == set()  # el lead viejo ya no está vivo
 
     assert (await app_client.get(URL, params={"filtro": "clasificacion:vip"}, headers=headers)).status_code == 400
     assert (await app_client.get(URL, params={"filtro": "saldo:1"}, headers=headers)).status_code == 400

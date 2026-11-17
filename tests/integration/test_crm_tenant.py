@@ -20,23 +20,28 @@ pytestmark = [
 
 async def test_crm_aislado_por_tenant(tenant_setup) -> None:
     t1, t2 = tenant_setup
-    from pack_commerce.models import Lead
+    from datetime import UTC, datetime
 
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
-    # limpia sus propios leads de prueba
+    # limpia sus propios leads de prueba (el lead es del core desde ADR-0193: sin borrado físico)
     for tid in (t1, t2):
         async with tenant_scope(tid):
             async with get_session() as session:
-                await session.execute(Lead.__table__.delete().where(Lead.name.like("rls-crm:%")))
+                await session.execute(
+                    Lead.__table__.update()
+                    .where(Lead.name.like("rls-crm:%"), Lead.deleted_at.is_(None))
+                    .values(deleted_at=datetime.now(UTC))
+                )
 
     async with tenant_scope(t1):
         async with get_session() as session:
-            session.add(Lead(name="rls-crm:t1", interest="x"))
+            session.add(Lead(tenant_id=t1, name="rls-crm:t1", interest="x"))
     async with tenant_scope(t2):
         async with get_session() as session:
-            session.add(Lead(name="rls-crm:t2", interest="x"))
+            session.add(Lead(tenant_id=t2, name="rls-crm:t2", interest="x"))
 
     async with tenant_scope(t1):
         async with get_session() as session:

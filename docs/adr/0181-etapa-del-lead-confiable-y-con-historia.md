@@ -23,7 +23,7 @@ la etapa.
 ## Decisión
 
 1. **Una sola función.** `pack_commerce.etapas.cambiar_etapa(session, lead, nueva, actor=…,
-   idempotency_key=…)` es el único código que asigna `Lead.status`. `tests/test_pack_commerce_etapa_unica.py`
+   idempotency_key=…)` es el único código que asigna `Lead.status`. `tests/test_leads_etapa_unica.py`
    lo vigila con AST (cualquier asignación a `<…lead…>.status` fuera de `etapas.py` falla). Crear un lead con
    `Lead(status=…)` es un alta, no un cambio, y no pasa por ella.
 2. **Etapas válidas:** `nuevo`, `calificado`, `contactado`, `convertido`, `perdido` (`ETAPAS`; `ESTADOS_LEAD`

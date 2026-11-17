@@ -56,15 +56,22 @@ async def _configure_intake(
 
 
 async def _cleanup(tenant_id) -> None:
-    from pack_commerce.models import Lead
-    from sqlalchemy import delete
+    from datetime import UTC, datetime
 
+    from sqlalchemy import update
+
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
+    # El lead es del core (ADR-0193): sin borrado físico, se retira el de la corrida anterior.
     async with tenant_scope(tenant_id):
         async with get_session() as session:
-            await session.execute(delete(Lead).where(Lead.idempotency_key == IDEM))
+            await session.execute(
+                update(Lead)
+                .where(Lead.idempotency_key == IDEM, Lead.deleted_at.is_(None))
+                .values(deleted_at=datetime.now(UTC))
+            )
 
 
 def _payload(nombre: str = "Lead Intake") -> dict:
@@ -106,10 +113,9 @@ async def test_intake_valida_secreto(app_client, moto_setup) -> None:
 
 
 async def test_intake_crea_y_es_idempotente(app_client, moto_setup) -> None:
-    from pack_commerce.models import Lead
     from sqlalchemy import func, select
 
-    from core.db.models import Customer, MemoryFact
+    from core.db.models import Customer, Lead, MemoryFact
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -129,11 +135,13 @@ async def test_intake_crea_y_es_idempotente(app_client, moto_setup) -> None:
         async with get_session() as session:
             n = (
                 await session.execute(
-                    select(func.count()).select_from(Lead).where(Lead.idempotency_key == IDEM)
+                    select(func.count())
+                    .select_from(Lead)
+                    .where(Lead.idempotency_key == IDEM, Lead.deleted_at.is_(None))
                 )
             ).scalar()
             lead = (
-                await session.execute(select(Lead).where(Lead.idempotency_key == IDEM))
+                await session.execute(select(Lead).where(Lead.idempotency_key == IDEM, Lead.deleted_at.is_(None)))
             ).scalar_one()
             # El perfil del cliente nuevo es proyección de sus hechos (ADR-0114 §3, HU-AOS-36).
             customer = await session.get(Customer, lead.customer_id)

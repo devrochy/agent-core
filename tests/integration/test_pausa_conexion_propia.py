@@ -150,11 +150,10 @@ async def test_lo_que_entra_a_una_conexion_pausada_se_guarda_sin_llm(monkeypatch
 
 # ---------------------------------------------------------------- salida
 async def test_un_seguimiento_del_pack_no_sale_por_la_conexion_pausada(monkeypatch) -> None:
-    from pack_commerce.jobs import _follow_up_leads_del_negocio
-    from pack_commerce.models import Lead
-
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.gateway.meta_connection_state import MOTIVO_CONEXION_PAUSADA
+    from core.leads.jobs import _follow_up_leads_del_negocio
     from core.shared.tenant import tenant_scope
 
     tid = await _negocio()

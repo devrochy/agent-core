@@ -1,7 +1,7 @@
 """La etapa del lead: una sola puerta para validarla, cambiarla y dejar historia (HU-CRM-18, ADR-0181).
 
-`cambiar_etapa` es el único lugar del pack que escribe `Lead.status` (lo vigila
-`tests/test_pack_commerce_etapa_unica.py`). La usan `actualizar_lead`, `calificar_lead`, el hook de
+Vive en el core desde ADR-0193 (antes en `pack_commerce.etapas`). `cambiar_etapa` es el único lugar que escribe
+`Lead.status` (lo vigila `tests/test_leads_etapa_unica.py`). La usan `actualizar_lead`, `calificar_lead`, el hook de
 edición de la ficha (ADR-0149) y el seguimiento automático (`jobs.py`); cada uno dice quién actúa.
 
 Reglas:
@@ -12,7 +12,7 @@ Reglas:
 - Un lead solo pasa a «perdido» con un motivo del catálogo cerrado (`MOTIVOS_DE_PERDIDA`, HU-CRM-23) y una
   nota opcional; sin motivo válido no cambia nada. Reabrirlo limpia el motivo vigente del lead; el de la
   pérdida queda en la fila del cambio de etapa.
-- Cada cambio deja una fila en `pack_commerce_lead_stage_changes` (etapa anterior, nueva, actor,
+- Cada cambio deja una fila en `lead_stage_changes` (etapa anterior, nueva, actor,
   cuándo) y mueve `stage_changed_at`, en la misma transacción. Con `idempotency_key`, repetir el
   mismo cambio (reintento) no lo vuelve a aplicar ni a registrar.
 """
@@ -24,12 +24,18 @@ from typing import Any, Literal
 
 from sqlalchemy import select
 
-from pack_commerce.models import Lead, LeadStageChange
+from core.db.models import Lead, LeadStageChange
+from core.leads.catalogo import (  # noqa: F401  (los reexporta para quien importa desde aquí)
+    ACTORES_DE_ETAPA,
+    CODIGOS_DE_MOTIVO,
+    ETAPAS,
+    MOTIVOS_DE_PERDIDA,
+    NOTA_DE_PERDIDA_MAX,
+)
 
 Actor = Literal["agente", "persona", "sistema"]
-ACTORES: tuple[str, ...] = ("agente", "persona", "sistema")
+ACTORES: tuple[str, ...] = ACTORES_DE_ETAPA
 
-ETAPAS: tuple[str, ...] = ("nuevo", "calificado", "contactado", "convertido", "perdido")
 ETAPA_INICIAL = "nuevo"
 ETAPA_CALIFICADA = "calificado"
 ETAPA_DE_PERDIDA = "perdido"
@@ -45,16 +51,6 @@ class EtapaInvalida(ValueError):
         )
 
 
-# Por qué se pierde un lead (HU-CRM-23): cerrado y fijo; que cada negocio defina los suyos es otra decisión.
-MOTIVOS_DE_PERDIDA: tuple[tuple[str, str], ...] = (
-    ("precio", "Precio"),
-    ("sin_respuesta", "Sin respuesta"),
-    ("compro_en_otro_lado", "Compró en otro lado"),
-    ("no_era_para_el", "No era para él"),
-    ("otro", "Otro"),
-)
-CODIGOS_DE_MOTIVO: tuple[str, ...] = tuple(c for c, _ in MOTIVOS_DE_PERDIDA)
-NOTA_DE_PERDIDA_MAX = 300
 SIN_MOTIVO = "Sin motivo registrado"
 
 

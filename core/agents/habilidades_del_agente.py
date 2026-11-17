@@ -22,6 +22,8 @@ from core.agents.instalaciones_agente import (
     instaladas_en_agente,
     instalar_en_agente,
 )
+from core.leads.tools import GRUPO as GRUPO_LEADS
+from core.leads.tools import es_de_captar_leads
 from core.mcp.host import mcp_host
 from core.plugin_manager import plugin_manager
 
@@ -62,6 +64,8 @@ def _grupo(nombre: str, pack_id: str) -> str:
     grupos = getattr(modulo, "grupos_de_acciones", None) or {}
     if nombre in grupos:
         return grupos[nombre]
+    if es_de_captar_leads(nombre):
+        return GRUPO_LEADS
     for prefijo, grupo in _GRUPOS_DEL_CORE:
         if nombre.startswith(prefijo):
             return grupo
@@ -98,7 +102,9 @@ def acciones(contenido: dict[str, Any], packs: set[str]) -> list[Accion]:
     for tool in mcp_host.get_tools():
         pack_id = tool.plugin_id or ""
         de_suscripciones = tool.name.startswith("sub_")
-        if pack_id not in packs and not (de_suscripciones and "pack_subscriptions" in packs):
+        # Captar leads (ADR-0193 §2): del core, para cualquier agente; se enciende con su binding.
+        de_captar_leads = es_de_captar_leads(tool.name)
+        if pack_id not in packs and not (de_suscripciones and "pack_subscriptions" in packs) and not de_captar_leads:
             continue
         binding = bindings.get(tool.name)
         salida.append(

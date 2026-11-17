@@ -39744,7 +39744,7 @@
           "pack · comercio"
         ],
         "summary": "Seguimiento Hecho",
-        "description": "Marca como hecho el seguimiento del lead del cliente. Queda en su línea de tiempo con la nota.",
+        "description": "Alias de `POST /api/v1/admin/leads/{customer_id}/seguimiento/hecho` (el lead es del core desde ADR-0193): lo\nsiguen usando el panel y la APK instalados.",
         "operationId": "seguimiento_hecho_api_v1_pack_commerce_leads__customer_id__seguimiento_hecho_post",
         "parameters": [
           {
@@ -47046,6 +47046,86 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/leads/{lead_id}/seguimiento/hecho": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Seguimiento Hecho",
+        "description": "Marca como hecho el seguimiento del lead del cliente; queda en su línea de tiempo con la nota (ADR-0193: antes\n`POST /api/v1/pack/commerce/leads/{customer_id}/seguimiento/hecho`, que sigue como alias).",
+        "operationId": "seguimiento_hecho_api_v1_admin_leads__lead_id__seguimiento_hecho_post",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeguimientoHechoIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -78430,7 +78510,7 @@
         },
         "type": "object",
         "title": "SeguimientoHechoIn",
-        "description": "Cierra el seguimiento y, si se pide, programa el siguiente en el mismo gesto (HU-CRM-21).\n`siguiente_en` es ISO 8601: sin zona es hora del negocio."
+        "description": "Cierra el seguimiento y, si se pide, programa el siguiente en el mismo gesto (HU-CRM-21). `siguiente_en` es\nISO 8601: sin zona es hora del negocio."
       },
       "SetPermissionsRequest": {
         "properties": {

@@ -71,7 +71,7 @@ def test_run_async_recrea_loop_si_el_thread_murio() -> None:
 
 def test_beat_scan_registra_crons_de_packs() -> None:
     """El beat debe escanear plugins (`beat_init`) para programar los crons de
-    los packs; sin eso, `follow_up_leads`/`follow_up_quotes` nunca corren."""
+    los packs; sin eso, `follow_up_quotes` nunca corre. Los de leads son del core (ADR-0193)."""
     import importlib.util
 
     if importlib.util.find_spec("pack_commerce") is None:
@@ -80,4 +80,5 @@ def test_beat_scan_registra_crons_de_packs() -> None:
     from core.tasks import celery_app as app
 
     app._load_plugins()
-    assert "pack_commerce.follow_up_leads" in app.celery.conf.beat_schedule
+    assert "pack_commerce.follow_up_quotes" in app.celery.conf.beat_schedule
+    assert "core.leads_follow_up" in app.celery.conf.beat_schedule

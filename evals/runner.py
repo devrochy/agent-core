@@ -258,13 +258,16 @@ async def run_scenario(
     # aunque el flujo del tenant excluyera la tool.
     from core.agents.flow import render_flow, resolve_flow
     from core.agents.spec import enabled_packs
+    from core.leads.tools import es_de_captar_leads
     from core.shared.tenant import tenant_scope
 
     enabled = enabled_packs(spec)
+    # El golden no tiene agente: Captar leads (del core, con binding, ADR-0193) se ofrece como antes de moverla, solo
+    # si el negocio vende (comercio). Así las grabaciones miden lo mismo.
     candidate = [
         tool
         for tool in mcp_host.get_skill_tools([s.name for s in mcp_host.list_skills()])
-        if (tool.plugin_id or "core") in enabled
+        if (tool.plugin_id or "core") in enabled and (not es_de_captar_leads(tool.name) or "pack_commerce" in enabled)
     ]
     # Los overrides del negocio (flow.json, playbooks) salen del `tenant_scope`, no del
     # `tenantId` del spec.json: el flujo y el prompt se arman dentro del scope del negocio.

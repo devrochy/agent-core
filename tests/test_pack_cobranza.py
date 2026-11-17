@@ -203,9 +203,14 @@ def test_cobros_al_propietario_ya_no_expone_rutas() -> None:
 def test_lead_provider_registra_columnas() -> None:
     import pack_cobranza.providers  # noqa: F401
 
-    from core.admin.lead_registry import lead_registry
+    from core.admin.lead_registry import SIEMPRE, lead_registry
 
-    cols = [c.key for c in lead_registry.columns_for({"pack_cobranza"})]
+    # Las del provider `leads` del core también salen siempre (ADR-0193, `lead_registry.SIEMPRE`), pero ningún otro
+    # pack se cuela; las del pack son exactamente estas.
+    providers = lead_registry.providers_for({"pack_cobranza"})
+    assert {p.plugin_id for p in providers} <= {"pack_cobranza", *SIEMPRE}
+    [cobranza] = [p for p in providers if p.plugin_id == "pack_cobranza"]
+    cols = [c.key for c in cobranza.columns]
     assert cols == [
         "cartera",
         "saldo",

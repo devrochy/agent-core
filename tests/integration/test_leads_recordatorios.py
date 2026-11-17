@@ -56,9 +56,7 @@ async def _negocio(horario: dict | None = None) -> uuid.UUID:
 
 
 async def _lead(tid: uuid.UUID, nombre: str = "Ana", *, en: datetime | None, nota: str | None = "Llamar", **campos) -> uuid.UUID:
-    from pack_commerce.models import Lead
-
-    from core.db.models import Customer
+    from core.db.models import Customer, Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -74,9 +72,9 @@ async def _lead(tid: uuid.UUID, nombre: str = "Ana", *, en: datetime | None, not
 
 
 async def _mover(tid: uuid.UUID, cliente: uuid.UUID, **campos) -> None:
-    from pack_commerce.models import Lead
     from sqlalchemy import select
 
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -88,8 +86,7 @@ async def _mover(tid: uuid.UUID, cliente: uuid.UUID, **campos) -> None:
 
 
 async def _correr(tid: uuid.UUID, ahora: datetime = AHORA, config=CONFIG):
-    from pack_commerce.jobs import _recordar_del_negocio
-
+    from core.leads.jobs import _recordar_del_negocio
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tid):
@@ -195,9 +192,9 @@ async def test_apagar_los_recordatorios_no_toca_el_seguimiento() -> None:
     conteo, resumen = await _correr(tid, config=apagada)
     assert conteo.enviados == 0 and resumen is False
     assert await _avisos(tid) == []
-    from pack_commerce.models import Lead
     from sqlalchemy import select
 
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -309,7 +306,7 @@ async def test_el_resumen_de_dos_negocios_el_mismo_dia_no_se_pisa() -> None:
 
 
 async def test_un_negocio_que_falla_no_corta_a_los_demas(monkeypatch: pytest.MonkeyPatch) -> None:
-    from pack_commerce import jobs
+    from core.leads import jobs
 
     roto, sano = await _negocio(), await _negocio()
     await _lead(sano, "Del sano", en=datetime.now(UTC) - timedelta(minutes=10))
@@ -326,12 +323,12 @@ async def test_un_negocio_que_falla_no_corta_a_los_demas(monkeypatch: pytest.Mon
             raise RuntimeError("negocio roto")
         return await real(tenant_id, config, ahora)
 
-    async def config(tenant_id, kind):  # type: ignore[no-untyped-def]
+    async def config(tenant_id):  # type: ignore[no-untyped-def]
         return CONFIG
 
-    monkeypatch.setattr(jobs, "_tenant_ids", tenants)
+    monkeypatch.setattr(jobs, "_negocios_con_captar_leads", tenants)
     monkeypatch.setattr(jobs, "_recordar_del_negocio", recordar)
-    monkeypatch.setattr(jobs, "_config_del_negocio", config)
+    monkeypatch.setattr(jobs.config_leads, "cargar_del_negocio", config)
     await jobs.recordar_seguimientos()
     assert llamados == [roto, sano]
     (aviso,) = await _avisos(sano, "commerce.seguimiento_vencido")

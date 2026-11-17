@@ -177,6 +177,9 @@ class PlantillaAgente(BaseModel):
     acciones_opcionales: dict[
         str, list[Annotated[str, Field(pattern=r"^[a-z0-9_]{1,64}$")]]
     ] = Field(default_factory=dict, max_length=10)
+    # Captar leads (ADR-0193 §2): el agente nace con las acciones del grupo `leads` del core y asegura el lead del
+    # cliente en cada conversación. Es independiente de las habilidades (no hace falta comercio).
+    captar_leads: bool = False
     # Ids `procedure/1` publicados por esas habilidades: el agente los declara con `^M.0`.
     procedimientos: list[Annotated[str, Field(pattern=r"^[a-z0-9_]{1,60}\.[a-z0-9_]{1,40}$")]] = Field(
         min_length=1, max_length=20

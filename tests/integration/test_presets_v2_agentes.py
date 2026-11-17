@@ -188,8 +188,8 @@ async def test_instala_agentes_reglas_y_release_candidata_sin_activarla() -> Non
     # ADR-0190: cada especialista del preset nace con sus habilidades instaladas y la release las congela.
     por_key = {c["agent_key"]: c for c in componentes[0][0]}
     assert "pack_commerce" in por_key["ventas"]["skills"]
-    # Agenda lleva Comercio solo por Captar leads (`crear_lead`): sus bindings no traen `crear_pedido` (arriba).
-    assert por_key["agenda"]["skills"] == ["pack_calendar", "pack_commerce"]
+    # Agenda ya no lleva Comercio: Captar leads es del core (ADR-0193) y no es una habilidad instalada.
+    assert por_key["agenda"]["skills"] == ["pack_calendar"]
     assert "skills" not in por_key["atencion"]  # sin instalaciones propias: hereda las del negocio
     activa = await _sql(tid, "select active_release_id from channel_connections where id = :c", c=cid)
     assert activa == activa_antes

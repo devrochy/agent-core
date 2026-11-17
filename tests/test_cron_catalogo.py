@@ -154,7 +154,7 @@ def test_la_pantalla_de_automatizaciones_tiene_crons():
     assert de_negocio, "Ningún cron configurable por negocio: la pantalla de Automatizaciones quedaría vacía."
     # Los packs con automatizaciones visibles están representados.
     assert {
-        "pack_commerce.follow_up_leads",
+        "core.leads_follow_up",
         "pack_calendar.recordatorios_de_citas",
         "pack_cobranza.marcar_mora",
         "pack_subscriptions.avisos_de_cobro",

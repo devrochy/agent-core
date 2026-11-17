@@ -6,7 +6,7 @@ quien programa se resuelven con la zona horaria del negocio (`AppSettings.timezo
 servidor ni la del navegador.
 
 Qué cuenta como historia: el seguimiento vigente vive en el lead; cuando deja de estar vigente
-(se hizo, se movió de fecha o se canceló) queda una fila en `pack_commerce_lead_followups` con su
+(se hizo, se movió de fecha o se canceló) queda una fila en `lead_followups` con su
 nota, la fecha que tenía y cómo terminó. Cambiar solo la nota sin tocar la fecha no es otro seguimiento y
 no deja fila.
 
@@ -25,9 +25,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import ColumnElement, and_, select
 
-from core.db.models import AppSettings
+from core.db.models import AppSettings, Lead, LeadFollowup
 from core.llm.prompt_builder import DEFAULT_TIMEZONE
-from pack_commerce.models import Lead, LeadFollowup
 
 NOTA_MAX = 200
 DIAS_PROXIMOS = 7

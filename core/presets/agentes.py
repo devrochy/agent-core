@@ -126,6 +126,13 @@ def _es_tool_de_suscripcion(nombre: str, owner: str) -> bool:
     return owner == CORE_OWNER and nombre.startswith("sub_")
 
 
+def _es_de_captar_leads(nombre: str) -> bool:
+    """Captar leads es del core pero no esencial: solo la llevan las plantillas que la declaran (ADR-0193 §2)."""
+    from core.leads.tools import es_de_captar_leads
+
+    return es_de_captar_leads(nombre)
+
+
 def _es_tool_de_suscripcion_de_cobranza(nombre: str, owner: str) -> bool:
     return owner == PACK_COBRANZA and nombre.startswith("cob_") and "_suscripcion" in nombre
 
@@ -153,6 +160,8 @@ def herramienta_propia(
         return info.owner in propias and nombre in acotadas[info.owner]
     if _es_tool_de_suscripcion(nombre, info.owner):
         return PACK_SUSCRIPCIONES in propias
+    if info.owner == CORE_OWNER and _es_de_captar_leads(nombre):
+        return plantilla.captar_leads
     if _es_tool_de_suscripcion_de_cobranza(nombre, info.owner):
         return info.owner in propias and proveedor_suscripciones == PACK_COBRANZA
     return info.owner in propias or info.owner == CORE_OWNER

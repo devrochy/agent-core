@@ -15,7 +15,9 @@ from core.mcp.types import RegistroCreado
 def _tools() -> dict[str, Any]:
     from pack_calendar.skills import CalendarSkill
     from pack_cobranza.skills import CobranzaSkill
-    from pack_commerce.skills import LeadSkill, OrderSkill
+    from pack_commerce.skills import OrderSkill
+
+    from core.leads.tools import LeadSkill  # Captar leads es del core (ADR-0193)
 
     return {t.name: t for s in (LeadSkill(), OrderSkill(), CalendarSkill(), CobranzaSkill()) for t in s.get_tools()}
 
@@ -24,8 +26,8 @@ def _tools() -> dict[str, Any]:
     ("tool", "resultado", "esperado"),
     [
         ("crear_lead", {"lead_id": "L1", "status": "created"}, ("L1", None)),
-        ("crear_lead", {"lead_id": "L1", "status": "ya_existe"}, None),  # ya era lead (landing)
-        ("crear_lead", {"lead_id": "L1", "status": "duplicate"}, None),  # reintento
+        # ADR-0193: si el lead ya existía (el turno lo aseguró, la landing o un reintento) es `actualizado`.
+        ("crear_lead", {"lead_id": "L1", "status": "actualizado"}, None),
         ("crear_pedido", {"order_id": "O1", "status": "confirmed", "public_order_number": "P-7"}, ("O1", "P-7")),
         ("crear_pedido", {"order_id": "O1", "status": "duplicate", "public_order_number": "P-7"}, None),
         ("crear_pedido", {"status": "faltan_datos_cliente"}, None),
