@@ -1388,3 +1388,125 @@ async def import_products_csv(
             producto.has_variants = False
             creados += 1
     return ImportResult(created=creados, unknown_allies=desconocidos[:50])
+
+
+# ------------------------------------------------------------------ formas de pago (SPEC-48, HU-COM-21)
+class FormaDePagoOut(BaseModel):
+    method: Literal["efectivo_contraentrega", "transferencia", "pago_en_linea"]
+    label: str
+    enabled: bool
+    estado: Literal["activa", "falta_configurar", "apagada"] = Field(
+        description="`falta_configurar`: encendida pero sin lo que necesita (cuenta o proveedor); el agente no la ofrece.",
+    )
+    falta: str = Field(description="Qué falta, en palabras del dueño; vacío si nada.")
+    instructions: str
+    superpoder: str | None = Field(description="Superpoder del dominio «Formas de pago» que la acompaña; contra entrega no tiene.")
+
+
+class CuentaDeTransferencia(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    entity: str = Field(max_length=80, description="Entidad (Bancolombia, Nequi…).")
+    accountType: str = Field(default="", max_length=80)
+    accountNumber: str = Field(max_length=80)
+    holderName: str = Field(default="", max_length=80)
+    holderDocument: str = Field(default="", max_length=80)
+
+
+class FormasDePagoOut(BaseModel):
+    agent_id: uuid.UUID
+    configurada: bool = Field(description="`false`: el agente aún no guardó sus formas y se deducen como antes.")
+    forms: list[FormaDePagoOut]
+    transfer_accounts: list[CuentaDeTransferencia]
+    transfer_proof_required: bool
+    transfer_ocr_enabled: bool
+    pago_en_linea_disponible: bool = Field(description="El negocio tiene una cuenta de pagos en línea conectada.")
+
+
+class FormaDePagoIn(BaseModel):
+    method: Literal["efectivo_contraentrega", "transferencia", "pago_en_linea"]
+    enabled: bool
+    instructions: str = Field(default="", max_length=500)
+
+
+class FormasDePagoIn(BaseModel):
+    forms: list[FormaDePagoIn] = Field(min_length=1, max_length=3)
+    transfer_accounts: list[CuentaDeTransferencia] = Field(default_factory=list, max_length=10)
+    transfer_proof_required: bool = True
+    transfer_ocr_enabled: bool = True
+
+
+async def _formas_out(agent_id: uuid.UUID) -> FormasDePagoOut:
+    from .formas_de_pago import config_del_agente, estados, pago_en_linea_disponible
+
+    config = await config_del_agente(agent_id)
+    online = await pago_en_linea_disponible()
+    guardadas = getattr(config, "payment_forms", None)
+    cuentas = list(getattr(config, "transfer_accounts", None) or [])
+    return FormasDePagoOut(
+        agent_id=agent_id,
+        configurada=guardadas is not None,
+        forms=[FormaDePagoOut(**e.__dict__) for e in estados(guardadas, cuentas, online)],
+        transfer_accounts=[CuentaDeTransferencia.model_validate(c) for c in cuentas],
+        transfer_proof_required=bool(getattr(config, "transfer_proof_required", True)),
+        transfer_ocr_enabled=bool(getattr(config, "transfer_ocr_enabled", True)),
+        pago_en_linea_disponible=online,
+    )
+
+
+async def _agente_de_ventas(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> None:
+    """El agente es de ESTE negocio y tiene Comercio instalado; si no, 404 (nunca se confirma que existe)."""
+    from core.agents.instalaciones_agente import instaladas_en_agente
+
+    if "pack_commerce" not in await instaladas_en_agente(tenant_id, agent_id, solo_activas=False):
+        raise ApiError.not_found("Agente no encontrado.")
+
+
+@router.get("/agents/{agent_id}/payment-forms", response_model=FormasDePagoOut)
+async def formas_de_pago_del_agente(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> FormasDePagoOut:
+    """Formas de pago del agente con su estado, sus cuentas de transferencia y el proveedor en línea."""
+    await _agente_de_ventas(principal.tenant_id, agent_id)
+    return await _formas_out(agent_id)
+
+
+@router.put("/agents/{agent_id}/payment-forms", response_model=FormasDePagoOut)
+async def guardar_formas_de_pago(
+    agent_id: uuid.UUID,
+    payload: FormasDePagoIn,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> FormasDePagoOut:
+    """Guarda las formas y las cuentas del agente. Transferencia encendida sin cuenta se guarda y queda
+    «Falta configurar» (el agente no la ofrece); tiene que quedar al menos una forma encendida."""
+    from core.agents.instalaciones_agente import config_del_agente as propia_del_agente
+    from core.agents.instalaciones_agente import guardar_config_del_agente
+    from core.plugin_manager import plugin_manager
+
+    from .formas_de_pago import normalizar_cuentas, normalizar_formas
+
+    await _agente_de_ventas(principal.tenant_id, agent_id)
+    try:
+        formas = normalizar_formas([f.model_dump() for f in payload.forms])
+        cuentas = normalizar_cuentas([c.model_dump() for c in payload.transfer_accounts])
+    except ValueError as exc:
+        raise ApiError.bad_request(str(exc), "invalid_payment_forms") from None
+    if payload.transfer_ocr_enabled and not payload.transfer_proof_required:
+        raise ApiError.bad_request("Leer el comprobante exige pedirlo: activa «Pedir comprobante».", "invalid_payment_forms")
+    modulo = plugin_manager.get("pack_commerce")
+    esquema = getattr(modulo, "config_agente", None)
+    if esquema is None:  # pragma: no cover - el pack siempre declara su config de agente
+        raise ApiError.not_found("Agente no encontrado.")
+    actual = await propia_del_agente(principal.tenant_id, agent_id, "pack_commerce") or {}
+    valores = esquema.model_validate(
+        {
+            **actual,
+            "payment_forms": formas,
+            "transfer_accounts": cuentas,
+            "transfer_proof_required": payload.transfer_proof_required,
+            "transfer_ocr_enabled": payload.transfer_ocr_enabled,
+        }
+    ).model_dump(mode="json", exclude_unset=True)
+    await guardar_config_del_agente(principal.tenant_id, agent_id, "pack_commerce", valores)
+    return await _formas_out(agent_id)

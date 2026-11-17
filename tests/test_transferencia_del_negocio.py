@@ -89,7 +89,7 @@ async def test_un_proveedor_que_falla_cuenta_como_sin_datos(monkeypatch) -> None
 async def test_comercio_ofrece_sus_cuentas_y_el_chat_imprime_el_mismo_bloque(monkeypatch) -> None:
     config = SimpleNamespace(transfer_accounts=[BANCOLOMBIA, NEQUI])
 
-    async def _config() -> SimpleNamespace:
+    async def _config(*_a: object) -> SimpleNamespace:
         return config
 
     monkeypatch.setattr(comercio, "_plugin_config", _config)
@@ -100,7 +100,7 @@ async def test_comercio_ofrece_sus_cuentas_y_el_chat_imprime_el_mismo_bloque(mon
 
 @pytest.mark.asyncio
 async def test_comercio_sin_config_o_sin_cuentas_no_ofrece_nada(monkeypatch) -> None:
-    async def _sin_config() -> None:
+    async def _sin_config(*_a: object) -> None:
         return None
 
     monkeypatch.setattr(comercio, "_plugin_config", _sin_config)
