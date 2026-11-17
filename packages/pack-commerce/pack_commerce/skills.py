@@ -1415,6 +1415,27 @@ class OrderSkill(BaseSkill):
                 simular=sandbox_prueba.simular_verificar_pago_pedido,
                 connection_predicate=solo_con_motor_activo(),
             ),
+            # SPEC-48, HU-COM-24: solo la ofrece el motor, en `pack_commerce.comprobar_transferencia`.
+            MCPTool(
+                name="comprobar_comprobante",
+                description=(
+                    "Revisa la última foto de comprobante que mandó el cliente contra su pedido por "
+                    "transferencia. Úsala cuando el cliente mande el comprobante o diga que ya transfirió. "
+                    "Nunca digas que el pago quedó confirmado sin esta respuesta."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "order_id": {"type": "string", "description": "ID del pedido del cliente"},
+                        "nota": {"type": "string", "description": "Lo que dijo el cliente del pago, si dijo algo", "maxLength": 300},
+                    },
+                    "required": ["order_id"],
+                },
+                handler=self.comprobar_comprobante,
+                side_effects=True,
+                simular=sandbox_prueba.simular_comprobar_comprobante,
+                connection_predicate=solo_con_motor_activo(),
+            ),
         ]
 
     # ------------------------------------------------------------ handlers
@@ -2134,6 +2155,12 @@ class OrderSkill(BaseSkill):
             # SafeRenderer: el link exacto lo adjunta el core.
             "_safe_append": f"💳 Podés pagar tu pedido {base_reference} aquí: {link.url}",
         }
+
+    async def comprobar_comprobante(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Comprobante de transferencia contra el pedido del cliente (SPEC-48, HU-COM-24)."""
+        from pack_commerce.comprobar_transferencia import comprobar
+
+        return await comprobar(arguments, context)
 
     async def verificar_pago_pedido(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         """Estado del pago en línea del pedido del cliente (HU-AOS-07), solo lectura.

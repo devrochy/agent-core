@@ -1650,11 +1650,17 @@ async def cambiar_estado_de_pago(
             proof.reviewed_by = actor
             proof.reviewed_at = ahora
             proof.review_note = nota or None
+        ya_pagado = order.payment_status == "pagado"
         order.payment_status = nuevo
         order.payment_status_changed_by = actor
         order.payment_status_changed_at = ahora
         order.payment_status_reason = nota or {"confirmar": "Comprobante confirmado", "marcar_pagado": "Marcado pagado"}.get(
             payload.accion
         )
+        if nuevo == "pagado" and not ya_pagado:
+            # Cierra la tarea que espera el pago (comprobar_transferencia / tomar_pedido), como el webhook.
+            from .module import CRMModule
+
+            await CRMModule._emitir_pedido_pagado(session, principal.tenant_id, order)
         await session.flush()
         return await _comprobantes_out(session, order)
