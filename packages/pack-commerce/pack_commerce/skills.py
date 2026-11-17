@@ -1713,10 +1713,10 @@ class OrderSkill(BaseSkill):
                 "error": "Método de pago no válido. Usa 'efectivo_contraentrega', 'transferencia' o 'pago_en_linea'."
             }
         # SPEC-48, HU-COM-21: solo una forma de pago activa del agente (encendida y configurada).
-        from pack_commerce.formas_de_pago import ETIQUETAS, metodos_del_agente
+        from pack_commerce.formas_de_pago import ETIQUETAS, metodos_configurados
 
-        activos = await metodos_del_agente(context.agent_id)
-        if payment_method not in activos:
+        activos = await metodos_configurados(context.agent_id)
+        if activos is not None and payment_method not in activos:
             return {
                 "error": "Esa forma de pago no está habilitada.",
                 "formas_disponibles": activos,

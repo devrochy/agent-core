@@ -69,9 +69,16 @@ async def metodo_de_pago(valor: Any, ctx: ToolContext, datos: dict[str, Any]) ->
     """Solo una forma de pago activa del agente (SPEC-48, HU-COM-21): encendida por el dueño y con lo
     que necesita (cuentas para transferencia, proveedor para pago en línea). Sin eso la tarea llegaría
     a pagar sin poder cobrar (y tras crear el pedido ya no se cambia)."""
-    from pack_commerce.formas_de_pago import ETIQUETAS, metodos_del_agente
+    from pack_commerce.formas_de_pago import ETIQUETAS, metodos_configurados
 
-    activos = await metodos_del_agente(ctx.agent_id)
+    activos = await metodos_configurados(ctx.agent_id)
+    if activos is None:
+        # Sin formas guardadas: como antes, solo el pago en línea exige el proveedor.
+        if valor == "pago_en_linea" and not await _pago_en_linea_disponible():
+            return ResolverResult(
+                ok=False, error="El pago en línea no está disponible en este negocio: ofrece otro método de pago."
+            )
+        return ResolverResult(ok=True)
     if valor in activos:
         return ResolverResult(ok=True)
     if valor == "pago_en_linea" and not await _pago_en_linea_disponible():
