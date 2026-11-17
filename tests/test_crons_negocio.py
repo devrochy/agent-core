@@ -98,3 +98,57 @@ async def test_un_cron_desconocido_corre_por_defecto():
 def test_zona_invalida_cae_a_la_del_negocio():
     assert str(zona("No/Existe")) == ZONA_POR_DEFECTO
     assert str(zona(None)) == ZONA_POR_DEFECTO
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("hora", "motivo"), [(22, None), (10, svc.OMITIDA_FUERA_DE_HORA)])
+async def test_un_cron_con_hora_local_solo_corre_a_su_hora(monkeypatch, hora, motivo):
+    """Sin configuración del negocio rige `hora_local_por_defecto` del catálogo (22 h en Bogotá)."""
+
+    async def _sin_config(*_a, **_k):
+        return None
+
+    async def _bogota(*_a, **_k):
+        return zona("America/Bogota")
+
+    monkeypatch.setattr(svc, "cargar", _sin_config)
+    monkeypatch.setattr(svc, "zona_del_negocio", _bogota)
+    politica = await svc.politica(
+        "00000000-0000-0000-0000-000000000001",
+        "pack_subscriptions.generar_cargos",
+        ahora=_local(2026, 11, 16, hora),
+    )
+    assert politica.motivo == motivo
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("modulo", "job"),
+    [
+        ("pack_subscriptions.jobs", "_expirar_inscripciones"),
+        ("pack_subscriptions.jobs", "_generar_cargos"),
+        ("pack_subscriptions.jobs", "_marcar_vencidas"),
+        ("pack_subscriptions.jobs", "_avisos_de_cobro"),
+        ("pack_calendar.jobs", "_recordatorios_de_citas"),
+    ],
+)
+async def test_el_job_le_pasa_su_reloj_a_la_politica(monkeypatch, modulo, job):
+    """El job y la política miran el mismo reloj: el `now` del job llega como `ahora`."""
+    import importlib
+    import uuid
+
+    jobs = importlib.import_module(modulo)
+    recibido: list[datetime | None] = []
+
+    async def _ids():
+        return [uuid.UUID("00000000-0000-0000-0000-000000000001")]
+
+    async def _debe_correr(_tid, _cron, *, ahora=None):
+        recibido.append(ahora)
+        return False
+
+    monkeypatch.setattr(jobs, "_tenant_ids", _ids)
+    monkeypatch.setattr(jobs, "debe_correr", _debe_correr)
+    momento = _local(2026, 11, 16, 3)
+    await getattr(jobs, job)(momento)
+    assert recibido == [momento]
