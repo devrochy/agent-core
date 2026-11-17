@@ -1,4 +1,4 @@
-"""HU-AOS-70 · Tablas de leads del core y copia desde commerce (ADR-0193, migración 0144).
+"""HU-AOS-70 · Tablas de leads del core y copia desde commerce (ADR-0193, migración 0146).
 
 Con la BD real: un lead vivo por cliente; la copia conserva ids, historia y seguimientos; entre varios leads de un
 mismo cliente queda vivo el más reciente y los demás entran borrados (sin borrado físico); un lead vivo del core gana

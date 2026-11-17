@@ -1,4 +1,4 @@
-"""Catálogos cerrados del lead (ADR-0193). La migración 0144 los copia a sus CHECK a propósito; el test de la
+"""Catálogos cerrados del lead (ADR-0193). La migración 0146 los copia a sus CHECK a propósito; el test de la
 migración los compara con estos."""
 
 from __future__ import annotations

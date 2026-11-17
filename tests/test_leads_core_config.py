@@ -1,7 +1,7 @@
 """HU-AOS-70 · Config de Captar leads y frontera de los packs (ADR-0193).
 
 Sin base: la config guarda los secretos para cifrarlos enteros y nunca los expone al serializar; lo desconocido se
-ignora; los catálogos del core coinciden con los CHECK de la migración 0144; ningún pack importa los modelos de leads
+ignora; los catálogos del core coinciden con los CHECK de la migración 0146; ningún pack importa los modelos de leads
 del core (invariante 5 y ADR-0193 §4: los packs pasan por `core.leads`).
 """
 
@@ -15,7 +15,7 @@ from core.leads import catalogo
 from core.leads.config import ConfigCaptarLeads, a_guardar, desde_guardado
 
 RAIZ = Path(__file__).resolve().parents[1]
-MIGRACION = RAIZ / "alembic" / "versions" / "0144_leads_en_el_core.py"
+MIGRACION = RAIZ / "alembic" / "versions" / "0146_leads_en_el_core.py"
 MODELOS_DE_LEADS = {"Lead", "LeadStageChange", "LeadFollowup", "LeadSettings"}
 
 

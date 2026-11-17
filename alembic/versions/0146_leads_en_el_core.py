@@ -26,8 +26,8 @@ Reversible: el downgrade borra las cuatro tablas, como 0121 y 0137. Mientras com
 parte 2) no se pierde nada: los originales siguen en `pack_commerce_leads` y `agent-core db copiar-leads` los vuelve
 a copiar. Después del cambio de dueño, bajar esta migración pierde lo que el core haya escrito.
 
-Revision ID: 0144
-Revises: 0143
+Revision ID: 0146
+Revises: 0145
 Create Date: 2026-11-16
 """
 
@@ -38,8 +38,8 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from alembic import op
 
-revision = "0144"
-down_revision = "0143"
+revision = "0146"
+down_revision = "0145"
 branch_labels = None
 depends_on = None
 
