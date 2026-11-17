@@ -691,17 +691,27 @@ async def paso_job(ctx: Contexto, paso: dict[str, Any], registro: list[str]) -> 
     # El job recorre los negocios de `_tenant_ids()`: acá SOLO el del journey, para no
     # tocar otros negocios con el reloj adelantado y la pasarela simulada (auditoría).
     original = getattr(modulo, "_tenant_ids", None)
+    # ADR-0201: el journey prueba la lógica del job, no el planificador. La política por negocio
+    # (hora local/ventana) se prueba en sus propios tests; aquí se corre el job a la hora simulada.
+    original_debe = getattr(modulo, "debe_correr", None)
 
     async def _solo_este_negocio() -> list[uuid.UUID]:
         return [ctx.tenant_id]
 
+    async def _siempre(_tid: uuid.UUID, _cron: str, **_kw: object) -> bool:
+        return True
+
     if original is not None:
         modulo._tenant_ids = _solo_este_negocio  # type: ignore[attr-defined]
+    if original_debe is not None:
+        modulo.debe_correr = _siempre  # type: ignore[attr-defined]
     try:
         resultado = await funcion(ctx.ahora)
     finally:
         if original is not None:
             modulo._tenant_ids = original  # type: ignore[attr-defined]
+        if original_debe is not None:
+            modulo.debe_correr = original_debe  # type: ignore[attr-defined]
     registro.append(f"    job {paso['job']} @ {ctx.ahora:%Y-%m-%d}: {resultado}")
 
 
