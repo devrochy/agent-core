@@ -11,7 +11,9 @@
     "pack_payments"
   ],
   "procedimientos": [
-    "pack_commerce.tomar_pedido"
+    "pack_commerce.tomar_pedido",
+    "pack_commerce.pago_en_linea",
+    "pack_commerce.comprobar_transferencia"
   ],
   "playbooks": [
     "ventas",

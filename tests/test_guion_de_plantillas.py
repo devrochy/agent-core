@@ -7,7 +7,8 @@ import pytest
 from core.presets import PlantillaAgente, load_plantilla
 from core.presets.guion import RespuestasInvalidas, resolver
 
-VENTAS = ["pack_commerce.tomar_pedido"]
+# SPEC-48: las formas de pago (pago en línea, comprobar transferencia) son del enfoque de Ventas.
+VENTAS = ["pack_commerce.tomar_pedido", "pack_commerce.pago_en_linea", "pack_commerce.comprobar_transferencia"]
 
 
 def test_las_cuatro_plantillas_traen_un_guion_corto_y_valido() -> None:
