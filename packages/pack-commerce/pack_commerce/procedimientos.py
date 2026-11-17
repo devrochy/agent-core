@@ -6,7 +6,7 @@ motor de procedimientos del core.
 
 - **Resolvers** (reciben solo `ToolContext`, sin efectos): convierten lo que dice el cliente en un
   dato válido del servidor o devuelven un error de negocio que el modelo corrige.
-  - `metodo_de_pago`: `pago_en_linea` solo si el negocio tiene pagos en línea.
+  - `metodo_de_pago`: solo una forma de pago activa del agente (SPEC-48, `formas_de_pago.py`).
 - **Resumen de `confirmar_cotizacion`**: lo que el cliente confirma sale de la cotización
   vigente en la base (productos, descuento y total), no de los argumentos ni del modelo; el kernel
   le suma los datos del cliente de la tarea (resumen único).
@@ -60,23 +60,33 @@ def rotulos_de_datos() -> Mapping[str, str]:
 
 # ------------------------------------------------------------------ resolvers
 async def _pago_en_linea_disponible() -> bool:
-    from core.agents.spec import enabled_packs, load_active_spec
-    from core.payments import payment_registry
+    from pack_commerce.formas_de_pago import pago_en_linea_disponible
 
-    spec = await load_active_spec(get_current_tenant_id())
-    return payment_registry.capability_for(enabled_packs(spec)) is not None
+    return await pago_en_linea_disponible()
 
 
 async def metodo_de_pago(valor: Any, ctx: ToolContext, datos: dict[str, Any]) -> ResolverResult:
-    """`pago_en_linea` solo si el negocio cobra en línea: sin eso la tarea llegaría a pagar sin
-    poder emitir el link (y tras crear el pedido ya no se cambia)."""
-    if valor != "pago_en_linea":
+    """Solo una forma de pago activa del agente (SPEC-48, HU-COM-21): encendida por el dueño y con lo
+    que necesita (cuentas para transferencia, proveedor para pago en línea). Sin eso la tarea llegaría
+    a pagar sin poder cobrar (y tras crear el pedido ya no se cambia)."""
+    from pack_commerce.formas_de_pago import ETIQUETAS, metodos_configurados
+
+    activos = await metodos_configurados(ctx.agent_id)
+    if activos is None:
+        # Sin formas guardadas: como antes, solo el pago en línea exige el proveedor.
+        if valor == "pago_en_linea" and not await _pago_en_linea_disponible():
+            return ResolverResult(
+                ok=False, error="El pago en línea no está disponible en este negocio: ofrece otro método de pago."
+            )
         return ResolverResult(ok=True)
-    if not await _pago_en_linea_disponible():
+    if valor in activos:
+        return ResolverResult(ok=True)
+    if valor == "pago_en_linea" and not await _pago_en_linea_disponible():
         return ResolverResult(
             ok=False, error="El pago en línea no está disponible en este negocio: ofrece otro método de pago."
         )
-    return ResolverResult(ok=True)
+    disponibles = ", ".join(ETIQUETAS[m].lower() for m in activos) or "ninguna"
+    return ResolverResult(ok=False, error=f"Esa forma de pago no está habilitada. Ofrece: {disponibles}.")
 
 
 async def _metodos_entrega_de(ctx: ToolContext) -> list[str]:

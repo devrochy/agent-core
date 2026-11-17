@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 
 from core.mcp.types import BasePluginConfig
 
@@ -99,6 +99,21 @@ class CRMConfig(BasePluginConfig):
         description="Cuentas para transferencia (Nequi, Bancolombia...). Se envían por _safe_append.",
     )
 
+    # Formas de pago del agente (SPEC-48, HU-COM-21): contra entrega, transferencia y pago en
+    # línea, con su interruptor e instrucciones. None = sin configurar (se deduce como antes).
+    payment_forms: list[dict] | None = Field(
+        default=None,
+        description="Formas de pago del agente: [{method, enabled, instructions}] (ver pack_commerce.formas_de_pago).",
+    )
+    transfer_proof_required: bool = Field(
+        default=True,
+        description="Con transferencia, pedir el comprobante antes de dar el pedido por pagado.",
+    )
+    transfer_ocr_enabled: bool = Field(
+        default=True,
+        description="Leer el comprobante con visión y compararlo con el pedido (exige pedir el comprobante).",
+    )
+
     # ---------------------------------------------------------------- moneda
     currency_symbol: str = Field(default="$", description="Símbolo de moneda para precios")
     currency_code: str = Field(default="COP", description="Código de moneda (COP, USD)")
@@ -119,6 +134,28 @@ class CRMConfig(BasePluginConfig):
             "El retiro en tienda no pide dirección."
         ),
     )
+
+    @field_validator("payment_forms")
+    @classmethod
+    def _formas_de_pago_validas(cls, valor: list[dict] | None) -> list[dict] | None:
+        from pack_commerce.formas_de_pago import normalizar_formas
+
+        return normalizar_formas(valor)
+
+    @field_validator("transfer_accounts", mode="before")
+    @classmethod
+    def _cuentas_validas(cls, valor: object) -> list[dict]:
+        # Al cargar no se rechaza una config ya guardada: las cuentas se sanean (texto corto) y
+        # las que no son objetos se descartan. La validación estricta es la del PUT del panel.
+        from pack_commerce.formas_de_pago import sanear_cuentas
+
+        return sanear_cuentas(valor)
+
+    @model_validator(mode="after")
+    def _lectura_exige_comprobante(self) -> CRMConfig:
+        if self.transfer_ocr_enabled and not self.transfer_proof_required:
+            raise ValueError("Leer el comprobante exige pedirlo: activa «Pedir comprobante».")
+        return self
 
     @field_validator("order_prefix", mode="before")
     @classmethod
