@@ -16,9 +16,8 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, Numeric, Text, text
+from sqlalchemy import Boolean, DateTime, Index, Integer, Numeric, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -48,98 +47,11 @@ class Base(DeclarativeBase):
     pass
 
 
-class Lead(TenantMixin, Base):
-    """Prospecto capturado en conversación (lead de venta)."""
-
-    __tablename__ = "pack_commerce_leads"
-    __table_args__ = (
-        Index(
-            "uq_crm_leads_tenant_idem",
-            "tenant_id",
-            "idempotency_key",
-            unique=True,
-            postgresql_where=text("idempotency_key is not null"),
-        ),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))  # FK lógica a customers
-    conversation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    name: Mapped[str | None] = mapped_column(Text)
-    phone: Mapped[str | None] = mapped_column(Text)
-    email: Mapped[str | None] = mapped_column(Text)
-    interest: Mapped[str] = mapped_column(Text, default="")
-    score: Mapped[int] = mapped_column(Integer, default=0)          # 0-10
-    status: Mapped[str] = mapped_column(Text, default="nuevo")      # nuevo|calificado|contactado|convertido|perdido
-    idempotency_key: Mapped[str | None] = mapped_column(Text)
-    last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    # Desde cuándo está en la etapa actual (HU-CRM-18). NULL en los leads anteriores: no se inventa.
-    stage_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # Próxima acción y cuándo (HU-CRM-21): la fecha va en UTC; «hoy» se resuelve con la zona del negocio.
-    next_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    next_action_note: Mapped[str | None] = mapped_column(Text)  # tope 200 (CHECK en la migración)
-    # Por qué se perdió (HU-CRM-23): solo vale mientras el lead está «perdido»; reabrirlo lo limpia (el
-    # motivo queda en la fila del cambio de etapa). NULL en un perdido anterior a la HU: «sin motivo».
-    loss_reason: Mapped[str | None] = mapped_column(Text)  # catálogo cerrado (CHECK en la migración)
-    loss_note: Mapped[str | None] = mapped_column(Text)  # tope 300 (CHECK en la migración)
-    # Cuánto vale el lead, en la moneda del negocio (sin conversión). Opcional, nunca negativo.
-    estimated_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+# Los leads (`pack_commerce_leads`, `pack_commerce_lead_stage_changes`, `pack_commerce_lead_followups`) son del core
+# desde ADR-0193 (`core.db.models.Lead*`, migración 0144). Las tablas siguen en la base, sin escrituras, hasta una HU
+# que las retire; `agent-core db copiar-leads` las lee con SQL. Ningún código del pack las usa.
 
 
-class LeadStageChange(TenantMixin, Base):
-    """Un cambio de etapa de un lead: etapa anterior y nueva, quién lo hizo y cuándo (HU-CRM-18).
-
-    Solo la escribe `pack_commerce.etapas.cambiar_etapa`. `customer_id` va copiado del lead porque
-    la línea de tiempo de la ficha consulta por cliente."""
-
-    __tablename__ = "pack_commerce_lead_stage_changes"
-    __table_args__ = (
-        Index(
-            "uq_pack_commerce_lead_stage_changes_tenant_idem",
-            "tenant_id",
-            "idempotency_key",
-            unique=True,
-            postgresql_where=text("idempotency_key is not null"),
-        ),
-        Index("ix_pack_commerce_lead_stage_changes_cliente", "tenant_id", "customer_id", "changed_at", "id"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))  # FK lógica a pack_commerce_leads
-    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    from_stage: Mapped[str] = mapped_column(Text)  # puede ser texto libre de un lead anterior a la HU
-    to_stage: Mapped[str] = mapped_column(Text)  # una de las cinco etapas (CHECK en la migración)
-    actor: Mapped[str] = mapped_column(Text)  # agente | persona | sistema
-    idempotency_key: Mapped[str | None] = mapped_column(Text)
-    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    # El motivo con que se perdió (HU-CRM-23), solo en el cambio a «perdido»: la historia lo conserva aunque
-    # se reabra el lead y el lead ya no lo muestre como vigente.
-    loss_reason: Mapped[str | None] = mapped_column(Text)
-    loss_note: Mapped[str | None] = mapped_column(Text)
-
-
-class LeadFollowup(TenantMixin, Base):
-    """Un seguimiento del lead que se cerró: hecho, reprogramado o cancelado (HU-CRM-21).
-
-    El seguimiento vigente vive en `Lead.next_action_at/_note`; aquí queda el que dejó de estar
-    vigente, con su nota y la fecha que tenía. Solo lo escribe `pack_commerce.seguimiento`.
-    `customer_id` va copiado del lead porque la línea de tiempo de la ficha consulta por cliente."""
-
-    __tablename__ = "pack_commerce_lead_followups"
-    __table_args__ = (Index("ix_pack_commerce_lead_followups_cliente", "tenant_id", "customer_id", "closed_at", "id"),)
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))  # FK lógica a pack_commerce_leads
-    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    note: Mapped[str | None] = mapped_column(Text)
-    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # la fecha que tenía programada
-    outcome: Mapped[str] = mapped_column(Text)  # hecho | reprogramado | cancelado (CHECK en la migración)
-    actor: Mapped[str] = mapped_column(Text, default="persona")  # persona | sistema
-    closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-# ------------------------------------------------------------------ catálogo
 class Category(TenantMixin, Base):
     """Categoría de productos en árbol auto-referenciado."""
 

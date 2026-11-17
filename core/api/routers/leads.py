@@ -1390,6 +1390,11 @@ async def update_lead_pack(
     """Cambia campos que un pack deja editar desde la ficha (p. ej. el estado del lead de venta).
     El core valida claves y valores; el pack escribe en sus tablas (ADR-0149)."""
     _enabled, providers = await _providers()
+    # El panel y la APK instalados editan el lead con el id de commerce: desde ADR-0193 es el provider del core.
+    from core.leads.providers import ALIAS_DE_EDICION, PROVIDER_ID
+
+    if plugin_id == ALIAS_DE_EDICION:
+        plugin_id = PROVIDER_ID
     provider = next((p for p in providers if p.plugin_id == plugin_id and p.edicion is not None), None)
     if provider is None or provider.edicion is None:
         # Sin distinguir «no existe» de «no habilitado»: no se revela qué packs hay.

@@ -151,6 +151,27 @@ def fijar_contacto(lead: Lead, *, name: Any = None, phone: Any = None, email: An
 
 
 # ------------------------------------------------------------------ entradas por ids (para los packs)
+async def completar_contacto(
+    session: Any, tenant_id: uuid.UUID, customer_id: uuid.UUID, *, nombre: Any = None, email: Any = None,
+    telefono: Any = None,
+) -> bool:
+    """Completa el lead EXISTENTE del cliente con lo que dio en un recorrido guiado (ahí las tools de lead no se
+    ofrecen). Nunca crea otro lead ni toca la memoria del cliente; pisa con el último valor dicho. True si había lead."""
+    lead = await vivo(session, tenant_id, customer_id)
+    if lead is None:
+        return False
+    limpios = {
+        campo: " ".join(str(valor or "").split())[:tope]
+        for campo, valor, tope in (("name", nombre, 200), ("email", email, 254), ("phone", telefono, 40))
+    }
+    if limpios["email"]:
+        limpios["email"] = limpios["email"].lower()
+    fijar_contacto(lead, **limpios)
+    lead.last_activity_at = datetime.now(UTC)
+    return True
+
+
+
 async def por_cliente(
     session: Any, tenant_id: uuid.UUID, customer_ids: list[uuid.UUID] | None = None
 ) -> dict[uuid.UUID, LeadVista]:
@@ -225,3 +246,36 @@ async def sembrar_para_qa(
     lead.score = score
     lead.status = status  # escritura directa permitida: siembra de QA (ver `tests/test_leads_etapa_unica.py`)
     return vista(lead)
+
+
+class ClienteSinLead(LookupError):
+    """El cliente no es del negocio (o es de prueba), o no tiene lead."""
+
+
+async def marcar_seguimiento_hecho(
+    session: Any,
+    tenant_id: uuid.UUID,
+    customer_id: uuid.UUID,
+    *,
+    siguiente_en: str | None = None,
+    siguiente_nota: str | None = None,
+    excluir_canal: str | None = None,
+) -> None:
+    """Cierra el seguimiento del lead del cliente como «hecho» y, si se pide, programa el siguiente en el mismo gesto
+    (HU-CRM-21). `siguiente_en` es ISO 8601: sin zona es hora del negocio. `ValueError` si la fecha o la nota no
+    valen; `ClienteSinLead` si no hay a quién."""
+    from core.leads import seguimiento
+
+    q = select(Customer.id).where(
+        Customer.tenant_id == tenant_id, Customer.id == customer_id, Customer.deleted_at.is_(None)
+    )
+    if excluir_canal is not None:
+        q = q.where(Customer.channel != excluir_canal)
+    if (await session.execute(q)).scalar_one_or_none() is None:
+        raise ClienteSinLead("Cliente no encontrado.")
+    lead = await vivo(session, tenant_id, customer_id, bloquear=True)
+    if lead is None:
+        raise ClienteSinLead("Este cliente no tiene un lead.")
+    zona = await seguimiento.zona_del_negocio(session, tenant_id)
+    siguiente = seguimiento.parsear_fecha(siguiente_en, zona) if siguiente_en else None
+    seguimiento.completar(session, lead, siguiente_fecha=siguiente, siguiente_nota=siguiente_nota)

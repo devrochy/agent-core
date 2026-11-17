@@ -23,6 +23,7 @@ from core.datos_cliente.servicio import evaluar_accion
 from core.db.models import Conversation
 from core.db.session import get_owned, get_session
 from core.kernel.oferta import solo_con_motor_activo
+from core.leads import servicio as leads_core
 from core.mcp.types import BaseSkill, MCPTool, Referencia, RegistroCreado, ToolContext
 from core.memory.facts import HechoInvalido, NamespaceNoConcedido
 from core.shared.logger import get_logger
@@ -30,20 +31,10 @@ from core.shared.tenant import get_current_tenant_id
 from core.shared.test_mode import is_panel_test
 from pack_commerce import sandbox as sandbox_prueba
 from pack_commerce.datos import A_LEGADO, ACCION_POR_ENTREGA
-from pack_commerce.etapas import (
-    CODIGOS_DE_MOTIVO,
-    ETAPAS,
-    EtapaInvalida,
-    MotivoDePerdidaInvalido,
-    TransicionNoPermitida,
-    cambiar_etapa,
-)
-from pack_commerce.etapas import calificar as calificar_etapa
 from pack_commerce.fotos import url_foto
 from pack_commerce.models import (
     CategoryComplement,
     Inventory,
-    Lead,
     Order,
     OrderItem,
     OrderItemBatch,
@@ -58,8 +49,6 @@ from pack_commerce.models import (
 CUSTOMER_SEGMENTS = ("nuevo", "ocasional", "frecuente", "fiel", "inactivo")
 
 log = get_logger(__name__)
-# Datos que el cliente deja al pedir que lo contacten: son operativos del lead (HU-CRM-16).
-OPERATIVOS_DE_LEAD = ("name", "email", "phone", "crm_lead_id")
 
 ORDER_STATUS_ACTIVE = ("abierto", "despachado")
 # Una cotización "en curso": se puede confirmar o convertir en pedido (ADR-0130).
@@ -631,77 +620,6 @@ def _validar_checkout(campos_requeridos: list[str], data: dict[str, Any]) -> tup
 _ESPACIOS = re.compile(r"\s+")
 
 
-# ------------------------------------------------------------------ LEADS
-def _ultimo_lead_del_cliente(customer_id: Any, tenant_id: Any) -> Any:
-    """El lead que muestra la ficha: el de actividad más reciente (como `providers._ultimo_lead`).
-    Un cliente puede tener varios (intake, borrador automático, ficha): nunca falla por eso."""
-    return (
-        select(Lead)
-        .where(Lead.customer_id == customer_id, Lead.tenant_id == tenant_id)
-        .order_by(Lead.last_activity_at.desc(), Lead.id.desc())
-        .limit(1)
-    )
-
-
-async def completar_lead(
-    session: Any,
-    customer_id: uuid.UUID,
-    *,
-    nombre: Any = None,
-    email: Any = None,
-    telefono: Any = None,
-) -> bool:
-    """Completa el lead EXISTENTE del cliente con los datos que dio (smoke de test 2026-10-20:
-    en un recorrido guiado las tools de lead no se ofrecen y el lead quedaba sin nombre ni
-    correo). Nunca crea otro lead ni toca la memoria del cliente. Pisa con el último valor
-    dicho. True si había lead."""
-    lead = (
-        await session.execute(
-            _ultimo_lead_del_cliente(customer_id, get_current_tenant_id())
-        )
-    ).scalars().first()
-    if lead is None:
-        return False
-    for campo, valor, tope in (("name", nombre, 200), ("email", email, 254), ("phone", telefono, 40)):
-        limpio = _ESPACIOS.sub(" ", str(valor or "")).strip()[:tope]
-        if limpio:
-            setattr(lead, campo, limpio.lower() if campo == "email" else limpio)
-    lead.last_activity_at = _now()
-    return True
-
-
-
-async def _avisar_lead_nuevo(session, lead_id, customer_id=None) -> None:  # type: ignore[no-untyped-def]
-    """Centro de notificaciones (ADR-0167): lead nuevo, en la transacción que lo crea. Sin
-    datos del cliente en el texto; nunca propaga. El destino es el CLIENTE (HU-CRM-20): la ficha
-    se abre por id de cliente, no de lead; sin él (no debería pasar) queda el destino de lead."""
-    from core.notifications.service import notify
-    from core.notifications.spec import NotificationSpec
-
-    tenant_id = get_current_tenant_id()
-    if tenant_id is None:
-        return
-    await notify(
-        session,
-        tenant_id,
-        NotificationSpec(
-            event_key="commerce.lead_nuevo",
-            category="ventas",
-            severity="info",
-            title="Lead nuevo",
-            body="Un cliente nuevo quedó registrado como lead. Revisa su ficha para darle seguimiento.",
-            dedupe_key=f"lead_nuevo:{lead_id}",
-            section="leads",
-            data={"kind": "lead_nuevo", "lead_id": str(lead_id)},
-            target=(
-                {"entity": "cliente", "id": str(customer_id), "section": "leads"}
-                if customer_id is not None
-                else {"entity": "lead", "id": str(lead_id), "section": "leads"}
-            ),
-        ),
-    )
-
-
 async def _avisar_pedido_nuevo(session, order) -> None:  # type: ignore[no-untyped-def]
     """Centro de notificaciones (ADR-0167): pedido nuevo, en la transacción que lo crea."""
     from core.notifications.service import notify
@@ -725,213 +643,6 @@ async def _avisar_pedido_nuevo(session, order) -> None:  # type: ignore[no-untyp
             target={"entity": "pedido", "id": str(order.id), "section": "pack_commerce"},
         ),
     )
-
-
-class LeadSkill(BaseSkill):
-    name = "lead_skill"
-    description = "Captura y calificación de leads (prospectos de venta)"
-    keywords: list[str] = []  # noqa: RUF012  (siempre activa)
-
-    def get_tools(self) -> list[MCPTool]:
-        return [
-            MCPTool(
-                name="crear_lead",
-                description=(
-                    "Registra un nuevo prospecto (lead) en el CRM. Úsala de inmediato cuando "
-                    "el cliente se presenta (da su nombre) y muestra intención de comprar o "
-                    "de que lo contacten. NO la uses dos veces para la misma persona: si ya "
-                    "existe, usa actualizar_lead."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "Nombre completo del prospecto"},
-                        "email": {"type": "string", "description": "Email si lo dio"},
-                        "phone": {"type": "string", "description": "Teléfono si lo dio"},
-                        "interest": {"type": "string", "description": "Qué producto/servicio le interesa"},
-                    },
-                    "required": ["name", "interest"],
-                },
-                handler=self.crear_lead,
-                side_effects=True,
-                simular=sandbox_prueba.simular_crear_lead,
-                # HU-AOS-47: procedencia del lead (no cuenta el que ya existía ni el reintento).
-                crea_registro=RegistroCreado(
-                    kind="lead", id_key="lead_id", es_nuevo=lambda r: r.get("status") == "created"
-                ),
-            ),
-            MCPTool(
-                name="calificar_lead",
-                description=(
-                    "Asigna una puntuación 1-10 al lead según presupuesto, urgencia y poder de "
-                    "decisión. Úsala cuando el lead confirme un presupuesto o monto de compra: "
-                    "es el momento de calificar, no de consultar inventario ni de volver a "
-                    "crear/actualizar el lead."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "score": {"type": "integer", "description": "Puntuación 1-10"},
-                        "notes": {"type": "string", "description": "Justificación breve"},
-                    },
-                    "required": ["score"],
-                },
-                handler=self.calificar_lead,
-                side_effects=True,
-                simular=sandbox_prueba.simular_calificar_lead,
-            ),
-            MCPTool(
-                name="actualizar_lead",
-                description=(
-                    "Actualiza datos del lead ya registrado en esta conversación. Úsala DE "
-                    "INMEDIATO cuando el lead (registrado con crear_lead) te dé un dato nuevo: "
-                    "teléfono, email, interés o una corrección. No respondas 'ya anoté' sin "
-                    "haberla llamado. Para marcar el lead como «perdido» (status=perdido) envía "
-                    "SIEMPRE loss_reason con el motivo; sin él no se guarda el cambio."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "Nombre completo del prospecto"},
-                        "email": {"type": "string"},
-                        "phone": {"type": "string", "description": "Teléfono si lo dio"},
-                        "interest": {"type": "string"},
-                        "status": {
-                            "type": "string",
-                            "enum": ["nuevo", "calificado", "contactado", "convertido", "perdido"],
-                        },
-                        "loss_reason": {
-                            "type": "string",
-                            "enum": list(CODIGOS_DE_MOTIVO),
-                            "description": "Por qué se perdió. Obligatorio si status es perdido",
-                        },
-                        "loss_note": {
-                            "type": "string",
-                            "description": "Detalle breve de la pérdida (máx. 300 caracteres), opcional",
-                        },
-                    },
-                },
-                handler=self.actualizar_lead,
-                side_effects=True,
-                simular=sandbox_prueba.simular_actualizar_lead,
-            ),
-        ]
-
-    # ------------------------------------------------------------ handlers
-    async def crear_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        async with get_session() as session:
-            tenant_id = get_current_tenant_id()
-            existing = (
-                await session.execute(
-                    select(Lead).where(
-                        Lead.idempotency_key == context.idempotency_key,
-                        Lead.tenant_id == tenant_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing is not None:
-                return {"lead_id": str(existing.id), "status": "duplicate"}
-
-            by_customer = (
-                await session.execute(_ultimo_lead_del_cliente(context.customer_id, tenant_id))
-            ).scalars().first()
-            if by_customer is not None:
-                return {
-                    "lead_id": str(by_customer.id),
-                    "status": "ya_existe",
-                    "hint": "Este cliente ya es un lead. Usa actualizar_lead.",
-                }
-
-            lead = Lead(
-                customer_id=context.customer_id,
-                conversation_id=context.conversation_id,
-                name=arguments.get("name"),
-                email=arguments.get("email"),
-                phone=arguments.get("phone"),
-                interest=arguments.get("interest", ""),
-                idempotency_key=context.idempotency_key,
-            )
-            session.add(lead)
-            await session.flush()
-            lead_id = str(lead.id)
-            await _avisar_lead_nuevo(session, lead.id, lead.customer_id)
-
-        # Entity Memory (Capa 2): el core recuerda esto en TODAS las conversaciones futuras.
-        # El perfil es la fuente de los datos de contacto que muestra la ficha (ADR-0149).
-        perfil: dict[str, Any] = {
-            "name": arguments.get("name"),
-            "email": arguments.get("email"),
-            "crm_lead_id": lead_id,
-        }
-        telefono = _ESPACIOS.sub(" ", str(arguments.get("phone") or "")).strip()[:40]
-        if telefono:
-            perfil["phone"] = telefono
-        await _guardar_en_perfil(context, perfil, operativos=OPERATIVOS_DE_LEAD)
-        return {"lead_id": lead_id, "status": "created"}
-
-    async def calificar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        try:
-            score = max(1, min(10, int(arguments.get("score", 0))))
-        except (TypeError, ValueError):
-            return {"error": "score inválido: debe ser un número entre 1 y 10."}
-        async with get_session() as session:
-            lead = (
-                await session.execute(_ultimo_lead_del_cliente(context.customer_id, get_current_tenant_id()))
-            ).scalars().first()
-            if lead is None:
-                return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
-            etapa = await calificar_etapa(
-                session, lead, score, actor="agente", idempotency_key=f"agente:calificar_lead:{context.idempotency_key}"
-            )
-        return {"lead_id": str(lead.id), "score": score, "status": etapa}
-
-    async def actualizar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        async with get_session() as session:
-            lead = (
-                await session.execute(_ultimo_lead_del_cliente(context.customer_id, get_current_tenant_id()))
-            ).scalars().first()
-            if lead is None:
-                return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
-            # La etapa primero: si no vale, no se guarda nada del resto (HU-CRM-18).
-            if arguments.get("status"):
-                try:
-                    await cambiar_etapa(
-                        session,
-                        lead,
-                        arguments["status"],
-                        actor="agente",
-                        idempotency_key=f"agente:actualizar_lead:{context.idempotency_key}",
-                        loss_reason=arguments.get("loss_reason"),
-                        loss_note=arguments.get("loss_note"),
-                    )
-                except EtapaInvalida as exc:
-                    return {"error": str(exc), "etapas_validas": list(ETAPAS)}
-                except TransicionNoPermitida as exc:
-                    return {"error": str(exc), "etapa_actual": lead.status}
-                except MotivoDePerdidaInvalido as exc:
-                    # La etapa no cambió: el agente reintenta con un motivo del catálogo (HU-CRM-23).
-                    return {"error": str(exc), "motivos_validos": list(CODIGOS_DE_MOTIVO), "etapa_actual": lead.status}
-                except ValueError as exc:  # nota de la pérdida demasiado larga
-                    return {"error": str(exc), "etapa_actual": lead.status}
-            if arguments.get("name"):
-                lead.name = str(arguments["name"])
-            if arguments.get("email"):
-                lead.email = str(arguments["email"])
-            if arguments.get("phone"):
-                lead.phone = str(arguments["phone"])
-            if arguments.get("interest"):
-                lead.interest = str(arguments["interest"])
-            lead.last_activity_at = _now()
-        # Los datos de contacto también van al perfil, que es lo que muestra la ficha (ADR-0149).
-        topes = {"name": 200, "email": 254, "phone": 40}  # los de `completar_lead`
-        contacto = {
-            k: _ESPACIOS.sub(" ", str(arguments[k])).strip()[:tope]
-            for k, tope in topes.items()
-            if arguments.get(k)
-        }
-        contacto = {k: v for k, v in contacto.items() if v}
-        await _guardar_en_perfil(context, contacto, operativos=OPERATIVOS_DE_LEAD)
-        return {"lead_id": str(lead.id), "status": "actualizado"}
 
 
 # ------------------------------------------------------------------ CATÁLOGO
@@ -1853,9 +1564,10 @@ class OrderSkill(BaseSkill):
                 )
                 await self._decrement_stock(session, item.variant_id, item.quantity)
             quote.status = "convertida"
-            # El lead del cliente queda con los datos del pedido (sin crear otro).
-            await completar_lead(
+            # El lead del cliente queda con los datos del pedido (sin crear otro): el lead es del core (ADR-0193).
+            await leads_core.completar_contacto(
                 session,
+                get_current_tenant_id(),
                 context.customer_id,
                 nombre=customer_data.get("full_name"),
                 email=customer_data.get("email"),

@@ -172,6 +172,10 @@ class LeadProvider:
     medida_query: LeadMedidaQuery | None = None
 
 
+# Providers del core que no son un pack y se muestran siempre (ADR-0193: el lead es del core).
+SIEMPRE: frozenset[str] = frozenset({"leads"})
+
+
 class LeadRegistry:
     def __init__(self) -> None:
         self._providers: dict[str, LeadProvider] = {}
@@ -215,7 +219,7 @@ class LeadRegistry:
     def providers_for(self, enabled: set[str] | None) -> list[LeadProvider]:
         if enabled is None:
             return list(self._providers.values())
-        return [p for pid, p in self._providers.items() if pid in enabled]
+        return [p for pid, p in self._providers.items() if pid in enabled or pid in SIEMPRE]
 
     def columns_for(self, enabled: set[str] | None) -> list[LeadColumn]:
         cols: list[LeadColumn] = []

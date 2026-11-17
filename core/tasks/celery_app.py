@@ -243,6 +243,26 @@ def _access_events_retention() -> Any:
     return retener_eventos_de_acceso()
 
 
+# Captar leads (ADR-0193 §3): reenganche de leads cada hora y recordatorios de seguimiento cada 5 min. Vivían en
+# `pack_commerce.jobs`; ahora son del core y corren solo en los negocios con config de Captar leads.
+_LEADS_FOLLOW_UP_TASK = "core.leads_follow_up"
+_LEADS_RECORDAR_TASK = "core.leads_recordar_seguimientos"
+
+
+@core_cron(_LEADS_FOLLOW_UP_TASK, crontab(minute="0"))
+def _leads_follow_up() -> Any:
+    from core.leads.jobs import follow_up_leads
+
+    return follow_up_leads()
+
+
+@core_cron(_LEADS_RECORDAR_TASK, crontab(minute="*/5"))
+def _leads_recordar_seguimientos() -> Any:
+    from core.leads.jobs import recordar_seguimientos
+
+    return recordar_seguimientos()
+
+
 # «Cliente esperando respuesta» (ADR-0167): cada 5 min avisa de los clientes con una escalación
 # abierta que llevan más de 15 min sin respuesta humana (un aviso por episodio).
 _CLIENTE_ESPERANDO_TASK = "core.cliente_esperando"

@@ -439,6 +439,10 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # Ficha de lo que cada módulo habilitado ya sabe del cliente (HU-CRM-14): acotada y tolerante a fallos.
     # Apagada por defecto: solo la trae el agente que encendió sus herramientas de datos del cliente.
     agente_del_turno = release_vigente.agente_del_turno()
+    # Captar leads (ADR-0193 §2): el lead del cliente existe antes de que el agente lo enriquezca.
+    from core.leads.asegurar import asegurar_en_el_turno
+
+    await asegurar_en_el_turno(agente_del_turno, customer, conversation)
     packs_del_agente = (
         set(agente_del_turno.packs)
         if agente_del_turno is not None and agente_del_turno.packs is not None

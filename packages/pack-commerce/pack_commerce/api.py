@@ -16,7 +16,7 @@ sesión de admin). Reemplaza el intake propuesto en ADR-0055 (que usaba
 4. Si el tenant configuró `CRMConfig.lead_intake_turnstile`, exige y valida el
    token de Cloudflare Turnstile (`siteverify`).
 5. Crea/actualiza el lead de forma **idempotente**: `Customer` del core (identidad,
-   ADR-0022) + `Lead` del pack (dominio comercial), con clave
+   ADR-0022) + el lead del core (ADR-0193, `core.leads.servicio`), con clave
    `intake:<email|phone>`.
 
 Salida a red (ADR-0052): la validación de Turnstile no usa `httpx` directo, sino
@@ -36,6 +36,7 @@ from core.agents.spec import enabled_packs, load_active_spec
 from core.db.models import Customer
 from core.db.session import get_session
 from core.gateway.webhook_verify import constant_time_equal
+from core.leads import servicio as leads_core
 from core.mcp.types import plugin_http
 from core.memory import entity as entity_memory
 from core.plugin_manager import plugin_manager
@@ -45,7 +46,6 @@ from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 from core.tenants import resolve_tenant_by_slug
 from pack_commerce.config import CRMConfig
-from pack_commerce.models import Lead
 
 log = get_logger(__name__)
 
@@ -213,7 +213,7 @@ async def intake_lead(
             return JSONResponse({"error": "turnstile_failed"}, status_code=403)
 
         external_id = email or phone      # identidad del Customer (canal web)
-        idem = f"intake:{external_id}"    # idempotencia del Lead (pack)
+        idem = f"intake:{external_id}"    # idempotencia del Lead
 
         async with get_session() as session:
             customer = (
@@ -255,31 +255,17 @@ async def intake_lead(
                 customer.name = nombre or customer.name
                 customer.contact_phone = phone or customer.contact_phone
 
-            lead = (
-                await session.execute(
-                    select(Lead).where(
-                        Lead.tenant_id == tenant_id, Lead.idempotency_key == idem
-                    )
-                )
-            ).scalar_one_or_none()
-
-            if lead is None:
-                session.add(
-                    Lead(
-                        customer_id=customer.id,
-                        name=nombre,
-                        phone=phone or None,
-                        email=email or None,
-                        interest=negocio or config.lead_intake_default_interest,
-                        status=config.lead_intake_default_status,
-                        idempotency_key=idem,
-                    )
-                )
-            else:
-                lead.name = nombre or lead.name
-                lead.phone = phone or lead.phone
-                lead.email = email or lead.email
-                lead.interest = negocio or lead.interest
+            # El lead es del core (ADR-0193): si el cliente ya tiene uno vivo, el formulario lo completa.
+            await leads_core.registrar_desde_intake(
+                session,
+                tenant_id,
+                customer.id,
+                name=nombre,
+                phone=phone or None,
+                email=email or None,
+                interest=negocio or config.lead_intake_default_interest,
+                idempotency_key=idem,
+            )
 
     log.info("lead_intake_ok", tenant_slug=slug)
     return JSONResponse({"ok": True})

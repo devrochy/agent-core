@@ -24,10 +24,11 @@ from core.api.deps import Principal, get_principal, require
 from core.api.errors import ApiError
 from core.db.models import Customer
 from core.db.session import get_owned, get_session
+from core.leads import seguimiento
 from core.shared.tenant import tenant_slug
 from core.shared.test_mode import TEST_CHANNEL
 
-from . import aliados, seguimiento
+from . import aliados
 
 # Registra los providers de búsqueda global del pack (ADR-0096).
 from . import search as _search  # noqa: F401
@@ -37,7 +38,6 @@ from .models import (
     Ally,
     Category,
     Inventory,
-    Lead,
     Order,
     OrderItem,
     Product,
@@ -92,7 +92,6 @@ class CommerceDashboard(BaseModel):
 async def commerce_dashboard(
     principal: Annotated[Principal, Depends(require("pack_commerce"))],
 ) -> CommerceDashboard:
-    from core.db.models import Customer
 
     tenant_id = principal.tenant_id
     async with get_session() as session:
@@ -1102,7 +1101,6 @@ async def list_orders(
     Conserva la forma de lista (la consumen el panel y la APK); el total de los que coinciden
     con los filtros viaja en la cabecera `X-Total-Count`.
     """
-    from core.db.models import Customer
 
     if estado is not None and estado not in ORDER_STATUSES:
         raise ApiError.bad_request(
@@ -1267,37 +1265,22 @@ async def seguimiento_hecho(
     payload: SeguimientoHechoIn,
     principal: Annotated[Principal, Depends(require("leads", write=True))],
 ) -> Response:
-    """Marca como hecho el seguimiento del lead del cliente. Queda en su línea de tiempo con la nota."""
+    """Alias de `POST /api/v1/admin/leads/{customer_id}/seguimiento/hecho` (el lead es del core desde ADR-0193): lo
+    siguen usando el panel y la APK instalados."""
+    from core.leads import servicio as leads_core
+
     async with get_session() as session:
-        # Las mismas reglas que el PATCH de la ficha (`_cliente` del core): ni borrados ni de prueba.
-        cliente = (
-            await session.execute(
-                select(Customer.id).where(
-                    Customer.tenant_id == principal.tenant_id,
-                    Customer.id == customer_id,
-                    Customer.deleted_at.is_(None),
-                    Customer.channel != TEST_CHANNEL,
-                )
-            )
-        ).scalar_one_or_none()
-        if cliente is None:
-            raise ApiError.not_found("Cliente no encontrado.")
-        # Un cliente puede tener varios leads: el seguimiento es el del que muestra la ficha (el más reciente).
-        lead = (
-            await session.execute(
-                select(Lead)
-                .where(Lead.tenant_id == principal.tenant_id, Lead.customer_id == customer_id)
-                .order_by(Lead.last_activity_at.desc(), Lead.id.desc())
-                .limit(1)
-                .with_for_update()
-            )
-        ).scalars().first()
-        if lead is None:
-            raise ApiError.not_found("Este cliente no tiene un lead de venta.")
         try:
-            zona = await seguimiento.zona_del_negocio(session, principal.tenant_id)
-            siguiente = seguimiento.parsear_fecha(payload.siguiente_en, zona) if payload.siguiente_en else None
-            seguimiento.completar(session, lead, siguiente_fecha=siguiente, siguiente_nota=payload.siguiente_nota)
+            await leads_core.marcar_seguimiento_hecho(
+                session,
+                principal.tenant_id,
+                customer_id,
+                siguiente_en=payload.siguiente_en,
+                siguiente_nota=payload.siguiente_nota,
+                excluir_canal=TEST_CHANNEL,
+            )
+        except leads_core.ClienteSinLead as exc:
+            raise ApiError.not_found(str(exc)) from exc
         except ValueError as exc:
             raise ApiError.bad_request(str(exc), code="datos_invalidos") from exc
     return Response(status_code=204)

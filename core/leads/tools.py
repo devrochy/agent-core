@@ -113,24 +113,6 @@ async def avisar_lead_nuevo(session: Any, lead_id: uuid.UUID, customer_id: uuid.
         log.warning("leads_aviso_lead_nuevo_fallo", exc_info=True)
 
 
-async def completar_lead(
-    session: Any, customer_id: uuid.UUID, *, nombre: Any = None, email: Any = None, telefono: Any = None
-) -> bool:
-    """Completa el lead EXISTENTE del cliente con lo que dio en un recorrido guiado (las tools de lead no se ofrecen
-    ahí). Nunca crea otro lead ni toca la memoria del cliente; pisa con el último valor dicho. True si había lead."""
-    lead = await servicio.vivo(session, get_current_tenant_id(), customer_id)
-    if lead is None:
-        return False
-    servicio.fijar_contacto(
-        lead,
-        name=_limpio("name", nombre),
-        email=_limpio("email", email),
-        phone=_limpio("phone", telefono),
-    )
-    lead.last_activity_at = datetime.now(UTC)
-    return True
-
-
 class LeadSkill(BaseSkill):
     name = "lead_skill"
     description = "Captura y calificación de leads (prospectos)"
