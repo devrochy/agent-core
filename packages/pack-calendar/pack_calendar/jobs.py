@@ -86,7 +86,7 @@ async def _recordatorios_de_citas(now: datetime) -> int:
     enviados = 0
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
-            if not await debe_correr(tenant_id, CRON_RECORDATORIOS):
+            if not await debe_correr(tenant_id, CRON_RECORDATORIOS, ahora=now):
                 continue
             enviados_negocio = 0
             config = await _config()
