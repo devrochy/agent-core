@@ -81,3 +81,15 @@
 {"catalogo": "planes", "texto": "quiero contratar Premium", "esperado": "pack_subscriptions.contratar_plan"}
 {"catalogo": "planes", "texto": "cambiar mi plan", "esperado": "pack_subscriptions.cambiar_plan"}
 {"catalogo": "planes", "texto": "cuánto cuesta el plan basic", "esperado": null}
+{"catalogo": "tienda_pagos", "texto": "quiero pedir dos hamburguesas", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda_pagos", "texto": "quiero hacer un pedido", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda_pagos", "texto": "me lo mandan a la casa", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda_pagos", "texto": "quiero comprar tres camisetas", "esperado": "pack_commerce.tomar_pedido"}
+{"catalogo": "tienda_pagos", "texto": "ya pagué", "esperado": "pack_commerce.pago_en_linea"}
+{"catalogo": "tienda_pagos", "texto": "ya hice el pago", "esperado": "pack_commerce.pago_en_linea"}
+{"catalogo": "tienda_pagos", "texto": "no me llegó el link de pago", "esperado": "pack_commerce.pago_en_linea"}
+{"catalogo": "tienda_pagos", "texto": "el link venció", "esperado": "pack_commerce.pago_en_linea"}
+{"catalogo": "tienda_pagos", "texto": "me puedes reenviar el link de pago", "esperado": "pack_commerce.pago_en_linea"}
+{"catalogo": "tienda_pagos", "texto": "cuál es el estado de mi pago", "esperado": "pack_commerce.pago_en_linea"}
+{"catalogo": "tienda_pagos", "texto": "hola", "esperado": null}
+{"catalogo": "tienda_pagos", "texto": "¿aceptan tarjeta?", "esperado": null}

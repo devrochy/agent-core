@@ -210,8 +210,10 @@ def _modulos(monkeypatch) -> None:  # type: ignore[no-untyped-def]
 
 def test_superpoder_de_ventas_cae_en_su_dominio(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _modulos(monkeypatch)
-    [poder] = editor.superpoderes({"pack_commerce"})
-    assert (poder.id, poder.group, poder.group_label) == ("pack_commerce.tomar_pedido", "ventas", "Ventas")
+    poderes = {p.id: p for p in editor.superpoderes({"pack_commerce"})}
+    assert (poderes["pack_commerce.tomar_pedido"].group, poderes["pack_commerce.tomar_pedido"].group_label) == ("ventas", "Ventas")
+    pago = poderes["pack_commerce.pago_en_linea"]
+    assert (pago.group, pago.group_label) == ("formas_de_pago", "Formas de pago")
 
 
 def test_formas_de_pago_es_un_dominio_del_pack_de_ventas() -> None:
@@ -226,8 +228,7 @@ def test_superpoder_sin_grupo_cae_en_otros(monkeypatch) -> None:  # type: ignore
     from core.plugin_manager import plugin_manager
 
     monkeypatch.setattr(plugin_manager, "get", lambda pid: None)
-    [poder] = editor.superpoderes({"pack_commerce"})
-    assert (poder.group, poder.group_label) == ("otros", "Otros")
+    assert {(p.group, p.group_label) for p in editor.superpoderes({"pack_commerce"})} == {("otros", "Otros")}
 
 
 def test_el_dominio_no_toca_el_procedimiento_publicado(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -235,6 +236,7 @@ def test_el_dominio_no_toca_el_procedimiento_publicado(monkeypatch) -> None:  # 
     from core.kernel.procedures.de_pack import cargar
 
     _modulos(monkeypatch)
-    [proc] = cargar("pack_commerce")
+    proc = next(p for p in cargar("pack_commerce") if p.id == "pack_commerce.tomar_pedido")
     assert "group" not in proc.model_dump()
-    assert editor.superpoderes({"pack_commerce"})[0].version == proc.version
+    poderes = {p.id: p for p in editor.superpoderes({"pack_commerce"})}
+    assert poderes[proc.id].version == proc.version

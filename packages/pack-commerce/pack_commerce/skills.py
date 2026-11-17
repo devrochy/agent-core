@@ -503,6 +503,13 @@ def _sin_cotizacion_vigente() -> dict[str, Any]:
     }
 
 
+_ESTADO_DE_PAGO_VISIBLE = {
+    "pagado": "pagado",
+    "en_revision": "en revisión",
+    "rechazado": "pago rechazado",
+}
+
+
 async def _transfer_safe_append(agent_id: Any = None) -> str:
     """Arma el bloque de datos de transferencia (nunca lo escribe el LLM). Con `agent_id`, las
     cuentas propias del agente pisan a las del negocio (SPEC-48, HU-COM-21)."""
@@ -2225,7 +2232,10 @@ class OrderSkill(BaseSkill):
             "public_order_number": order.public_order_number,
             "status": status_labels.get(order.status, order.status),
             "delivery_method": "domicilio" if order.delivery_method == "domicilio" else "recoger en tienda",
-            "payment_status": "pagado" if order.payment_status == "pagado" else "pendiente de pago",
+            "payment_status": _ESTADO_DE_PAGO_VISIBLE.get(order.payment_status, "pendiente de pago"),
+            # El id real del pedido del cliente (el mismo de Referencias vigentes): lo usa
+            # `pack_commerce.pago_en_linea` para reenviar el link sin crear otro pedido (HU-COM-23).
+            "order_id": str(order.id),
             "items": [
                 {
                     "product": by_id.get(i.variant_id).name if by_id.get(i.variant_id) else "Producto",
