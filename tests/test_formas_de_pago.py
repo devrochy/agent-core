@@ -107,7 +107,7 @@ async def test_resolver_solo_acepta_formas_activas(monkeypatch) -> None:  # type
     async def _online() -> bool:
         return True
 
-    monkeypatch.setattr(fp, "metodos_del_agente", _activos)
+    monkeypatch.setattr(fp, "metodos_configurados", _activos)
     monkeypatch.setattr(procedimientos, "_pago_en_linea_disponible", _online)
     ctx = SimpleNamespace(agent_id=uuid.uuid4())
     assert (await procedimientos.metodo_de_pago("efectivo_contraentrega", ctx, {})).ok
@@ -125,10 +125,27 @@ async def test_resolver_sin_proveedor_explica_el_pago_en_linea(monkeypatch) -> N
     async def _online() -> bool:
         return False
 
-    monkeypatch.setattr(fp, "metodos_del_agente", _activos)
+    monkeypatch.setattr(fp, "metodos_configurados", _activos)
     monkeypatch.setattr(procedimientos, "_pago_en_linea_disponible", _online)
     rechazo = await procedimientos.metodo_de_pago("pago_en_linea", SimpleNamespace(agent_id=None), {})
     assert not rechazo.ok and "no está disponible" in (rechazo.error or "")
+
+
+@pytest.mark.asyncio
+async def test_sin_formas_guardadas_el_resolver_sigue_como_antes(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from pack_commerce import procedimientos
+
+    async def _sin_configurar(_agent):  # type: ignore[no-untyped-def]
+        return None
+
+    async def _online() -> bool:
+        return False
+
+    monkeypatch.setattr(fp, "metodos_configurados", _sin_configurar)
+    monkeypatch.setattr(procedimientos, "_pago_en_linea_disponible", _online)
+    ctx = SimpleNamespace(agent_id=uuid.uuid4())
+    assert (await procedimientos.metodo_de_pago("transferencia", ctx, {})).ok
+    assert not (await procedimientos.metodo_de_pago("pago_en_linea", ctx, {})).ok
 
 
 @pytest.mark.asyncio
