@@ -71,10 +71,24 @@ def test_con_el_estado_de_las_tareas_no_suben_los_falsos_positivos() -> None:
     assert medicion.falsos_positivos == [] and medicion.falsos_negativos == []
 
 
-def test_horarios_y_preguntas_en_active() -> None:
+def test_horarios_y_preguntas_en_active(monkeypatch) -> None:
     """HU-AOS-20 parte 3: con las dos validaciones en `active` y el estado derivado, las respuestas
     reales siguen bajo el umbral de falsos positivos, y los casos `sintetico-horario` /
-    `sintetico-preguntas` (con sus modos, reloj y contexto) no fallan ninguno."""
+    `sintetico-preguntas` (con sus modos, reloj y contexto) no fallan ninguno.
+
+    El set está grabado con fechas de noviembre de 2026: se congela «hoy» para que el gate no
+    cambie de resultado al pasar la medianoche de la zona del negocio."""
+    from datetime import UTC
+    from datetime import datetime as _datetime
+
+    import core.orchestrator.verificador.horarios as horarios_mod
+
+    class _FechaFija(_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _datetime(2026, 11, 9, 12, 0, tzinfo=tz or UTC)
+
+    monkeypatch.setattr(horarios_mod, "datetime", _FechaFija)
     from core.orchestrator.verificador import Modos
 
     casos = cargar()

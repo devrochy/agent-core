@@ -43,10 +43,12 @@ async def _sql(sql: str, **params) -> None:
 
 
 async def _limpiar() -> None:
-    # La tabla tiene RLS: se borra dentro del scope de cada negocio.
+    # La tabla tiene RLS y `app_runtime` no tiene DELETE: se apaga con borrado lógico.
     for tid in (A, B, T1):
         async with tenant_scope(tid):
-            await _sql("delete from tenant_cron_configs where tenant_id = :t", t=tid)
+            await _sql("update tenant_cron_configs set deleted_at = now() where tenant_id = :t", t=tid)
+    # El historial se purga con la función SECURITY DEFINER (también sin DELETE para la app).
+    await svc.mantenimiento(dias=0)
 
 
 @pytest.fixture(autouse=True)
