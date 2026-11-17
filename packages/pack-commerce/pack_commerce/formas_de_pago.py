@@ -190,3 +190,14 @@ async def estados_del_agente(agent_id: Any) -> list[EstadoDeForma]:
 
 async def metodos_del_agente(agent_id: Any) -> list[str]:
     return [e.method for e in await estados_del_agente(agent_id) if e.estado == "activa"]
+
+
+async def metodos_configurados(agent_id: Any) -> list[str] | None:
+    """Los métodos activos SOLO si el agente guardó sus formas de pago; `None` si no las guardó.
+    Con `None`, `crear_pedido` y el resolver siguen como antes de SPEC-48 (no se endurece nada a un
+    negocio que no configuró): la regla nueva aplica cuando el dueño decide sus formas."""
+    config = await config_del_agente(agent_id)
+    guardadas = getattr(config, "payment_forms", None)
+    if guardadas is None:
+        return None
+    return metodos_activos(guardadas, getattr(config, "transfer_accounts", None), await pago_en_linea_disponible())
