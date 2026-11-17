@@ -60,6 +60,8 @@ class AgenteCongelado:
     # ADR-0195: flujo propio del agente congelado (`{"sha256", "sections"}`); `None` = release
     # anterior, se lee `flow_tenant`.
     flow: Mapping[str, Any] | None = None
+    # HU-AOS-82: horario propio congelado (`{"tz", "ranges"}`); `None` = hereda el del negocio.
+    schedule: Mapping[str, Any] | None = None
 
     @property
     def tools(self) -> frozenset[str]:

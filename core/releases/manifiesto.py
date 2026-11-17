@@ -66,6 +66,8 @@ class Componente:
     # ADR-0195: flujo propio del agente (secciones + hash). `None` = release anterior, lee `flow_tenant`.
     flow: Mapping[str, Any] | None = None
     flow_hash: str | None = None
+    # HU-AOS-82: horario propio del agente (`{"tz", "ranges"}`); `None` = hereda el del negocio.
+    schedule: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,7 @@ def _componente(c: Componente) -> dict[str, Any]:
         "procedures": [{"id": pid, "version": v} for pid, v in sorted(c.procedures)],
         **({"skills": sorted(c.skills)} if c.skills is not None else {}),
         **({"flow": {"sha256": c.flow_hash, "sections": c.flow}} if c.flow is not None else {}),
+        **({"schedule": c.schedule} if c.schedule is not None else {}),
     }
 
 
