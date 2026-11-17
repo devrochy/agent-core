@@ -301,9 +301,18 @@ async def test_seguimientos_saltan_el_negocio_pausado(monkeypatch: pytest.Monkey
         corridos.append(tid)
         return 0, 0
 
+    async def _debe_correr(*_a, **_k):
+        # ADR-0201: la política por negocio se prueba aparte; aquí solo importa la pausa.
+        return True
+
+    async def _registrar(*_a, **_k):
+        return None
+
     monkeypatch.setattr(jobs, "_tenant_ids", _ids)
     monkeypatch.setattr(pausa_automatica, "negocio_pausado", _negocio)
     monkeypatch.setattr(jobs, "_config_del_negocio", _config)
     monkeypatch.setattr(jobs, por_negocio, _seguimiento)
+    monkeypatch.setattr(jobs, "debe_correr", _debe_correr)
+    monkeypatch.setattr(jobs, "registrar", _registrar)
     await getattr(jobs, cron)()
     assert corridos == [activo]

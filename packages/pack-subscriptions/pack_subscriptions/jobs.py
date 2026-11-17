@@ -29,6 +29,7 @@ from core.shared.events import (
 )
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
+from core.tasks.cron_negocio import debe_correr, registrar, registrar_fallo
 from core.tasks.decorators import register_cron
 from pack_subscriptions import promociones
 from pack_subscriptions.avisos import recordatorio_de_hoy
@@ -45,6 +46,14 @@ from pack_subscriptions.periodos import etiqueta_periodo, sumar_periodo
 log = get_logger(__name__)
 
 PACK_ID = "pack_subscriptions"
+
+# Nombres del catálogo (ADR-0201): la política por negocio se consulta con el nombre de la tarea.
+CRON_EXPIRAR = f"{PACK_ID}.expirar_inscripciones"
+CRON_PRECIOS = f"{PACK_ID}.sincronizar_precios_de_plan"
+CRON_CARGOS = f"{PACK_ID}.generar_cargos"
+CRON_DESCUENTOS = f"{PACK_ID}.verificar_descuentos"
+CRON_VENCIDAS = f"{PACK_ID}.marcar_vencidas"
+CRON_AVISOS = f"{PACK_ID}.avisos_de_cobro"
 
 
 async def _tenant_ids() -> list[uuid.UUID]:
@@ -163,7 +172,7 @@ async def reservar_aviso_del_dia(  # type: ignore[no-untyped-def]
     return fila is not None
 
 
-@register_cron(PACK_ID, "30 3 * * *")
+@register_cron(PACK_ID, "30 * * * *")
 async def expirar_inscripciones() -> None:
     await _expirar_inscripciones(datetime.now(UTC))
 
@@ -177,8 +186,11 @@ async def _expirar_inscripciones(now: datetime) -> int:
 
     total = 0
     for tenant_id in await _tenant_ids():
+        expiradas_negocio = 0
         try:
             async with tenant_scope(tenant_id):
+                if not await debe_correr(tenant_id, CRON_EXPIRAR):
+                    continue
                 config = await _config_del_negocio()
                 limite = now - timedelta(days=config.dias_pago_inscripcion)
                 async with get_session() as session:
@@ -197,7 +209,7 @@ async def _expirar_inscripciones(now: datetime) -> int:
                     ).scalars().all()
                 for sub_id in ids:
                     if await expirar_una(sub_id, limite=limite):
-                        total += 1
+                        expiradas_negocio += 1
                 # HU-SUB-33: gauge `canjes_reservados_antiguos`. Un canje reservado pasado el plazo de pago es
                 # cupo retenido por un cobro que nadie anuló ni pagó (o un pago recibido sin aplicar).
                 async with get_session() as session:
@@ -206,9 +218,15 @@ async def _expirar_inscripciones(now: datetime) -> int:
                     )
                 if antiguos:
                     log.warning("subs_canjes_reservados_antiguos", tenant_id=str(tenant_id), total=antiguos)
-        except Exception:
+                total += expiradas_negocio
+                await registrar(
+                    tenant_id, CRON_EXPIRAR, acciones=expiradas_negocio,
+                    resumen=f"{expiradas_negocio} inscripciones expiradas",
+                )
+        except Exception as exc:
             # Un negocio con problemas no frena a los demás: el próximo corte reintenta.
             log.exception("subs_inscripciones_expirar_fallo", tenant_id=str(tenant_id))
+            await registrar_fallo(tenant_id, CRON_EXPIRAR, error_class=type(exc).__name__)
     log.info("subs_inscripciones_expiradas", total=total)
     return total
 
@@ -224,18 +242,27 @@ async def _sincronizar_precios_de_plan() -> int:
 
     total = 0
     for tenant_id in await _tenant_ids():
+        sincronizados = 0
         try:
             async with tenant_scope(tenant_id):
+                if not await debe_correr(tenant_id, CRON_PRECIOS):
+                    continue
                 async with get_session() as session:
-                    total += await sincronizar(session, tenant_id)
-        except Exception:
+                    sincronizados = await sincronizar(session, tenant_id)
+                total += sincronizados
+                await registrar(
+                    tenant_id, CRON_PRECIOS, acciones=sincronizados,
+                    resumen=f"{sincronizados} precios sincronizados",
+                )
+        except Exception as exc:
             log.exception("precios_de_plan_fallido", tenant_id=str(tenant_id))
+            await registrar_fallo(tenant_id, CRON_PRECIOS, error_class=type(exc).__name__)
     if total:
         log.info("precios_de_plan_sincronizados", total=total)
     return total
 
 
-@register_cron(PACK_ID, "15 3 * * *")
+@register_cron(PACK_ID, "15 * * * *")
 async def generar_cargos() -> None:
     await _generar_cargos(datetime.now(UTC))
 
@@ -255,11 +282,19 @@ async def _generar_cargos(now: datetime) -> int:
     total = 0
     for tenant_id in await _tenant_ids():
         try:
-            generadas = await _generar_cargos_del_negocio(tenant_id, now)
-        except Exception:
+            async with tenant_scope(tenant_id):
+                if not await debe_correr(tenant_id, CRON_CARGOS):
+                    continue
+                generadas = await _generar_cargos_del_negocio(tenant_id, now)
+                await registrar(
+                    tenant_id, CRON_CARGOS, acciones=generadas,
+                    resumen=f"{generadas} cargos generados",
+                )
+        except Exception as exc:
             # Un negocio que falla no frena a los demás. Su transacción se deshizo entera (cargos y descuento
             # consumido incluidos), así que la corrida de mañana reintenta sin perder ni duplicar un período.
             log.exception("subs_cargos_negocio_fallido", tenant_id=str(tenant_id))
+            await registrar_fallo(tenant_id, CRON_CARGOS, error_class=type(exc).__name__)
             continue
         total += generadas
         log.info("subs_cargos_generados", tenant_id=str(tenant_id), generadas=generadas)
@@ -301,7 +336,7 @@ async def _generar_cargos_del_negocio(tenant_id: uuid.UUID, now: datetime) -> in
     return generadas
 
 
-@register_cron(PACK_ID, "30 3 * * *")
+@register_cron(PACK_ID, "30 * * * *")
 async def verificar_descuentos() -> None:
     await _verificar_descuentos()
 
@@ -313,21 +348,33 @@ async def _verificar_descuentos() -> int:
     inconsistentes = 0
     for tenant_id in await _tenant_ids():
         try:
-            async with tenant_scope(tenant_id), get_session() as session:
-                malas = await promociones.descuentos_inconsistentes(session)
-                vigentes, mensual = await promociones.resumen_de_descuentos(session)
-        except Exception:
+            async with tenant_scope(tenant_id):
+                if not await debe_correr(tenant_id, CRON_DESCUENTOS):
+                    continue
+                async with get_session() as session:
+                    malas = await promociones.descuentos_inconsistentes(session)
+                    vigentes, mensual = await promociones.resumen_de_descuentos(session)
+                for sub_id in malas:
+                    log.error(
+                        "subs_descuento_inconsistente",
+                        tenant_id=str(tenant_id),
+                        subscription_id=str(sub_id),
+                    )
+                inconsistentes += len(malas)
+                await registrar(
+                    tenant_id, CRON_DESCUENTOS, acciones=0,
+                    resumen=f"{len(malas)} inconsistencias de descuento",
+                )
+                log.info(
+                    "subs_descuentos_vigentes",
+                    tenant_id=str(tenant_id),
+                    suscripciones_con_descuento=vigentes,
+                    descuento_vigente_mensual_cop=str(mensual),
+                )
+        except Exception as exc:
             log.exception("subs_descuentos_verificacion_fallida", tenant_id=str(tenant_id))
+            await registrar_fallo(tenant_id, CRON_DESCUENTOS, error_class=type(exc).__name__)
             continue
-        for sub_id in malas:
-            log.error("subs_descuento_inconsistente", tenant_id=str(tenant_id), subscription_id=str(sub_id))
-        inconsistentes += len(malas)
-        log.info(
-            "subs_descuentos_vigentes",
-            tenant_id=str(tenant_id),
-            suscripciones_con_descuento=vigentes,
-            descuento_vigente_mensual_cop=str(mensual),
-        )
     return inconsistentes
 
 
@@ -426,7 +473,7 @@ async def _turno_legal_del_aviso(session, tenant_id: uuid.UUID, sub: Subscriptio
     return None
 
 
-@register_cron(PACK_ID, "45 3 * * *")
+@register_cron(PACK_ID, "45 * * * *")
 async def marcar_vencidas() -> None:
     await _marcar_vencidas(datetime.now(UTC))
 
@@ -438,6 +485,8 @@ async def _marcar_vencidas(now: datetime) -> int:
     total = 0
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
+            if not await debe_correr(tenant_id, CRON_VENCIDAS):
+                continue
             config = await _config_del_negocio()
             limite = now - timedelta(days=config.dias_gracia)
             async with get_session() as session:
@@ -515,6 +564,10 @@ async def _marcar_vencidas(now: datetime) -> int:
                         },
                     )
             total += len(vistas)
+            await registrar(
+                tenant_id, CRON_VENCIDAS, acciones=len(vistas),
+                resumen=f"{len(vistas)} suscripciones vencidas",
+            )
             if vistas:
                 log.info("subs_vencidas", tenant_id=str(tenant_id), total=len(vistas))
     return total
@@ -607,6 +660,11 @@ async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
     totales = {"recordatorios": 0, "pausadas": 0, "fin_de_prueba": 0, "fuera_de_horario": 0}
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
+            if not await debe_correr(tenant_id, CRON_AVISOS):
+                continue
+            recordatorios_negocio = 0
+            pausadas_negocio = 0
+            fin_de_prueba_negocio = 0
             config = await _config_del_negocio()
             async with get_session() as session:
                 tz = await zona_del_negocio(session, tenant_id)
@@ -696,8 +754,20 @@ async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
                         },
                     )
                     totales["recordatorios"] += int(insertado)
+                    recordatorios_negocio += int(insertado)
                 totales["pausadas"] += len(pausadas)
-                totales["fin_de_prueba"] += await _ofertas_fin_de_prueba(session, tenant_id, config, now, hoy)
+                pausadas_negocio += len(pausadas)
+                fin_de_prueba_negocio = await _ofertas_fin_de_prueba(session, tenant_id, config, now, hoy)
+                totales["fin_de_prueba"] += fin_de_prueba_negocio
+            await registrar(
+                tenant_id,
+                CRON_AVISOS,
+                acciones=recordatorios_negocio + pausadas_negocio + fin_de_prueba_negocio,
+                resumen=(
+                    f"{recordatorios_negocio} avisos, {pausadas_negocio} pausas, "
+                    f"{fin_de_prueba_negocio} ofertas de fin de prueba"
+                ),
+            )
     if any(totales.values()):
         log.info("subs_avisos_de_cobro", **totales)
     return totales

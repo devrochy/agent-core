@@ -47,6 +47,9 @@ CORE_SECTIONS: dict[str, str] = {
     "costs": "Costos LLM",
     "plan": "Plan y consumo",
     "settings": "Configuración",
+    # Automatizaciones del negocio (ADR-0201): el dueño escribe; el colaborador lee por defecto
+    # y el dueño puede darle `write` o quitárselo en Colaboradores.
+    "automatizaciones": "Automatizaciones",
     "tenants": "Tenants",
     "collaborators": "Colaboradores",
     # Depurador del turno (HU-AOS-28, ADR-0169): entradas y salidas de las acciones, redactadas.

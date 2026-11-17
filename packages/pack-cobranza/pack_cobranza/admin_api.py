@@ -646,7 +646,7 @@ _MOTIVO_EVENTO: dict[str, str] = {
 
 
 def _fecha(valor: datetime | None) -> str:
-    return valor.strftime("%Y-%m-%d %H:%M") if valor else ""
+    return valor.isoformat() if valor else ""
 
 
 async def _nombres_de_gestores(session: Any, tid: uuid.UUID) -> dict[uuid.UUID, str]:
@@ -783,7 +783,7 @@ async def audit_log(
         operaciones=operaciones,
         filas=[
             AuditRow(
-                fecha=r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "",
+                fecha=r.created_at.isoformat() if r.created_at else "",
                 entidad=r.entidad,
                 entidad_id=str(r.entidad_id)[:8],
                 operacion=r.operacion,
@@ -1512,7 +1512,7 @@ async def portfolio_detail(
         caja=PortfolioCaja(
             saldo_inicial=float(caja.saldo_inicial) if caja else 0.0,
             saldo_actual=float(caja.saldo_actual) if caja else 0.0,
-            actualizado=caja.updated_at.strftime("%Y-%m-%d %H:%M") if caja and caja.updated_at else "",
+            actualizado=caja.updated_at.isoformat() if caja and caja.updated_at else "",
         ),
         liquidaciones=[
             Liquidation(
@@ -2104,7 +2104,7 @@ async def client_detail(
         ClientMovement(
             id=p.id,
             tipo="pago",
-            fecha=p.fecha_hora.strftime("%Y-%m-%d %H:%M") if p.fecha_hora else "",
+            fecha=p.fecha_hora.isoformat() if p.fecha_hora else "",
             valor=float(p.valor or 0),
             metodo=p.metodo_pago or "",
         )
@@ -2113,7 +2113,7 @@ async def client_detail(
         ClientMovement(
             id=a.id,
             tipo="abono",
-            fecha=a.fecha_hora.strftime("%Y-%m-%d %H:%M") if a.fecha_hora else "",
+            fecha=a.fecha_hora.isoformat() if a.fecha_hora else "",
             valor=float(a.valor or 0),
             metodo=a.metodo_pago or "",
         )
@@ -2451,7 +2451,7 @@ async def get_cash(
     return PortfolioCaja(
         saldo_inicial=float(caja.saldo_inicial) if caja else 0.0,
         saldo_actual=float(caja.saldo_actual) if caja else 0.0,
-        actualizado=caja.updated_at.strftime("%Y-%m-%d %H:%M") if caja and caja.updated_at else "",
+        actualizado=caja.updated_at.isoformat() if caja and caja.updated_at else "",
     )
 
 
@@ -3073,7 +3073,7 @@ def _as_note(row: CarteraNota) -> NoteRow:
     return NoteRow(
         id=row.id,
         nota=row.nota,
-        fecha=row.created_at.strftime("%Y-%m-%d %H:%M") if row.created_at else "",
+        fecha=row.created_at.isoformat() if row.created_at else "",
         autor=row.creado_por_rol or "",
     )
 
@@ -3523,7 +3523,7 @@ def _as_change(row: CambioCliente) -> ClientChange:
         campos_propuestos=row.campos_propuestos or {},
         estado=row.estado,
         solicitado_por=row.solicitado_por_rol or "",
-        fecha=row.created_at.strftime("%Y-%m-%d %H:%M") if row.created_at else "",
+        fecha=row.created_at.isoformat() if row.created_at else "",
         motivo_rechazo=row.motivo_rechazo,
     )
 

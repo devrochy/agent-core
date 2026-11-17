@@ -39,6 +39,9 @@ SIN_CLASIFICAR = "Sin clasificar"
 _CAMPO = re.compile(r"^[0-9*/,\-]+$")
 
 
+AMBITOS: tuple[str, ...] = ("plataforma", "negocio")
+
+
 @dataclass(frozen=True)
 class CronMeta:
     """Metadata de un cron. `default` es la expresión de 5 campos (UTC); los crons por intervalo
@@ -62,6 +65,26 @@ class CronMeta:
     # ejecuciones manuales siempre se guardan.
     record_success: bool = True
 
+    # ------------------------------------------------------------------ política por negocio
+    # `plataforma`: solo master; recorre los negocios por dentro (salud de canales, cobros de la
+    # plataforma, retenciones legales). `negocio`: el dueño puede verlo y configurarlo en
+    # Automatizaciones (ADR-0201).
+    ambito: str = "plataforma"
+    # El negocio puede encenderlo/apagarlo y configurarlo. Un cron de negocio sin esta bandera es
+    # visible pero siempre está encendido (p. ej. una tarea interna de corrección).
+    configurable: bool = False
+    # Acepta una hora local del negocio (solo crons diarios; el beat corre cada hora y cada negocio
+    # comprueba si en SU zona ya es su hora). `hora_local_por_defecto` es la hora que se usa
+    # mientras el negocio no elija otra: conserva un horario sensato sin obligar a configurar.
+    hora_local: bool = False
+    hora_local_por_defecto: int | None = None
+    # Acepta una ventana horaria local (crons frecuentes: no actuar fuera de 08:00–18:00).
+    ventana: bool = False
+    # Campos de la configuración del pack que la pantalla enlaza (nunca se duplican aquí).
+    parametros: tuple[str, ...] = ()
+    # Pack del que cuelga el cron (para el enlace a su configuración y el default de habilitado).
+    pack: str | None = None
+
     def __post_init__(self) -> None:
         if (self.default is None) == (self.interval_s is None):
             raise ValueError(f"{self.name}: define `default` o `interval_s`, uno solo")
@@ -69,6 +92,23 @@ class CronMeta:
             raise ValueError(f"{self.name}: un cron que escribe a clientes es sensible")
         if self.interval_s is not None and self.reprogramable:
             raise ValueError(f"{self.name}: un cron por intervalo no es reprogramable")
+        if self.ambito not in AMBITOS:
+            raise ValueError(f"{self.name}: ámbito desconocido «{self.ambito}»")
+        if self.ambito == "plataforma" and (self.configurable or self.hora_local or self.ventana):
+            raise ValueError(f"{self.name}: un cron de plataforma no se configura por negocio")
+        if (self.hora_local or self.ventana or self.parametros) and not self.configurable:
+            raise ValueError(f"{self.name}: hora/ventana/parámetros exigen `configurable=True`")
+        if self.parametros and self.pack is None:
+            raise ValueError(f"{self.name}: los parámetros son de un pack; define `pack`")
+        if self.pack is not None and self.ambito != "negocio":
+            raise ValueError(f"{self.name}: un cron de pack es de ámbito `negocio`")
+        if self.hora_local and self.hora_local_por_defecto is None:
+            raise ValueError(f"{self.name}: `hora_local` exige `hora_local_por_defecto`")
+        if self.hora_local_por_defecto is not None:
+            if not self.hora_local:
+                raise ValueError(f"{self.name}: `hora_local_por_defecto` exige `hora_local=True`")
+            if not 0 <= self.hora_local_por_defecto <= 23:
+                raise ValueError(f"{self.name}: `hora_local_por_defecto` va de 0 a 23")
 
 
 def _m(
@@ -111,38 +151,65 @@ CATALOGO: dict[str, CronMeta] = dict(
            "Compara los dos canales de cobro y alerta cada diferencia.", "30 5 * * *"),
         # ---- Suscripciones (pack)
         _m("pack_subscriptions.expirar_inscripciones", "Suscripciones", "Expirar inscripciones",
-           "Vence las inscripciones que llegaron a su fin.", "30 3 * * *"),
+           "Vence las inscripciones que llegaron a su fin.", "30 * * * *",
+           ambito="negocio", configurable=True, pack="pack_subscriptions", hora_local=True,
+           hora_local_por_defecto=22),
         _m("pack_subscriptions.sincronizar_precios_de_plan", "Suscripciones", "Sincronizar precios del plan",
-           "Aplica los cambios de precio programados de los planes.", "10 * * * *"),
+           "Aplica los cambios de precio programados de los planes.", "10 * * * *",
+           ambito="negocio", configurable=True, pack="pack_subscriptions"),
         _m("pack_subscriptions.generar_cargos", "Suscripciones", "Generar cargos",
-           "Genera los cargos del período de cada suscripción.", "15 3 * * *", sensitive=True),
+           "Genera los cargos del período de cada suscripción.", "15 * * * *", sensitive=True,
+           ambito="negocio", configurable=True, pack="pack_subscriptions", hora_local=True,
+           hora_local_por_defecto=22),
         _m("pack_subscriptions.verificar_descuentos", "Suscripciones", "Verificar descuentos",
-           "Revisa la vigencia de las promociones y descuentos.", "30 3 * * *"),
+           "Revisa la vigencia de las promociones y descuentos.", "30 * * * *",
+           ambito="negocio", configurable=True, pack="pack_subscriptions", hora_local=True,
+           hora_local_por_defecto=22),
         _m("pack_subscriptions.marcar_vencidas", "Suscripciones", "Marcar suscripciones vencidas",
-           "Marca como vencidas las suscripciones con cobros sin pagar.", "45 3 * * *"),
+           "Marca como vencidas las suscripciones con cobros sin pagar.", "45 * * * *",
+           ambito="negocio", configurable=True, pack="pack_subscriptions", hora_local=True,
+           hora_local_por_defecto=22),
         _m("pack_subscriptions.avisos_de_cobro", "Suscripciones", "Avisos de cobro",
            "Envía los avisos de cobro a los clientes, respetando el horario legal de cada negocio.",
-           "5 * * * *", sensitive=True, writes_to_customers=True),
+           "5 * * * *", sensitive=True, writes_to_customers=True,
+           ambito="negocio", configurable=True, pack="pack_subscriptions", ventana=True),
         # ---- Cobranza (pack)
         _m("pack_cobranza.marcar_mora", "Cobranza", "Marcar mora",
-           "Marca las cuotas vencidas como en mora.", "0 2 * * *"),
+           "Marca las cuotas vencidas como en mora.", "0 * * * *",
+           ambito="negocio", configurable=True, pack="pack_cobranza", hora_local=True,
+           hora_local_por_defecto=21),
         _m("pack_cobranza.generar_cargos_suscripcion", "Cobranza", "Generar cargos de suscripción",
-           "Genera los cargos recurrentes de la cartera.", "10 2 * * *", sensitive=True),
+           "Genera los cargos recurrentes de la cartera.", "10 * * * *", sensitive=True,
+           ambito="negocio", configurable=True, pack="pack_cobranza", hora_local=True,
+           hora_local_por_defecto=21),
         _m("pack_cobranza.cierre_diario", "Cobranza", "Cierre diario",
-           "Cierra el día de cobranza de cada negocio.", "55 23 * * *"),
+           "Cierra el día de cobranza de cada negocio.", "55 * * * *",
+           ambito="negocio", configurable=True, pack="pack_cobranza", hora_local=True,
+           hora_local_por_defecto=18),
         # ---- Comercio y CRM (pack)
         _m("pack_commerce.follow_up_leads", "Comercio y CRM", "Seguimiento de leads",
-           "Escribe a los leads que quedaron sin respuesta.", "0 9 * * *", sensitive=True, writes_to_customers=True),
+           "Escribe a los leads que quedaron sin respuesta.", "0 * * * *", sensitive=True,
+           writes_to_customers=True, ambito="negocio", configurable=True, pack="pack_commerce",
+           hora_local=True, hora_local_por_defecto=9, parametros=("follow_up_hours",)),
         _m("pack_commerce.follow_up_quotes", "Comercio y CRM", "Seguimiento de cotizaciones",
-           "Escribe a los clientes con cotizaciones sin cerrar.", "30 9,15,20 * * *", sensitive=True, writes_to_customers=True),
+           "Escribe a los clientes con cotizaciones sin cerrar.", "30 9,15,20 * * *", sensitive=True,
+           writes_to_customers=True, ambito="negocio", configurable=True, pack="pack_commerce",
+           ventana=True),
         _m("pack_commerce.recordar_seguimientos", "Comercio y CRM", "Recordatorios de seguimiento",
-           "Avisa al equipo de los seguimientos de leads que vencen.", "*/5 * * * *"),
+           "Avisa al equipo de los seguimientos de leads que vencen.", "*/5 * * * *",
+           ambito="negocio", configurable=True, pack="pack_commerce", ventana=True,
+           parametros=(
+               "seguimiento_recordatorios", "seguimiento_resumen_diario", "seguimiento_resumen_hora",
+           )),
         # ---- Calendario (pack)
         _m("pack_calendar.recordatorios_de_citas", "Calendario", "Recordatorios de citas",
-           "Envía el recordatorio de las citas próximas.", "*/15 * * * *", sensitive=True, writes_to_customers=True),
+           "Envía el recordatorio de las citas próximas.", "*/15 * * * *", sensitive=True,
+           writes_to_customers=True, ambito="negocio", configurable=True, pack="pack_calendar",
+           ventana=True, parametros=("recordatorios_horas",)),
         # ---- Memoria e IA
         _m("core.memory_consolidation", "Memoria e IA", "Consolidación de la memoria",
-           "Convierte los datos de las tareas cerradas en hechos de memoria.", "30 3 * * *"),
+           "Convierte los datos de las tareas cerradas en hechos de memoria.", "30 * * * *",
+           ambito="negocio", configurable=True, hora_local=True, hora_local_por_defecto=3),
         _m("core.memory_retention", "Memoria e IA", "Retención de la memoria",
            "Purga la memoria semántica vencida (no hace nada si la retención está en 0).", "45 3 * * *"),
         _m("core.playground_cleanup", "Memoria e IA", "Purga de pruebas del panel",
@@ -158,7 +225,7 @@ CATALOGO: dict[str, CronMeta] = dict(
         # ---- Notificaciones
         _m("core.cliente_esperando", "Notificaciones", "Cliente esperando respuesta",
            "Avisa de los clientes con una escalación abierta sin respuesta humana.", "*/5 * * * *",
-           sensitive=True),
+           sensitive=True, ambito="negocio", configurable=True, ventana=True),
         _m("core.notifications_retention", "Notificaciones", "Retención de notificaciones",
            "Da de baja las notificaciones de más de 180 días.", "0 4 * * *"),
         # ---- Acceso y altas

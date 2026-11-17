@@ -34,8 +34,9 @@ from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
 from core.api.schemas import TenantOption
 from core.billing.enforcement import plan_summary
-from core.db.models import Admin
+from core.db.models import Admin, AppSettings
 from core.db.session import get_session
+from core.llm.prompt_builder import DEFAULT_TIMEZONE
 
 router = APIRouter(prefix="/admin", tags=["admin · sesión"])
 
@@ -69,6 +70,10 @@ class MeResponse(BaseModel):
     qa_testers_habilitados: bool = False
     # Plan del negocio activo: el banner de Free y la campana lo leen sin otra petición.
     plan: MePlanSummary | None = None
+    # Preferencias del negocio activo (ADR-0199): el panel formatea fechas y montos con ellas
+    # sin pedir `/admin/settings` en cada pantalla. Sin negocio, los valores por defecto.
+    timezone: str = DEFAULT_TIMEZONE
+    currency: str = "COP"
 
 
 class PerfilUpdate(BaseModel):
@@ -82,6 +87,27 @@ class PasswordChange(BaseModel):
     nueva: str
 
 
+async def _preferencias_del_negocio(tenant_id: uuid.UUID | None) -> tuple[str, str]:
+    """Zona horaria y moneda del negocio activo (ADR-0091, ADR-0199).
+
+    Se leen una vez por render del panel; sin negocio o sin fila, los valores por defecto.
+    """
+    if tenant_id is None:
+        return DEFAULT_TIMEZONE, "COP"
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                select(AppSettings.timezone, AppSettings.currency).where(
+                    AppSettings.tenant_id == tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).first()
+    if fila is None:
+        return DEFAULT_TIMEZONE, "COP"
+    return (fila[0] or DEFAULT_TIMEZONE, fila[1] or "COP")
+
+
 async def _me_response(principal: Principal, admin: Admin) -> MeResponse:
     tenant = next(
         (
@@ -92,6 +118,7 @@ async def _me_response(principal: Principal, admin: Admin) -> MeResponse:
         None,
     )
     resumen_del_plan = await plan_summary(principal.tenant_id)
+    timezone, currency = await _preferencias_del_negocio(principal.tenant_id)
     return MeResponse(
         admin_id=admin.id,
         email=admin.email,
@@ -118,6 +145,8 @@ async def _me_response(principal: Principal, admin: Admin) -> MeResponse:
             if resumen_del_plan is not None
             else None
         ),
+        timezone=timezone,
+        currency=currency,
     )
 
 

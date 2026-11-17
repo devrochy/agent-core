@@ -21,10 +21,12 @@ from core.db.models import Tenant
 from core.db.session import get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
+from core.tasks.cron_negocio import debe_correr, registrar, registrar_fallo
 
 log = get_logger(__name__)
 
 VENTANA_DIAS = 7
+CRON_MEMORIA = "core.memory_consolidation"
 
 
 async def consolidar_negocio(tenant_id: uuid.UUID, *, now: datetime | None = None) -> dict[str, int]:
@@ -58,9 +60,17 @@ async def consolidar_memoria() -> dict[str, int]:
     total = {"tareas": 0, "hechos": 0}
     for tenant_id in tenant_ids:
         try:
-            parcial = await consolidar_negocio(tenant_id)
+            async with tenant_scope(tenant_id):
+                if not await debe_correr(tenant_id, CRON_MEMORIA):
+                    continue
+                parcial = await consolidar_negocio(tenant_id)
+                await registrar(
+                    tenant_id, CRON_MEMORIA, acciones=parcial["hechos"],
+                    resumen=f"{parcial['tareas']} tareas, {parcial['hechos']} hechos",
+                )
         except Exception as exc:
             log.error("memory_consolidation_tenant_failed", tenant_id=str(tenant_id), error_type=type(exc).__name__)
+            await registrar_fallo(tenant_id, CRON_MEMORIA, error_class=type(exc).__name__)
             continue
         total["tareas"] += parcial["tareas"]
         total["hechos"] += parcial["hechos"]

@@ -25,12 +25,14 @@ from core.notifications import catalog
 from core.notifications.service import notify_standalone
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
+from core.tasks.cron_negocio import debe_correr, registrar, registrar_fallo
 
 log = get_logger(__name__)
 
 UMBRAL_MINUTOS = 15
 VENTANA_MAXIMA_HORAS = 24
 LOTE = 200
+CRON_ESPERANDO = "core.cliente_esperando"
 
 
 async def _inicio_de_espera(session, esc: Escalation) -> datetime | None:
@@ -77,8 +79,11 @@ async def avisar_clientes_esperando(
 
     avisos = 0
     for tenant_id in tenant_ids:
+        avisos_negocio = 0
         try:
             async with tenant_scope(tenant_id):
+                if not await debe_correr(tenant_id, CRON_ESPERANDO):
+                    continue
                 async with get_session() as session:
                     abiertas = (
                         await session.execute(
@@ -109,8 +114,15 @@ async def avisar_clientes_esperando(
                     ),
                 )
                 avisos += int(nid is not None)
+                avisos_negocio += int(nid is not None)
+            async with tenant_scope(tenant_id):
+                await registrar(
+                    tenant_id, CRON_ESPERANDO, acciones=avisos_negocio,
+                    resumen=f"{avisos_negocio} avisos de clientes esperando",
+                )
         except Exception as exc:  # un negocio con problemas no frena a los demás
             log.warning("cliente_esperando_fallo", tenant_id=str(tenant_id), error=type(exc).__name__)
+            await registrar_fallo(tenant_id, CRON_ESPERANDO, error_class=type(exc).__name__)
 
     if avisos:
         log.info("cliente_esperando", avisos=avisos)

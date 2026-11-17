@@ -19,6 +19,7 @@ from core.api.routers import (
     agents,
     audit,
     auth,
+    automatizaciones,
     collaborators,
     connection_agents,
     connection_releases,
@@ -133,6 +134,7 @@ api_router.include_router(platform_altas.router)
 api_router.include_router(platform_meta_es.router)
 api_router.include_router(crons.router)
 api_router.include_router(kill_switch.router)
+api_router.include_router(automatizaciones.router)
 api_router.include_router(qa.router)
 api_router.include_router(declarative_tools.router)
 api_router.include_router(settings.router)

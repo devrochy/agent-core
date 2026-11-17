@@ -64,9 +64,18 @@ async def test_salta_el_negocio_sin_config_y_sigue_con_los_demas(
         procesados.append((tenant_id, get_current_tenant_id()))
         return 3, 2
 
+    async def debe_correr(tenant_id: uuid.UUID, cron_name: str) -> bool:
+        # ADR-0201: la política por negocio se prueba aparte; aquí solo importa el recorrido.
+        return True
+
+    async def registrar(*args, **kwargs) -> None:
+        return None
+
     monkeypatch.setattr(jobs, "_tenant_ids", tenant_ids)
     monkeypatch.setattr(plugin_manager, "load_config", load_config)
     monkeypatch.setattr(jobs, por_negocio, seguimiento)
+    monkeypatch.setattr(jobs, "debe_correr", debe_correr)
+    monkeypatch.setattr(jobs, "registrar", registrar)
     monkeypatch.setattr(jobs, "log", _LogQueAnota(eventos))
 
     await cron()  # no lanza: el wrapper de `register_cron` no registra `cron_task_failed`

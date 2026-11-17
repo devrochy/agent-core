@@ -26,6 +26,8 @@ _USUARIOS_DEL_SERVICIO = {
     ROOT / "core" / "tasks" / "cron_scheduler.py",
     ROOT / "core" / "tasks" / "celery_app.py",  # el cron de mantenimiento llama a `mantenimiento`
     ROOT / "core" / "observability" / "sondas.py",  # métrica de fallos en 24 h (ADR-0188), solo lectura
+    # ADR-0201: la política por negocio reusa `proxima_ejecucion` para la próxima de un cron.
+    ROOT / "core" / "admin" / "crons_negocio_service.py",
 }
 
 

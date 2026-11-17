@@ -18,6 +18,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.admin import crons_negocio_service as negocio_svc
 from core.admin import crons_service as svc
 from core.admin.roles import es_master
 from core.api.deps import Principal, get_principal
@@ -68,6 +69,9 @@ class CronOut(BaseModel):
     sensitive: bool
     reprogramable: bool
     record_success: bool = Field(description="False: no se guarda cada ejecución exitosa.")
+    ambito: Literal["plataforma", "negocio"] = Field(
+        description="`negocio`: también se configura en Configuración / Automatizaciones (ADR-0201)."
+    )
     estado: CronEstado
     next_run_at: datetime | None
     last_run: CronRunOut | None
@@ -209,3 +213,45 @@ async def reset_cron_schedule(
     """Vuelve al horario por defecto del código."""
     _require_master(principal)
     return _vista(await _con_errores(svc.restaurar_horario(name, principal.admin.id)))
+
+
+class CronNegocioResumenOut(BaseModel):
+    """Un negocio con fila de configuración para este cron (ADR-0201). Solo metadatos operativos."""
+
+    tenant_id: uuid.UUID
+    tenant_name: str
+    habilitada: bool
+    hora_local: int | None
+    ventana: dict[str, Any] | None
+    last_run_at: datetime | None
+    last_status: RunStatus | None
+    last_resumen: str | None
+    last_acciones: int | None
+    fallos_24h: int
+
+
+@router.get("/{name}/negocios", response_model=list[CronNegocioResumenOut])
+async def crons_por_negocio(
+    name: str, principal: Annotated[Principal, Depends(get_principal)]
+) -> list[CronNegocioResumenOut]:
+    """Vista por negocio de un cron de ámbito `negocio`: quién lo tiene apagado o fallando."""
+    _require_master(principal)
+    try:
+        filas = await negocio_svc.resumen_por_negocio(name)
+    except negocio_svc.CronNegocioNoEncontrado as exc:
+        raise ApiError.not_found("Ese cron no es de negocio o no existe.") from exc
+    return [
+        CronNegocioResumenOut(
+            tenant_id=f.tenant_id,
+            tenant_name=f.tenant_name,
+            habilitada=f.habilitada,
+            hora_local=f.hora_local,
+            ventana=f.ventana,
+            last_run_at=f.last_run_at,
+            last_status=f.last_status,  # type: ignore[arg-type]
+            last_resumen=f.last_resumen,
+            last_acciones=f.last_acciones,
+            fallos_24h=f.fallos_24h,
+        )
+        for f in filas
+    ]
