@@ -213,8 +213,8 @@ async def leer_comprobante(
     resultado_ledger: dict[str, Any],
     moneda: str = "COP",
 ) -> ComprobanteTransferencia:
-    """Imagen → `ComprobanteTransferencia`, con la cuota verificada antes. El ledger guarda la
-    salida (`guardar_salida`) para responder un reintento sin volver a cobrar."""
+    """Imagen → `ComprobanteTransferencia`, con la cuota verificada antes. El ledger mide el
+    consumo pero no guarda la salida (datos de la cuenta sin enmascarar)."""
     import json
 
     from core.billing.enforcement import QuotaExceeded
@@ -250,7 +250,9 @@ async def leer_comprobante(
             result={"proposito": PROPOSITO, **resultado_ledger},
             max_tokens=MAX_TOKENS,
             config=config,
-            guardar_salida=True,
+            # La salida NO se guarda en el ledger: llevaría la cuenta y la referencia sin enmascarar.
+            # La idempotencia la da `pack_commerce_payment_proofs` (image_sha256 + order_id).
+            guardar_salida=False,
         )
     except ErrorProveedor as exc:
         raise ComprobanteNoLeido("vision_no_respondio") from exc
