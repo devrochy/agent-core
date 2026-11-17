@@ -85,8 +85,10 @@
 {"catalogo": "tienda_pagos", "texto": "quiero hacer un pedido", "esperado": "pack_commerce.tomar_pedido"}
 {"catalogo": "tienda_pagos", "texto": "me lo mandan a la casa", "esperado": "pack_commerce.tomar_pedido"}
 {"catalogo": "tienda_pagos", "texto": "quiero comprar tres camisetas", "esperado": "pack_commerce.tomar_pedido"}
-{"catalogo": "tienda_pagos", "texto": "ya pagué", "esperado": "pack_commerce.pago_en_linea"}
-{"catalogo": "tienda_pagos", "texto": "ya hice el pago", "esperado": "pack_commerce.pago_en_linea"}
+{"catalogo": "tienda_pagos", "texto": "ya pagué por el link", "esperado": "pack_commerce.pago_en_linea"}
+{"catalogo": "tienda_pagos", "texto": "Pagar", "esperado": null}
+{"catalogo": "tienda_pagos", "texto": "ya pagué", "esperado": null}
+{"catalogo": "tienda_pagos", "texto": "ya hice el pago por el link", "esperado": "pack_commerce.pago_en_linea"}
 {"catalogo": "tienda_pagos", "texto": "no me llegó el link de pago", "esperado": "pack_commerce.pago_en_linea"}
 {"catalogo": "tienda_pagos", "texto": "el link venció", "esperado": "pack_commerce.pago_en_linea"}
 {"catalogo": "tienda_pagos", "texto": "me puedes reenviar el link de pago", "esperado": "pack_commerce.pago_en_linea"}
