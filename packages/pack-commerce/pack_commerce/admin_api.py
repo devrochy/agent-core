@@ -24,7 +24,6 @@ from core.api.deps import Principal, get_principal, require
 from core.api.errors import ApiError
 from core.db.models import Customer
 from core.db.session import get_owned, get_session
-from core.leads import seguimiento
 from core.shared.tenant import tenant_slug
 from core.shared.test_mode import TEST_CHANNEL
 
@@ -1251,12 +1250,8 @@ async def update_order_status(
     return Response(status_code=204)
 
 
-class SeguimientoHechoIn(BaseModel):
-    """Cierra el seguimiento y, si se pide, programa el siguiente en el mismo gesto (HU-CRM-21).
-    `siguiente_en` es ISO 8601: sin zona es hora del negocio."""
-
-    siguiente_en: str | None = Field(default=None, max_length=32)
-    siguiente_nota: str | None = Field(default=None, max_length=seguimiento.NOTA_MAX)
+# El cuerpo es el del core (ADR-0193): un solo schema `SeguimientoHechoIn` para la ruta nueva y este alias.
+from core.api.routers.leads import SeguimientoHechoIn  # noqa: E402
 
 
 @router.post("/leads/{customer_id}/seguimiento/hecho", status_code=204)
