@@ -678,8 +678,14 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar
         release_vigente.marcar_v3_sin_release(tenant_id)
         return None
     asignacion, release = resultado
+    if asignacion.bloqueo is not None:
+        # HU-ARCH-38: el que atendería y el de por defecto están en pausa. Ningún agente queda en la ranura: el
+        # loop cierra el turno en silencio y cualquier otro camino (el toque de una opción directa) ve un turno
+        # sin release y niega toda herramienta (fail-closed).
+        release_vigente.marcar_v3_sin_release(tenant_id)
+        return asignacion
     release_vigente.fijar(release.artefactos(asignacion.lane, foco=asignacion.foco))
-    release_vigente.fijar_pausados(asignacion.pausados)
+    release_vigente.fijar_pausados(tenant_id, asignacion.pausados)
     anotar_release(
         asignacion.release_id,
         asignacion.lane,
@@ -688,7 +694,9 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar
     if asignacion.ruta is not None:
         anotar_ruta(asignacion.ruta, activa=asignacion.modo_ruteo == "active")
         ruta = asignacion.ruta
-        if asignacion.modo_ruteo == "active" and (ruta.start is not None or ruta.pila):
+        desviado = asignacion.foco is not None and ruta.agente.instance_id != asignacion.foco.instance_id
+        # Con el agente de la ruta en pausa (HU-ARCH-38) atiende el de por defecto: no se abre lo que pedía la ruta.
+        if asignacion.modo_ruteo == "active" and not desviado and (ruta.start is not None or ruta.pila):
             release_vigente.fijar_inicio(tenant_id, ruta.start, pila=ruta.pila, max_stack=ruta.max_stack)
     return asignacion
 

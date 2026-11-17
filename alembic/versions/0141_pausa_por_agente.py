@@ -30,14 +30,15 @@ _RAZONES_0106 = (
 )
 
 
-def _check(razones: tuple[str, ...]) -> None:
+def _check(razones: tuple[str, ...], *, validar: bool = True) -> None:
     lista = ", ".join(f"'{r}'" for r in razones)
     op.execute("ALTER TABLE a2a_events DROP CONSTRAINT IF EXISTS ck_a2a_events_reason")
     op.execute(
         f"ALTER TABLE a2a_events ADD CONSTRAINT ck_a2a_events_reason "
         f"CHECK (reason IS NULL OR reason IN ({lista})) NOT VALID"
     )
-    op.execute("ALTER TABLE a2a_events VALIDATE CONSTRAINT ck_a2a_events_reason")
+    if validar:
+        op.execute("ALTER TABLE a2a_events VALIDATE CONSTRAINT ck_a2a_events_reason")
 
 
 def upgrade() -> None:
@@ -48,7 +49,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    _check(_RAZONES_0106)
+    # Sin VALIDATE: puede haber filas con `agent_paused` (mismo criterio que 0111).
+    _check(_RAZONES_0106, validar=False)
     op.drop_column("agents", "paused_reason")
     op.drop_column("agents", "paused_by")
     op.drop_column("agents", "paused_at")

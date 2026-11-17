@@ -111,3 +111,42 @@ async def test_el_coordinador_no_se_pausa() -> None:
         with pytest.raises(versiones.Conflicto) as exc:
             await versiones.pausar_agente(tid, filas[0][0], pausar=True, admin_id=None, motivo="x")
     assert exc.value.codigo == "agent_reserved"
+
+
+async def test_no_se_pausa_el_agente_de_otro_negocio() -> None:
+    from core.agents import versiones
+    from core.shared.tenant import tenant_scope
+
+    tid_a, _cid_a, _ = await _con_dos_especialistas()
+    tid_b, _cid_b, _ = await _con_dos_especialistas()
+    agenda_b = await _agente(tid_b, "agenda")
+    async with tenant_scope(tid_a):
+        with pytest.raises(versiones.AgenteNoEncontrado):
+            await versiones.pausar_agente(tid_a, agenda_b, pausar=True, admin_id=None, motivo="x")
+    ((pausados_b,),) = await _sql(tid_b, "select count(*) from agents where paused_at is not null")
+    assert pausados_b == 0
+
+
+async def test_con_bloqueo_ningun_agente_queda_en_la_ranura() -> None:
+    """Otro camino que use la ranura (el toque de una opción directa) ve un turno sin release y niega las tools."""
+    from core.db.models import Conversation
+    from core.db.session import get_session
+    from core.kernel.release_del_turno import fijar_release_del_turno
+    from core.shared import release_vigente
+    from core.shared.tenant import tenant_scope
+
+    tid, cid, _ = await _con_dos_especialistas()
+    conv = await _conversacion(tid, cid)
+    await _pausar(tid, "ventas")
+    await _pausar(tid, "agenda")
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            conversation = await session.get(Conversation, conv)
+        token = release_vigente.abrir()
+        try:
+            asignacion = await fijar_release_del_turno(conversation, enrutar=False)
+            assert asignacion is not None and asignacion.bloqueo == "kill_switch"
+            assert release_vigente.vigente() is None and release_vigente.agente_del_turno() is None
+            assert release_vigente.sin_release() and release_vigente.exige_concesion()
+        finally:
+            release_vigente.cerrar(token)
