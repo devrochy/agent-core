@@ -361,3 +361,19 @@ __all__ = [
     "simular_generar_cotizacion",
     "simular_verificar_pago_pedido",
 ]
+
+
+async def simular_comprobar_comprobante(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+    """En la prueba no se lee ninguna imagen ni se cobra visión: el comprobante queda en revisión."""
+    sandbox = await _sandbox(context)
+    order = await sandbox.leer("orders", str(arguments.get("order_id", "")))
+    if order is None:
+        return {"error": "pedido_no_encontrado"}
+    return {
+        "order_id": order["order_id"],
+        "public_order_number": order["public_order_number"],
+        "resultado": "en_revision",
+        "total": float(order.get("total") or 0),
+        "detalle": "En la prueba el comprobante queda en revisión (simulado): no se lee ninguna imagen.",
+        "comprobante": "recibido",
+    }
