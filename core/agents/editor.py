@@ -79,6 +79,10 @@ class Superpoder:
     title: str
     description: str
     phrases: tuple[str, ...]
+    # Dominio visible en el editor (SPEC-48, HU-AOS-83): "ventas", "formas_de_pago",
+    # "agenda", "cobranza", "suscripciones" u "otros". Un poder sin grupo cae en "otros".
+    group: str = "otros"
+    group_label: str = "Otros"
 
 
 def _ofrecibles(habilitados: Iterable[str]) -> list[Any]:
@@ -98,18 +102,36 @@ def _ofrecibles(habilitados: Iterable[str]) -> list[Any]:
     return [p for _, p in sorted(por_id.items())]
 
 
+def _dominio(pack: str, procedure_id: str) -> tuple[str, str]:
+    """(clave, etiqueta) del dominio de un procedimiento. El pack declara el mapa; si no,
+    el procedimiento cae en `otros` y la etiqueta es la del pack o «Otros»."""
+    from core.plugin_manager import plugin_manager
+
+    modulo = plugin_manager.get(pack) if pack else None
+    grupos = getattr(modulo, "grupos_de_procedimientos", None) or {}
+    etiquetas = getattr(modulo, "etiquetas_de_grupos_de_procedimientos", None) or {}
+    grupo = str(grupos.get(procedure_id) or "otros")
+    etiqueta = str(etiquetas.get(grupo) or (getattr(modulo, "display_name", "") if grupo == "otros" else ""))
+    return grupo, etiqueta or ("Otros" if grupo == "otros" else grupo)
+
+
 def superpoderes(habilitados: Iterable[str]) -> list[Superpoder]:
-    return [
-        Superpoder(
-            id=p.id,
-            version=p.version,
-            pack=p.owner,
-            title=p.title,
-            description=p.triggers.description,
-            phrases=tuple(p.triggers.examples),
+    salida: list[Superpoder] = []
+    for p in _ofrecibles(habilitados):
+        grupo, etiqueta = _dominio(p.owner, p.id)
+        salida.append(
+            Superpoder(
+                id=p.id,
+                version=p.version,
+                pack=p.owner,
+                title=p.title,
+                description=p.triggers.description,
+                phrases=tuple(p.triggers.examples),
+                group=grupo,
+                group_label=etiqueta,
+            )
         )
-        for p in _ofrecibles(habilitados)
-    ]
+    return salida
 
 
 # ------------------------------------------------------------------ plantillas
