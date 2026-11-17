@@ -1,4 +1,4 @@
-### Arreglado
+## Pruebas de crons a cualquier hora (2026-11-17)
 
 - Pruebas de integración de los crons de negocio: ya no dependen de la hora en que corre el CI.
   Desde ADR-0201 cada cron de negocio corre solo a su hora local y las pruebas que llaman los
