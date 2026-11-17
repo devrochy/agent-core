@@ -368,6 +368,12 @@ class PaymentProof(TenantMixin, Base):
     __table_args__ = (
         Index("ix_pack_commerce_payment_proofs_tenant_order", "tenant_id", "order_id", "created_at"),
         Index("ix_pack_commerce_payment_proofs_tenant_sha256", "tenant_id", "image_sha256"),
+        Index(
+            "uq_pack_commerce_payment_proofs_tenant_order_sha256",
+            "tenant_id", "order_id", "image_sha256",
+            unique=True,
+            postgresql_where=text("deleted_at is null"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
