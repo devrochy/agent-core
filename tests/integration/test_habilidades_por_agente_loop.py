@@ -259,6 +259,7 @@ async def test_el_especialista_por_defecto_con_release_ve_lo_mismo_que_sin_el_fi
     # El especialista por defecto DECLARA los publicados de los packs habilitados (rango ^M.0, resuelto en el build).
     assert {p["id"] for p in por_defecto["procedures"] if p["version"] != "0.0.0"} == {
         PLAN, CITA, "pack_commerce.tomar_pedido", "pack_subscriptions.cambiar_plan",
+        "pack_commerce.pago_en_linea", "pack_commerce.comprobar_transferencia",  # SPEC-48, HU-COM-23/24
     }
 
     # HU-ARCH-34: con release, el especialista por defecto ve lo mismo que sin el filtro de concesión (su versión

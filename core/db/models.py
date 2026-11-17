@@ -2640,6 +2640,8 @@ class AgentDraftRecord(Base):
     content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     # Flujo de atención del agente (ADR-0195): fuera del AgentSpec v3, versionado con él.
     flow: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+    # Horario propio del agente (HU-AOS-82, 0145): null = hereda el del negocio.
+    schedule: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
     base_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     lock_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -2664,6 +2666,9 @@ class AgentVersionRecord(Base):
     # Flujo de atención congelado con la versión (ADR-0195); null en versiones anteriores.
     flow: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
     flow_hash: Mapped[str | None] = mapped_column(Text)
+    # Horario propio congelado con la versión (HU-AOS-82); null = hereda el del negocio.
+    schedule: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+    schedule_hash: Mapped[str | None] = mapped_column(Text)
     legacy_agent_spec_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     notes: Mapped[str] = mapped_column(Text, default="", server_default="")
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -3187,7 +3192,7 @@ class MensajeGuardado(Base):
 
 class Lead(Base):
     """El enriquecimiento de embudo de un `Customer` (ADR-0022): etapa, puntaje, interés, seguimiento, motivo de
-    pérdida, valor y origen. Vive en el core desde ADR-0193 (migración 0144); ningún pack lo importa: lo leen y
+    pérdida, valor y origen. Vive en el core desde ADR-0193 (migración 0146); ningún pack lo importa: lo leen y
     escriben por `core.leads`. Un lead vivo por cliente (único parcial). `status` es texto libre a propósito: los
     leads anteriores a HU-CRM-18 traen etapas viejas. Borrado lógico (invariante 8)."""
 
@@ -3226,7 +3231,7 @@ class Lead(Base):
     interest: Mapped[str] = mapped_column(Text, nullable=False, default="")
     score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="nuevo")
-    # Catálogo cerrado (CHECK en 0144); sale del canal. NULL = lead anterior a ADR-0193 (copiado de commerce).
+    # Catálogo cerrado (CHECK en 0146); sale del canal. NULL = lead anterior a ADR-0193 (copiado de commerce).
     origen: Mapped[str | None] = mapped_column(Text)
     idempotency_key: Mapped[str | None] = mapped_column(Text)
     custom: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
@@ -3244,7 +3249,7 @@ class Lead(Base):
 
 class LeadStageChange(Base):
     """Un cambio de etapa de un lead con su actor (HU-CRM-18) y, si se perdió, el motivo (HU-CRM-23). `customer_id`
-    va copiado del lead porque la línea de tiempo de la ficha consulta por cliente (0144)."""
+    va copiado del lead porque la línea de tiempo de la ficha consulta por cliente (0146)."""
 
     __tablename__ = "lead_stage_changes"
     __table_args__ = (
@@ -3275,7 +3280,7 @@ class LeadStageChange(Base):
 
 class LeadFollowup(Base):
     """Un seguimiento del lead que dejó de estar vigente: hecho, reprogramado o cancelado (HU-CRM-21). El vigente vive
-    en `Lead.next_action_at/_note` (0144)."""
+    en `Lead.next_action_at/_note` (0146)."""
 
     __tablename__ = "lead_followups"
     __table_args__ = (
@@ -3296,7 +3301,7 @@ class LeadFollowup(Base):
 
 
 class LeadSettings(Base):
-    """Configuración de Captar leads del negocio (ADR-0193 §6, 0144): intake público y seguimiento. Cifrada entera
+    """Configuración de Captar leads del negocio (ADR-0193 §6, 0146): intake público y seguimiento. Cifrada entera
     con la caja de secretos (lleva el secreto del intake y la llave de Turnstile); el esquema vive en
     `core.leads.config`. Sin fila, Captar leads no está configurado y sus crons no hacen nada."""
 

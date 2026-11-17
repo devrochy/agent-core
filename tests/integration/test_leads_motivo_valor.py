@@ -478,6 +478,6 @@ def test_el_catalogo_de_la_migracion_es_el_del_codigo() -> None:
     from core.leads.etapas import CODIGOS_DE_MOTIVO
 
     # La tabla del lead es del core desde ADR-0193: el CHECK vive en su migración.
-    migracion = Path(__file__).resolve().parents[2] / "alembic/versions/0144_leads_en_el_core.py"
+    migracion = Path(__file__).resolve().parents[2] / "alembic/versions/0146_leads_en_el_core.py"
     copiado = re.search(r"_MOTIVOS = \"\((.*?)\)\"", migracion.read_text()).group(1)
     assert [m.strip("'") for m in copiado.split(",")] == list(CODIGOS_DE_MOTIVO)

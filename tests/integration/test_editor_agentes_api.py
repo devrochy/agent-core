@@ -595,3 +595,78 @@ async def test_flujo_de_atencion_por_agente(app_client) -> None:
     h_otro = await _dueno(app_client, otro)
     r = await app_client.get(f"/api/v1/admin/agents/{aid}/flow", headers=h_otro)
     assert r.status_code == 404, r.text
+
+
+HORARIO_VENTAS = {"tz": "America/Bogota", "ranges": [{"day": 0, "from": "08:00", "to": "10:00"}]}
+
+
+async def test_horario_por_agente(app_client) -> None:
+    """HU-AOS-82: un agente fija su horario sin tocar a los demás; publicar un cambio solo de horario
+    es una versión nueva; la release lo congela; el ingreso lo usa y, sin horario, cae al del negocio."""
+    from types import SimpleNamespace
+
+    from core.kernel.ingress import horario_del_agente
+    from core.shared.tenant import tenant_scope
+
+    tid, cid = await _negocio()
+    h = await _dueno(app_client, tid)
+    ventas = (await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={"name": "Ventas h"})).json()
+    agenda = (await app_client.post("/api/v1/admin/agent-templates/agenda/agents", headers=h, json={"name": "Agenda h"})).json()
+    aid, otro = ventas["agent"]["id"], agenda["agent"]["id"]
+
+    r = await app_client.get(f"/api/v1/admin/agents/{aid}/schedule", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "negocio" and r.json()["schedule"] is None
+
+    r = await app_client.put(
+        f"/api/v1/admin/agents/{aid}/schedule", headers=h,
+        json={"schedule": {"tz": "Marte/Base", "ranges": []}, "lock_version": r.json()["lock_version"]},
+    )
+    assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_schedule"
+
+    lock = (await app_client.get(f"/api/v1/admin/agents/{aid}/schedule", headers=h)).json()["lock_version"]
+    r = await app_client.put(f"/api/v1/admin/agents/{aid}/schedule", headers=h, json={"schedule": HORARIO_VENTAS, "lock_version": lock})
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "agente" and r.json()["schedule"] == HORARIO_VENTAS
+    # Aislamiento: el otro agente sigue con el del negocio.
+    assert (await app_client.get(f"/api/v1/admin/agents/{otro}/schedule", headers=h)).json()["source"] == "negocio"
+
+    r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
+    assert r.status_code == 200, r.text
+    v1 = r.json()["version"]["id"]
+    # Un cambio SOLO de horario es una versión nueva (antes chocaba con la unicidad por contenido).
+    lock = (await app_client.get(f"/api/v1/admin/agents/{aid}/schedule", headers=h)).json()["lock_version"]
+    otro_horario = {**HORARIO_VENTAS, "ranges": [{"day": 1, "from": "09:00", "to": "11:00"}]}
+    await app_client.put(f"/api/v1/admin/agents/{aid}/schedule", headers=h, json={"schedule": otro_horario, "lock_version": lock})
+    r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
+    assert r.status_code == 200, r.text
+    assert r.json()["version"]["id"] != v1
+    [(congelado,)] = await _sql(tid, "select schedule from agent_versions where id = :v", v=uuid.UUID(r.json()["version"]["id"]))
+    assert congelado == otro_horario
+
+    # El ingreso: con el dueño vigente en Ventas vale su horario; sin conversación conocida, None (negocio).
+    [(release_id,)] = await _sql(
+        tid, "select id from connection_releases where connection_id = :c order by number desc limit 1", c=cid
+    )
+    [(instancia,)] = await _sql(
+        tid, "select id from agent_instances where agent_id = :a and connection_id = :c", a=uuid.UUID(aid), c=cid
+    )
+    cliente = uuid.uuid4()
+    conv = uuid.uuid4()
+    await _sql(tid, "insert into customers (id, tenant_id, channel, external_id) values (:i, :t, 'instagram', :e)", i=cliente, t=tid, e=f"ig:{conv.hex[:8]}")
+    await _sql(
+        tid,
+        "insert into conversations (id, tenant_id, customer_id, connection_id, release_id, active_agent_instance_id, channel) "
+        "values (:i, :t, :c, :cc, :r, :a, 'instagram')",
+        i=conv, t=tid, c=cliente, cc=cid, r=release_id, a=instancia,
+    )
+    async with tenant_scope(tid):
+        assert await horario_del_agente(SimpleNamespace(id=conv, tenant_id=tid)) == otro_horario
+        assert await horario_del_agente(SimpleNamespace(id=uuid.uuid4(), tenant_id=tid)) is None
+
+    # Otro negocio no ve ni cambia el horario.
+    otro_negocio, _ = await _negocio()
+    h_otro = await _dueno(app_client, otro_negocio)
+    assert (await app_client.get(f"/api/v1/admin/agents/{aid}/schedule", headers=h_otro)).status_code == 404
+    r = await app_client.put(f"/api/v1/admin/agents/{aid}/schedule", headers=h_otro, json={"schedule": None, "lock_version": 0})
+    assert r.status_code == 404

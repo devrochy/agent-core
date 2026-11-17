@@ -634,6 +634,10 @@ class BaseModule(ABC):
     # Grupo de cada acción del pack, por lo que hace (ADR-0190 §8): `{nombre_de_la_tool: clave}`. Solo la clave; la
     # etiqueta la pone el panel. Una acción sin grupo cae en `otras`.
     grupos_de_acciones: ClassVar[dict[str, str]] = {}
+    # Dominio de cada procedimiento del pack (SPEC-48, HU-AOS-83): `{id del procedimiento: clave}`.
+    # La etiqueta sale de `etiquetas_de_grupos_de_procedimientos` o, si falta, del `display_name` del pack.
+    grupos_de_procedimientos: ClassVar[dict[str, str]] = {}
+    etiquetas_de_grupos_de_procedimientos: ClassVar[dict[str, str]] = {}
 
     # --- Catálogo de habilidades (HU-FWK-04, SPEC-16) ---
     # Nombre visible al cliente (glosario: "habilidad", no "plugin"/"pack"). Si

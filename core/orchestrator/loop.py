@@ -26,6 +26,7 @@ from sqlalchemy import func, select
 from core.agents import procedencia
 from core.agents.compiler import aviso_no_disponible
 from core.agents.flow import confirmed_actions_v2, render_flow, resolve_flow
+from core.agents.horario_agente import con_horario_del_agente
 from core.agents.responses import load_response
 from core.agents.spec import enabled_packs, load_active_spec
 from core.agents.spec_de_release import spec_del_turno
@@ -488,8 +489,12 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         accion_por_confirmar=await _accion_por_confirmar(conversation, active_tools),
         state_card=state_card,
         team_notes=team_notes,
+        # HU-AOS-82: el horario propio del agente en foco, si tiene; si no, el del negocio.
         service_hours=horario_de_servicio.para_prompt(
-            app_settings.escalation_config if app_settings else None,
+            con_horario_del_agente(
+                app_settings.escalation_config if app_settings else None,
+                agente_del_turno.schedule if agente_del_turno is not None else None,
+            ),
             app_settings.language if app_settings else None,
         ),
         # Zona del negocio para la fecha y hora actual del prompt (ADR-0091).

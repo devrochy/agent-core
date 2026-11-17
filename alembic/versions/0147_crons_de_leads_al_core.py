@@ -7,8 +7,8 @@ encendido, hora local, ventana) se renombra para no perderla. Solo datos, sin ca
 
 Reversible: el downgrade devuelve los nombres viejos.
 
-Revision ID: 0145
-Revises: 0144
+Revision ID: 0147
+Revises: 0146
 Create Date: 2026-11-17
 """
 
@@ -18,8 +18,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0145"
-down_revision = "0144"
+revision = "0147"
+down_revision = "0146"
 branch_labels = None
 depends_on = None
 

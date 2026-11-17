@@ -32,7 +32,14 @@ CAMBIO = "pack_subscriptions.cambiar_plan"
 CITA = "pack_calendar.agendar_cita"
 PROMESA = "pack_cobranza.promesa_de_pago"
 PEDIDO = "pack_commerce.tomar_pedido"
-CATALOGOS = {"planes": [PLAN, CAMBIO, CITA, PROMESA], "tienda": [PEDIDO, CITA, PROMESA]}
+PAGO = "pack_commerce.pago_en_linea"
+# SPEC-48, HU-COM-23: la tienda con pagos en línea suma el superpoder de pedidos existentes; sus
+# disparadores no pueden quitarle a `tomar_pedido` una compra nueva.
+CATALOGOS = {
+    "planes": [PLAN, CAMBIO, CITA, PROMESA],
+    "tienda": [PEDIDO, CITA, PROMESA],
+    "tienda_pagos": [PEDIDO, PAGO, CITA, PROMESA],
+}
 
 
 def _procedimientos() -> dict[str, Any]:
@@ -150,3 +157,13 @@ def test_el_lexico_roto_falla_cerrado() -> None:
 def test_el_texto_largo_se_recorta() -> None:
     indice = _indices()["planes"]
     assert indice.puntuar("x " * 10_000 + "quiero agendar una demo") == []
+
+
+def test_pago_en_linea_no_se_solapa_con_tomar_pedido() -> None:
+    """SPEC-48, HU-COM-23: «quiero pagar» no es disparador; una compra nueva no va al pago de un pedido."""
+    indice = _indices()["tienda_pagos"]
+    for texto in ("quiero hacer un pedido", "quiero comprar tres camisetas", "me lo mandan a la casa"):
+        ruta = fuerte(indice.puntuar(texto), strong=0.80, margin=0.15)
+        assert ruta is None or ruta.procedure_id == PEDIDO, texto
+    examples = _procedimientos()[PAGO].triggers.examples
+    assert not any("quiero pagar" in e for e in examples)

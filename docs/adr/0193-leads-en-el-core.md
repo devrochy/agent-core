@@ -131,7 +131,7 @@ Decisiones tomadas al implementar, que el texto de arriba no fijaba:
    clasificación, pedidos, cotizaciones y su línea de tiempo. `PATCH /admin/leads/{id}/pack/pack_commerce` queda como
    alias del provider `leads` para el panel y la APK instalados (decisión del dueño, 2026-11-17).
 7. **Crons** `core.leads_follow_up` y `core.leads_recordar_seguimientos` (antes `pack_commerce.*`): solo corren con
-   fila de `lead_settings`; la migración 0145 renombra la política que cada negocio había guardado. Los eventos de
+   fila de `lead_settings`; la migración 0147 renombra la política que cada negocio había guardado. Los eventos de
    notificación conservan sus nombres (`commerce.lead_nuevo`, `commerce.seguimiento_vencido`,
    `commerce.resumen_ventas`) y las fuentes de la línea de tiempo también, por las preferencias y los cursores ya
    guardados.

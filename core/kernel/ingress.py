@@ -132,6 +132,45 @@ async def conexion_pausada(
     return True
 
 
+async def horario_del_agente(conversation: Any) -> Any:
+    """Horario propio del agente que atiende la conversación (HU-AOS-82), o `None` para el del
+    negocio. Antes del ruteo: el dueño vigente si es especialista de la release de la conversación;
+    si no, el agente por defecto de la release activa de la conexión. Fail-open: cualquier problema
+    (sin release, release vieja, error) cae al horario del negocio."""
+    try:
+        from sqlalchemy import text
+
+        from core.db.session import get_session
+        from core.releases.cargar import cargar_release
+
+        tenant_id = conversation.tenant_id
+        async with get_session() as session:
+            fila = (
+                await session.execute(
+                    text(
+                        "SELECT c.release_id, c.active_agent_instance_id, cc.active_release_id "
+                        "FROM conversations c LEFT JOIN channel_connections cc "
+                        "  ON cc.tenant_id = c.tenant_id AND cc.id = c.connection_id "
+                        "WHERE c.tenant_id = :t AND c.id = :c"
+                    ),
+                    {"t": tenant_id, "c": conversation.id},
+                )
+            ).first()
+            if fila is None:
+                return None
+            release_id = fila[0] or fila[2]
+            if release_id is None:
+                return None
+            release = await cargar_release(session, tenant_id, release_id)
+        if release is None:
+            return None
+        foco = release.foco(fila[1] if fila[0] is not None else None)
+        return foco.schedule
+    except Exception:
+        log.warning("horario_del_agente_fallback", conversation_id=str(getattr(conversation, "id", "")))
+        return None
+
+
 async def politicas_de_entrada(
     conversation: Any, customer: Any, app_settings: Any, mensaje: str
 ) -> bool:
@@ -168,6 +207,11 @@ async def politicas_de_entrada(
 
     # ---------------- escalamiento por keywords
     escalation_cfg = dict(app_settings.escalation_config or {}) if app_settings else {}
+    # HU-AOS-82: el horario que vale es el del agente que atiende (su dueño vigente o el de la
+    # conexión); sin horario propio, el del negocio. El modo y el aviso siguen siendo del negocio.
+    from core.agents.horario_agente import con_horario_del_agente
+
+    escalation_cfg = con_horario_del_agente(escalation_cfg, await horario_del_agente(conversation))
     keywords = list(escalation_cfg.get("keywords", []))
     if matches_escalation_keywords(mensaje, keywords or None):
         # La decisión va antes que cualquier efecto (el `turn_id` de la auditoría sale de ella).
