@@ -370,14 +370,19 @@ async def referencias_vigentes(conversation_id: uuid.UUID, customer_id: uuid.UUI
 
 async def _referencia_de_formas() -> list[Referencia]:
     """Las formas de pago que el agente en foco puede ofrecer (SPEC-48, HU-COM-21): solo los ids
-    y si están activas, nunca cuentas ni instrucciones (invariante 7). Sin agente en foco, nada."""
+    y `si`/`no`, nunca cuentas ni instrucciones (invariante 7). Solo cuando el agente GUARDÓ sus
+    formas: sin configurar, el prompt queda como antes (y las grabaciones de los journeys valen).
+    Sin agente en foco, nada. `crear_pedido` rechaza igual lo no habilitado, con su pista."""
     from core.shared import release_vigente
-    from pack_commerce.formas_de_pago import METODOS, metodos_del_agente
+    from pack_commerce.formas_de_pago import METODOS, metodos_configurados
 
     agente = release_vigente.agente_del_turno()
     if agente is None:
         return []
-    activos = set(await metodos_del_agente(agente.agent_id))
+    configurados = await metodos_configurados(agente.agent_id)
+    if configurados is None:
+        return []
+    activos = set(configurados)
     return [Referencia(tipo="formas_de_pago", datos=tuple((m, "si" if m in activos else "no") for m in METODOS))]
 
 

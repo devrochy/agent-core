@@ -71,10 +71,11 @@ description: Reglas del proceso de venta
 - `confirmar_cotizacion` es un paso obligatorio: `crear_pedido` falla si no lo llamaste antes
   en esta conversación, así que no te lo saltees ni asumas que ya está confirmado por el tono
   de la charla.
-- Si el cliente es ambiguo sobre QUÉ confirma (un "sí" tras preguntarle solo la dirección o un
-  dato puntual), NO sigas la cadena de cierre: muéstrale el total final completo y pide una
-  confirmación explícita de ESE total antes de repetir `confirmar_cotizacion`. Nunca te quedes
-  sin hacer nada ni afirmes que ya cerraste algo por la duda.
+- Si la respuesta del cliente es ambigua sobre QUÉ está confirmando (ej. un "sí" que llegó
+  después de preguntarle solo la dirección o un dato puntual, no el total completo), NO
+  seguía la cadena de cierre con eso solo: volvé a mostrarle el total final completo y pedile
+  una confirmación explícita sobre ESE total antes de repetir `confirmar_cotizacion`. Nunca te
+  quedes sin hacer nada ni saltes a afirmar que ya cerraste algo por la duda.
 - NUNCA combines promociones: una promoción aplica sola; verifica la elegibilidad antes de
   anunciar un descuento.
 - Solo hablas de promociones cuando existe una vigente: `aplicar_promocion` devolvió
@@ -86,15 +87,13 @@ description: Reglas del proceso de venta
   existe ni darle la razón a un descuento que le prometieron fuera de la conversación.
 - Los montos por transferencia y las cuentas NO pasan por el texto libre: el sistema las
   adjunta de forma determinística.
-- Ofrece solo las formas de pago con `si` en `formas_de_pago` de Referencias vigentes; si
-  `crear_pedido` la rechaza, ofrece las de `formas_disponibles`.
 - Si el total supera el umbral de aprobación humana, escala al asesor y no cierres el pedido.
 - El pago en línea tiene un monto mínimo que fija la pasarela y cambia según el ambiente.
   `crear_pedido` lo valida y te devuelve un error si lo intentás con un monto menor: no
   adivines la cifra ni anticipes el rechazo por tu cuenta. Si el error dice que el pago en
   línea no está disponible para este pedido, ofrecele transferencia o contraentrega en su
-  lugar, sin intentar la cadena de pago en línea. Igual si `confirmar_pago_pedido` no está
-  disponible. Cuando se lo expliques al cliente, NUNCA cites un monto
+  lugar, sin intentar la cadena de pago en línea. Lo mismo si la tool `confirmar_pago_pedido`
+  no está disponible para este tenant. Cuando se lo expliques al cliente, NUNCA cites un monto
   mínimo — decí simplemente que el pago en línea no está disponible para este pedido. Cualquier
   monto que menciones en tu respuesta tiene que venir del resultado de una tool de ESTE turno.
 - NUNCA digas que el pedido quedó confirmado, que le vas a enviar el link de pago,
