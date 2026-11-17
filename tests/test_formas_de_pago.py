@@ -158,8 +158,14 @@ async def test_referencia_lleva_solo_ids_y_si_no(monkeypatch) -> None:  # type: 
     async def _activos(_agent):  # type: ignore[no-untyped-def]
         return ["efectivo_contraentrega", "transferencia"]
 
-    monkeypatch.setattr(fp, "metodos_del_agente", _activos)
+    async def _sin_configurar(_agent):  # type: ignore[no-untyped-def]
+        return None
+
     monkeypatch.setattr(release_vigente, "agente_del_turno", lambda: SimpleNamespace(agent_id=uuid.uuid4()))
+    # Sin formas guardadas no hay línea: el prompt queda igual que antes de SPEC-48.
+    monkeypatch.setattr(fp, "metodos_configurados", _sin_configurar)
+    assert await skills._referencia_de_formas() == []
+    monkeypatch.setattr(fp, "metodos_configurados", _activos)
     [ref] = await skills._referencia_de_formas()
     linea = renderizar(ref)
     assert linea == "- formas_de_pago: efectivo_contraentrega=si, transferencia=si, pago_en_linea=no"
