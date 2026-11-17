@@ -30238,6 +30238,431 @@
         }
       }
     },
+    "/api/v1/admin/platform/crons/{name}/negocios": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · crons"
+        ],
+        "summary": "Crons Por Negocio",
+        "description": "Vista por negocio de un cron de ámbito `negocio`: quién lo tiene apagado o fallando.",
+        "operationId": "crons_por_negocio_api_v1_admin_platform_crons__name__negocios_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CronNegocioResumenOut"
+                  },
+                  "title": "Response Crons Por Negocio Api V1 Admin Platform Crons  Name  Negocios Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/automatizaciones": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · automatizaciones"
+        ],
+        "summary": "Listar Automatizaciones",
+        "operationId": "listar_automatizaciones_api_v1_admin_automatizaciones_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomatizacionesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/automatizaciones/{cron_name}": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · automatizaciones"
+        ],
+        "summary": "Detalle Automatizacion",
+        "operationId": "detalle_automatizacion_api_v1_admin_automatizaciones__cron_name__get",
+        "parameters": [
+          {
+            "name": "cron_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Cron Name"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronNegocioOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · automatizaciones"
+        ],
+        "summary": "Actualizar Automatizacion",
+        "description": "Enciende/apaga o cambia hora/ventana. Solo lo que el catálogo admite.",
+        "operationId": "actualizar_automatizacion_api_v1_admin_automatizaciones__cron_name__put",
+        "parameters": [
+          {
+            "name": "cron_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Cron Name"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronNegocioUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronNegocioOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/automatizaciones/{cron_name}/runs": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · automatizaciones"
+        ],
+        "summary": "Listar Ejecuciones",
+        "description": "Ejecuciones con efecto, fallos y manuales del negocio (ADR-0200).",
+        "operationId": "listar_ejecuciones_api_v1_admin_automatizaciones__cron_name__runs_get",
+        "parameters": [
+          {
+            "name": "cron_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Cron Name"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "success",
+                    "failed",
+                    "skipped"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_CronNegocioRunOut_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/qa/catalog": {
       "get": {
         "tags": [
@@ -49946,6 +50371,54 @@
         ],
         "title": "AuditRow"
       },
+      "AutomatizacionesOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CronNegocioOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "resumen": {
+            "$ref": "#/components/schemas/AutomatizacionesResumen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "resumen"
+        ],
+        "title": "AutomatizacionesOut"
+      },
+      "AutomatizacionesResumen": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "habilitadas": {
+            "type": "integer",
+            "title": "Habilitadas"
+          },
+          "apagadas": {
+            "type": "integer",
+            "title": "Apagadas"
+          },
+          "con_fallo": {
+            "type": "integer",
+            "title": "Con Fallo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "habilitadas",
+          "apagadas",
+          "con_fallo"
+        ],
+        "title": "AutomatizacionesResumen"
+      },
       "AvanzarIn": {
         "properties": {
           "paso": {
@@ -56046,6 +56519,461 @@
         ],
         "title": "CronModuleSummary"
       },
+      "CronNegocioOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "module": {
+            "type": "string",
+            "title": "Module"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "pack": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pack",
+            "description": "Pack del que cuelga; enlaza a su configuración."
+          },
+          "sensitive": {
+            "type": "boolean",
+            "title": "Sensitive"
+          },
+          "configurable": {
+            "type": "boolean",
+            "title": "Configurable"
+          },
+          "admite_hora_local": {
+            "type": "boolean",
+            "title": "Admite Hora Local"
+          },
+          "admite_ventana": {
+            "type": "boolean",
+            "title": "Admite Ventana"
+          },
+          "parametros": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Parametros",
+            "description": "Campos del pack que la pantalla enlaza."
+          },
+          "habilitada": {
+            "type": "boolean",
+            "title": "Habilitada"
+          },
+          "hora_local": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hora Local",
+            "description": "Hora local efectiva (la elegida o la del catálogo)."
+          },
+          "hora_local_por_defecto": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hora Local Por Defecto",
+            "description": "Hora local que se usa si el negocio no elige."
+          },
+          "hora_local_personalizada": {
+            "type": "boolean",
+            "title": "Hora Local Personalizada",
+            "description": "True si el negocio eligió una hora propia."
+          },
+          "ventana": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Ventana"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "last_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "success",
+                  "failed",
+                  "skipped"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Status"
+          },
+          "last_resumen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Resumen"
+          },
+          "last_acciones": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Acciones"
+          },
+          "acciones": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "enable",
+                "disable",
+                "hora",
+                "ventana"
+              ]
+            },
+            "type": "array",
+            "title": "Acciones",
+            "description": "Acciones válidas para esta automatización."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "module",
+          "label",
+          "description",
+          "pack",
+          "sensitive",
+          "configurable",
+          "admite_hora_local",
+          "admite_ventana",
+          "parametros",
+          "habilitada",
+          "hora_local",
+          "hora_local_por_defecto",
+          "hora_local_personalizada",
+          "ventana",
+          "next_run_at",
+          "last_run_at",
+          "last_status",
+          "last_resumen",
+          "last_acciones",
+          "acciones"
+        ],
+        "title": "CronNegocioOut"
+      },
+      "CronNegocioResumenOut": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Tenant Id"
+          },
+          "tenant_name": {
+            "type": "string",
+            "title": "Tenant Name"
+          },
+          "habilitada": {
+            "type": "boolean",
+            "title": "Habilitada"
+          },
+          "hora_local": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hora Local"
+          },
+          "ventana": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ventana"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "last_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "running",
+                  "success",
+                  "failed",
+                  "skipped"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Status"
+          },
+          "last_resumen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Resumen"
+          },
+          "last_acciones": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Acciones"
+          },
+          "fallos_24h": {
+            "type": "integer",
+            "title": "Fallos 24H"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "tenant_name",
+          "habilitada",
+          "hora_local",
+          "ventana",
+          "last_run_at",
+          "last_status",
+          "last_resumen",
+          "last_acciones",
+          "fallos_24h"
+        ],
+        "title": "CronNegocioResumenOut",
+        "description": "Un negocio con fila de configuración para este cron (ADR-0200). Solo metadatos operativos."
+      },
+      "CronNegocioRunOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failed",
+              "skipped"
+            ],
+            "title": "Status"
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "manual"
+            ],
+            "title": "Trigger"
+          },
+          "acciones": {
+            "type": "integer",
+            "title": "Acciones"
+          },
+          "resumen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resumen"
+          },
+          "error_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Class"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "trigger",
+          "acciones",
+          "resumen",
+          "error_class",
+          "detail",
+          "started_at",
+          "finished_at",
+          "duration_ms"
+        ],
+        "title": "CronNegocioRunOut"
+      },
+      "CronNegocioUpdate": {
+        "properties": {
+          "habilitada": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Habilitada"
+          },
+          "hora_local": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 23.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hora Local"
+          },
+          "ventana": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Ventana"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "CronNegocioUpdate"
+      },
       "CronOut": {
         "properties": {
           "name": {
@@ -56124,6 +57052,15 @@
             "type": "boolean",
             "title": "Record Success",
             "description": "False: no se guarda cada ejecución exitosa."
+          },
+          "ambito": {
+            "type": "string",
+            "enum": [
+              "plataforma",
+              "negocio"
+            ],
+            "title": "Ambito",
+            "description": "`negocio`: también se configura en Configuración / Automatizaciones (ADR-0200)."
           },
           "estado": {
             "type": "string",
@@ -56222,6 +57159,7 @@
           "sensitive",
           "reprogramable",
           "record_success",
+          "ambito",
           "estado",
           "next_run_at",
           "last_run",
@@ -63384,6 +64322,16 @@
                 "type": "null"
               }
             ]
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone",
+            "default": "America/Bogota"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency",
+            "default": "COP"
           }
         },
         "type": "object",
@@ -67583,6 +68531,42 @@
           "has_more"
         ],
         "title": "Page[ConversationSummary]"
+      },
+      "Page_CronNegocioRunOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CronNegocioRunOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "has_more"
+        ],
+        "title": "Page[CronNegocioRunOut]"
       },
       "Page_CronRunOut_": {
         "properties": {
@@ -80953,6 +81937,34 @@
           "en_revision"
         ],
         "title": "VendedorAltas"
+      },
+      "Ventana": {
+        "properties": {
+          "desde": {
+            "type": "string",
+            "title": "Desde",
+            "description": "HH:MM en hora local."
+          },
+          "hasta": {
+            "type": "string",
+            "title": "Hasta",
+            "description": "HH:MM en hora local."
+          },
+          "dias": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Dias",
+            "description": "0=lunes … 6=domingo. Vacío = todos los días."
+          }
+        },
+        "type": "object",
+        "required": [
+          "desde",
+          "hasta"
+        ],
+        "title": "Ventana"
       },
       "VerifierKind": {
         "properties": {

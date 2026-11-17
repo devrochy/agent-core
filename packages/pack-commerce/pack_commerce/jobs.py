@@ -24,6 +24,7 @@ from core.db.session import get_owned, get_session
 from core.shared.exceptions import PluginConfigError
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
+from core.tasks.cron_negocio import debe_correr, registrar, registrar_fallo
 from core.tasks.decorators import register_cron
 from pack_commerce.config import FOLLOW_UP_HORAS_MAX, FOLLOW_UP_HORAS_POR_DEFECTO
 from pack_commerce.etapas import cambiar_etapa
@@ -33,6 +34,10 @@ log = get_logger(__name__)
 
 
 PACK_ID = "pack_commerce"
+
+CRON_LEADS = f"{PACK_ID}.follow_up_leads"
+CRON_QUOTES = f"{PACK_ID}.follow_up_quotes"
+CRON_SEGUIMIENTOS = f"{PACK_ID}.recordar_seguimientos"
 
 
 async def _tenant_ids() -> list[uuid.UUID]:
@@ -76,17 +81,23 @@ async def _config_del_negocio(tenant_id: uuid.UUID, kind: str):  # type: ignore[
         return None
 
 
-@register_cron("pack_commerce", "0 9 * * *")
+@register_cron("pack_commerce", "0 * * * *")
 async def follow_up_leads() -> None:
     """Reengancha leads calificados inactivos, dentro de la ventana de 24h de WhatsApp."""
     total_candidates = 0
     total_sent = 0
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
+            if not await debe_correr(tenant_id, CRON_LEADS):
+                continue
             config = await _config_del_negocio(tenant_id, "lead")
             if config is None:
                 continue
             candidates, sent = await _follow_up_leads_del_negocio(tenant_id, config)
+            await registrar(
+                tenant_id, CRON_LEADS, acciones=sent,
+                resumen=f"{sent} leads reenganchados de {candidates} candidatos",
+            )
         total_candidates += candidates
         total_sent += sent
 
@@ -175,10 +186,16 @@ async def follow_up_quotes() -> None:
     total_sent = 0
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
+            if not await debe_correr(tenant_id, CRON_QUOTES):
+                continue
             config = await _config_del_negocio(tenant_id, "quote")
             if config is None:
                 continue
             candidates, sent = await _follow_up_quotes_del_negocio(tenant_id, config)
+            await registrar(
+                tenant_id, CRON_QUOTES, acciones=sent,
+                resumen=f"{sent} cotizaciones reenganchadas de {candidates} candidatas",
+            )
         total_candidates += candidates
         total_sent += sent
 
@@ -245,14 +262,21 @@ async def recordar_seguimientos() -> None:
     for tenant_id in await _tenant_ids():
         try:
             async with tenant_scope(tenant_id):
+                if not await debe_correr(tenant_id, CRON_SEGUIMIENTOS):
+                    continue
                 config = await _config_del_negocio(tenant_id, "seguimiento")
                 if config is None:
                     continue
                 conteo, resumen = await _recordar_del_negocio(tenant_id, config)
+                await registrar(
+                    tenant_id, CRON_SEGUIMIENTOS, acciones=conteo.enviados,
+                    resumen=f"{conteo.enviados} recordatorios, {int(resumen)} resúmenes",
+                )
             total.sumar(conteo)
             resumenes += int(resumen)
-        except Exception:
+        except Exception as exc:
             log.exception("recordar_seguimientos_fallo", tenant_id=str(tenant_id))
+            await registrar_fallo(tenant_id, CRON_SEGUIMIENTOS, error_class=type(exc).__name__)
     log.info(
         "recordar_seguimientos_completed",
         enviados=total.enviados,

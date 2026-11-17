@@ -20,12 +20,15 @@ from core.events.outbox import emit_domain
 from core.shared.events import ON_APPOINTMENT_REMINDER
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
+from core.tasks.cron_negocio import debe_correr, registrar
 from core.tasks.decorators import register_cron
 from pack_calendar.models import Appointment, AppointmentType
 
 log = get_logger(__name__)
 
 PACK_ID = "pack_calendar"
+
+CRON_RECORDATORIOS = f"{PACK_ID}.recordatorios_de_citas"
 
 
 async def _tenant_ids() -> list[uuid.UUID]:
@@ -83,6 +86,9 @@ async def _recordatorios_de_citas(now: datetime) -> int:
     enviados = 0
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
+            if not await debe_correr(tenant_id, CRON_RECORDATORIOS):
+                continue
+            enviados_negocio = 0
             config = await _config()
             horas = [int(h) for h in (config.recordatorios_horas or []) if int(h) > 0]
             if not horas:
@@ -124,6 +130,11 @@ async def _recordatorios_de_citas(now: datetime) -> int:
                         },
                     )
                     enviados += int(insertado)
+                    enviados_negocio += int(insertado)
+            await registrar(
+                tenant_id, CRON_RECORDATORIOS, acciones=enviados_negocio,
+                resumen=f"{enviados_negocio} recordatorios enviados",
+            )
     if enviados:
         log.info("citas_recordatorios", enviados=enviados)
     return enviados

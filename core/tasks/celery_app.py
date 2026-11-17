@@ -279,7 +279,7 @@ def _canary_no_inferioridad() -> Any:
 _MEMORY_CONSOLIDATION_TASK = "core.memory_consolidation"
 
 
-@core_cron(_MEMORY_CONSOLIDATION_TASK, crontab(hour="3", minute="30"))
+@core_cron(_MEMORY_CONSOLIDATION_TASK, crontab(minute="30"))
 def _memory_consolidation() -> Any:
     from core.tasks.memory_consolidation import consolidar_memoria
 

@@ -159,7 +159,15 @@ async def mantenimiento(ahora: datetime | None = None) -> dict[str, int]:
         borradas = await session.execute(
             delete(CronRun).where(CronRun.started_at < ahora - timedelta(days=RETENCION_DIAS))
         )
-    return {"colgadas": colgadas.rowcount or 0, "borradas": borradas.rowcount or 0}
+    # ADR-0200: el historial por negocio se purga con su propia función (RLS).
+    from core.admin import crons_negocio_service
+
+    borradas_negocio = await crons_negocio_service.mantenimiento()
+    return {
+        "colgadas": colgadas.rowcount or 0,
+        "borradas": borradas.rowcount or 0,
+        "borradas_negocio": borradas_negocio,
+    }
 
 
 # --------------------------------------------------------------------------- vistas
@@ -198,6 +206,8 @@ class CronView:
     failures_24h: int
     acciones: list[str]
     updated_at: datetime | None = None
+    # `plataforma` (solo master) o `negocio` (también en Configuración › Automatizaciones, ADR-0200).
+    ambito: str = "plataforma"
 
 
 def proxima_ejecucion(expression: str, ahora: datetime) -> datetime:
@@ -268,7 +278,7 @@ def _vista(
         default_schedule=meta.default, interval_s=meta.interval_s, schedule=schedule,
         overridden=override is not None, paused=paused, critical=meta.critical,
         sensitive=meta.sensitive, reprogramable=meta.reprogramable, record_success=meta.record_success,
-        estado=_estado(meta, paused, last), next_run_at=next_run, last_run=last,
+        ambito=meta.ambito, estado=_estado(meta, paused, last), next_run_at=next_run, last_run=last,
         last_success_at=last_success_at, runs_24h=runs_24h, failures_24h=failures_24h,
         acciones=acciones_validas(meta, paused, override is not None), updated_at=updated_at,
     )

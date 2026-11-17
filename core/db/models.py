@@ -2348,6 +2348,80 @@ class CronRun(Base):
     detail: Mapped[str | None] = mapped_column(Text)
 
 
+class TenantCronConfig(Base):
+    """Política de un cron POR NEGOCIO (ADR-0200): tabla de negocio con RLS.
+
+    Sin fila = valores por defecto del catálogo: un cron de pack está encendido si el pack lo
+    está; uno de core, siempre. Guarda el encendido/apagado, la hora local, la ventana y un
+    resumen de la última ejecución para la tarjeta. Solo la toca
+    `core/admin/crons_negocio_service.py`; un test lo vigila.
+    """
+
+    __tablename__ = "tenant_cron_configs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "cron_name", name="uq_tenant_cron_configs"),
+        CheckConstraint(
+            "hora_local is null or (hora_local >= 0 and hora_local <= 23)",
+            name="ck_tenant_cron_configs_hora",
+        ),
+        CheckConstraint(
+            "last_status is null or last_status in ('success','failed','skipped')",
+            name="ck_tenant_cron_configs_status",
+        ),
+        Index("ix_tenant_cron_configs_tenant", "tenant_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    cron_name: Mapped[str] = mapped_column(Text, nullable=False)
+    habilitada: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    # Hora local (0–23) de los crons diarios; NULL = la del código.
+    hora_local: Mapped[int | None] = mapped_column(Integer)
+    # {"desde": "08:00", "hasta": "18:00", "dias": [0..6]} en hora local; NULL = sin ventana.
+    ventana: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_status: Mapped[str | None] = mapped_column(Text)
+    last_resumen: Mapped[str | None] = mapped_column(Text)
+    last_acciones: Mapped[int | None] = mapped_column(Integer)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TenantCronRun(Base):
+    """Una ejecución de un cron para UN negocio (ADR-0200): tabla de negocio con RLS.
+
+    Solo se guarda lo que tuvo efecto (`acciones > 0`), los fallos y las ejecuciones manuales. Un
+    barrido sin efecto no deja fila. Retención de 90 días por la función
+    `admin_purgar_tenant_cron_runs` (el rol de la app no borra filas de otro negocio bajo RLS).
+    """
+
+    __tablename__ = "tenant_cron_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('success','failed','skipped')", name="ck_tenant_cron_runs_status"
+        ),
+        CheckConstraint("trigger in ('scheduled','manual')", name="ck_tenant_cron_runs_trigger"),
+        CheckConstraint("acciones >= 0", name="ck_tenant_cron_runs_acciones"),
+        Index("ix_tenant_cron_runs_cron", "tenant_id", "cron_name", text("started_at desc")),
+        Index("ix_tenant_cron_runs_started", "started_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    cron_name: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    trigger: Mapped[str] = mapped_column(Text, nullable=False, default="scheduled")
+    acciones: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    resumen: Mapped[str | None] = mapped_column(Text)
+    # Solo la clase de la excepción: el mensaje puede traer datos del negocio.
+    error_class: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+
+
 class GraphApiCall(Base):
     """Observabilidad: una fila por llamada saliente a Graph API."""
 
