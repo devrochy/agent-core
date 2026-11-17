@@ -37,12 +37,14 @@ log = get_logger(__name__)
 EstadoDelRecorrido = Literal["pendiente", "en_curso", "omitido", "completo", "no_aplica"]
 ESTADOS_GUARDADOS: Final = ("en_curso", "omitido", "completo")
 
-# SPEC-47 (HU-UX-23, D-75): la bienvenida pasa de 6 a 9 pasos, los mismos de Nuevo agente y Editar más
-# «Tu negocio»: 1 Tu negocio · 2 Identidad · 3 Cómo habla · 4 Horario y reglas · 5 Habilidades · 6 Flujo ·
-# 7 Conocimiento y datos · 8 Pruébalo · 9 Publicar. Lo guardado lleva `pasos` con el total con que se
-# guardó; un recorrido guardado con 6 (sin esa clave) se traduce al leerlo con `PASO_DE_6_A_9`.
-TOTAL_PASOS: Final = 9
+# SPEC-47 (HU-AOS-81, D-SPEC-47-4): la bienvenida es la creación rápida de 4 pasos: 1 Tu negocio y tipo de
+# agente · 2 Habilidades y formas de pago · 3 Datos para probar · 4 Revisar, probar y publicar. Antes fueron
+# 9 (HU-UX-23) y antes 6 (HU-UX-21, la APK todavía los manda sin `pasos`). Lo guardado lleva `pasos` con el
+# total con que se guardó; uno de 9 o de 6 se traduce al leerlo.
+TOTAL_PASOS: Final = 4
+PASOS_ANTERIORES: Final = 9
 PASO_DE_6_A_9: Final = {1: 1, 2: 3, 3: 4, 4: 4, 5: 7, 6: 8}
+PASO_DE_9_A_4: Final = {1: 1, 2: 1, 3: 1, 4: 1, 5: 2, 6: 2, 7: 3, 8: 4, 9: 4}
 ACCION_AUDITORIA: Final = "onboarding_recorrido"
 
 
@@ -138,18 +140,24 @@ def paso_de_6_a_9(paso: int) -> int:
     return PASO_DE_6_A_9.get(paso, paso)
 
 
+def paso_de_4(paso: int, pasos: int | None) -> int:
+    """El paso de la bienvenida de 4 que corresponde a `paso` numerado sobre `pasos` (4, 9 o, sin dato, 6)."""
+    if pasos == TOTAL_PASOS:
+        return paso
+    de_9 = paso if pasos == PASOS_ANTERIORES else paso_de_6_a_9(min(max(paso, 1), 6))
+    return PASO_DE_9_A_4.get(min(max(de_9, 1), PASOS_ANTERIORES), TOTAL_PASOS)
+
+
 def paso_guardado(datos: dict[str, Any]) -> int:
-    """El paso guardado, entre 1 y `TOTAL_PASOS`. Uno guardado con el recorrido de 6 pasos (sin `pasos`)
-    se lleva a su equivalente de 9; «Crea tu agente» (4) vuelve a «Horario y reglas», que es donde ahora
-    se crea el agente al avanzar. Un recorrido completo queda en el último paso."""
+    """El paso guardado, entre 1 y `TOTAL_PASOS`. Uno guardado con 9 o con 6 pasos se lleva a su
+    equivalente de 4. Un recorrido completo queda en el último paso."""
     paso = datos.get("paso")
     if not isinstance(paso, int) or isinstance(paso, bool):
         return 1
     if datos.get("estado") == "completo":
         return TOTAL_PASOS
-    if datos.get("pasos") != TOTAL_PASOS:
-        paso = paso_de_6_a_9(min(max(paso, 1), 6))
-    return min(max(paso, 1), TOTAL_PASOS)
+    pasos = datos.get("pasos")
+    return min(max(paso_de_4(paso, pasos if isinstance(pasos, int) else None), 1), TOTAL_PASOS)
 
 
 # --------------------------------------------------------------------- transiciones (puras)
@@ -264,8 +272,8 @@ async def fijar(
     from core.db.session import get_session
 
     _exigir_scope(tenant_id)
-    # Todo lo que se escribe queda con el total de 9 pasos. Si el cambio no trae `paso`, se escribe el ya
-    # traducido: si no, un recorrido guardado con 6 quedaría marcado como de 9 con el número viejo.
+    # Todo lo que se escribe queda con el total de 4 pasos. Si el cambio no trae `paso`, se escribe el ya
+    # traducido: si no, un recorrido guardado con 9 o 6 quedaría marcado como de 4 con el número viejo.
     if "paso" not in cambios:
         cambios = {**cambios, "paso": (await leer(tenant_id)).paso}
     cambios = {**cambios, "pasos": TOTAL_PASOS}
@@ -316,7 +324,9 @@ async def marcar_prueba(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> None:
 
 __all__ = [
     "ACCION_AUDITORIA",
+    "PASOS_ANTERIORES",
     "PASO_DE_6_A_9",
+    "PASO_DE_9_A_4",
     "TOTAL_PASOS",
     "FaltanPasos",
     "NegocioNoEncontrado",
@@ -332,6 +342,7 @@ __all__ = [
     "fijar",
     "leer",
     "marcar_prueba",
+    "paso_de_4",
     "paso_de_6_a_9",
     "paso_guardado",
 ]

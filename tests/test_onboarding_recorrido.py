@@ -19,7 +19,7 @@ def _r(crudo: object, creado: datetime = NUEVO, desde: date | None = CORTE) -> r
 
 
 def _9(**datos: object) -> dict[str, object]:
-    """Un recorrido guardado ya con los 9 pasos de SPEC-47."""
+    """Un recorrido guardado ya con los 4 pasos de la creación rápida (HU-AOS-81)."""
     return {**datos, "pasos": r.TOTAL_PASOS}
 
 
@@ -78,19 +78,20 @@ def test_el_paso_guardado_se_acota() -> None:
     assert _r(_9(estado="en_curso", paso=-4)).paso == 1
 
 
-def test_el_recorrido_de_6_pasos_se_lee_en_su_equivalente_de_9() -> None:
-    """SPEC-47: lo guardado sin `pasos` es del recorrido de 6; se traduce al leerlo. «Crea tu agente»
-    vuelve a «Horario y reglas», que es donde ahora se crea el agente al avanzar."""
-    equivalentes = {1: 1, 2: 3, 3: 4, 4: 4, 5: 7, 6: 8}
-    for viejo, nuevo in equivalentes.items():
+def test_los_recorridos_de_6_y_9_pasos_se_leen_en_su_equivalente_de_4() -> None:
+    """HU-AOS-81: la bienvenida es de 4 pasos. Lo guardado sin `pasos` es del asistente de 6 (la APK) y lo
+    guardado con 9 es de SPEC-47: se traducen al leerlo. Los pasos del negocio (1 a 4 de 9) son el 1."""
+    de_6 = {1: 1, 2: 1, 3: 1, 4: 1, 5: 3, 6: 4}
+    for viejo, nuevo in de_6.items():
         assert _r({"estado": "en_curso", "paso": viejo}).paso == nuevo
-    assert _r({"estado": "omitido", "paso": 5}).paso == 7
-    # Ya guardado con 9, no se traduce; y un recorrido completo queda en el último paso.
-    assert _r(_9(estado="en_curso", paso=5)).paso == 5
+    de_9 = {1: 1, 4: 1, 5: 2, 6: 2, 7: 3, 8: 4, 9: 4}
+    for viejo, nuevo in de_9.items():
+        assert _r({"estado": "en_curso", "paso": viejo, "pasos": 9}).paso == nuevo
+    # Ya guardado con 4, no se traduce; y un recorrido completo queda en el último paso.
+    assert _r(_9(estado="en_curso", paso=3)).paso == 3
     assert _r({"estado": "completo", "paso": 6}).paso == r.TOTAL_PASOS
     assert r.paso_guardado({"estado": "en_curso", "paso": True}) == 1
-    # Lo que manda un cliente de 6 se traduce; lo que ya viene sobre 9 (7 u 8) se deja.
-    assert [r.paso_de_6_a_9(p) for p in (1, 2, 3, 4, 5, 6, 7, 8, 9)] == [1, 3, 4, 4, 7, 8, 7, 8, 9]
+    assert r.paso_de_4(9, 9) == 4 and r.paso_de_4(2, 4) == 2 and r.paso_de_4(5, None) == 3
 
 
 def test_avanzar_empieza_y_retoma() -> None:
@@ -125,9 +126,9 @@ def test_omitir_guarda_quien_y_cuando_y_conserva_el_paso() -> None:
 
 
 def test_reanudar_solo_si_estaba_omitido() -> None:
-    assert r.cambios_de_reanudar(_r(_9(estado="omitido", paso=5))) == {
+    assert r.cambios_de_reanudar(_r(_9(estado="omitido", paso=3))) == {
         "estado": "en_curso",
-        "paso": 5,
+        "paso": 3,
     }
     with pytest.raises(r.TransicionInvalida):
         r.cambios_de_reanudar(_r({"estado": "en_curso"}))
