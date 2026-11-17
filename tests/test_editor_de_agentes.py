@@ -195,3 +195,48 @@ def test_conexiones_al_publicar_d35() -> None:
     assert set(campos) == {"connection_ids[1]", "connection_ids[2]"}
     assert "pack_calendar" in campos["connection_ids[1]"]
     assert "connection_ids" in editor._validar_conexiones([ok, ok], disponibles)
+
+
+# ------------------------------------------------------------------ dominios (SPEC-48, HU-AOS-83)
+def _modulos(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from pack_calendar.module import GoogleCalendarModule
+    from pack_commerce.module import CRMModule
+
+    from core.plugin_manager import plugin_manager
+
+    modulos = {"pack_commerce": CRMModule, "pack_calendar": GoogleCalendarModule}
+    monkeypatch.setattr(plugin_manager, "get", lambda pid: modulos.get(pid))
+
+
+def test_superpoder_de_ventas_cae_en_su_dominio(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _modulos(monkeypatch)
+    poderes = {p.id: p for p in editor.superpoderes({"pack_commerce"})}
+    assert (poderes["pack_commerce.tomar_pedido"].group, poderes["pack_commerce.tomar_pedido"].group_label) == ("ventas", "Ventas")
+    pago = poderes["pack_commerce.pago_en_linea"]
+    assert (pago.group, pago.group_label) == ("formas_de_pago", "Formas de pago")
+
+
+def test_formas_de_pago_es_un_dominio_del_pack_de_ventas() -> None:
+    from pack_commerce.module import CRMModule
+
+    grupos = CRMModule.grupos_de_procedimientos
+    assert grupos["pack_commerce.pago_en_linea"] == grupos["pack_commerce.comprobar_transferencia"] == "formas_de_pago"
+    assert CRMModule.etiquetas_de_grupos_de_procedimientos["formas_de_pago"] == "Formas de pago"
+
+
+def test_superpoder_sin_grupo_cae_en_otros(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from core.plugin_manager import plugin_manager
+
+    monkeypatch.setattr(plugin_manager, "get", lambda pid: None)
+    assert {(p.group, p.group_label) for p in editor.superpoderes({"pack_commerce"})} == {("otros", "Otros")}
+
+
+def test_el_dominio_no_toca_el_procedimiento_publicado(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """procedure/1 no cambia: el grupo es metadato de la vista, no del JSON del procedimiento."""
+    from core.kernel.procedures.de_pack import cargar
+
+    _modulos(monkeypatch)
+    proc = next(p for p in cargar("pack_commerce") if p.id == "pack_commerce.tomar_pedido")
+    assert "group" not in proc.model_dump()
+    poderes = {p.id: p for p in editor.superpoderes({"pack_commerce"})}
+    assert poderes[proc.id].version == proc.version

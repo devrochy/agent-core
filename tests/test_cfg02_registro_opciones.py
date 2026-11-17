@@ -232,6 +232,9 @@ LECTORES: dict[str, set[str]] = {
     "core/gateway/sender.py": set(),
     "core/kernel/ingress.py": {"escalation_cfg"},
     "core/waweb/policy.py": {"b"},
+    # HU-AOS-82: el horario propio del agente reemplaza `business_hours` (el resto es del negocio).
+    "core/agents/horario_agente.py": {"escalation_cfg"},
+    "core/api/routers/agent_editor.py": {"escalation_cfg"},
 }
 RECORTADORES = {"_clamped_int", "_clamped_bool", "leer_entero"}
 

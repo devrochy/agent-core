@@ -39525,10 +39525,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Estado del pago: pendiente, pagado o rechazado.",
+              "description": "Estado del pago: pendiente, en_revision, pagado o rechazado.",
               "title": "Pago"
             },
-            "description": "Estado del pago: pendiente, pagado o rechazado."
+            "description": "Estado del pago: pendiente, en_revision, pagado o rechazado."
           },
           {
             "name": "q",
@@ -46562,6 +46562,490 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/commerce/agents/{agent_id}/payment-forms": {
+      "get": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Formas De Pago Del Agente",
+        "description": "Formas de pago del agente con su estado, sus cuentas de transferencia y el proveedor en línea.",
+        "operationId": "formas_de_pago_del_agente_api_v1_pack_commerce_agents__agent_id__payment_forms_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FormasDePagoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Guardar Formas De Pago",
+        "description": "Guarda las formas y las cuentas del agente. Transferencia encendida sin cuenta se guarda y queda\n«Falta configurar» (el agente no la ofrece); tiene que quedar al menos una forma encendida.",
+        "operationId": "guardar_formas_de_pago_api_v1_pack_commerce_agents__agent_id__payment_forms_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FormasDePagoIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FormasDePagoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/commerce/orders/{order_id}/payment-proofs": {
+      "get": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Comprobantes Del Pedido",
+        "description": "Comprobantes del pedido (los 20 más recientes) con su imagen firmada y el resultado.",
+        "operationId": "comprobantes_del_pedido_api_v1_pack_commerce_orders__order_id__payment_proofs_get",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Order Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComprobantesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/commerce/orders/{order_id}/payment-status": {
+      "post": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Cambiar Estado De Pago",
+        "description": "Revisión manual del pago. Queda quién, cuándo y la nota. Un pedido pagado no se vuelve a\nrechazar desde aquí (un reembolso no es un rechazo); rechazar un comprobante deja el pedido\n`rechazado` y el agente deja de presentarlo como pagado.",
+        "operationId": "cambiar_estado_de_pago_api_v1_pack_commerce_orders__order_id__payment_status_post",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Order Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EstadoDePagoIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComprobantesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/schedule": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Get Agent Schedule",
+        "description": "Horario del borrador del agente y el del negocio que hereda si no tiene uno propio.",
+        "operationId": "get_agent_schedule_api_v1_admin_agents__agent_id__schedule_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentScheduleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Save Agent Schedule",
+        "description": "Guarda el horario propio (o `null` para heredar) con el `lock_version` del borrador. Vale al publicar.",
+        "operationId": "save_agent_schedule_api_v1_admin_agents__agent_id__schedule_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentScheduleIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentScheduleOut"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -78531,6 +79015,14 @@
             },
             "type": "array",
             "title": "Phrases"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group"
+          },
+          "group_label": {
+            "type": "string",
+            "title": "Group Label"
           }
         },
         "type": "object",
@@ -78540,7 +79032,9 @@
           "skill",
           "title",
           "description",
-          "phrases"
+          "phrases",
+          "group",
+          "group_label"
         ],
         "title": "Superpower"
       },
@@ -84039,6 +84533,479 @@
           "fecha_hora"
         ],
         "title": "Payment"
+      },
+      "CuentaDeTransferencia": {
+        "properties": {
+          "entity": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Entity",
+            "description": "Entidad (Bancolombia, Nequi…)."
+          },
+          "accountType": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Accounttype",
+            "default": ""
+          },
+          "accountNumber": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Accountnumber"
+          },
+          "holderName": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Holdername",
+            "default": ""
+          },
+          "holderDocument": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Holderdocument",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "entity",
+          "accountNumber"
+        ],
+        "title": "CuentaDeTransferencia"
+      },
+      "FormaDePagoOut": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "efectivo_contraentrega",
+              "transferencia",
+              "pago_en_linea"
+            ],
+            "title": "Method"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "activa",
+              "falta_configurar",
+              "apagada"
+            ],
+            "title": "Estado",
+            "description": "`falta_configurar`: encendida pero sin lo que necesita (cuenta o proveedor); el agente no la ofrece."
+          },
+          "falta": {
+            "type": "string",
+            "title": "Falta",
+            "description": "Qué falta, en palabras del dueño; vacío si nada."
+          },
+          "instructions": {
+            "type": "string",
+            "title": "Instructions"
+          },
+          "superpoder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superpoder",
+            "description": "Superpoder del dominio «Formas de pago» que la acompaña; contra entrega no tiene."
+          }
+        },
+        "type": "object",
+        "required": [
+          "method",
+          "label",
+          "enabled",
+          "estado",
+          "falta",
+          "instructions",
+          "superpoder"
+        ],
+        "title": "FormaDePagoOut"
+      },
+      "FormasDePagoOut": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "configurada": {
+            "type": "boolean",
+            "title": "Configurada",
+            "description": "`false`: el agente aún no guardó sus formas y se deducen como antes."
+          },
+          "forms": {
+            "items": {
+              "$ref": "#/components/schemas/FormaDePagoOut"
+            },
+            "type": "array",
+            "title": "Forms"
+          },
+          "transfer_accounts": {
+            "items": {
+              "$ref": "#/components/schemas/CuentaDeTransferencia"
+            },
+            "type": "array",
+            "title": "Transfer Accounts"
+          },
+          "transfer_proof_required": {
+            "type": "boolean",
+            "title": "Transfer Proof Required"
+          },
+          "transfer_ocr_enabled": {
+            "type": "boolean",
+            "title": "Transfer Ocr Enabled"
+          },
+          "pago_en_linea_disponible": {
+            "type": "boolean",
+            "title": "Pago En Linea Disponible",
+            "description": "El negocio tiene una cuenta de pagos en línea conectada."
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "configurada",
+          "forms",
+          "transfer_accounts",
+          "transfer_proof_required",
+          "transfer_ocr_enabled",
+          "pago_en_linea_disponible"
+        ],
+        "title": "FormasDePagoOut"
+      },
+      "FormaDePagoIn": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "efectivo_contraentrega",
+              "transferencia",
+              "pago_en_linea"
+            ],
+            "title": "Method"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "instructions": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Instructions",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "method",
+          "enabled"
+        ],
+        "title": "FormaDePagoIn"
+      },
+      "FormasDePagoIn": {
+        "properties": {
+          "forms": {
+            "items": {
+              "$ref": "#/components/schemas/FormaDePagoIn"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Forms"
+          },
+          "transfer_accounts": {
+            "items": {
+              "$ref": "#/components/schemas/CuentaDeTransferencia"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "title": "Transfer Accounts"
+          },
+          "transfer_proof_required": {
+            "type": "boolean",
+            "title": "Transfer Proof Required",
+            "default": true
+          },
+          "transfer_ocr_enabled": {
+            "type": "boolean",
+            "title": "Transfer Ocr Enabled",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "forms"
+        ],
+        "title": "FormasDePagoIn"
+      },
+      "EstadoDePagoIn": {
+        "properties": {
+          "accion": {
+            "type": "string",
+            "enum": [
+              "confirmar",
+              "rechazar",
+              "marcar_pagado"
+            ],
+            "title": "Accion",
+            "description": "`confirmar`: el comprobante en revisión es válido. `rechazar`: no lo es. `marcar_pagado`: el pago se verificó por fuera (sin comprobante)."
+          },
+          "proof_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proof Id",
+            "description": "Comprobante que se confirma o rechaza."
+          },
+          "nota": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Nota",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "accion"
+        ],
+        "title": "EstadoDePagoIn"
+      },
+      "ComprobanteOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pagado",
+              "en_revision",
+              "rechazado"
+            ],
+            "title": "Status"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url",
+            "description": "URL firmada de vida corta; `null` si la imagen no está."
+          },
+          "extracted": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Extracted",
+            "description": "Lo que leyó la visión: monto, fecha, estado, banco, cuenta (últimos 4)…"
+          },
+          "match": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Match",
+            "description": "Resultado de la comparación con el pedido y sus motivos."
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "image_url",
+          "extracted",
+          "match",
+          "reviewed_at",
+          "review_note",
+          "created_at"
+        ],
+        "title": "ComprobanteOut"
+      },
+      "ComprobantesOut": {
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Order Id"
+          },
+          "payment_status": {
+            "type": "string",
+            "title": "Payment Status"
+          },
+          "payment_method": {
+            "type": "string",
+            "title": "Payment Method"
+          },
+          "payment_status_changed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Status Changed At"
+          },
+          "payment_status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Status Reason"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ComprobanteOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "order_id",
+          "payment_status",
+          "payment_method",
+          "payment_status_changed_at",
+          "payment_status_reason",
+          "items"
+        ],
+        "title": "ComprobantesOut"
+      },
+      "AgentScheduleIn": {
+        "properties": {
+          "schedule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule",
+            "description": "`null` vuelve a heredar el horario del negocio."
+          },
+          "lock_version": {
+            "type": "integer",
+            "title": "Lock Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "schedule",
+          "lock_version"
+        ],
+        "title": "AgentScheduleIn"
+      },
+      "AgentScheduleOut": {
+        "properties": {
+          "schedule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule",
+            "description": "Horario propio del agente (`{tz, ranges}`); `null` = hereda el del negocio."
+          },
+          "business_hours": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Hours",
+            "description": "El horario del negocio (lo que hereda)."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "agente",
+              "negocio"
+            ],
+            "title": "Source"
+          },
+          "lock_version": {
+            "type": "integer",
+            "title": "Lock Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "schedule",
+          "business_hours",
+          "source",
+          "lock_version"
+        ],
+        "title": "AgentScheduleOut"
       }
     }
   }

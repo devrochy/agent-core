@@ -22,6 +22,9 @@ PENDIENTES = {
     "pack_cobranza.promesa_de_pago": 0,
     "pack_commerce.tomar_pedido": 1,
     "pack_calendar.agendar_cita": 1,
+    # SPEC-48 (2026-11-17): se graban con LLM real y OK del dueño (HU-QA-19).
+    "pack_commerce.pago_en_linea": 0,
+    "pack_commerce.comprobar_transferencia": 0,
 }
 
 

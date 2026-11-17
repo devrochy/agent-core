@@ -2640,6 +2640,8 @@ class AgentDraftRecord(Base):
     content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     # Flujo de atención del agente (ADR-0195): fuera del AgentSpec v3, versionado con él.
     flow: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+    # Horario propio del agente (HU-AOS-82, 0145): null = hereda el del negocio.
+    schedule: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
     base_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     lock_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -2664,6 +2666,9 @@ class AgentVersionRecord(Base):
     # Flujo de atención congelado con la versión (ADR-0195); null en versiones anteriores.
     flow: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
     flow_hash: Mapped[str | None] = mapped_column(Text)
+    # Horario propio congelado con la versión (HU-AOS-82); null = hereda el del negocio.
+    schedule: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+    schedule_hash: Mapped[str | None] = mapped_column(Text)
     legacy_agent_spec_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     notes: Mapped[str] = mapped_column(Text, default="", server_default="")
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

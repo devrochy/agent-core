@@ -421,6 +421,10 @@ class GoogleCalendarModule(BaseModule):
         "list_appointment_types": "disponibilidad",
         "list_calendars": "disponibilidad",
     }
+    grupos_de_procedimientos: ClassVar[dict[str, str]] = {
+        "pack_calendar.agendar_cita": "agenda",
+    }
+    etiquetas_de_grupos_de_procedimientos: ClassVar[dict[str, str]] = {"agenda": "Agenda"}
     # Lo que es de CADA agente de este tipo; el resto de `CalendarConfig` es del negocio (SPEC-44, design.md §2).
     config_agente = config_de_agente(CalendarConfig, ("multi_agenda_modo", "slot_minutes", "appointments_cancelled_summary", "confirmacion_texto", "completion_claims_disabled", "completion_claims_custom",), "ConfigDeAgenteDeAgenda")
     id = PLUGIN_ID

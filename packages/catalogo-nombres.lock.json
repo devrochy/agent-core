@@ -20,6 +20,7 @@
     "cob_registrar_promesa_pago",
     "cob_registrar_promesa_saldo",
     "cob_renovar_suscripcion",
+    "comprobar_comprobante",
     "confirmar_cotizacion",
     "confirmar_pago_pedido",
     "consultar_estado_pedido",
@@ -61,6 +62,8 @@
   "procedimientos": [
     "pack_calendar.agendar_cita",
     "pack_cobranza.promesa_de_pago",
+    "pack_commerce.comprobar_transferencia",
+    "pack_commerce.pago_en_linea",
     "pack_commerce.tomar_pedido",
     "pack_subscriptions.cambiar_plan",
     "pack_subscriptions.contratar_plan"

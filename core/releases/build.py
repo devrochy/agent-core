@@ -167,7 +167,7 @@ async def _componentes(
             version = (
                 await session.execute(
                     text(
-                        "SELECT id, version, content_hash, contract, content, flow, flow_hash "
+                        "SELECT id, version, content_hash, contract, content, flow, flow_hash, schedule "
                         "FROM agent_versions "
                         "WHERE tenant_id = :t AND agent_id = :a "
                         "AND (cast(:v AS uuid) IS NULL OR id = cast(:v AS uuid)) "
@@ -180,7 +180,7 @@ async def _componentes(
                 raise ErrorDelBuild(
                     "agente_sin_version", f"El agente '{key}' no tiene versión publicada."
                 )
-            vid, numero, huella, contrato, contenido, flujo, huella_flujo = version
+            vid, numero, huella, contrato, contenido, flujo, huella_flujo, horario = version
             for issue in revisar_spec(contenido, catalogo, contrato):
                 problemas.append(f"{key}: {issue.path} ({issue.code})")
             salida.append(
@@ -200,6 +200,7 @@ async def _componentes(
                         ),
                         flow=flujo,
                         flow_hash=huella_flujo,
+                        schedule=horario if rol != "core" else None,
                     ),
                     contenido,
                     flujo,

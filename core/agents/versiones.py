@@ -393,6 +393,47 @@ async def guardar_borrador(
     return await obtener_borrador(tenant_id, agent_id)
 
 
+async def guardar_horario(
+    tenant_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    horario: Any,
+    lock_version: int,
+    *,
+    actor: uuid.UUID | None = None,
+) -> AgentDraftRecord:
+    """Guarda el horario propio del agente (HU-AOS-82) con el mismo `lock_version` del borrador.
+    `None` vuelve a heredar el del negocio. Lanza `horario_agente.HorarioInvalido` si no sirve."""
+    from core.agents import horario_agente
+
+    agente = await obtener_agente(tenant_id, agent_id)
+    if agente.status != "active":
+        raise Conflicto("El agente está archivado.")
+    normalizado = horario_agente.normalizar(horario)
+    async with get_session() as session:
+        nuevo = (
+            await session.execute(
+                update(AgentDraftRecord)
+                .where(
+                    AgentDraftRecord.tenant_id == tenant_id,
+                    AgentDraftRecord.agent_id == agent_id,
+                    AgentDraftRecord.lock_version == lock_version,
+                    AgentDraftRecord.deleted_at.is_(None),
+                )
+                .values(
+                    schedule=normalizado,
+                    lock_version=AgentDraftRecord.lock_version + 1,
+                    updated_by=actor,
+                    updated_at=func.now(),
+                )
+                .returning(AgentDraftRecord.lock_version)
+            )
+        ).scalar_one_or_none()
+    if nuevo is None:
+        actual = await obtener_borrador(tenant_id, agent_id)
+        raise Conflicto("Otra persona guardó este borrador antes: recárgalo.", actual.lock_version)
+    return await obtener_borrador(tenant_id, agent_id)
+
+
 async def guardar_flujo(
     tenant_id: uuid.UUID,
     agent_id: uuid.UUID,
@@ -478,12 +519,14 @@ async def publicar(
     if agente.status != "active":
         raise Conflicto("El agente está archivado.")
     flujo: dict[str, Any] | None = None
+    horario: dict[str, Any] | None = None
     if contenido is None:
         borrador = await obtener_borrador(tenant_id, agent_id)
         if lock_version is not None and borrador.lock_version != lock_version:
             raise Conflicto("El borrador cambió desde que lo abriste: recárgalo antes de publicar.")
         contenido = borrador.content
         flujo = borrador.flow
+        horario = getattr(borrador, "schedule", None)
     contrato = CONTRATO_POR_KIND[agente.kind]
     if modelo and contrato == "agentspec/3" and isinstance(contenido, Mapping):
         actual = contenido.get("model")
@@ -511,6 +554,11 @@ async def publicar(
     else:
         flujo = None
         huella_flujo = None
+    # HU-AOS-82: el horario propio se congela con la versión (un KernelSpec no lleva horario).
+    from core.agents import horario_agente
+
+    horario = horario_agente.efectivo(horario, None) if contrato == "agentspec/3" else None
+    huella_horario = horario_agente.huella(horario)
     async with get_session() as session:
         # Serializa las publicaciones del agente (el número es max + 1) y vuelve a mirar el
         # estado bajo el lock: un archivado en paralelo no deja publicar.
@@ -535,7 +583,8 @@ async def publicar(
                     AgentVersionRecord.tenant_id == tenant_id,
                     AgentVersionRecord.agent_id == agent_id,
                     AgentVersionRecord.content_hash == huella,
-                    AgentVersionRecord.flow_hash == huella_flujo,
+                    AgentVersionRecord.flow_hash.is_not_distinct_from(huella_flujo),
+                    AgentVersionRecord.schedule_hash.is_not_distinct_from(huella_horario),
                 )
             )
         ).scalar_one_or_none()
@@ -560,6 +609,8 @@ async def publicar(
             content_hash=huella,
             flow=flujo,
             flow_hash=huella_flujo,
+            schedule=horario,
+            schedule_hash=huella_horario,
             legacy_agent_spec_id=legacy_agent_spec_id,
             notes=notes[:2000],
             created_by=actor,

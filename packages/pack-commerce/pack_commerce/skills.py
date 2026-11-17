@@ -163,12 +163,15 @@ def _parse_uuid(value: str) -> uuid.UUID | None:
         return None
 
 
-async def _plugin_config() -> Any:  # type: ignore[no-untyped-def]
-    """Config del plugin con fallback a None (robusto en pruebas/activación parcial)."""
+async def _plugin_config(agent_id: Any = None) -> Any:  # type: ignore[no-untyped-def]
+    """Config del plugin con fallback a None (robusto en pruebas/activación parcial).
+
+    Con `agent_id` (SPEC-48, HU-COM-21), los campos de `config_agente` (formas de pago y
+    cuentas) de ese agente pisan a los del negocio; el resto sigue siendo del negocio."""
     try:
         from core.plugin_manager import plugin_manager
 
-        return await plugin_manager.load_config("pack_commerce")
+        return await plugin_manager.load_config("pack_commerce", agent_id=agent_id)
     except Exception:
         return None
 
@@ -362,7 +365,25 @@ async def referencias_vigentes(conversation_id: uuid.UUID, customer_id: uuid.UUI
                 ),
             )
         )
-    return referencias
+    return referencias + await _referencia_de_formas()
+
+
+async def _referencia_de_formas() -> list[Referencia]:
+    """Las formas de pago que el agente en foco puede ofrecer (SPEC-48, HU-COM-21): solo los ids
+    y `si`/`no`, nunca cuentas ni instrucciones (invariante 7). Solo cuando el agente GUARDÓ sus
+    formas: sin configurar, el prompt queda como antes (y las grabaciones de los journeys valen).
+    Sin agente en foco, nada. `crear_pedido` rechaza igual lo no habilitado, con su pista."""
+    from core.shared import release_vigente
+    from pack_commerce.formas_de_pago import METODOS, metodos_configurados
+
+    agente = release_vigente.agente_del_turno()
+    if agente is None:
+        return []
+    configurados = await metodos_configurados(agente.agent_id)
+    if configurados is None:
+        return []
+    activos = set(configurados)
+    return [Referencia(tipo="formas_de_pago", datos=tuple((m, "si" if m in activos else "no") for m in METODOS))]
 
 
 async def _referencias_del_sandbox(conversation_id: uuid.UUID) -> list[Referencia]:
@@ -401,7 +422,7 @@ async def _referencias_del_sandbox(conversation_id: uuid.UUID) -> list[Referenci
                 ),
             )
         )
-    return referencias
+    return referencias + await _referencia_de_formas()
 
 
 async def _order_del_cliente(session, order_id, customer_id) -> Order | None:  # type: ignore[no-untyped-def]
@@ -487,11 +508,21 @@ def _sin_cotizacion_vigente() -> dict[str, Any]:
     }
 
 
-async def _transfer_safe_append() -> str:
-    """Arma el bloque de datos de transferencia (nunca lo escribe el LLM)."""
-    from core.payments.transferencia import formatear_cuentas
+_ESTADO_DE_PAGO_VISIBLE = {
+    "pagado": "pagado",
+    "en_revision": "en revisión",
+    "rechazado": "pago rechazado",
+}
 
-    config = await _plugin_config()
+
+async def _transfer_safe_append(agent_id: Any = None) -> str:
+    """Arma el bloque de datos de transferencia (nunca lo escribe el LLM). Con `agent_id`, las
+    cuentas propias del agente pisan a las del negocio (SPEC-48, HU-COM-21)."""
+    from core.payments.transferencia import formatear_cuentas
+    from pack_commerce.formas_de_pago import config_del_agente
+
+    # El mismo camino que `metodos_del_agente`: si transferencia está activa, sus cuentas salen.
+    config = await (config_del_agente(agent_id) if agent_id is not None else _plugin_config())
     return formatear_cuentas(getattr(config, "transfer_accounts", None))
 
 
@@ -1384,6 +1415,27 @@ class OrderSkill(BaseSkill):
                 simular=sandbox_prueba.simular_verificar_pago_pedido,
                 connection_predicate=solo_con_motor_activo(),
             ),
+            # SPEC-48, HU-COM-24: solo la ofrece el motor, en `pack_commerce.comprobar_transferencia`.
+            MCPTool(
+                name="comprobar_comprobante",
+                description=(
+                    "Revisa la última foto de comprobante que mandó el cliente contra su pedido por "
+                    "transferencia. Úsala cuando el cliente mande el comprobante o diga que ya transfirió. "
+                    "Nunca digas que el pago quedó confirmado sin esta respuesta."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "order_id": {"type": "string", "description": "ID del pedido del cliente"},
+                        "nota": {"type": "string", "description": "Lo que dijo el cliente del pago, si dijo algo", "maxLength": 300},
+                    },
+                    "required": ["order_id"],
+                },
+                handler=self.comprobar_comprobante,
+                side_effects=True,
+                simular=sandbox_prueba.simular_comprobar_comprobante,
+                connection_predicate=solo_con_motor_activo(),
+            ),
         ]
 
     # ------------------------------------------------------------ handlers
@@ -1680,11 +1732,21 @@ class OrderSkill(BaseSkill):
                 "hint": "Pide los datos que faltan uno a uno.",
             }
         consiente_guardar = bool(arguments.get("guardar_datos_cliente", False))
-        config = await _plugin_config()
+        config = await _plugin_config(context.agent_id)
 
         if payment_method not in PAYMENT_METHODS:
             return {
                 "error": "Método de pago no válido. Usa 'efectivo_contraentrega', 'transferencia' o 'pago_en_linea'."
+            }
+        # SPEC-48, HU-COM-21: solo una forma de pago activa del agente (encendida y configurada).
+        from pack_commerce.formas_de_pago import ETIQUETAS, metodos_configurados
+
+        activos = await metodos_configurados(context.agent_id)
+        if activos is not None and payment_method not in activos:
+            return {
+                "error": "Esa forma de pago no está habilitada.",
+                "formas_disponibles": activos,
+                "hint": "Ofrecele una de estas: " + ", ".join(ETIQUETAS[m].lower() for m in activos),
             }
         if delivery_method and delivery_method not in DELIVERY_METHODS:
             return {"error": "Método de entrega no válido. Usa 'domicilio' o 'recoger_en_tienda'."}
@@ -1905,7 +1967,7 @@ class OrderSkill(BaseSkill):
             "entregado_en": f"{customer_data.get('address')}, {customer_data.get('municipality')}, {customer_data.get('city')}",
         }
         if payment_method == "transferencia":
-            transfer_block = await _transfer_safe_append()
+            transfer_block = await _transfer_safe_append(context.agent_id)
             template = getattr(config, "order_confirmed_transfer_message", "") or ""
             if transfer_block:
                 default = (
@@ -2094,6 +2156,12 @@ class OrderSkill(BaseSkill):
             "_safe_append": f"💳 Podés pagar tu pedido {base_reference} aquí: {link.url}",
         }
 
+    async def comprobar_comprobante(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Comprobante de transferencia contra el pedido del cliente (SPEC-48, HU-COM-24)."""
+        from pack_commerce.comprobar_transferencia import comprobar
+
+        return await comprobar(arguments, context)
+
     async def verificar_pago_pedido(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         """Estado del pago en línea del pedido del cliente (HU-AOS-07), solo lectura.
 
@@ -2196,7 +2264,10 @@ class OrderSkill(BaseSkill):
             "public_order_number": order.public_order_number,
             "status": status_labels.get(order.status, order.status),
             "delivery_method": "domicilio" if order.delivery_method == "domicilio" else "recoger en tienda",
-            "payment_status": "pagado" if order.payment_status == "pagado" else "pendiente de pago",
+            "payment_status": _ESTADO_DE_PAGO_VISIBLE.get(order.payment_status, "pendiente de pago"),
+            # El id real del pedido del cliente (el mismo de Referencias vigentes): lo usa
+            # `pack_commerce.pago_en_linea` para reenviar el link sin crear otro pedido (HU-COM-23).
+            "order_id": str(order.id),
             "items": [
                 {
                     "product": by_id.get(i.variant_id).name if by_id.get(i.variant_id) else "Producto",

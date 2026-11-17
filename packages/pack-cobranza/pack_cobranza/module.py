@@ -62,6 +62,10 @@ class CobranzaModule(BaseModule):
         "cob_cancelar_suscripcion": "suscripciones",
         "cob_link_suscripcion": "pagos",
     }
+    grupos_de_procedimientos: ClassVar[dict[str, str]] = {
+        "pack_cobranza.promesa_de_pago": "cobranza",
+    }
+    etiquetas_de_grupos_de_procedimientos: ClassVar[dict[str, str]] = {"cobranza": "Cobranza"}
     id = PLUGIN_ID
     name = "Cobranza"
     version = "0.7.0"
