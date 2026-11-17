@@ -109,6 +109,10 @@ class Asignacion:
     # enrutó). En `shadow` la ruta solo se registra; en `active` su agente es el `foco`.
     modo_ruteo: str = "off"
     ruta: Ruta | None = None
+    # HU-ARCH-38: agentes del negocio en pausa (`agent_id`) y, si el que debería atender y el de por defecto
+    # están en pausa, el motivo para cerrar el turno en silencio (`kill_switch`).
+    pausados: frozenset[uuid.UUID] = frozenset()
+    bloqueo: str | None = None
 
 
 @dataclass(frozen=True)
@@ -411,7 +415,20 @@ async def asignar(
         )
         if modo == "active" and ruta is not None:
             foco = ruta.agente
-    dueno_cambio = foco.instance_id != dueno
+    # Pausa por agente (HU-ARCH-38, ADR-0200): estado vivo, sin publicar. Un especialista pausado no atiende:
+    # atiende el de por defecto sin cambiar el dueño (al reanudar, la conversación vuelve a él); si el de por
+    # defecto también está pausado, el turno se cierra en silencio.
+    pausados = await _agentes_pausados(session, tenant_id)
+    bloqueo: str | None = None
+    desviado = False
+    if foco.agent_id in pausados:
+        por_defecto = hacia.foco(None)
+        if por_defecto.agent_id in pausados:
+            bloqueo = "kill_switch"
+        else:
+            log.info("agente_pausado_desviado", conversation_id=str(conversation_id), agent_key=foco.key)
+            foco, desviado = por_defecto, True
+    dueno_cambio = foco.instance_id != dueno and not desviado and bloqueo is None
     if dueno_cambio:
         await session.execute(
             text(
@@ -444,8 +461,21 @@ async def asignar(
         dueno_cambio=dueno_cambio,
         modo_ruteo=modo,
         ruta=ruta,
+        pausados=pausados,
+        bloqueo=bloqueo,
     )
     return asignacion, hacia
+
+
+async def _agentes_pausados(session: AsyncSession, tenant_id: uuid.UUID) -> frozenset[uuid.UUID]:
+    """`agent_id` de los agentes del negocio en pausa (HU-ARCH-38). Con RLS y filtro explícito por negocio."""
+    filas = await session.execute(
+        text(
+            "SELECT id FROM agents WHERE tenant_id = :t AND paused_at IS NOT NULL AND deleted_at IS NULL"
+        ),
+        {"t": tenant_id},
+    )
+    return frozenset(uuid.UUID(str(f[0])) for f in filas.all())
 
 
 async def _enrutar(
@@ -649,6 +679,7 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar
         return None
     asignacion, release = resultado
     release_vigente.fijar(release.artefactos(asignacion.lane, foco=asignacion.foco))
+    release_vigente.fijar_pausados(asignacion.pausados)
     anotar_release(
         asignacion.release_id,
         asignacion.lane,

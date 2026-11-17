@@ -2549,6 +2549,10 @@ class AgentRecord(Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    # Pausa por agente (HU-ARCH-38, ADR-0200): estado vivo, fuera de la release; no lo copia el snapshot.
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paused_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    paused_reason: Mapped[str | None] = mapped_column(Text)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

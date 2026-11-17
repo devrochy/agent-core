@@ -284,3 +284,12 @@ def test_sin_grafo_el_manifiesto_y_su_hash_no_cambian() -> None:
     assert man.hash_de(sin) != man.hash_de(con)
     assert man.resumen(con)["a2a_graph"] == {"version": 1, "content_hash": "a" * 64, "links": 0}
     assert man.resumen(sin)["a2a_graph"] is None
+
+
+# ------------------------------------------------------------------ pausa por agente (HU-ARCH-38)
+@pytest.mark.parametrize("modo", ["delegate", "handoff", "query"])
+def test_a_un_agente_pausado_no_se_le_pasa_ni_se_le_consulta(modo: str) -> None:
+    grafo = _grafo(_enlace(A, B))
+    d = evaluar(_estado(pausados=frozenset({IB})), _op(IA, IB, modo), grafo, Limites())
+    assert not d.permitido and d.razon == "agent_paused"
+    assert evaluar(_estado(), _op(IA, IB, modo), grafo, Limites()).permitido, "sin pausa, el enlace sirve"

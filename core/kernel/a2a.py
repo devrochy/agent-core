@@ -50,7 +50,7 @@ log = get_logger(__name__)
 Modo = Literal["delegate", "handoff", "query"]
 Razon = Literal[
     "turn_closed", "cycle", "no_link", "depth", "repeat", "calls", "owner_frozen", "data_class", "budget",
-    "no_ledger",
+    "no_ledger", "agent_paused",
 ]
 _CONTEXTO_CLAVE = b"a2a.payload_hash.v1"
 _DEADLINE_SIN_ENLACE_MS = 15_000
@@ -216,6 +216,8 @@ class EstadoDelTurno:
     cerrado: str | None = None
     a2a_conversation_id: uuid.UUID | None = None
     abiertas: dict[uuid.UUID, Abierta] = field(default_factory=dict)
+    # HU-ARCH-38: instancias de agentes en pausa: no se les delega, pasa ni consulta.
+    pausados: frozenset[uuid.UUID] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -313,6 +315,8 @@ def evaluar(estado: EstadoDelTurno, op: Operacion, grafo: GrafoCongelado, limite
         return no("turn_closed")
     if op.to_instance_id in pila:
         return no("cycle")
+    if op.to_instance_id in estado.pausados:
+        return no("agent_paused")
     enlace = grafo.enlace(op.from_instance_id, op.to_instance_id)
     if not _INTENCION.match(op.intencion):
         return no("no_link", enlace)
