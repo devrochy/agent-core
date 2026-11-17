@@ -132,7 +132,7 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
     assert set(plantillas) == {"agenda", "cobranza", "suscripciones", "ventas"}
     ventas = plantillas["ventas"]
     assert ventas["available"] and ventas["missing_skills"] == [] and ventas["will_enable"] == []
-    assert [s["id"] for s in ventas["superpowers"]] == ["pack_commerce.tomar_pedido"]
+    assert [s["id"] for s in ventas["superpowers"]] == ["pack_commerce.tomar_pedido", "pack_commerce.pago_en_linea", "pack_commerce.comprobar_transferencia"]
     assert all(len(s["phrases"]) >= 3 for s in ventas["superpowers"])
     cobranza = plantillas["cobranza"]
     assert cobranza["available"] and cobranza["missing_skills"] == [] and cobranza["will_enable"] == ["pack_cobranza"]
@@ -146,7 +146,7 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
         "ventas", "Mis ventas", None,
     )
     contenido = creado["draft"]["content"]
-    assert {p["id"] for p in contenido["procedures"]} == {"pack_commerce.tomar_pedido"}
+    assert {p["id"] for p in contenido["procedures"]} == {"pack_commerce.tomar_pedido", "pack_commerce.pago_en_linea", "pack_commerce.comprobar_transferencia"}
     assert creado["draft"]["lock_version"] == 1
 
     r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
@@ -171,7 +171,8 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
     assert r.status_code == 422, r.text
     error = r.json()["error"]
     assert error["code"] == "invalid_spec"
-    assert set(error["fields"]) == {"procedures[0].overrides.examples"}
+    # Con el mínimo subido, falla cada superpoder de Ventas (pedidos y formas de pago, SPEC-48).
+    assert set(error["fields"]) == {f"procedures[{i}].overrides.examples" for i in range(3)}
     assert "frases" in error["fields"]["procedures[0].overrides.examples"]
 
     # Copiar frases de la habilidad no suma; frases propias sí. (Un modelo que no sirve ya no
@@ -407,7 +408,7 @@ async def test_superpoderes_por_enfoque(app_client) -> None:
 
     r = await app_client.get(f"/api/v1/admin/agent-superpowers?agent_id={aid}", headers=h)
     assert r.status_code == 200, r.text
-    assert {s["id"] for s in r.json()["items"]} == {"pack_commerce.tomar_pedido"}
+    assert {s["id"] for s in r.json()["items"]} == {"pack_commerce.tomar_pedido", "pack_commerce.pago_en_linea", "pack_commerce.comprobar_transferencia"}
 
     # Marcar un superpoder de otro enfoque: el borrador lo guarda, publicar lo rechaza junto al campo.
     borrador = (await app_client.get(f"/api/v1/admin/agents/{aid}/draft", headers=h)).json()
@@ -421,13 +422,14 @@ async def test_superpoderes_por_enfoque(app_client) -> None:
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
     assert r.status_code == 422, r.text
     campos = r.json()["error"]["fields"]
-    assert "procedures[1].id" in campos and "enfoque" in campos["procedures[1].id"]
+    ultimo = f"procedures[{len(nuevo['procedures']) - 1}].id"  # el ajeno va al final
+    assert ultimo in campos and "enfoque" in campos[ultimo]
     assert await _sql(tid, "select 1 from agent_versions where agent_id = :a", a=uuid.UUID(aid)) == []
 
     # HU-AOS-51: la API genérica de versiones tampoco se salta el enfoque.
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/versions", headers=h, json={})
     assert r.status_code == 422, r.text
-    assert "enfoque" in r.json()["error"]["fields"]["procedures[1].id"]
+    assert "enfoque" in r.json()["error"]["fields"][ultimo]
     assert await _sql(tid, "select 1 from agent_versions where agent_id = :a", a=uuid.UUID(aid)) == []
 
     # Aislamiento: el agente de un negocio no se consulta desde otro.
@@ -508,8 +510,12 @@ async def test_crear_desde_el_guion_de_la_plantilla(app_client) -> None:
     creado = r.json()
     assert (creado["agent"]["key"], creado["agent"]["latest_version"]) == ("ventas", None)
     contenido = creado["draft"]["content"]
-    # Aunque pida «planes», Ventas ya no vende planes: solo queda `tomar_pedido`.
-    assert [p["id"] for p in contenido["procedures"]] == ["pack_commerce.tomar_pedido"]
+    # Aunque pida «planes», Ventas ya no vende planes: quedan sus pedidos y formas de pago (SPEC-48).
+    assert sorted(p["id"] for p in contenido["procedures"]) == [
+        "pack_commerce.comprobar_transferencia",
+        "pack_commerce.pago_en_linea",
+        "pack_commerce.tomar_pedido",
+    ]
     assert contenido["persona"]["maxLength"] == 300
     assert isinstance(creado["requirements"], list)
     assert all({"skill", "kind", "title", "section"} <= set(x) for x in creado["requirements"])
