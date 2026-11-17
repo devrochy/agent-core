@@ -526,3 +526,23 @@ def _meta_request(payload: dict[str, Any]) -> tuple[bytes, dict[str, str]]:
     if secret:
         headers.update(_sign_meta(body, secret))
     return body, headers
+
+@pytest.fixture(autouse=True)
+def _crons_de_negocio_a_cualquier_hora(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Los crons de negocio solo corren a su hora local (ADR-0201): el beat los dispara cada hora
+    y la política salta las demás. Las pruebas llaman los jobs directo a cualquier hora, así que
+    aquí «fuera de hora» no cuenta cuando no se pide un momento concreto. Apagado y ventana siguen
+    contando, y quien pasa `ahora` prueba la regla tal cual."""
+    import dataclasses
+
+    from core.admin import crons_negocio_service as svc
+
+    real = svc.politica
+
+    async def politica(tenant_id: uuid.UUID, cron_name: str, *, ahora: Any = None) -> Any:
+        resultado = await real(tenant_id, cron_name, ahora=ahora)
+        if ahora is None and resultado.motivo == svc.OMITIDA_FUERA_DE_HORA:
+            return dataclasses.replace(resultado, motivo=None)
+        return resultado
+
+    monkeypatch.setattr(svc, "politica", politica)
