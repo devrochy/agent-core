@@ -147,7 +147,9 @@ async def _registrar(
 def _tool(nombre: str, plugin: str) -> Any:
     """La tool real del pack, como la registra el MCPHost (con su `plugin_id`)."""
     from pack_calendar.skills import CalendarSkill
-    from pack_commerce.skills import LeadSkill, OrderSkill
+    from pack_commerce.skills import OrderSkill
+
+    from core.leads.tools import LeadSkill  # Captar leads es del core (ADR-0193)
 
     for skill in (LeadSkill(), OrderSkill(), CalendarSkill()):
         for tool in skill.get_tools():
@@ -261,14 +263,14 @@ async def test_procedencia_primero_gana_y_legacy_no_escribe() -> None:
 
     e = await _escenario()
     tid = e["tid"]
-    lead = _tool("crear_lead", "pack_commerce")
+    lead = _tool("crear_lead", "core")
     ref = str(uuid.uuid4())
     await _registrar(tid, e["c1"], e["cid"], e["i_ventas"], e["v_ventas"], lead, {"lead_id": ref, "status": "created"})
     # Otro agente lo «crea» después (no debería): gana el primero.
     await _registrar(tid, e["c2"], e["cid"], e["i_agenda"], e["v_agenda"], lead, {"lead_id": ref, "status": "created"})
-    # El lead que ya existía no se atribuye.
+    # El lead que ya existía (crear_lead le puso datos, ADR-0193) no se atribuye.
     await _registrar(tid, e["c2"], e["cid"], e["i_agenda"], e["v_agenda"], lead,
-                     {"lead_id": str(uuid.uuid4()), "status": "ya_existe"})
+                     {"lead_id": str(uuid.uuid4()), "status": "actualizado"})
     # Sin release (legacy): nada.
     async with tenant_scope(tid):
         await procedencia.registrar(lead, {"lead_id": str(uuid.uuid4()), "status": "created"}, e["c1"])

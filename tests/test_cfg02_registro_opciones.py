@@ -232,6 +232,8 @@ LECTORES: dict[str, set[str]] = {
     "core/gateway/sender.py": set(),
     "core/kernel/ingress.py": {"escalation_cfg"},
     "core/waweb/policy.py": {"b"},
+    # Captar leads (ADR-0193): lee `business_hours` del escalamiento para los recordatorios, como antes commerce.
+    "core/leads/jobs.py": set(),
 }
 RECORTADORES = {"_clamped_int", "_clamped_bool", "leer_entero"}
 

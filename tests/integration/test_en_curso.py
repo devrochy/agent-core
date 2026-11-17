@@ -39,7 +39,7 @@ def _procedimientos_de_comercio() -> None:
     """El host de los tests no activa los packs: se registran sus procedimientos (como en
     `test_procedimientos_agenda_subs_cobranza`)."""
     from pack_commerce.procedimientos import registrar
-    from pack_commerce.skills import CatalogSkill, LeadSkill, OrderSkill
+    from pack_commerce.skills import CatalogSkill, OrderSkill
 
     from core.mcp.host import mcp_host
 
@@ -48,7 +48,7 @@ def _procedimientos_de_comercio() -> None:
     mcp_host.remove_plugin("pack_commerce")
     mcp_host.begin_activation("pack_commerce")
     try:
-        for skill in (LeadSkill, CatalogSkill, OrderSkill):
+        for skill in (CatalogSkill, OrderSkill):  # Captar leads es del core (ADR-0193)
             mcp_host.register_skill(skill())
         registrar(mcp_host)
     finally:

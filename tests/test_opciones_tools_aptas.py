@@ -26,9 +26,10 @@ SENSIBLES = {"confirmar_cotizacion", "cob_registrar_abono", "sub_cancelar", "sub
 def _tools_del_codigo() -> dict[str, Any]:
     from pack_calendar.skills import CalendarSkill
     from pack_cobranza.skills import CobranzaSkill
-    from pack_commerce.skills import CatalogSkill, LeadSkill, OrderSkill
+    from pack_commerce.skills import CatalogSkill, OrderSkill
     from pack_knowledge.skills import KnowledgeSkill
 
+    from core.leads.tools import LeadSkill  # Captar leads es del core (ADR-0193)
     from core.subscriptions.tools import SubscriptionSkill
     from core.tools.core_skill import CoreSkill
 

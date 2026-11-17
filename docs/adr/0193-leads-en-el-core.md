@@ -104,3 +104,35 @@ Detalle:
   `LEAD_WEBHOOK_URL` y `LEAD_WEBHOOK_BASE`.
 - Tests: intake (secreto, Turnstile, cupo, slug inexistente, deduplicación), tools con y sin comercio, copia
   idempotente, aislamiento cross-tenant y test estático de que ningún pack importa el modelo de leads.
+
+## Adenda 2026-11-17 — implementación (HU-AOS-70, parte 2)
+
+Decisiones tomadas al implementar, que el texto de arriba no fijaba:
+
+1. **Captar leads son tools del core que necesitan binding.** `crear_lead`, `calificar_lead` y `actualizar_lead`
+   tienen dueño `core` y son `always_available` (no las nombra ningún flujo de pack), pero NO se dan a todo agente
+   como el resto de las del core: `core.leads.tools.ACCIONES_CAPTAR_LEADS` las excluye en la oferta del turno
+   (`core/kernel/oferta.py`), en los presets (`PlantillaAgente.captar_leads`, `core/presets/agentes.py`), en el reporte
+   de bindings, en el motor de procedimientos (no son «esenciales del core»: no se ofrecen en cualquier etapa ni se
+   saltan el lock) y en las acciones del agente del panel (grupo `leads`, para cualquier agente). Un agente tiene
+   Captar leads si su versión declara `crear_lead`.
+2. **Plantillas.** `captar_leads: true` en Ventas, Agenda y Suscripciones; Cobranza no. Agenda deja de tener comercio
+   como habilidad opcional solo para `crear_lead`.
+3. **Asegurar el lead** corre en el turno, después del ruteo (`core/leads/asegurar.py`), no en el evento de conversación
+   nueva (que llega antes de saber qué agente atiende). Se salta la prueba del panel. `crear_lead` asegura y completa:
+   `created` solo si el lead nació en esa llamada; ya no hay `ya_existe`.
+4. **Origen** sale del canal (`catalogo.origen_del_canal`: `whatsapp`, `web`→`chat_web`, `instagram`, `telegram`); un
+   canal sin origen deja NULL. Se agrega `telegram` al catálogo cerrado (D-74). Los leads copiados de commerce quedan
+   con NULL («anterior a ADR-0193»).
+5. **Configuración** en la tabla `lead_settings` (una fila por negocio, cifrada), no en `plugin_configs`: su
+   `plugin_id` es FK a `plugins` y el plugin manager asume un pack. Sin `auto_create_lead`, `lead_intake_source` ni
+   `lead_intake_default_status`.
+6. **Provider de Clientes `leads`**, siempre activo (`lead_registry.SIEMPRE`), con pestaña «Lead». Commerce conserva
+   clasificación, pedidos, cotizaciones y su línea de tiempo. `PATCH /admin/leads/{id}/pack/pack_commerce` queda como
+   alias del provider `leads` para el panel y la APK instalados (decisión del dueño, 2026-11-17).
+7. **Crons** `core.leads_follow_up` y `core.leads_recordar_seguimientos` (antes `pack_commerce.*`): solo corren con
+   fila de `lead_settings`; la migración 0145 renombra la política que cada negocio había guardado. Los eventos de
+   notificación conservan sus nombres (`commerce.lead_nuevo`, `commerce.seguimiento_vencido`,
+   `commerce.resumen_ventas`) y las fuentes de la línea de tiempo también, por las preferencias y los cursores ya
+   guardados.
+8. **Commerce no marca «convertido» por un pedido**: no lo hacía antes y no se inventa aquí.

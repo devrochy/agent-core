@@ -351,6 +351,7 @@ async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: li
     from core.db.session import get_session
     from core.kernel.procedures import catalogo_de_acciones
     from core.kernel.procedures.catalogo import CORE_OWNER
+    from core.leads.tools import ACCIONES_CAPTAR_LEADS
     from core.shared.tenant import tenant_scope
     from core.subscriptions.tools import SOLO_PROCEDIMIENTO
 
@@ -383,7 +384,11 @@ async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: li
         contenido["tools"] = [
             {"tool": nombre, "enabled": True, "scopes": list(getattr(info, "scopes", ()))}
             for nombre, info in sorted(catalogo.items())
-            if (info.owner in habilitados or info.owner == CORE_OWNER) and nombre not in SOLO_PROCEDIMIENTO
+            if (info.owner in habilitados or info.owner == CORE_OWNER)
+            and nombre not in SOLO_PROCEDIMIENTO
+            # Captar leads es del core pero necesita binding (ADR-0193): como antes de moverla, la lleva el agente de
+            # la corrida si el negocio vende (comercio), para que las grabaciones midan lo mismo.
+            and (nombre not in ACCIONES_CAPTAR_LEADS or "pack_commerce" in habilitados)
         ]
         contenido["procedures"] = declarados(procedimientos_publicados(spec), set())
         del leido, spec

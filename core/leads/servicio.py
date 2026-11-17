@@ -108,6 +108,10 @@ async def asegurar(
         .returning(Lead.id)
     )
     creado = (await session.execute(stmt)).scalar_one_or_none() is not None
+    if creado:
+        from core.leads import config as config_leads
+
+        await config_leads.asegurar_por_defecto(session, tenant_id)
     lead = await vivo(session, tenant_id, customer_id)
     if lead is None:
         # Solo si chocó la clave de idempotencia con el lead de OTRO cliente: es un error del llamador.

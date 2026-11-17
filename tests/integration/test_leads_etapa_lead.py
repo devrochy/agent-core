@@ -1,7 +1,7 @@
 """HU-CRM-18 · La etapa del lead es confiable y deja historia (ADR-0181).
 
 Con la BD real: `actualizar_lead` y `calificar_lead` (agente), el hook de la ficha (persona) y el
-seguimiento automático (sistema) pasan por `pack_commerce.etapas.cambiar_etapa`; cada cambio deja un
+seguimiento automático (sistema) pasan por `core.leads.etapas.cambiar_etapa` (del core desde ADR-0193); cada cambio deja un
 registro con etapa anterior, nueva y quién, que aparece en la línea de tiempo; un reintento no lo
 duplica; nada cruza negocios.
 """
@@ -56,8 +56,7 @@ async def _cliente(tid: uuid.UUID, nombre: str = "Ana") -> tuple[uuid.UUID, uuid
 
 
 async def _lead(tid: uuid.UUID, cliente: uuid.UUID, conv: uuid.UUID | None = None, **campos):
-    from pack_commerce.models import Lead
-
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -70,9 +69,9 @@ async def _lead(tid: uuid.UUID, cliente: uuid.UUID, conv: uuid.UUID | None = Non
 
 
 async def _estado(tid: uuid.UUID, lead_id: uuid.UUID) -> tuple[str, datetime | None]:
-    from pack_commerce.models import Lead
     from sqlalchemy import select
 
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -83,9 +82,9 @@ async def _estado(tid: uuid.UUID, lead_id: uuid.UUID) -> tuple[str, datetime | N
 
 
 async def _cambios(tid: uuid.UUID, lead_id: uuid.UUID | None = None) -> list[tuple[str, str, str]]:
-    from pack_commerce.models import LeadStageChange
     from sqlalchemy import select
 
+    from core.db.models import LeadStageChange
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -108,8 +107,7 @@ def _ctx(cliente: uuid.UUID, conv: uuid.UUID, clave: str | None = None):
 
 
 async def _tool(tid: uuid.UUID, nombre: str, args: dict, cliente: uuid.UUID, conv: uuid.UUID, clave: str | None = None):
-    from pack_commerce.skills import LeadSkill
-
+    from core.leads.tools import LeadSkill
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tid):
@@ -128,8 +126,7 @@ async def test_solo_etapas_validas_y_no_guarda_nada() -> None:
     for etapa in r["etapas_validas"]:
         assert etapa in r["error"]
     # No guarda nada: ni la etapa ni el resto de los campos del mismo llamado.
-    from pack_commerce.models import Lead
-
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -244,9 +241,9 @@ async def test_idempotencia_del_mismo_cambio() -> None:
 
 
 async def test_la_clave_de_idempotencia_es_unica_por_negocio() -> None:
-    from pack_commerce.models import LeadStageChange
     from sqlalchemy.exc import IntegrityError
 
+    from core.db.models import LeadStageChange
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -273,9 +270,8 @@ async def test_la_clave_de_idempotencia_es_unica_por_negocio() -> None:
 
 
 async def test_el_seguimiento_deja_al_sistema_como_actor(monkeypatch) -> None:
-    from pack_commerce.jobs import _follow_up_leads_del_negocio
-
     from core.gateway import sender
+    from core.leads.jobs import _follow_up_leads_del_negocio
     from core.shared.tenant import tenant_scope
 
     tid = await _negocio()
@@ -299,9 +295,8 @@ async def test_el_seguimiento_deja_al_sistema_como_actor(monkeypatch) -> None:
 
 
 async def test_el_seguimiento_no_pisa_lo_que_cambio_una_persona(monkeypatch) -> None:
-    from pack_commerce.jobs import _follow_up_leads_del_negocio
-
     from core.gateway import sender
+    from core.leads.jobs import _follow_up_leads_del_negocio
     from core.shared.tenant import tenant_scope
 
     tid = await _negocio()
@@ -310,10 +305,9 @@ async def test_el_seguimiento_no_pisa_lo_que_cambio_una_persona(monkeypatch) -> 
 
     async def _enviar(conversation_id, texto, *a, **k):
         # Mientras sale el mensaje, la persona marca el lead como convertido.
-        from pack_commerce.etapas import cambiar_etapa
-        from pack_commerce.models import Lead
-
+        from core.db.models import Lead
         from core.db.session import get_session
+        from core.leads.etapas import cambiar_etapa
 
         async with get_session() as session:
             await cambiar_etapa(session, await session.get(Lead, lead), "convertido", actor="persona")
@@ -372,9 +366,9 @@ async def test_los_cambios_no_cruzan_negocios(app_client) -> None:
     eventos = (await app_client.get(f"{URL}/{c2}/timeline", headers=headers)).json()["items"]
     assert [e for e in eventos if e["kind"] == "etapa"] == []
     # Y sin negocio en contexto la RLS no deja ver nada.
-    from pack_commerce.models import LeadStageChange
     from sqlalchemy import func, select
 
+    from core.db.models import LeadStageChange
     from core.db.session import get_session
 
     async with get_session() as session:

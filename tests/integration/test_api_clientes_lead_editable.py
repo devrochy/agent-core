@@ -1,9 +1,9 @@
-"""ADR-0149 · Estado e interés del lead de venta editables desde la ficha del cliente.
+"""ADR-0149 · Estado e interés del lead editables desde la ficha del cliente.
 
-Con la BD real: la ficha trae los campos editables de pack_commerce con su valor (código, no
-etiqueta); `PATCH /admin/leads/{id}/pack/pack_commerce` cambia el lead que muestra la ficha sin
-crear otra fila, o lo crea si no había, sin copiar datos de contacto; el core rechaza claves y
-valores fuera de lo declarado y un pack sin edición; nada cruza negocios. Las tools de lead
+Con la BD real: la ficha trae los campos editables del provider `leads` del core (ADR-0193) con su valor (código, no
+etiqueta); `PATCH /admin/leads/{id}/pack/leads` (y su alias `/pack/pack_commerce`, que usan el panel y la APK
+instalados) cambia el lead vivo del cliente sin crear otra fila, o lo crea si no había, sin copiar datos de contacto;
+el core rechaza claves y valores fuera de lo declarado y un pack sin edición; nada cruza negocios. Las tools de lead
 reflejan nombre, correo y teléfono en el perfil (la fuente de los datos de contacto).
 """
 
@@ -60,9 +60,10 @@ async def _cliente(tid: uuid.UUID, nombre: str) -> tuple[uuid.UUID, uuid.UUID]:
 
 
 async def _leads(tid: uuid.UUID, customer_id: uuid.UUID) -> list:
-    from pack_commerce.models import Lead
+    """Todos los leads del cliente (también los borrados), del de actividad más reciente al más viejo."""
     from sqlalchemy import select
 
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -80,12 +81,11 @@ async def _leads(tid: uuid.UUID, customer_id: uuid.UUID) -> list:
 
 
 def _editables(ficha: dict) -> dict[str, dict]:
-    return {e["key"]: e for e in ficha["editables"] if e["plugin_id"] == "pack_commerce"}
+    return {e["key"]: e for e in ficha["editables"] if e["plugin_id"] == "leads"}
 
 
 async def test_edita_el_lead_que_muestra_la_ficha_sin_duplicar(app_client) -> None:
-    from pack_commerce.models import Lead
-
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -95,7 +95,9 @@ async def test_edita_el_lead_que_muestra_la_ficha_sin_duplicar(app_client) -> No
     hace_una_hora = datetime.now(UTC) - timedelta(hours=1)
     async with tenant_scope(tid):
         async with get_session() as session:
-            session.add(Lead(tenant_id=tid, customer_id=ana, status="nuevo", interest="viejo", last_activity_at=hace_un_mes))
+            # Uno viejo ya borrado: hay a lo sumo un lead vivo por cliente (ADR-0193).
+            session.add(Lead(tenant_id=tid, customer_id=ana, status="nuevo", interest="viejo", last_activity_at=hace_un_mes,
+                             deleted_at=hace_un_mes))
             session.add(
                 Lead(tenant_id=tid, customer_id=ana, status="calificado", interest="plan basic", name="Ana L",
                      phone="300", email="ana@x.co", last_activity_at=hace_una_hora)
@@ -126,7 +128,7 @@ async def test_edita_el_lead_que_muestra_la_ficha_sin_duplicar(app_client) -> No
     assert leads[0].last_activity_at == hace_una_hora
 
     r = await app_client.patch(
-        f"{URL}/{ana}/pack/pack_commerce",
+        f"{URL}/{ana}/pack/leads",
         # Perder un lead pide motivo (HU-CRM-23).
         json={"valores": {"estado_lead": "perdido", "motivo_perdida": "otro"}},
         headers=headers,
@@ -136,7 +138,7 @@ async def test_edita_el_lead_que_muestra_la_ficha_sin_duplicar(app_client) -> No
     assert _editables(ficha)["estado_lead"]["value"] == "perdido"
     assert ficha["extras"]["estado_lead"] == "Perdido"
     leads = await _leads(tid, ana)
-    assert len(leads) == 2  # editó el más reciente, no creó otro
+    assert len(leads) == 2  # editó el vivo, no creó otro
     assert leads[0].status == "perdido"
     assert leads[0].last_activity_at > hace_una_hora
     assert leads[1].status == "nuevo" and leads[1].interest == "viejo"
@@ -165,7 +167,7 @@ async def test_crea_el_lead_si_no_habia_sin_datos_de_contacto(app_client) -> Non
     leads = await _leads(tid, beto)
     assert len(leads) == 1
     assert (leads[0].status, leads[0].interest) == ("contactado", "domicilios")
-    assert leads[0].idempotency_key == f"manual:{beto}"
+    assert leads[0].origen == "manual"
     assert (leads[0].name, leads[0].phone, leads[0].email) == (None, None, None)
 
     # Otra edición usa ese mismo lead.
@@ -207,8 +209,7 @@ async def test_valida_claves_valores_y_pack(app_client) -> None:
 
 
 async def test_no_cruza_negocios(app_client) -> None:
-    from pack_commerce.models import Lead
-
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -229,12 +230,11 @@ async def test_no_cruza_negocios(app_client) -> None:
 
 
 async def test_tools_de_lead_reflejan_el_contacto_en_el_perfil() -> None:
-    from pack_commerce.models import Lead
-    from pack_commerce.skills import LeadSkill
     from sqlalchemy import select
 
-    from core.db.models import MemoryFact
+    from core.db.models import Lead, MemoryFact
     from core.db.session import get_session
+    from core.leads.tools import LeadSkill
     from core.mcp.types import ToolContext
     from core.shared.tenant import tenant_scope
 
@@ -248,11 +248,11 @@ async def test_tools_de_lead_reflejan_el_contacto_en_el_perfil() -> None:
     async with tenant_scope(tid):
         creado = await skill.crear_lead({"name": "Daniela", "interest": "plan", "phone": "3001112233"}, ctx())
         assert creado["status"] == "created"
-        # Un segundo lead más viejo (intake, ficha): las tools siguen con el más reciente, sin fallar.
+        # Un lead viejo ya borrado: las tools siguen con el vivo, sin fallar (uno vivo por cliente, ADR-0193).
         async with get_session() as session:
             session.add(
                 Lead(tenant_id=tid, customer_id=dani, interest="viejo",
-                     last_activity_at=datetime.now(UTC) - timedelta(days=3))
+                     last_activity_at=datetime.now(UTC) - timedelta(days=3), deleted_at=datetime.now(UTC))
             )
         actualizado = await skill.actualizar_lead({"phone": "3009998877", "name": "Daniela Gómez"}, ctx())
         # La salida de la tool no cambia.

@@ -107,7 +107,7 @@ def _catalogo() -> dict[str, Any]:
         "crear_pedido": SimpleNamespace(owner="pack_commerce"),
         "check_availability": SimpleNamespace(owner="pack_calendar"),
         "escalate_to_human": SimpleNamespace(owner="core"),
-        "crear_lead": SimpleNamespace(owner="pack_commerce"),
+        "crear_lead": SimpleNamespace(owner="core"),  # Captar leads es del core (ADR-0193)
     }
 
 
@@ -126,7 +126,7 @@ def test_derivar_contenido_acota_al_fin_del_agente() -> None:
     )
     assert avisos == []
     assert contenido["procedures"] == [{"id": "pack_calendar.agendar_cita", "version": "^1.0", "overrides": None}]
-    # Las propias que la base no traía (aquí `crear_lead`, opcional acotada de comercio) también llevan
+    # Las propias que la base no traía (aquí `crear_lead`, de Captar leads del core) también llevan
     # binding (ADR-0192 §1): sin General que las herede, HU-ARCH-34 las negaría.
     assert [b["tool"] for b in contenido["tools"]] == ["check_availability", "escalate_to_human", "crear_lead"]
     assert [g["name"] for g in contenido["guardrails"]] == ["g2"]  # el required_tool de ventas no sigue
@@ -153,24 +153,9 @@ def _catalogo_con_leads() -> dict[str, Any]:
     }
 
 
-def test_agenda_toma_solo_crear_lead_de_pack_commerce() -> None:
-    """HU-AOS-22: con pack_commerce, Agenda captura el lead del prospecto (`crear_lead` y su
-    guardrail) sin la caja de ventas (cotización, pedido) ni el playbook de ventas."""
-    contenido, avisos = derivar_contenido(
-        load_plantilla("agenda"),
-        _general_con_leads(),
-        catalogo=_catalogo_con_leads(),
-        habilitados={"pack_commerce", "pack_calendar"},
-        publicados=[_proc("pack_calendar.agendar_cita", "1.0.0")],
-        playbooks_de_packs={"ventas", "citas"},
-    )
-    assert avisos == []
-    assert [b["tool"] for b in contenido["tools"]] == ["check_availability", "escalate_to_human", "crear_lead"]
-    assert [g["name"] for g in contenido["guardrails"]] == ["g2", "g3"]
-    assert [p["name"] for p in contenido["playbooks"]] == ["citas", "propio_del_negocio"]
-
-
-def test_agenda_sin_pack_commerce_no_tiene_crear_lead() -> None:
+def test_agenda_capta_leads_sin_comercio() -> None:
+    """HU-AOS-22 y ADR-0193 §2: Agenda captura el lead del prospecto (`crear_lead` y su guardrail) con Captar leads
+    del core, sin comercio habilitado y sin la caja de ventas (cotización, pedido) ni el playbook de ventas."""
     contenido, avisos = derivar_contenido(
         load_plantilla("agenda"),
         _general_con_leads(),
@@ -180,7 +165,25 @@ def test_agenda_sin_pack_commerce_no_tiene_crear_lead() -> None:
         playbooks_de_packs={"ventas", "citas"},
     )
     assert avisos == []
+    assert [b["tool"] for b in contenido["tools"]] == ["check_availability", "escalate_to_human", "crear_lead"]
+    assert [g["name"] for g in contenido["guardrails"]] == ["g2", "g3"]
+    assert [p["name"] for p in contenido["playbooks"]] == ["citas", "propio_del_negocio"]
+
+
+def test_plantilla_sin_captar_leads_no_tiene_crear_lead() -> None:
+    """Captar leads es del core pero no esencial: una plantilla que no la declara no la recibe (ADR-0193 §2)."""
+    plantilla = load_plantilla("agenda").model_copy(update={"captar_leads": False})
+    contenido, avisos = derivar_contenido(
+        plantilla,
+        _general_con_leads(),
+        catalogo=_catalogo_con_leads(),
+        habilitados={"pack_commerce", "pack_calendar"},
+        publicados=[_proc("pack_calendar.agendar_cita", "1.0.0")],
+        playbooks_de_packs={"ventas", "citas"},
+    )
+    assert avisos == []
     assert [b["tool"] for b in contenido["tools"]] == ["check_availability", "escalate_to_human"]
+    assert [g["name"] for g in contenido["guardrails"]] == ["g2"]
 
 
 def test_ventas_sigue_tomando_su_opcional_completa() -> None:
@@ -205,7 +208,7 @@ def test_ventas_sigue_tomando_su_opcional_completa() -> None:
 
 def test_acciones_opcionales_avisa_si_la_habilidad_no_publica_la_accion() -> None:
     plantilla = load_plantilla("agenda").model_copy(
-        update={"acciones_opcionales": {"pack_commerce": ["crear_lead", "no_existe"]}}
+        update={"opcionales": ["pack_commerce"], "acciones_opcionales": {"pack_commerce": ["generar_cotizacion", "no_existe"]}}
     )
     _, avisos = derivar_contenido(
         plantilla,
@@ -344,6 +347,7 @@ def test_agente_de_preset_lleva_binding_de_las_del_core(preset_id: str) -> None:
     """HU-ARCH-34: aunque el General no tenga bindings, lo que el turno ofrece siempre queda concedido."""
     from core.kernel.procedures.catalogo import CORE_OWNER, catalogo_de_acciones
     from core.kernel.procedures.de_pack import cargar
+    from core.leads.tools import es_de_captar_leads
     from core.plugin_manager import plugin_manager
     from core.subscriptions.tools import SOLO_PROCEDIMIENTO
 
@@ -363,5 +367,7 @@ def test_agente_de_preset_lleva_binding_de_las_del_core(preset_id: str) -> None:
         esperadas = {
             n for n, info in catalogo.items()
             if info.owner == CORE_OWNER and n not in SOLO_PROCEDIMIENTO and not n.startswith("sub_")
+            # Captar leads (ADR-0193 §2): del core pero solo para las plantillas que la declaran.
+            and (plantilla.captar_leads or not es_de_captar_leads(n))
         }
         assert esperadas <= concedidas, plantilla.key

@@ -602,7 +602,9 @@ async def test_dogfooding_solvershub_ventas_agenda_y_suscripciones(_ruteo: None,
 
 # ---------------------------------------------------------------- Agenda captura el lead (HU-AOS-22)
 PRESENTACION = "hola, soy Ana de la tienda Flores Ana y quiero agendar una demo"
-VENTAS_FUERA_DE_AGENDA = {"generar_cotizacion", "crear_pedido", "agregar_item_pedido", "calificar_lead", "actualizar_lead"}
+# La caja de ventas (commerce). Captar leads es del core (ADR-0193) y Agenda la lleva entera.
+VENTAS_FUERA_DE_AGENDA = {"generar_cotizacion", "crear_pedido", "agregar_item_pedido"}
+CAPTAR_LEADS = {"crear_lead", "calificar_lead", "actualizar_lead"}
 
 
 async def _turno_con_resultado(tid: uuid.UUID, conv: uuid.UUID, monkeypatch: Any, pasos: list[Any], texto: str) -> tuple[_Guion, Any]:
@@ -626,7 +628,7 @@ async def _turno_con_resultado(tid: uuid.UUID, conv: uuid.UUID, monkeypatch: Any
 
 async def _leads(tid: uuid.UUID, cliente: uuid.UUID) -> list[Any]:
     return await _sql(
-        tid, "select name, interest from pack_commerce_leads where customer_id = :c", c=cliente
+        tid, "select name, interest from leads where customer_id = :c", c=cliente
     )
 
 
@@ -637,7 +639,8 @@ async def _cliente(tid: uuid.UUID, conv: uuid.UUID) -> uuid.UUID:
 
 async def test_agenda_captura_el_lead_del_prospecto_y_agenda_la_demo(_ruteo: None, monkeypatch: Any) -> None:
     """Un prospecto se presenta y pide una demo: la regla `preset_agenda_palabras` lo manda a
-    Agenda, que tiene `crear_lead` (y no la caja de ventas). Quedan el lead y la cita."""
+    Agenda, que tiene Captar leads (y no la caja de ventas). Quedan el lead y la cita. El turno ya aseguró el lead
+    del cliente (ADR-0193 §2), así que `crear_lead` le pone los datos y responde `actualizado`."""
     from datetime import timedelta
     from zoneinfo import ZoneInfo
 
@@ -668,9 +671,9 @@ async def test_agenda_captura_el_lead_del_prospecto_y_agenda_la_demo(_ruteo: Non
     assert d["route_source"] == "rule" and d["rule_id"] == "preset_agenda_palabras"
     assert d["active_instance_id"] == str(inst["agenda"])
     # Lo que se le ofreció al modelo en el turno de presentación: el lead sí, la caja de ventas no.
-    assert "crear_lead" in guion.tools[0]
+    assert CAPTAR_LEADS <= set(guion.tools[0])
     assert not (VENTAS_FUERA_DE_AGENDA & set(guion.tools[0]))
-    assert '"status": "created"' in guion.resultados[0] or "'status': 'created'" in guion.resultados[0]
+    assert '"status": "actualizado"' in guion.resultados[0], guion.resultados
     assert "no está disponible para este agente" in guion.resultados[1], guion.resultados
     assert await _leads(tid, cliente) == [("Ana", "demo para la tienda Flores Ana")]
 
@@ -697,7 +700,8 @@ async def test_agenda_captura_el_lead_del_prospecto_y_agenda_la_demo(_ruteo: Non
 
 async def test_agenda_no_duplica_el_lead_de_un_cliente_existente(_ruteo: None, monkeypatch: Any) -> None:
     """Un cliente que ya es lead (lo registró Ventas) vuelve y pide una demo: Agenda llama
-    `crear_lead`, la tool responde `ya_existe` y sigue habiendo un solo lead."""
+    `crear_lead`, que le pone los datos que dio al lead que ya tenía (ADR-0193: responde `actualizado`) y sigue
+    habiendo un solo lead."""
     from core.releases.promocion import promover
     from core.shared.tenant import tenant_scope
 
@@ -710,7 +714,7 @@ async def test_agenda_no_duplica_el_lead_de_un_cliente_existente(_ruteo: None, m
     cliente = await _cliente(tid, previa)
     await _sql(
         tid,
-        "insert into pack_commerce_leads (id, tenant_id, customer_id, conversation_id, name, interest, score, "
+        "insert into leads (id, tenant_id, customer_id, conversation_id, name, interest, score, "
         "status, last_activity_at, created_at) values (:id, :t, :c, :conv, 'Ana', 'plan premium', 0, 'nuevo', now(), now())",
         id=uuid.uuid4(), t=tid, c=cliente, conv=previa,
     )
@@ -726,5 +730,5 @@ async def test_agenda_no_duplica_el_lead_de_un_cliente_existente(_ruteo: None, m
         "Claro, Ana. ¿Para qué día quieres la demo?",
     ], PRESENTACION)
     assert (await _decision(tid, conv))["active_instance_id"] == str(inst["agenda"])
-    assert "ya_existe" in guion.resultados[0]
-    assert await _leads(tid, cliente) == [("Ana", "plan premium")]
+    assert '"status": "actualizado"' in guion.resultados[0], guion.resultados
+    assert await _leads(tid, cliente) == [("Ana", "demo")]

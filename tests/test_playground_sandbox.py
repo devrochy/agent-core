@@ -127,10 +127,11 @@ def test_todas_las_tools_declaran_lectura_o_simulador() -> None:
     """Una tool nueva sin declaración no puede volver a escribir en producción desde el panel."""
     from pack_calendar.skills import CalendarSkill
     from pack_cobranza.skills import CobranzaSkill
-    from pack_commerce.skills import CatalogSkill, LeadSkill, OrderSkill
+    from pack_commerce.skills import CatalogSkill, OrderSkill
 
     from core.datos_cliente.aviso_tool import AvisoDatosSkill
     from core.datos_cliente.tools import DatosClienteSkill
+    from core.leads.tools import LeadSkill  # Captar leads es del core (ADR-0193)
     from core.memory.historial_tool import HistorialClienteSkill
     try:
         from pack_knowledge.skills import KnowledgeSkill

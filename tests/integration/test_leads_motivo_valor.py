@@ -28,7 +28,7 @@ pytestmark = [
 ]
 
 URL = "/api/v1/admin/leads"
-PACK = "pack_commerce"
+PACK = "leads"  # el provider del lead es del core desde ADR-0193 (`/pack/pack_commerce` queda de alias)
 MOTIVOS = ["precio", "sin_respuesta", "compro_en_otro_lado", "no_era_para_el", "otro"]
 
 
@@ -45,9 +45,7 @@ async def _negocio() -> uuid.UUID:
 
 async def _cliente(tid: uuid.UUID, nombre: str = "Ana", **lead) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     """(cliente, conversación, lead)."""
-    from pack_commerce.models import Lead
-
-    from core.db.models import Conversation, Customer
+    from core.db.models import Conversation, Customer, Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -65,9 +63,9 @@ async def _cliente(tid: uuid.UUID, nombre: str = "Ana", **lead) -> tuple[uuid.UU
 
 
 async def _lead(tid: uuid.UUID, lead_id: uuid.UUID):
-    from pack_commerce.models import Lead
     from sqlalchemy import select
 
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -77,9 +75,9 @@ async def _lead(tid: uuid.UUID, lead_id: uuid.UUID):
 
 
 async def _cambios(tid: uuid.UUID, lead_id: uuid.UUID) -> list[tuple[str, str, str | None, str | None]]:
-    from pack_commerce.models import LeadStageChange
     from sqlalchemy import select
 
+    from core.db.models import LeadStageChange
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -107,8 +105,7 @@ def _editables(r) -> dict:
 
 
 async def _tool(tid: uuid.UUID, args: dict, cliente: uuid.UUID, conv: uuid.UUID):
-    from pack_commerce.skills import LeadSkill
-
+    from core.leads.tools import LeadSkill
     from core.mcp.types import ToolContext
     from core.shared.tenant import tenant_scope
 
@@ -204,7 +201,7 @@ async def test_el_agente_no_pierde_un_lead_sin_motivo_valido(app_client) -> None
 
 
 async def test_la_tool_ofrece_el_motivo_con_el_catalogo_cerrado() -> None:
-    from pack_commerce.skills import LeadSkill
+    from core.leads.tools import LeadSkill
 
     tool = next(t for t in LeadSkill().get_tools() if t.name == "actualizar_lead")
     props = tool.parameters["properties"]
@@ -442,8 +439,7 @@ async def test_los_motivos_y_valores_no_cruzan_negocios(app_client) -> None:
 
 # ---------------------------------------------------------------- la migración
 async def test_los_check_de_la_migracion_protegen_los_datos() -> None:
-    from pack_commerce.models import Lead, LeadStageChange
-
+    from core.db.models import Lead, LeadStageChange
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -456,7 +452,8 @@ async def test_los_check_de_la_migracion_protegen_los_datos() -> None:
             async with tenant_scope(tid):
                 async with get_session() as session:
                     if modelo is Lead:
-                        session.add(Lead(tenant_id=tid, customer_id=cliente, **campos))
+                        # Otro cliente: el de la prueba ya tiene su lead vivo (uno por cliente, ADR-0193).
+                        session.add(Lead(tenant_id=tid, customer_id=uuid.uuid4(), **campos))
                     else:
                         session.add(
                             LeadStageChange(
@@ -478,8 +475,9 @@ async def test_los_check_de_la_migracion_protegen_los_datos() -> None:
 
 
 def test_el_catalogo_de_la_migracion_es_el_del_codigo() -> None:
-    from pack_commerce.etapas import CODIGOS_DE_MOTIVO
+    from core.leads.etapas import CODIGOS_DE_MOTIVO
 
-    migracion = Path(__file__).resolve().parents[2] / "packages/pack-commerce/alembic/versions/0019_lead_motivo_y_valor.py"
+    # La tabla del lead es del core desde ADR-0193: el CHECK vive en su migración.
+    migracion = Path(__file__).resolve().parents[2] / "alembic/versions/0144_leads_en_el_core.py"
     copiado = re.search(r"_MOTIVOS = \"\((.*?)\)\"", migracion.read_text()).group(1)
     assert [m.strip("'") for m in copiado.split(",")] == list(CODIGOS_DE_MOTIVO)

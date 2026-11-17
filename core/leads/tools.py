@@ -6,7 +6,8 @@ o concedidas por un procedimiento que declara). Esa excepción vive en `ACCIONES
 turno, los presets, el reporte de bindings y el panel de habilidades.
 
 - `crear_lead` ya no crea un segundo lead: asegura el lead vivo del cliente (el turno ya lo aseguró si el agente tiene
-  Captar leads) y le pone los datos que dio. Devuelve `created` solo si el lead nació en esta llamada.
+  Captar leads) y le pone los datos que dio. Devuelve `created` si el lead nació en esta llamada o si recibe sus
+  primeros datos de contacto (el prospecto queda registrado); si ya los tenía, `actualizado`.
 - El origen sale del canal de la conversación (`catalogo.origen_del_canal`), nunca de un argumento del modelo.
 - Los datos de contacto también van al perfil del cliente, que es lo que muestra la ficha (ADR-0149), con los
   `writeNamespaces` del agente (ADR-0114 §3).
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -119,11 +121,16 @@ class LeadSkill(BaseSkill):
     keywords: list[str] = []  # noqa: RUF012  (siempre registrada; la concesión es por binding)
 
     def get_tools(self) -> list[MCPTool]:
+        # `always_available`: entran al turno aunque ningún flujo las nombre (no son de un pack). Igual se ofrecen
+        # solo al agente con su binding (`core.kernel.oferta`).
+        return [replace(t, always_available=True) for t in self._build_tools()]
+
+    def _build_tools(self) -> list[MCPTool]:
         return [
             MCPTool(
                 name="crear_lead",
                 description=(
-                    "Registra los datos de un prospecto (lead) en el CRM. Úsala de inmediato cuando "
+                    "Registra un nuevo prospecto (lead) en el CRM. Úsala de inmediato cuando "
                     "el cliente se presenta (da su nombre) y muestra intención de comprar o "
                     "de que lo contacten. NO la uses dos veces para la misma persona: si ya "
                     "existe, usa actualizar_lead."
@@ -212,12 +219,15 @@ class LeadSkill(BaseSkill):
                 origen=origen_del_canal(context.channel),
                 conversation_id=context.conversation_id,
             )
+            # El turno ya aseguró el lead (vacío): registrar el prospecto es darle sus primeros datos de contacto. Así la
+            # procedencia (HU-AOS-47) atribuye el lead al agente que lo captó, no al turno que lo aseguró.
+            primer_registro = creado or not any((lead.name, lead.phone, lead.email))
             servicio.fijar_contacto(lead, **contacto, interest=arguments.get("interest"))
             lead_id = str(lead.id)
             if creado:
                 await avisar_lead_nuevo(session, lead.id, lead.customer_id)
         await _guardar_en_perfil(context, {**contacto, "crm_lead_id": lead_id})
-        return {"lead_id": lead_id, "status": "created" if creado else "actualizado"}
+        return {"lead_id": lead_id, "status": "created" if primer_registro else "actualizado"}
 
     async def calificar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         try:

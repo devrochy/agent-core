@@ -70,7 +70,7 @@ def permitida_para_el_agente(
 
         if not es_de_captar_leads(nombre):
             return True
-    de_un_pack = plugin_id not in (None, "", DECLARATIVA)
+    de_un_pack = plugin_id not in (None, "", DECLARATIVA, CORE_OWNER)
     if packs is not None and de_un_pack and plugin_id not in set(packs):
         return False
     if del_agente is None:

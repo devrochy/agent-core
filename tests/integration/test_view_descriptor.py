@@ -141,9 +141,9 @@ async def test_vista_descriptor_renderiza(app_client) -> None:
 
 
 async def test_vista_descriptor_guarda(app_client) -> None:
-    from pack_commerce.models import Lead
     from sqlalchemy import select
 
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import default_tenant, tenant_scope
 
