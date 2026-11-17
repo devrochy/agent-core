@@ -22,7 +22,9 @@ sin DELETE para `app_runtime` (invariante 8). `purge_tenant` las descubre por su
 Los catálogos de etapas, actores y motivos se copian aquí a propósito: una migración no cambia con el código que la
 sigue (el test de la migración los compara con `core.leads.catalogo`).
 
-Reversible: el downgrade borra las tablas; solo se permite sin filas, para no perder leads en silencio.
+Reversible: el downgrade borra las cuatro tablas, como 0121 y 0137. Mientras commerce siga siendo el dueño (hasta la
+parte 2) no se pierde nada: los originales siguen en `pack_commerce_leads` y `agent-core db copiar-leads` los vuelve
+a copiar. Después del cambio de dueño, bajar esta migración pierde lo que el core haya escrito.
 
 Revision ID: 0144
 Revises: 0143
@@ -196,12 +198,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    conn = op.get_bind()
-    # RLS forzada: el rol de migraciones (dueño con BYPASSRLS) cuenta todas las filas; sin bypass, Postgres da error
-    # en vez de contar, y el downgrade no avanza (falla cerrado).
-    conn.execute(sa.text("set local row_security = off"))
-    for tabla in _TABLAS:
-        if conn.execute(sa.text(f"select exists (select 1 from {tabla})")).scalar():
-            raise RuntimeError(f"0144: {tabla} tiene filas; bajar la migración las perdería. Vacíala a mano antes.")
     for tabla in reversed(_TABLAS):
         op.drop_table(tabla)
