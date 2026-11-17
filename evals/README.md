@@ -9,6 +9,22 @@
 
 Con k > 1 se reportan pass@1, pass^k y los escenarios inestables (ADR-0119).
 
+## Campos del escenario del golden
+
+Además de `conversation` y `assertions`, un escenario puede declarar:
+
+- `requires_plugins`: los packs que hay que activar; sin ellos sus tools no se registran.
+- `now`: la fecha y hora fijas del turno, en ISO 8601 con zona.
+- `team_notes`: notas del equipo sobre el cliente.
+- `spec`: otro spec del framework, `evals/specs/<nombre>.json`, para los packs que `framework.json` no trae (por
+  ejemplo `cobranza`). Se rechaza con `--tenant`: ahí manda el spec real del negocio (ADR-0016).
+- `connection_types`: los tipos de conexión activos del negocio, por ejemplo `["telegram"]`. Se pasan al
+  `connection_predicate` de las tools del core, como hace el loop. Por defecto va vacío, como un negocio sin
+  conexiones, así que el request de los escenarios que no lo declaran no cambia.
+
+Límite: el runner no arma el bloque del perfil del cliente, así que un escenario no puede probar que el cliente ya
+tiene teléfono (`ya_tiene_telefono`). Ese caso lo cubre el resultado de la tool en el historial.
+
 ## Grabar y reproducir el LLM
 
 Las evals llaman al LLM real y gastan saldo. Con el modo de grabación, una corrida queda
@@ -27,7 +43,7 @@ grabaciones se puede cambiar con `--grabaciones DIR` o `LLM_CASSETTE_DIR`.
 
 ```bash
 # Reproducir el gate del CI, sin clave
-python evals/runner.py "06,07,08,21,22,23,24,25,26" --grabacion replay
+python evals/runner.py "06,07,08,21,22,23,24,25,26,37,38" --grabacion replay
 python evals/journeys.py "01,05" --grabacion replay
 
 # Regrabar UN escenario o journey (LLM real: pedir OK al dueño antes)

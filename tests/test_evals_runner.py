@@ -141,3 +141,33 @@ def test_false_lista_vacia_y_ausente_no_restringen():
 def test_valor_invalido_falla_en_vez_de_pasar_en_silencio():
     for valor in ("crear_pedido", 1, None, [1]):
         assert "inválido" in _falla_tools_prohibidas(valor, [])
+
+
+# --------------------------------------------------------------- spec y conexiones por escenario (HU-CONN-26)
+def test_spec_del_escenario_carga_el_de_evals_specs_y_sin_campo_deja_el_neutro():
+    import pytest
+    from runner import _load_spec, _spec_del_escenario
+
+    neutro = _load_spec(None)
+    assert _spec_del_escenario({}, neutro, None) is neutro
+    cobranza = _spec_del_escenario({"spec": "cobranza"}, neutro, None)
+    assert cobranza.packs == ["pack_cobranza"]
+    assert "cobranza" in [p.name for p in cobranza.playbooks]
+    with pytest.raises(ValueError):
+        _spec_del_escenario({"spec": "cobranza"}, neutro, "un-negocio")  # con --tenant manda el spec real
+    with pytest.raises(ValueError):
+        _spec_del_escenario({"spec": "../framework"}, neutro, None)
+
+
+async def test_predicado_recibe_los_tipos_de_conexion_del_escenario():
+    import uuid
+    from types import SimpleNamespace
+
+    from runner import _predicado_ok
+
+    from core.tools.core_skill import hay_canal_que_pide_contacto
+
+    tool = SimpleNamespace(connection_predicate=hay_canal_que_pide_contacto)
+    tid = uuid.uuid4()
+    assert await _predicado_ok(tool, tid, {"telegram"}) is True
+    assert await _predicado_ok(tool, tid, set()) is False

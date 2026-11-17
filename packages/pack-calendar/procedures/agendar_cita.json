@@ -1,7 +1,7 @@
 {
   "contract": "procedure/1",
   "id": "pack_calendar.agendar_cita",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "Agendar una cita",
   "triggers": {
     "description": "El cliente quiere agendar una cita, una demo o una reunión en un horario disponible",
@@ -30,7 +30,7 @@
     },
     {
       "id": "datos",
-      "goal": "Pedir el correo del cliente para enviarle la confirmación",
+      "goal": "Pedir el correo del cliente para enviarle la confirmación. Teléfono: solo si la política del negocio lo pide (aparece en faltan o en recomendados_pendientes) y el perfil no tiene contact_phone; si existe la herramienta pedir_telefono, pídelo con ella (no reemplaza el correo); si responde canal_sin_pedir_contacto, pídelo por texto como cualquier otro dato: el requerido bloquea la cita y el recomendado se pide una vez y no la bloquea.",
       "actions": [],
       "exitWhen": { "slots": ["correo"] }
     },

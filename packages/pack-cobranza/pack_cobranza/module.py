@@ -64,7 +64,7 @@ class CobranzaModule(BaseModule):
     }
     id = PLUGIN_ID
     name = "Cobranza"
-    version = "0.6.0"
+    version = "0.7.0"
     description = "Carteras, clientes, préstamos y negociación de cobranza por WhatsApp"
     display_name = "Cobranza"
     category = "Cobros"
