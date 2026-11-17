@@ -83,12 +83,16 @@ async def _ultima_imagen(session: Any, tenant_id: uuid.UUID, conversation_id: An
     ).scalar_one_or_none()
 
 
-def _leer_archivo(key: str) -> bytes | None:
+async def _leer_archivo(key: str) -> bytes | None:
+    """El archivo, solo si está en la carpeta de medios de ESTE negocio (una key ajena o hostil,
+    de un dato viejo o de otro canal, no se abre)."""
     from core import almacenamiento
+    from core.shared.tenant import current_tenant_slug
 
-    if not almacenamiento.key_limpia(key):
+    slug = await current_tenant_slug()
+    if not slug or not almacenamiento.key_limpia(key):
         return None
-    ruta = almacenamiento.abrir(key)
+    ruta = almacenamiento.abrir(key, dentro_de=almacenamiento.carpeta_de("media", slug))
     if ruta is None or not ruta.is_file() or ruta.stat().st_size > MAX_BYTES:
         return None
     return ruta.read_bytes()
@@ -139,7 +143,7 @@ async def comprobar(arguments: dict[str, Any], context: Any) -> dict[str, Any]:
         image_key, message_id, mime = str(mensaje.media_url), mensaje.id, str(mensaje.media_type)
         creado, total = order.created_at, Decimal(str(order.total))
 
-    contenido = _leer_archivo(image_key)
+    contenido = await _leer_archivo(image_key)
     if contenido is None:
         return {
             "error": "sin_comprobante",
@@ -161,7 +165,9 @@ async def comprobar(arguments: dict[str, Any], context: Any) -> dict[str, Any]:
     mismo = next((p for p in previos if p.order_id == order_uuid), None)
     if mismo is not None:
         async with get_session() as session:
-            order = await session.get(Order, order_uuid)
+            order = (
+                await session.execute(select(Order).where(Order.tenant_id == tenant_id, Order.id == order_uuid))
+            ).scalar_one()
             return _salida(order, mismo.status, repetido=True)
     duplicado = bool(previos)
 
