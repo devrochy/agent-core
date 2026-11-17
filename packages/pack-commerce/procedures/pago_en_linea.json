@@ -6,12 +6,12 @@
   "triggers": {
     "description": "El cliente YA tiene un pedido con pago en línea: dice que ya pagó, que no le llegó el link o que venció, pide que se lo reenvíen o pregunta el estado de su pago. No es para una compra nueva.",
     "examples": [
-      "ya pagué",
+      "ya pagué por el link",
       "ya hice el pago por el link",
       "no me llegó el link de pago",
       "el link de pago venció",
       "me reenvías el link de pago",
-      "cuál es el estado de mi pago"
+      "cuál es el estado del pago de mi pedido"
     ]
   },
   "slots": {
@@ -26,7 +26,9 @@
     },
     "pago_confirmado": {
       "type": "string",
-      "enum": ["confirmado"],
+      "enum": [
+        "confirmado"
+      ],
       "setBy": "action:verificar_pago_pedido"
     }
   },
@@ -34,29 +36,52 @@
     {
       "id": "elegir_pedido",
       "goal": "Identificar el pedido del que habla el cliente con consultar_estado_pedido: el número de Referencias vigentes o el que dé el cliente. Nunca crees un pedido nuevo.",
-      "actions": ["consultar_estado_pedido"],
-      "exitWhen": { "slots": ["order_id"] }
+      "actions": [
+        "consultar_estado_pedido"
+      ],
+      "exitWhen": {
+        "slots": [
+          "order_id"
+        ]
+      }
     },
     {
       "id": "enviar_link",
       "goal": "Verificar el pago con verificar_pago_pedido. Si no está pagado y el cliente pide el link, no le llegó o venció, reenviarlo con confirmar_pago_pedido (sale uno nuevo si venció, sin otro pedido).",
-      "actions": ["verificar_pago_pedido", "confirmar_pago_pedido"],
-      "exitWhen": { "action": "verificar_pago_pedido" }
+      "actions": [
+        "verificar_pago_pedido",
+        "confirmar_pago_pedido"
+      ],
+      "exitWhen": {
+        "action": "verificar_pago_pedido"
+      }
     },
     {
       "id": "esperar_pago",
       "goal": "Esperar a que el pago se confirme. Si el cliente dice que ya pagó, verificarlo; si pide el link otra vez, reenviarlo. Solo el servidor dice si está pagado.",
-      "actions": ["verificar_pago_pedido", "confirmar_pago_pedido", "consultar_estado_pedido"],
-      "exitWhen": { "slots": ["pago_confirmado"] }
+      "actions": [
+        "verificar_pago_pedido",
+        "confirmar_pago_pedido",
+        "consultar_estado_pedido"
+      ],
+      "exitWhen": {
+        "slots": [
+          "pago_confirmado"
+        ]
+      }
     },
     {
       "id": "cerrar",
       "goal": "Contarle al cliente que su pago quedó confirmado y qué sigue con su pedido.",
-      "actions": ["consultar_estado_pedido"]
+      "actions": [
+        "consultar_estado_pedido"
+      ]
     }
   ],
   "completion": {
-    "events": ["pack_commerce.order.paid"],
+    "events": [
+      "pack_commerce.order.paid"
+    ],
     "returnControl": true
   },
   "recovery": {
@@ -65,7 +90,9 @@
   "claims": [
     {
       "kind": "link",
-      "mustMatch": ["slot:link"]
+      "mustMatch": [
+        "slot:link"
+      ]
     },
     {
       "kind": "status",
