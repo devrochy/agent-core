@@ -94,7 +94,7 @@ async def test_apagar_y_volver_a_encender(app_client, h):
 async def test_hora_local_solo_donde_el_catalogo_la_admite(app_client, h):
     r = await app_client.put(f"{BASE}/{CRON_VENTANA}", headers=h, json={"hora_local": 9})
     assert r.status_code == 400
-    assert r.json()["code"] == "not_configurable"
+    assert r.json()["error"]["code"] == "not_configurable"
 
 
 async def test_ventana_se_guarda_y_se_respeta(app_client, h):
