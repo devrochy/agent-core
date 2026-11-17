@@ -1542,8 +1542,11 @@ class EstadoDePagoIn(BaseModel):
     nota: str = Field(default="", max_length=300)
 
 
-def _comprobante_out(p: Any) -> ComprobanteOut:
-    url_imagen = almacenamiento.url(p.image_key) if almacenamiento.key_limpia(p.image_key) else None
+def _comprobante_out(p: Any, carpeta: str | None) -> ComprobanteOut:
+    # Solo se firma un archivo de la carpeta de medios de ESTE negocio (auditor multitenant): una
+    # key ajena en la fila no daría una URL válida a un archivo de otro negocio.
+    dentro = carpeta is not None and almacenamiento.abrir(p.image_key, dentro_de=carpeta) is not None
+    url_imagen = almacenamiento.url(p.image_key) if dentro else None
     return ComprobanteOut(
         id=p.id,
         status=p.status,
@@ -1558,6 +1561,9 @@ def _comprobante_out(p: Any) -> ComprobanteOut:
 
 async def _comprobantes_out(session: Any, order: Any) -> ComprobantesOut:
     from .models import PaymentProof
+
+    slug = await tenant_slug(order.tenant_id)
+    carpeta = almacenamiento.carpeta_de("media", slug) if slug else None
 
     filas = (
         await session.execute(
@@ -1577,7 +1583,7 @@ async def _comprobantes_out(session: Any, order: Any) -> ComprobantesOut:
         payment_method=order.payment_method,
         payment_status_changed_at=order.payment_status_changed_at,
         payment_status_reason=order.payment_status_reason,
-        items=[_comprobante_out(p) for p in filas],
+        items=[_comprobante_out(p, carpeta) for p in filas],
     )
 
 
