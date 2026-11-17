@@ -13,8 +13,9 @@ from typing import Any
 from sqlalchemy import func, select
 
 from core.db.session import get_session
+from core.leads import servicio as leads_core
 from core.shared.tenant import get_current_tenant_id
-from pack_commerce.models import Lead, Order, Quote
+from pack_commerce.models import Order, Quote
 
 _COTIZACION_ABIERTA = ("draft", "aceptada")
 
@@ -55,16 +56,7 @@ async def ficha(ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
                 )
             ).all()
         )
-        leads = {
-            lead.customer_id: lead
-            for lead in (
-                await session.execute(
-                    select(Lead)
-                    .where(Lead.tenant_id == tid, Lead.customer_id.in_(ids))
-                    .order_by(Lead.created_at.desc())
-                )
-            ).scalars()
-        }
+        leads = await leads_core.por_cliente(session, tid, list(ids))
     cantidad = {cid: n for cid, n, _ in pedidos}
     for cid in set(cantidad) | set(cotizaciones) | set(leads):
         partes: list[str] = []

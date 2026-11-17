@@ -281,9 +281,20 @@ async def test_correo_con_negocio_pausado_no_se_encola(monkeypatch: pytest.Monke
 # ---------------------------------------------------------------- seguimientos de comercio
 
 
-@pytest.mark.parametrize("cron, por_negocio", [("follow_up_leads", "_follow_up_leads_del_negocio"), ("follow_up_quotes", "_follow_up_quotes_del_negocio")])
-async def test_seguimientos_saltan_el_negocio_pausado(monkeypatch: pytest.MonkeyPatch, cron: str, por_negocio: str) -> None:
-    from pack_commerce import jobs
+@pytest.mark.parametrize(
+    "modulo, cron, por_negocio, ids",
+    [
+        # Los de leads son del core desde ADR-0193 (HU-AOS-70); los de cotizaciones siguen en commerce.
+        ("core.leads.jobs", "follow_up_leads", "_follow_up_leads_del_negocio", "_negocios_con_captar_leads"),
+        ("pack_commerce.jobs", "follow_up_quotes", "_follow_up_quotes_del_negocio", "_tenant_ids"),
+    ],
+)
+async def test_seguimientos_saltan_el_negocio_pausado(
+    monkeypatch: pytest.MonkeyPatch, modulo: str, cron: str, por_negocio: str, ids: str
+) -> None:
+    import importlib
+
+    jobs = importlib.import_module(modulo)
 
     pausado, activo = uuid.uuid4(), uuid.uuid4()
     corridos: list[uuid.UUID] = []
@@ -294,7 +305,7 @@ async def test_seguimientos_saltan_el_negocio_pausado(monkeypatch: pytest.Monkey
     async def _negocio(tid):
         return tid == pausado
 
-    async def _config(tid, kind):
+    async def _config(*_a, **_k):
         return SimpleNamespace()
 
     async def _seguimiento(tid, cfg):
@@ -308,9 +319,12 @@ async def test_seguimientos_saltan_el_negocio_pausado(monkeypatch: pytest.Monkey
     async def _registrar(*_a, **_k):
         return None
 
-    monkeypatch.setattr(jobs, "_tenant_ids", _ids)
+    monkeypatch.setattr(jobs, ids, _ids)
     monkeypatch.setattr(pausa_automatica, "negocio_pausado", _negocio)
-    monkeypatch.setattr(jobs, "_config_del_negocio", _config)
+    if modulo == "core.leads.jobs":
+        monkeypatch.setattr(jobs.config_leads, "cargar_del_negocio", _config)
+    else:
+        monkeypatch.setattr(jobs, "_config_del_negocio", _config)
     monkeypatch.setattr(jobs, por_negocio, _seguimiento)
     monkeypatch.setattr(jobs, "debe_correr", _debe_correr)
     monkeypatch.setattr(jobs, "registrar", _registrar)

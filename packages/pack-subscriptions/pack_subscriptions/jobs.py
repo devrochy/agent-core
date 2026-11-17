@@ -189,7 +189,7 @@ async def _expirar_inscripciones(now: datetime) -> int:
         expiradas_negocio = 0
         try:
             async with tenant_scope(tenant_id):
-                if not await debe_correr(tenant_id, CRON_EXPIRAR):
+                if not await debe_correr(tenant_id, CRON_EXPIRAR, ahora=now):
                     continue
                 config = await _config_del_negocio()
                 limite = now - timedelta(days=config.dias_pago_inscripcion)
@@ -283,7 +283,7 @@ async def _generar_cargos(now: datetime) -> int:
     for tenant_id in await _tenant_ids():
         try:
             async with tenant_scope(tenant_id):
-                if not await debe_correr(tenant_id, CRON_CARGOS):
+                if not await debe_correr(tenant_id, CRON_CARGOS, ahora=now):
                     continue
                 generadas = await _generar_cargos_del_negocio(tenant_id, now)
                 await registrar(
@@ -485,7 +485,7 @@ async def _marcar_vencidas(now: datetime) -> int:
     total = 0
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
-            if not await debe_correr(tenant_id, CRON_VENCIDAS):
+            if not await debe_correr(tenant_id, CRON_VENCIDAS, ahora=now):
                 continue
             config = await _config_del_negocio()
             limite = now - timedelta(days=config.dias_gracia)
@@ -660,7 +660,7 @@ async def _avisos_de_cobro(now: datetime) -> dict[str, int]:
     totales = {"recordatorios": 0, "pausadas": 0, "fin_de_prueba": 0, "fuera_de_horario": 0}
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
-            if not await debe_correr(tenant_id, CRON_AVISOS):
+            if not await debe_correr(tenant_id, CRON_AVISOS, ahora=now):
                 continue
             recordatorios_negocio = 0
             pausadas_negocio = 0

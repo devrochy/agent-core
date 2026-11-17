@@ -26,3 +26,16 @@ CODIGOS_DE_MOTIVO: tuple[str, ...] = tuple(c for c, _ in MOTIVOS_DE_PERDIDA)
 
 NOTA_DE_SEGUIMIENTO_MAX = 200
 NOTA_DE_PERDIDA_MAX = 300
+
+# Canal de la conversación (`Customer.channel` / `ToolContext.channel`) → origen del lead. Un canal sin origen en el
+# catálogo (prueba del panel, messenger, correo) deja el origen en NULL: no se inventa.
+_ORIGEN_POR_CANAL: dict[str, str] = {
+    "whatsapp": "whatsapp",
+    "web": "chat_web",
+    "instagram": "instagram",
+    "telegram": "telegram",
+}
+
+
+def origen_del_canal(canal: str | None) -> str | None:
+    return _ORIGEN_POR_CANAL.get(canal or "")

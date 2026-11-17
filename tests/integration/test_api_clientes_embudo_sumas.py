@@ -42,11 +42,11 @@ async def _negocio() -> uuid.UUID:
     return tid
 
 
-async def _cliente(tid: uuid.UUID, nombre: str, *, etapa: str | None = None, valor: str | None = None) -> uuid.UUID:
+async def _cliente(
+    tid: uuid.UUID, nombre: str, *, etapa: str | None = None, valor: str | None = None, origen: str | None = None
+) -> uuid.UUID:
     """Un cliente con su conversación y, si se pide, un lead en `etapa` con `valor` estimado."""
-    from pack_commerce.models import Lead
-
-    from core.db.models import Conversation, Customer
+    from core.db.models import Conversation, Customer, Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -66,6 +66,7 @@ async def _cliente(tid: uuid.UUID, nombre: str, *, etapa: str | None = None, val
                         conversation_id=conv.id,
                         status=etapa,
                         estimated_value=Decimal(valor) if valor is not None else None,
+                        origen=origen,
                     )
                 )
             return cliente.id
@@ -153,15 +154,15 @@ async def test_otro_filtro_de_valor_tambien_acota_las_sumas(app_client) -> None:
     assert faceta["counts"]["nuevo"] == 1
 
 
-async def test_las_sumas_tambien_salen_con_otro_filtro_del_pack(app_client) -> None:
+async def test_las_sumas_tambien_salen_con_otro_filtro_del_lead(app_client) -> None:
     tid = await _negocio()
-    await _cliente(tid, "Ana", etapa="nuevo", valor="100")
+    await _cliente(tid, "Ana", etapa="nuevo", valor="100", origen="whatsapp")
     headers = await api_headers(app_client, tid)
 
-    r = await app_client.get(URL, params={"facetas": "clasificacion", "resumen": "valor"}, headers=headers)
+    r = await app_client.get(URL, params={"facetas": "origen", "resumen": "valor"}, headers=headers)
     assert r.status_code == 200, r.text
-    # `clasificacion` también es del pack de comercio, que sabe sumar el valor por cliente.
-    faceta = _faceta(r.json(), "clasificacion")
+    # `origen` también es del provider `leads` del core (ADR-0193), que sabe sumar el valor por cliente.
+    faceta = _faceta(r.json(), "origen")
     assert faceta["sumas"] is not None
     assert sum(faceta["sumas"].values()) == 100.0
 

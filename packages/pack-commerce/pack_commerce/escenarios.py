@@ -21,13 +21,14 @@ from typing import Any
 from sqlalchemy import select, text
 
 from core.db.session import get_session
+from core.leads import servicio as leads_core
 from core.qa.contrato_datos import (
     EntradaDeEscenario,
     EscenarioNoDisponible,
     ResumenDeEscenario,
 )
 from core.shared.tenant import get_current_tenant_id
-from pack_commerce.models import Lead, Order, OrderItem, ProductVariant, Promotion
+from pack_commerce.models import Order, OrderItem, ProductVariant, Promotion
 
 
 def _contenido() -> dict[str, Any]:
@@ -62,16 +63,15 @@ async def clientes_y_pedidos(tenant_id: uuid.UUID, entrada: EntradaDeEscenario) 
     async with get_session() as session:
         variantes = await _variantes(session, tenant_id, skus)
         for n, (cliente, lead) in enumerate(zip(clientes, datos["leads"], strict=False)):
-            session.add(
-                Lead(
-                    tenant_id=tenant_id,
-                    customer_id=cliente.customer_id,
-                    name=cliente.nombre,
-                    interest=lead["interes"],
-                    score=[8, 3, 9, 5, 1, 7][n % 6],
-                    status=lead["estado"],
-                    idempotency_key=f"qa-escenario:{entrada.sufijo}:{cliente.customer_id}",
-                )
+            await leads_core.sembrar_para_qa(
+                session,
+                tenant_id,
+                cliente.customer_id,
+                name=cliente.nombre,
+                interest=lead["interes"],
+                score=[8, 3, 9, 5, 1, 7][n % 6],
+                status=lead["estado"],
+                idempotency_key=f"qa-escenario:{entrada.sufijo}:{cliente.customer_id}",
             )
         numeros: list[str] = []
         for n, pedido in enumerate(datos["pedidos"]):

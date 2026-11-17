@@ -315,10 +315,9 @@ async def test_filtro_por_agente_invalido_es_400(app_client) -> None:
 
 
 async def _cliente_con_lead(tid: uuid.UUID, nombre: str, **campos: str) -> uuid.UUID:
-    """Un cliente de WhatsApp con un lead de `auto_create_lead` (clave `auto:`); `campos` lo rellena."""
-    from pack_commerce.models import Lead
-
-    from core.db.models import Conversation, Customer
+    """Un cliente de WhatsApp con el lead que el turno asegura al empezar (nace vacío, ADR-0193); `campos` lo
+    rellena."""
+    from core.db.models import Conversation, Customer, Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -338,7 +337,6 @@ async def _cliente_con_lead(tid: uuid.UUID, nombre: str, **campos: str) -> uuid.
                     customer_id=cliente.id,
                     conversation_id=conv.id,
                     status="nuevo",
-                    idempotency_key=f"auto:{conv.id}",
                     **campos,
                 )
             )
@@ -346,7 +344,7 @@ async def _cliente_con_lead(tid: uuid.UUID, nombre: str, **campos: str) -> uuid.
             return cliente.id
 
 
-async def test_el_borrador_de_lead_vacio_no_cuenta_como_dato_de_ventas(app_client) -> None:
+async def test_el_lead_vacio_no_cuenta_como_dato_del_cliente(app_client) -> None:
     tid_a, tid_b = await _negocio(), await _negocio()
     vacio = await _cliente_con_lead(tid_a, "Borrador vacío")
     en_blanco = await _cliente_con_lead(tid_a, "Borrador en blanco", name="  ", interest=" ")
@@ -357,12 +355,15 @@ async def test_el_borrador_de_lead_vacio_no_cuenta_como_dato_de_ventas(app_clien
 
     lista = (await app_client.get(URL, headers=headers)).json()
     por_id = {i["id"]: i["agentes"] for i in lista["items"]}
-    # El lead que nace vacío con la conversación no es un dato; el que ya trae contacto o interés, sí.
+    # El lead que nace vacío con la conversación no es un dato; el que ya trae contacto o interés, sí. Desde ADR-0193
+    # el lead lo aporta el provider `leads` del core, y Ventas lo sigue contando (por el servicio de leads) para que
+    # `?agente=ventas` y el botón de plantilla de la APK instalada no pierdan al cliente que solo dejó sus datos.
     assert por_id[str(vacio)] == ["general"]
     assert por_id[str(en_blanco)] == ["general"]
-    assert por_id[str(con_correo)] == ["general", "ventas"]
-    assert por_id[str(con_interes)] == ["general", "ventas"]
+    assert set(por_id[str(con_correo)]) == {"general", "ventas", "leads"}
+    assert set(por_id[str(con_interes)]) == {"general", "ventas", "leads"}
 
-    ventas = (await app_client.get(URL, headers=headers, params={"agente": "ventas"})).json()
-    assert {i["id"] for i in ventas["items"]} == {str(con_correo), str(con_interes)}
-    assert str(ajeno) not in {i["id"] for i in ventas["items"]}
+    for agente in ("leads", "ventas"):
+        lista_agente = (await app_client.get(URL, headers=headers, params={"agente": agente})).json()
+        assert {i["id"] for i in lista_agente["items"]} == {str(con_correo), str(con_interes)}, agente
+        assert str(ajeno) not in {i["id"] for i in lista_agente["items"]}

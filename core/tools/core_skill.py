@@ -520,7 +520,7 @@ class CoreSkill(BaseSkill):
 def register_core_skills(host) -> None:
     """Registra las skills del core en el MCPHost (idempotente)."""
     registradas = {name for name, _ in getattr(host, "_skills", {}).items()}
-    if registradas >= {"core", "subscriptions", "datos_cliente", "historial_cliente", "aviso_datos"}:
+    if registradas >= {"core", "subscriptions", "datos_cliente", "historial_cliente", "aviso_datos", "lead_skill"}:
         return
     host.begin_activation("core")
     try:
@@ -542,8 +542,15 @@ def register_core_skills(host) -> None:
             from core.datos_cliente.aviso_tool import AvisoDatosSkill
 
             host.register_skill(AvisoDatosSkill())
+        if "lead_skill" not in registradas:
+            # Captar leads (ADR-0193 §2): del core, pero solo para los agentes con su binding.
+            from core.leads.tools import LeadSkill
+
+            host.register_skill(LeadSkill())
     finally:
         host.end_activation()
+    # El lead en la vista de Clientes (ADR-0193): importar el provider lo registra.
+    import core.leads.providers  # noqa: F401
 
 
 def register_core_skills_lazy() -> None:

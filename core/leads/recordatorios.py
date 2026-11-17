@@ -24,15 +24,15 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 
-from core.db.models import Customer, Notification
+from core.db.models import Customer, Lead, Notification
+from core.leads import seguimiento as seg
 from core.notifications.service import notify
 from core.notifications.spec import NotificationSpec
 from core.shared.logger import get_logger
-from pack_commerce import seguimiento as seg
-from pack_commerce.models import Lead
 
 log = get_logger(__name__)
 
+# Los nombres de evento siguen siendo los de commerce: las preferencias de aviso guardadas los usan.
 EVENTO_RECORDATORIO = "commerce.seguimiento_vencido"
 EVENTO_RESUMEN = "commerce.resumen_ventas"
 SECCION = "leads"
@@ -155,6 +155,7 @@ async def recordar_vencidos(  # type: ignore[no-untyped-def]
             select(Lead)
             .where(
                 Lead.tenant_id == tenant_id,
+                Lead.deleted_at.is_(None),
                 Lead.next_action_at.is_not(None),
                 Lead.next_action_at <= ahora,
                 Lead.next_action_at > ahora - VENTANA_RECORDATORIO,
@@ -220,7 +221,9 @@ async def resumen_diario(  # type: ignore[no-untyped-def]
     async def contar(*condiciones) -> int:  # type: ignore[no-untyped-def]
         return int(
             (
-                await session.execute(select(func.count(Lead.id)).where(Lead.tenant_id == tenant_id, *condiciones))
+                await session.execute(select(func.count(Lead.id)).where(
+                    Lead.tenant_id == tenant_id, Lead.deleted_at.is_(None), *condiciones
+                ))
             ).scalar_one()
         )
 

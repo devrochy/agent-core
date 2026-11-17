@@ -51,9 +51,7 @@ async def _cliente(
     ultimo_mensaje: datetime | None = None,
 ) -> uuid.UUID:
     """Un cliente con su conversación; opcionalmente un lead en `etapa` y un mensaje en `ultimo_mensaje`."""
-    from pack_commerce.models import Lead
-
-    from core.db.models import Conversation, Customer, Message
+    from core.db.models import Conversation, Customer, Lead, Message
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 

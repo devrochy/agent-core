@@ -118,9 +118,15 @@ async def _revisar_release(
 
 def _acciones_siempre_ofrecidas(catalogo: Mapping[str, Any]) -> set[str]:
     from core.kernel.procedures.catalogo import CORE_OWNER
+    from core.leads.tools import ACCIONES_CAPTAR_LEADS
     from core.subscriptions.tools import SOLO_PROCEDIMIENTO
 
-    return {nombre for nombre, info in catalogo.items() if info.owner == CORE_OWNER} - set(SOLO_PROCEDIMIENTO)
+    # Captar leads necesita binding (ADR-0193 §2): un agente sin él no tiene «faltante».
+    return (
+        {nombre for nombre, info in catalogo.items() if info.owner == CORE_OWNER}
+        - set(SOLO_PROCEDIMIENTO)
+        - ACCIONES_CAPTAR_LEADS
+    )
 
 
 async def reporte_de_bindings(

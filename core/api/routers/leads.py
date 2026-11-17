@@ -648,7 +648,15 @@ async def _facetas(
         ids_base = select(base.subquery().c.id)
         valores = pares.subquery()
         opciones = [v for v, _ in definicion.options]
-        medida = await provider.medida_query(resumen) if resumen and provider.medida_query is not None else None
+        # La suma puede ser de otro provider que la faceta (ADR-0193: el valor es del lead del core y la clasificación
+        # de commerce): se usa el primero habilitado que la sabe calcular.
+        medida = None
+        if resumen:
+            for candidato in [provider, *lead_registry.providers_for(enabled)]:
+                if candidato.medida_query is not None:
+                    medida = await candidato.medida_query(resumen)
+                    if medida is not None:
+                        break
         async with get_session() as session:
             total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
             filas = (
@@ -1390,6 +1398,11 @@ async def update_lead_pack(
     """Cambia campos que un pack deja editar desde la ficha (p. ej. el estado del lead de venta).
     El core valida claves y valores; el pack escribe en sus tablas (ADR-0149)."""
     _enabled, providers = await _providers()
+    # El panel y la APK instalados editan el lead con el id de commerce: desde ADR-0193 es el provider del core.
+    from core.leads.providers import ALIAS_DE_EDICION, PROVIDER_ID
+
+    if plugin_id == ALIAS_DE_EDICION:
+        plugin_id = PROVIDER_ID
     provider = next((p for p in providers if p.plugin_id == plugin_id and p.edicion is not None), None)
     if provider is None or provider.edicion is None:
         # Sin distinguir «no existe» de «no habilitado»: no se revela qué packs hay.
@@ -1561,6 +1574,41 @@ async def delete_lead_note(
             raise ApiError.forbidden("Solo quien escribió la nota o el propietario pueden borrarla.")
         nota.deleted_at = func.now()
     log.info("lead_nota_borrada", customer_id=str(lead_id), admin_id=str(principal.admin.id))
+    return Response(status_code=204)
+
+
+class SeguimientoHechoIn(BaseModel):
+    """Cierra el seguimiento y, si se pide, programa el siguiente en el mismo gesto (HU-CRM-21). `siguiente_en` es
+    ISO 8601: sin zona es hora del negocio."""
+
+    siguiente_en: str | None = Field(default=None, max_length=32)
+    siguiente_nota: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/{lead_id}/seguimiento/hecho", status_code=204)
+async def seguimiento_hecho(
+    lead_id: uuid.UUID,
+    payload: SeguimientoHechoIn,
+    principal: Annotated[Principal, Depends(require("leads", write=True))],
+) -> Response:
+    """Marca como hecho el seguimiento del lead del cliente; queda en su línea de tiempo con la nota (ADR-0193: antes
+    `POST /api/v1/pack/commerce/leads/{customer_id}/seguimiento/hecho`, que sigue como alias)."""
+    from core.leads import servicio as leads_core
+
+    async with get_session() as session:
+        try:
+            await leads_core.marcar_seguimiento_hecho(
+                session,
+                principal.tenant_id,
+                lead_id,
+                siguiente_en=payload.siguiente_en,
+                siguiente_nota=payload.siguiente_nota,
+                excluir_canal=TEST_CHANNEL,
+            )
+        except leads_core.ClienteSinLead as exc:
+            raise ApiError.not_found(str(exc)) from exc
+        except ValueError as exc:
+            raise ApiError.bad_request(str(exc), code="datos_invalidos") from exc
     return Response(status_code=204)
 
 

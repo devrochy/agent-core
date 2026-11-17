@@ -1,7 +1,8 @@
 """Configuración de Captar leads del negocio (ADR-0193 §6, HU-AOS-70).
 
-Antes vivía en la config de commerce (`CRMConfig`); la lee la API pública del intake, que no conoce al agente, así
-que es del negocio y no de cada agente (criterio de ADR-0190 §3). Se guarda entera cifrada en `lead_settings` (una
+Antes vivía en la config de commerce (`CRMConfig`); es del negocio y no de cada agente (criterio de ADR-0190 §3). La
+leen los crons de seguimiento; el intake público la usará cuando pase al core (parte 3 de HU-AOS-70: hasta entonces
+el intake de commerce sigue leyendo `CRMConfig`). Se guarda entera cifrada en `lead_settings` (una
 fila por negocio): lleva el secreto del intake y la llave de Turnstile.
 
 Cambios frente a `CRMConfig`, decididos al mover (ADR-0193):
@@ -130,6 +131,19 @@ async def cargar_del_negocio(tenant_id: uuid.UUID) -> ConfigCaptarLeads | None:
     """Como `cargar`, en su propia sesión (dentro del `tenant_scope` del negocio)."""
     async with get_session() as session:
         return await cargar(session, tenant_id)
+
+
+async def asegurar_por_defecto(session: Any, tenant_id: uuid.UUID) -> None:
+    """Crea la config de Captar leads con los valores por defecto si el negocio no tiene (nunca pisa una existente).
+    La llama el servicio al nacer un lead: un negocio que capta leads queda con sus crons de seguimiento, como antes
+    lo dejaba la config de commerce del alta. El intake público nace apagado."""
+    _del_negocio_en_curso(tenant_id)
+    cifrada = get_secret_box().encrypt_json(a_guardar(ConfigCaptarLeads()))
+    await session.execute(
+        insert(LeadSettings)
+        .values(tenant_id=tenant_id, config_encrypted=cifrada)
+        .on_conflict_do_nothing(index_elements=[LeadSettings.tenant_id])
+    )
 
 
 async def guardar(session: Any, tenant_id: uuid.UUID, config: ConfigCaptarLeads) -> None:

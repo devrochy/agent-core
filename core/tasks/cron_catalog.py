@@ -187,20 +187,19 @@ CATALOGO: dict[str, CronMeta] = dict(
            ambito="negocio", configurable=True, pack="pack_cobranza", hora_local=True,
            hora_local_por_defecto=18),
         # ---- Comercio y CRM (pack)
-        _m("pack_commerce.follow_up_leads", "Comercio y CRM", "Seguimiento de leads",
-           "Escribe a los leads que quedaron sin respuesta.", "0 * * * *", sensitive=True,
-           writes_to_customers=True, ambito="negocio", configurable=True, pack="pack_commerce",
-           hora_local=True, hora_local_por_defecto=9, parametros=("follow_up_hours",)),
         _m("pack_commerce.follow_up_quotes", "Comercio y CRM", "Seguimiento de cotizaciones",
            "Escribe a los clientes con cotizaciones sin cerrar.", "30 9,15,20 * * *", sensitive=True,
            writes_to_customers=True, ambito="negocio", configurable=True, pack="pack_commerce",
            ventana=True),
-        _m("pack_commerce.recordar_seguimientos", "Comercio y CRM", "Recordatorios de seguimiento",
+        # ---- Captar leads (core, ADR-0193): solo en negocios con config de Captar leads. Sus parámetros
+        # (horas de espera, recordatorios) se editan en la config de Captar leads (parte 3), no en un pack.
+        _m("core.leads_follow_up", "Comercio y CRM", "Seguimiento de leads",
+           "Escribe a los leads que quedaron sin respuesta.", "0 * * * *", sensitive=True,
+           writes_to_customers=True, ambito="negocio", configurable=True,
+           hora_local=True, hora_local_por_defecto=9),
+        _m("core.leads_recordar_seguimientos", "Comercio y CRM", "Recordatorios de seguimiento",
            "Avisa al equipo de los seguimientos de leads que vencen.", "*/5 * * * *",
-           ambito="negocio", configurable=True, pack="pack_commerce", ventana=True,
-           parametros=(
-               "seguimiento_recordatorios", "seguimiento_resumen_diario", "seguimiento_resumen_hora",
-           )),
+           ambito="negocio", configurable=True, ventana=True),
         # ---- Calendario (pack)
         _m("pack_calendar.recordatorios_de_citas", "Calendario", "Recordatorios de citas",
            "Envía el recordatorio de las citas próximas.", "*/15 * * * *", sensitive=True,

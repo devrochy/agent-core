@@ -102,7 +102,12 @@ async def test_acciones_agrupadas_y_pagos_por_agente(app_client) -> None:
     assert r.status_code == 200, r.text
     grupos = {a["tool"]: a["group"] for a in r.json()["items"]}
     assert grupos["crear_pedido"] == "pedidos" and grupos["crear_lead"] == "leads"
-    assert all(a["pack_id"] == "pack_commerce" for a in r.json()["items"])
+    # Las de Captar leads son del core (ADR-0193); el resto, de la habilidad instalada.
+    from core.leads.tools import ACCIONES_CAPTAR_LEADS
+
+    por_dueno = {a["tool"]: a["pack_id"] for a in r.json()["items"]}
+    assert {t: d for t, d in por_dueno.items() if t in ACCIONES_CAPTAR_LEADS} == dict.fromkeys(ACCIONES_CAPTAR_LEADS, "core")
+    assert all(d == "pack_commerce" for t, d in por_dueno.items() if t not in ACCIONES_CAPTAR_LEADS)
     # D-67: el superpoder «tomar pedido» concede `crear_pedido` aunque el borrador no tenga su binding.
     por_tool = {a["tool"]: a for a in r.json()["items"]}
     assert por_tool["crear_pedido"]["by_superpower"] is True

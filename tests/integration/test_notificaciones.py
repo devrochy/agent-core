@@ -467,9 +467,10 @@ async def test_notificacion_dirigida_a_una_persona_la_ve_sin_acceso_a_la_seccion
 async def test_lead_y_pedido_nuevos_aparecen_en_el_feed_por_su_seccion(app_client) -> None:
     """Los eventos que se crean en la transacción del negocio (lead, pedido) llegan al feed
     de quien tiene la sección y no al de quien no."""
-    from pack_commerce.skills import _avisar_lead_nuevo, _avisar_pedido_nuevo
+    from pack_commerce.skills import _avisar_pedido_nuevo
 
     from core.db.session import get_session
+    from core.leads.tools import avisar_lead_nuevo as _avisar_lead_nuevo  # del core desde ADR-0193
     from core.shared.tenant import tenant_scope
 
     tid, _owner, owner_email = await _tenant_con_owner(uniq("nt-ev"))
@@ -498,9 +499,8 @@ async def test_lead_y_pedido_nuevos_aparecen_en_el_feed_por_su_seccion(app_clien
 async def test_lead_nuevo_apunta_al_cliente_para_abrir_su_ficha(app_client) -> None:
     """HU-CRM-20: el destino del aviso es el id del CLIENTE (la ficha se abre por cliente);
     el id del lead viaja en `data` y sin cliente el destino sigue siendo el lead."""
-    from pack_commerce.skills import _avisar_lead_nuevo
-
     from core.db.session import get_session
+    from core.leads.tools import avisar_lead_nuevo as _avisar_lead_nuevo  # del core desde ADR-0193
     from core.shared.tenant import tenant_scope
 
     tid, _owner, owner_email = await _tenant_con_owner(uniq("nt-cli"))
@@ -533,42 +533,32 @@ async def _cliente_con_conversacion(tid: uuid.UUID) -> tuple[uuid.UUID, uuid.UUI
             return cliente.id, conv.id
 
 
-def _con_pack_habilitado(monkeypatch, *, auto_create_lead: bool) -> None:
-    """El hook solo actúa con el pack habilitado y `auto_create_lead` activo: se fijan sin montar un AgentSpec."""
-    import core.agents.spec as agent_spec
-    from core.plugin_manager import plugin_manager
-
-    async def _spec_activo(_tenant_id):
-        return object()
-
-    async def _config(_plugin_id):
-        return types.SimpleNamespace(auto_create_lead=auto_create_lead)
-
-    monkeypatch.setattr(agent_spec, "load_active_spec", _spec_activo)
-    monkeypatch.setattr(agent_spec, "enabled_packs", lambda _spec: {"pack_commerce"})
-    monkeypatch.setattr(plugin_manager, "load_config", _config)
+def _agente(tools: tuple[str, ...]) -> types.SimpleNamespace:
+    """El agente en foco del turno, con lo que su versión declara (como un `AgenteCongelado`)."""
+    return types.SimpleNamespace(tools=tools, declarativas=())
 
 
 @pytest.mark.aislamiento
-async def test_el_borrador_automatico_de_lead_avisa_con_destino_al_cliente(app_client, monkeypatch) -> None:
-    """HU-CRM-20: con `auto_create_lead` el borrador es el primer lead del cliente y `crear_lead` responde
-    `ya_existe`, así que el aviso «Lead nuevo» tiene que salir al crear el borrador, una sola vez, y su
-    destino es el CLIENTE (la ficha se abre por id de cliente)."""
-    from pack_commerce.models import Lead
-    from pack_commerce.module import CRMModule
-
+async def test_el_lead_que_asegura_el_turno_avisa_con_destino_al_cliente(app_client) -> None:
+    """HU-CRM-20 y ADR-0193 §2 (reemplaza a `auto_create_lead`): el turno de un agente con Captar leads asegura el
+    lead del cliente; luego `crear_lead` responde `actualizado`, así que el aviso «Lead nuevo» tiene que salir al
+    asegurarlo, una sola vez, y su destino es el CLIENTE (la ficha se abre por id de cliente)."""
+    from core.db.models import Conversation, Customer, Lead
     from core.db.session import get_session
+    from core.leads.asegurar import asegurar_en_el_turno
     from core.shared.tenant import tenant_scope
 
     tid, _owner, owner_email = await _tenant_con_owner(uniq("nt-bor"))
     cliente_id, conv_id = await _cliente_con_conversacion(tid)
-    _con_pack_habilitado(monkeypatch, auto_create_lead=True)
+    agente = _agente(("crear_lead", "escalate_to_human"))
 
-    modulo = CRMModule()
     async with tenant_scope(tid):
-        await modulo._on_conversation_started(conv_id, cliente_id)
-        # Otra conversación del mismo cliente: ya tiene lead, no se crea ni se avisa de nuevo.
-        await modulo._on_conversation_started(uuid.uuid4(), cliente_id)
+        async with get_session() as session:
+            cliente = await session.get(Customer, cliente_id)
+            conv = await session.get(Conversation, conv_id)
+        assert await asegurar_en_el_turno(agente, cliente, conv) is True
+        # Otro turno (u otra conversación) del mismo cliente: ya tiene lead, no se crea ni se avisa de nuevo.
+        assert await asegurar_en_el_turno(agente, cliente, types.SimpleNamespace(id=uuid.uuid4(), channel="web")) is False
         async with get_session() as session:
             leads = (await session.execute(select(Lead).where(Lead.customer_id == cliente_id))).scalars().all()
     assert len(leads) == 1
@@ -580,19 +570,21 @@ async def test_el_borrador_automatico_de_lead_avisa_con_destino_al_cliente(app_c
     assert items[0]["data"]["lead_id"] == str(leads[0].id)
 
 
-async def test_sin_auto_create_lead_el_borrador_no_crea_lead_ni_avisa(app_client, monkeypatch) -> None:
-    from pack_commerce.models import Lead
-    from pack_commerce.module import CRMModule
-
+async def test_un_agente_sin_captar_leads_no_asegura_lead_ni_avisa(app_client) -> None:
+    from core.db.models import Conversation, Customer, Lead
     from core.db.session import get_session
+    from core.leads.asegurar import asegurar_en_el_turno
     from core.shared.tenant import tenant_scope
 
     tid, _owner, owner_email = await _tenant_con_owner(uniq("nt-bor0"))
     cliente_id, conv_id = await _cliente_con_conversacion(tid)
-    _con_pack_habilitado(monkeypatch, auto_create_lead=False)
 
     async with tenant_scope(tid):
-        await CRMModule()._on_conversation_started(conv_id, cliente_id)
+        async with get_session() as session:
+            cliente = await session.get(Customer, cliente_id)
+            conv = await session.get(Conversation, conv_id)
+        assert await asegurar_en_el_turno(_agente(("escalate_to_human",)), cliente, conv) is False
+        assert await asegurar_en_el_turno(None, cliente, conv) is False  # sin release en el turno
         async with get_session() as session:
             leads = (await session.execute(select(Lead).where(Lead.customer_id == cliente_id))).scalars().all()
     assert leads == []

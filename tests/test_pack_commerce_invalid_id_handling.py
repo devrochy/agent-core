@@ -30,8 +30,9 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from pack_commerce.skills import LeadSkill, OrderSkill, _parse_uuid
+from pack_commerce.skills import OrderSkill, _parse_uuid
 
+from core.leads.tools import LeadSkill  # Captar leads es del core (ADR-0193)
 from core.mcp.types import ToolContext
 
 

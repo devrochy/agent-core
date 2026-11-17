@@ -48,8 +48,7 @@ async def _conversacion(tid: uuid.UUID) -> uuid.UUID:
 
 
 async def _lead(tid: uuid.UUID, conv: uuid.UUID) -> uuid.UUID:
-    from pack_commerce.models import Lead
-
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -65,13 +64,12 @@ async def _lead(tid: uuid.UUID, conv: uuid.UUID) -> uuid.UUID:
 
 
 async def _etapa(tid: uuid.UUID, lead: uuid.UUID) -> str:
-    (fila,) = await _filas(tid, "SELECT status FROM pack_commerce_leads WHERE id = :l", l=lead)
+    (fila,) = await _filas(tid, "SELECT status FROM leads WHERE id = :l", l=lead)
     return fila["status"]
 
 
 async def _seguimiento(tid: uuid.UUID) -> tuple[int, int]:
-    from pack_commerce.jobs import _follow_up_leads_del_negocio
-
+    from core.leads.jobs import _follow_up_leads_del_negocio
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tid):

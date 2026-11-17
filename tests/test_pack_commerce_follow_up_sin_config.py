@@ -1,8 +1,9 @@
-"""Los crons de seguimiento de pack-commerce saltan el negocio sin configuración.
+"""El cron de seguimiento de cotizaciones de pack-commerce salta el negocio sin configuración.
 
 Visto en el entorno de test (2026-10-11): un negocio con el pack habilitado pero sin
 configurar hacía que `load_config` lanzara `PluginConfigError` dentro del recorrido;
-el cron terminaba en `cron_task_failed` y los negocios siguientes no se procesaban.
+el cron terminaba en `cron_task_failed` y los negocios siguientes no se procesaban. El de leads es del core desde
+ADR-0193: su caso está en `tests/test_leads_follow_up_sin_config.py`.
 """
 
 from __future__ import annotations
@@ -39,7 +40,6 @@ class _LogQueAnota:
     ("cron", "por_negocio", "kind"),
     [
         (jobs.follow_up_quotes, "_follow_up_quotes_del_negocio", "quote"),
-        (jobs.follow_up_leads, "_follow_up_leads_del_negocio", "lead"),
     ],
 )
 async def test_salta_el_negocio_sin_config_y_sigue_con_los_demas(

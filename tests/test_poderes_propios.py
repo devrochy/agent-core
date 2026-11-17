@@ -101,10 +101,23 @@ def test_conserva_las_esenciales_del_core_y_nada_de_otro_pack(catalogo: Any, key
     assert packs_de_tools <= permitidos, (key, packs_de_tools - permitidos)
 
 
-def test_agenda_solo_toma_crear_lead_de_commerce(catalogo: Any) -> None:
+def test_agenda_capta_leads_del_core_sin_nada_de_commerce(catalogo: Any) -> None:
+    """ADR-0193 §2: Agenda ya no toma `crear_lead` de commerce; lleva Captar leads del core."""
+    from core.leads.tools import ACCIONES_CAPTAR_LEADS
+
     tools = _tools_de("agenda", catalogo)
-    de_commerce = {t for t in tools if catalogo[t].owner == "pack_commerce"}
-    assert de_commerce == {"crear_lead"}
+    assert not {t for t in tools if catalogo[t].owner == "pack_commerce"}
+    assert ACCIONES_CAPTAR_LEADS <= tools
+    assert {catalogo[t].owner for t in ACCIONES_CAPTAR_LEADS} == {"core"}
+
+
+@pytest.mark.parametrize(("key", "capta"), [("ventas", True), ("agenda", True), ("suscripciones", True), ("cobranza", False)])
+def test_captar_leads_solo_en_las_plantillas_que_la_declaran(catalogo: Any, key: str, capta: bool) -> None:
+    from core.leads.tools import ACCIONES_CAPTAR_LEADS
+
+    tools = _tools_de(key, catalogo, proveedor="pack_subscriptions")
+    assert (ACCIONES_CAPTAR_LEADS <= tools) is capta
+    assert capta or not (ACCIONES_CAPTAR_LEADS & tools)
 
 
 def test_herramientas_de_plantilla_lista_las_de_pack_sin_las_esenciales(catalogo: Any) -> None:

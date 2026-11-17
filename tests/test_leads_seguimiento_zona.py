@@ -11,7 +11,8 @@ from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
-from pack_commerce import seguimiento as seg
+
+from core.leads import seguimiento as seg
 
 BOGOTA = ZoneInfo("America/Bogota")  # UTC-5 todo el año
 

@@ -1,7 +1,7 @@
 """Simuladores de Comercio para la prueba del panel (HU-ARCH-14).
 
-Ninguna función de este módulo escribe en las tablas del pack: cotizaciones, pedidos,
-leads y links de pago viven en el `SandboxPrueba` (Redis) de la conversación `test`.
+Ninguna función de este módulo escribe en las tablas del pack: cotizaciones, pedidos
+y links de pago viven en el `SandboxPrueba` (Redis) de la conversación `test`.
 Las lecturas de catálogo/inventario sí son reales (solo lectura).
 
 El número de pedido simulado usa `PRUEBA-0001`, un contador propio del sandbox: nunca
@@ -22,61 +22,6 @@ async def _sandbox(context: ToolContext) -> SandboxPrueba:
     if context.sandbox is None:
         raise RuntimeError("El simulador de comercio requiere sandbox de prueba")
     return context.sandbox
-
-
-# ---------------------------------------------------------------- leads
-async def simular_crear_lead(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-    sandbox = await _sandbox(context)
-    existente = await sandbox.buscar("leads", "customer_id", str(context.customer_id))
-    if existente is not None:
-        return {
-            "lead_id": existente["lead_id"],
-            "status": "ya_existe",
-            "hint": "Este cliente ya es un lead. Usa actualizar_lead.",
-        }
-    lead_id = str(uuid.uuid4())
-    await sandbox.guardar(
-        "leads",
-        lead_id,
-        {
-            "lead_id": lead_id,
-            "customer_id": str(context.customer_id),
-            "conversation_id": str(context.conversation_id),
-            "name": arguments.get("name"),
-            "email": arguments.get("email"),
-            "phone": arguments.get("phone"),
-            "interest": arguments.get("interest", ""),
-            "status": "nuevo",
-        },
-    )
-    return {"lead_id": lead_id, "status": "created"}
-
-
-async def simular_calificar_lead(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-    try:
-        score = max(1, min(10, int(arguments.get("score", 0))))
-    except (TypeError, ValueError):
-        return {"error": "score inválido: debe ser un número entre 1 y 10."}
-    sandbox = await _sandbox(context)
-    lead = await sandbox.buscar("leads", "customer_id", str(context.customer_id))
-    if lead is None:
-        return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
-    lead["status"] = "calificado"
-    lead["score"] = score
-    await sandbox.guardar("leads", lead["lead_id"], lead)
-    return {"lead_id": lead["lead_id"], "score": score, "status": "calificado"}
-
-
-async def simular_actualizar_lead(arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-    sandbox = await _sandbox(context)
-    lead = await sandbox.buscar("leads", "customer_id", str(context.customer_id))
-    if lead is None:
-        return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
-    for campo in ("name", "email", "phone", "interest", "status"):
-        if arguments.get(campo):
-            lead[campo] = str(arguments[campo])
-    await sandbox.guardar("leads", lead["lead_id"], lead)
-    return {"lead_id": lead["lead_id"], "status": "actualizado"}
 
 
 # ---------------------------------------------------------------- cotización
@@ -349,14 +294,11 @@ async def simular_consultar_estado_pedido(arguments: dict[str, Any], context: To
 
 
 __all__ = [
-    "simular_actualizar_lead",
     "simular_agregar_item_pedido",
     "simular_aplicar_promocion",
-    "simular_calificar_lead",
     "simular_confirmar_cotizacion",
     "simular_confirmar_pago_pedido",
     "simular_consultar_estado_pedido",
-    "simular_crear_lead",
     "simular_crear_pedido",
     "simular_generar_cotizacion",
     "simular_verificar_pago_pedido",

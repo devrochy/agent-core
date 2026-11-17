@@ -26,7 +26,7 @@ pytestmark = [
 ]
 
 URL = "/api/v1/admin/leads"
-PACK = "pack_commerce"
+PACK = "leads"  # el provider del lead es del core desde ADR-0193 (`/pack/pack_commerce` queda de alias)
 
 
 async def _negocio(zona: str | None = None) -> uuid.UUID:
@@ -52,9 +52,7 @@ async def _negocio(zona: str | None = None) -> uuid.UUID:
 
 
 async def _cliente_con_lead(tid: uuid.UUID, nombre: str = "Ana", **campos) -> uuid.UUID:
-    from pack_commerce.models import Lead
-
-    from core.db.models import Customer
+    from core.db.models import Customer, Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -68,9 +66,9 @@ async def _cliente_con_lead(tid: uuid.UUID, nombre: str = "Ana", **campos) -> uu
 
 
 async def _lead(tid: uuid.UUID, cliente: uuid.UUID):
-    from pack_commerce.models import Lead
     from sqlalchemy import select
 
+    from core.db.models import Lead
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -80,9 +78,9 @@ async def _lead(tid: uuid.UUID, cliente: uuid.UUID):
 
 
 async def _historia(tid: uuid.UUID, cliente: uuid.UUID) -> list[tuple[str, str | None]]:
-    from pack_commerce.models import LeadFollowup
     from sqlalchemy import select
 
+    from core.db.models import LeadFollowup
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -142,7 +140,7 @@ async def test_programar_no_mueve_la_actividad_del_lead(app_client) -> None:
 
 
 async def test_filtros_pestañas_y_orden(app_client) -> None:
-    from pack_commerce import seguimiento as seg
+    from core.leads import seguimiento as seg
 
     tid = await _negocio()
     headers = await api_headers(app_client, tid)
@@ -180,7 +178,7 @@ async def test_filtros_pestañas_y_orden(app_client) -> None:
 
 
 async def test_hoy_es_el_dia_del_negocio_no_el_de_utc(app_client) -> None:
-    from pack_commerce import seguimiento as seg
+    from core.leads import seguimiento as seg
 
     # Un negocio en Auckland (UTC+12/13): su «hoy» no coincide con el día UTC la mayor parte del día.
     tid = await _negocio("Pacific/Auckland")
@@ -300,7 +298,7 @@ async def test_sin_lead_programar_lo_crea_y_completar_no(app_client) -> None:
 
 
 async def test_el_agente_no_tiene_como_cambiar_el_seguimiento() -> None:
-    from pack_commerce.skills import LeadSkill
+    from core.leads.tools import LeadSkill
 
     sus_args = {"seguimiento_en", "seguimiento_nota", "next_action_at", "next_action_note"}
     for nombre in ("actualizar_lead", "calificar_lead", "crear_lead"):

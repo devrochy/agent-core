@@ -2,6 +2,7 @@
   "key": "ventas",
   "nombre": "Ventas",
   "descripcion": "Vende el catálogo del negocio: pedidos, cotizaciones y links de pago.",
+  "captar_leads": true,
   "seccion": "Ventas",
   "habilidades": [
     "pack_commerce"

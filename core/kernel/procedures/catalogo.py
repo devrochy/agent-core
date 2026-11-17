@@ -46,10 +46,11 @@ Catalogo = Mapping[str, ActionInfo]
 
 
 def _core_skills() -> list[Any]:
+    from core.leads.tools import LeadSkill
     from core.subscriptions.tools import SubscriptionSkill
     from core.tools.core_skill import CoreSkill
 
-    return [CoreSkill(), SubscriptionSkill()]
+    return [CoreSkill(), SubscriptionSkill(), LeadSkill()]
 
 
 # Último catálogo armado y la identidad de los módulos de los que salió: la API lo pide

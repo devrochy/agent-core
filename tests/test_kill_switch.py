@@ -96,7 +96,7 @@ def test_los_crons_que_escriben_a_clientes_estan_marcados_y_son_sensibles() -> N
 
     marcados = {n for n, m in CATALOGO.items() if m.writes_to_customers}
     assert {
-        "pack_commerce.follow_up_leads",
+        "core.leads_follow_up",
         "pack_commerce.follow_up_quotes",
         "pack_calendar.recordatorios_de_citas",
         "pack_subscriptions.avisos_de_cobro",
@@ -135,7 +135,7 @@ def test_run_cron_omite_lo_programado_que_escribe_a_clientes(monkeypatch, trigge
     monkeypatch.setattr(cron_runtime.svc, "empezar_ejecucion", _nada, raising=False)
     monkeypatch.setattr(cron_runtime.svc, "terminar_ejecucion", _nada, raising=False)
 
-    cron_runtime.run_cron("pack_commerce.follow_up_leads", lambda: corridas.append("x"), trigger=trigger)
+    cron_runtime.run_cron("core.leads_follow_up", lambda: corridas.append("x"), trigger=trigger)
     assert bool(corridas) is corre
     if not corre:
         assert ("skipped", "kill_switch") in registradas
