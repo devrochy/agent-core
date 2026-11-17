@@ -2,6 +2,7 @@
   "key": "suscripciones",
   "nombre": "Suscripciones",
   "descripcion": "Atiende a los suscriptores: inscribe en un plan, informa el estado de la suscripción y cambia de plan.",
+  "captar_leads": true,
   "seccion": "Suscripciones",
   "habilidades": ["pack_subscriptions"],
   "procedimientos": ["pack_subscriptions.contratar_plan", "pack_subscriptions.cambiar_plan"],

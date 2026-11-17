@@ -615,7 +615,15 @@ class ContextoMotor:
         self.datos_fijados: set[str] = set()
         self._base = list(herramientas_base)
         self._candidatas = list(candidatas)
-        self._core = frozenset(t.name for t in self._base if getattr(t, "plugin_id", "") == CORE_OWNER)
+        # Captar leads es del core pero se comporta como la acción de una habilidad (ADR-0193 §2): no se ofrece en
+        # cualquier etapa ni se salta el lock.
+        from core.leads.tools import ACCIONES_CAPTAR_LEADS
+
+        self._core = frozenset(
+            t.name
+            for t in self._base
+            if getattr(t, "plugin_id", "") == CORE_OWNER and t.name not in ACCIONES_CAPTAR_LEADS
+        )
         self._foco = foco
         self._seq_al_empezar = dict(seq_al_empezar or {})
         # Procedimientos con una tarea abierta: no son candidatos de `iniciar_procedimiento`.

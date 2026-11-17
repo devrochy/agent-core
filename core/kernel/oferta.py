@@ -62,8 +62,14 @@ def permitida_para_el_agente(
     """¿La acción `nombre` (de `plugin_id`; None, "" o `declarative` = declarativa del negocio) se ofrece al agente?
     `packs`: habilidades de la release (None = sin release: todo pasa). `del_agente`: lo que su
     versión declara (None = sin agente en foco: todo pasa)."""
-    if plugin_id == CORE_OWNER or nombre in set(comandos):
+    if nombre in set(comandos):
         return True
+    if plugin_id == CORE_OWNER:
+        # Las del core se ofrecen siempre, salvo Captar leads: esas necesitan binding (ADR-0193 §2).
+        from core.leads.tools import es_de_captar_leads
+
+        if not es_de_captar_leads(nombre):
+            return True
     de_un_pack = plugin_id not in (None, "", DECLARATIVA)
     if packs is not None and de_un_pack and plugin_id not in set(packs):
         return False
