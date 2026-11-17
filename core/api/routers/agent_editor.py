@@ -84,6 +84,9 @@ class Superpower(BaseModel):
     title: str
     description: str
     phrases: list[str]
+    # Dominio visible en el editor (SPEC-48, HU-AOS-83). Los clientes viejos lo ignoran.
+    group: str
+    group_label: str
 
 
 class Requirement(BaseModel):
@@ -228,7 +231,14 @@ class EditorPublishOut(BaseModel):
 # ------------------------------------------------------------------ utilidades
 def _superpower(s: svc.Superpoder) -> Superpower:
     return Superpower(
-        id=s.id, version=s.version, skill=s.pack, title=s.title, description=s.description, phrases=list(s.phrases)
+        id=s.id,
+        version=s.version,
+        skill=s.pack,
+        title=s.title,
+        description=s.description,
+        phrases=list(s.phrases),
+        group=s.group,
+        group_label=s.group_label,
     )
 
 

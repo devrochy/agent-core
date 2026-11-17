@@ -1109,6 +1109,17 @@ class CRMModule(BaseModule):
     category = "Ventas"
     min_plan = "basic"
     action_summary: ClassVar[list[str]] = ["Cotizar", "Tomar pedidos", "Aplicar promociones", "Gestionar leads"]
+    # Dominios de superpoderes (SPEC-48, HU-AOS-83): "Pago en línea" y "Comprobar transferencia"
+    # no son poderes sueltos, son del dominio Formas de pago. Los dos nacen en HU-COM-23/24.
+    grupos_de_procedimientos: ClassVar[dict[str, str]] = {
+        "pack_commerce.tomar_pedido": "ventas",
+        "pack_commerce.pago_en_linea": "formas_de_pago",
+        "pack_commerce.comprobar_transferencia": "formas_de_pago",
+    }
+    etiquetas_de_grupos_de_procedimientos: ClassVar[dict[str, str]] = {
+        "ventas": "Ventas",
+        "formas_de_pago": "Formas de pago",
+    }
     setup_guide = "Carga tu catálogo (CSV o a mano) y define cómo cierras pedidos y cobras."
     requires_config = True
     config_schema = CRMConfig

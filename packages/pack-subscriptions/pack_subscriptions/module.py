@@ -53,6 +53,11 @@ _CANCELAR = re.compile(r"suscripci[oó]n\s+(?:qued\w*\s+)?(?:cancelad\w*|anulad\
 
 class SubscriptionsModule(BaseModule):
     tipo = "especialidad"  # ADR-0190 §1
+    grupos_de_procedimientos: ClassVar[dict[str, str]] = {
+        "pack_subscriptions.contratar_plan": "suscripciones",
+        "pack_subscriptions.cambiar_plan": "suscripciones",
+    }
+    etiquetas_de_grupos_de_procedimientos: ClassVar[dict[str, str]] = {"suscripciones": "Suscripciones"}
     # Lo que es de CADA agente de este tipo; el resto de `SubscriptionConfig` es del negocio (SPEC-44, design.md §2).
     config_agente = config_de_agente(SubscriptionConfig, ("monto_alto_inscripcion",), "ConfigDeAgenteDeSuscripciones")
     id = PLUGIN_ID

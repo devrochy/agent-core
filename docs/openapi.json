@@ -78531,6 +78531,14 @@
             },
             "type": "array",
             "title": "Phrases"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group"
+          },
+          "group_label": {
+            "type": "string",
+            "title": "Group Label"
           }
         },
         "type": "object",
@@ -78540,7 +78548,9 @@
           "skill",
           "title",
           "description",
-          "phrases"
+          "phrases",
+          "group",
+          "group_label"
         ],
         "title": "Superpower"
       },
