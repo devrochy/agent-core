@@ -61,6 +61,7 @@
   "procedimientos": [
     "pack_calendar.agendar_cita",
     "pack_cobranza.promesa_de_pago",
+    "pack_commerce.pago_en_linea",
     "pack_commerce.tomar_pedido",
     "pack_subscriptions.cambiar_plan",
     "pack_subscriptions.contratar_plan"
