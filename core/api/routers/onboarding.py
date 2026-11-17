@@ -117,12 +117,12 @@ class PrimerosPasosResponse(BaseModel):
 
 
 class AvanzarIn(BaseModel):
-    paso: int = Field(ge=1, le=rec.TOTAL_PASOS, description="Paso al que llega la persona.")
+    paso: int = Field(ge=1, le=rec.PASOS_ANTERIORES, description="Paso al que llega la persona.")
     pasos: int | None = Field(
         default=None,
         description=(
-            "Total de pasos con que el cliente numera `paso` (9 desde SPEC-47). Sin él, el paso es del "
-            "asistente de 6 (panel o APK anteriores) y se guarda traducido a su equivalente de 9."
+            "Total de pasos con que el cliente numera `paso` (4 desde HU-AOS-81; 9 un panel anterior). Sin él, "
+            "el paso es del asistente de 6 (la APK) y se guarda traducido a su equivalente de 4."
         ),
     )
 
@@ -252,7 +252,9 @@ async def avanzar_recorrido(
     require_owner_or_master(principal)
     actual = await _leer_recorrido(principal)
     try:
-        paso = payload.paso if payload.pasos == rec.TOTAL_PASOS else rec.paso_de_6_a_9(payload.paso)
+        if payload.pasos == rec.TOTAL_PASOS and payload.paso > rec.TOTAL_PASOS:
+            raise rec.TransicionInvalida(f"el paso debe estar entre 1 y {rec.TOTAL_PASOS}")
+        paso = rec.paso_de_4(payload.paso, payload.pasos)
         cambios = rec.cambios_de_avanzar(actual, paso)
     except rec.TransicionInvalida as exc:
         raise _transicion_invalida(exc) from None

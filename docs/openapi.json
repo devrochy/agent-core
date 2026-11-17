@@ -51301,7 +51301,7 @@
               }
             ],
             "title": "Pasos",
-            "description": "Total de pasos con que el cliente numera `paso` (9 desde SPEC-47). Sin él, el paso es del asistente de 6 (panel o APK anteriores) y se guarda traducido a su equivalente de 9."
+            "description": "Total de pasos con que el cliente numera `paso` (4 desde HU-AOS-81; 9 un panel anterior). Sin él, el paso es del asistente de 6 (la APK) y se guarda traducido a su equivalente de 4."
           }
         },
         "type": "object",
