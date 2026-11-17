@@ -15,6 +15,6 @@
   - Sin número, lo pide con `pedir_telefono` o, si el canal no tiene botón, dentro de la lista numerada.
 - **Evals:**
   - El golden admite `spec` (otro spec de `evals/specs/`) y `connection_types` por escenario.
-  - Escenarios nuevos: `37-cobranza-pide-telefono-telegram` (`must_call_tool: pedir_telefono`) y `38-cobranza-sin-boton-no-pide-numero`.
+  - Escenarios nuevos: `39-cobranza-pide-telefono-telegram` (`must_call_tool: pedir_telefono`) y `38-cobranza-sin-boton-no-pide-numero`.
   - Grabados con el LLM real (OK del dueño) y sumados al gate en replay (`scripts/gate_evals.sh`). El gate con LLM real de la release no cambia.
 - Las reglas de citas y suscripciones van en la etapa del procedimiento y no en `citas.md` ni en `planes.md`, para no cambiar el prompt de los journeys grabados.
