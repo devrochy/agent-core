@@ -76,11 +76,14 @@ async def test_la_negativa_no_rompe_la_tool(monkeypatch: pytest.MonkeyPatch, err
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("creado", "status"), [(True, "created"), (False, "actualizado")])
+@pytest.mark.parametrize(
+    ("creado", "nombre_previo", "status"),
+    [(True, None, "created"), (False, None, "created"), (False, "Ana María", "actualizado")],
+)
 async def test_crear_lead_sin_perfil_concedido_guarda_el_lead_y_no_copia_al_perfil(
-    monkeypatch: pytest.MonkeyPatch, creado: bool, status: str
+    monkeypatch: pytest.MonkeyPatch, creado: bool, nombre_previo: str | None, status: str
 ) -> None:
-    lead = SimpleNamespace(id=uuid.uuid4(), customer_id=None, name=None, phone=None, email=None, interest="")
+    lead = SimpleNamespace(id=uuid.uuid4(), customer_id=None, name=nombre_previo, phone=None, email=None, interest="")
     avisos: list[uuid.UUID] = []
 
     @asynccontextmanager
@@ -104,7 +107,8 @@ async def test_crear_lead_sin_perfil_concedido_guarda_el_lead_y_no_copia_al_perf
 
     res = await LeadSkill().crear_lead({"name": "Ana", "phone": "300 123", "interest": "pizza"}, ctx)
 
-    # ADR-0193: `created` solo si el lead nació en esta llamada; si ya existía, `actualizado` con los datos puestos.
+    # ADR-0193: `created` si el lead nació en esta llamada o recibe sus primeros datos de contacto (el turno ya lo
+    # había asegurado vacío); si ya tenía datos, `actualizado` con los datos puestos.
     assert res == {"lead_id": str(lead.id), "status": status}
     assert (lead.name, lead.phone, lead.interest) == ("Ana", "300 123", "pizza")
     assert avisos == ([lead.id] if creado else [])

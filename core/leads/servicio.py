@@ -25,6 +25,10 @@ from core.leads.catalogo import ORIGENES
 from core.leads.etapas import ETAPA_INICIAL
 
 
+class ClienteSinLead(LookupError):
+    """El cliente no es del negocio (o es de prueba), o no tiene lead."""
+
+
 @dataclass(frozen=True)
 class LeadVista:
     """Lo que un pack puede saber del lead de un cliente."""
@@ -225,7 +229,10 @@ async def registrar_desde_intake(
     idempotency_key: str | None = None,
 ) -> tuple[LeadVista, bool]:
     """Lead del formulario de la página (origen `landing`): si el cliente ya tiene uno vivo, se le ponen los datos que
-    trae el formulario en vez de crear otro. Devuelve `(lead, creado)`."""
+    trae el formulario en vez de crear otro. Devuelve `(lead, creado)`. `ClienteSinLead` si el cliente no es del
+    negocio."""
+    if not await _cliente_del_negocio(session, tenant_id, customer_id):
+        raise ClienteSinLead("Cliente no encontrado.")
     lead, creado = await asegurar(session, tenant_id, customer_id, origen="landing", idempotency_key=idempotency_key)
     fijar_contacto(lead, name=name, phone=phone, email=email, interest=interest)
     return vista(lead), creado
@@ -243,17 +250,16 @@ async def sembrar_para_qa(
     idempotency_key: str,
 ) -> LeadVista:
     """Datos de prueba (escenarios de QA, HU-QA-13): un lead con etapa y puntaje fijos. Siembra directa a propósito:
-    no deja historia de etapa (no es un cambio, es el estado inicial del escenario)."""
+    no deja historia de etapa (no es un cambio, es el estado inicial del escenario). `ClienteSinLead` si el cliente no
+    es del negocio."""
+    if not await _cliente_del_negocio(session, tenant_id, customer_id):
+        raise ClienteSinLead("Cliente no encontrado.")
     lead, _ = await asegurar(session, tenant_id, customer_id, origen="manual", idempotency_key=idempotency_key)
     lead.name = name
     lead.interest = interest
     lead.score = score
     lead.status = status  # escritura directa permitida: siembra de QA (ver `tests/test_leads_etapa_unica.py`)
     return vista(lead)
-
-
-class ClienteSinLead(LookupError):
-    """El cliente no es del negocio (o es de prueba), o no tiene lead."""
 
 
 async def marcar_seguimiento_hecho(

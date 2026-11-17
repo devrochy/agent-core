@@ -29,16 +29,24 @@ _RENOMBRES = (
 )
 
 
+# `tenant_cron_configs` tiene RLS forzada (0142): sin BYPASSRLS el UPDATE tocaría 0 filas en silencio.
+_PUEDE_SALTAR_RLS = "select rolsuper or rolbypassrls from pg_roles where rolname = current_user"
+
+
 def _renombrar(pares: tuple[tuple[str, str], ...]) -> None:
+    # Si el código nuevo ya escribió la fila con el nombre nuevo (arrancó antes de migrar), gana esa y la vieja queda.
     for viejo, nuevo in pares:
         op.execute(
-            sa.text("update tenant_cron_configs set cron_name = :nuevo where cron_name = :viejo").bindparams(
-                viejo=viejo, nuevo=nuevo
-            )
+            sa.text(
+                "update tenant_cron_configs v set cron_name = :nuevo where v.cron_name = :viejo and not exists ("
+                "select 1 from tenant_cron_configs n where n.tenant_id = v.tenant_id and n.cron_name = :nuevo)"
+            ).bindparams(viejo=viejo, nuevo=nuevo)
         )
 
 
 def upgrade() -> None:
+    if not op.get_bind().execute(sa.text(_PUEDE_SALTAR_RLS)).scalar():
+        raise RuntimeError("0147: el rol de migraciones no puede saltar la RLS de tenant_cron_configs; usa el dueño.")
     _renombrar(_RENOMBRES)
 
 

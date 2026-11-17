@@ -673,7 +673,8 @@ async def test_agenda_captura_el_lead_del_prospecto_y_agenda_la_demo(_ruteo: Non
     # Lo que se le ofreció al modelo en el turno de presentación: el lead sí, la caja de ventas no.
     assert CAPTAR_LEADS <= set(guion.tools[0])
     assert not (VENTAS_FUERA_DE_AGENDA & set(guion.tools[0]))
-    assert '"status": "actualizado"' in guion.resultados[0], guion.resultados
+    # El turno aseguró el lead vacío; darle sus primeros datos es registrar el prospecto (procedencia, HU-AOS-47).
+    assert '"status": "created"' in guion.resultados[0], guion.resultados
     assert "no está disponible para este agente" in guion.resultados[1], guion.resultados
     assert await _leads(tid, cliente) == [("Ana", "demo para la tienda Flores Ana")]
 
