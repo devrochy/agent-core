@@ -508,6 +508,13 @@ def _sin_cotizacion_vigente() -> dict[str, Any]:
     }
 
 
+_ESTADO_DE_PAGO_VISIBLE = {
+    "pagado": "pagado",
+    "en_revision": "en revisión",
+    "rechazado": "pago rechazado",
+}
+
+
 async def _transfer_safe_append(agent_id: Any = None) -> str:
     """Arma el bloque de datos de transferencia (nunca lo escribe el LLM). Con `agent_id`, las
     cuentas propias del agente pisan a las del negocio (SPEC-48, HU-COM-21)."""
@@ -1408,6 +1415,27 @@ class OrderSkill(BaseSkill):
                 simular=sandbox_prueba.simular_verificar_pago_pedido,
                 connection_predicate=solo_con_motor_activo(),
             ),
+            # SPEC-48, HU-COM-24: solo la ofrece el motor, en `pack_commerce.comprobar_transferencia`.
+            MCPTool(
+                name="comprobar_comprobante",
+                description=(
+                    "Revisa la última foto de comprobante que mandó el cliente contra su pedido por "
+                    "transferencia. Úsala cuando el cliente mande el comprobante o diga que ya transfirió. "
+                    "Nunca digas que el pago quedó confirmado sin esta respuesta."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "order_id": {"type": "string", "description": "ID del pedido del cliente"},
+                        "nota": {"type": "string", "description": "Lo que dijo el cliente del pago, si dijo algo", "maxLength": 300},
+                    },
+                    "required": ["order_id"],
+                },
+                handler=self.comprobar_comprobante,
+                side_effects=True,
+                simular=sandbox_prueba.simular_comprobar_comprobante,
+                connection_predicate=solo_con_motor_activo(),
+            ),
         ]
 
     # ------------------------------------------------------------ handlers
@@ -2128,6 +2156,12 @@ class OrderSkill(BaseSkill):
             "_safe_append": f"💳 Podés pagar tu pedido {base_reference} aquí: {link.url}",
         }
 
+    async def comprobar_comprobante(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Comprobante de transferencia contra el pedido del cliente (SPEC-48, HU-COM-24)."""
+        from pack_commerce.comprobar_transferencia import comprobar
+
+        return await comprobar(arguments, context)
+
     async def verificar_pago_pedido(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         """Estado del pago en línea del pedido del cliente (HU-AOS-07), solo lectura.
 
@@ -2230,7 +2264,10 @@ class OrderSkill(BaseSkill):
             "public_order_number": order.public_order_number,
             "status": status_labels.get(order.status, order.status),
             "delivery_method": "domicilio" if order.delivery_method == "domicilio" else "recoger en tienda",
-            "payment_status": "pagado" if order.payment_status == "pagado" else "pendiente de pago",
+            "payment_status": _ESTADO_DE_PAGO_VISIBLE.get(order.payment_status, "pendiente de pago"),
+            # El id real del pedido del cliente (el mismo de Referencias vigentes): lo usa
+            # `pack_commerce.pago_en_linea` para reenviar el link sin crear otro pedido (HU-COM-23).
+            "order_id": str(order.id),
             "items": [
                 {
                     "product": by_id.get(i.variant_id).name if by_id.get(i.variant_id) else "Producto",
