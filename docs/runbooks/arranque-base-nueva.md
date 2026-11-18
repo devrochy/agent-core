@@ -27,7 +27,7 @@ Marcadores:
 | `<uuid-postgres>` | contenedor de Postgres de producción (hoy `huvhzaxim2notqkcxqa5930a`) |
 | `<base-nueva>` | nombre de la base nueva. Propuesta: `agent_core_prod`. Solo minúsculas, dígitos y `_`. No puede ser `agent_core` (la vieja) ni empezar por `agentcore_eval` |
 | `<correo-master>` | correo del primer usuario master |
-| `<contenedor-api>` | `docker ps --format '{{.Names}}' \| grep <uuid-api> \| head -1` |
+| `<uuid-api>`, `<uuid-worker>`, `<uuid-beat>` | UUID de los recursos en Coolify (hoy `ggzjdyc7…`, `wv6kycje…`, `hwh7s5gs…`) |
 
 ## 0. Antes de empezar
 
@@ -96,7 +96,9 @@ Si el rol ya existía, **no** cambiarle la clave salvo que sea la de desarrollo:
 usa y la vuelta atrás consiste en volver a apuntar `DATABASE_URL` a ella con esa misma clave.
 Para saber si `app_runtime` tiene la de desarrollo (la que pone la `0003`), mirar la clave de la
 `DATABASE_URL` actual de la API de producción en Coolify: si es `app_runtime`, cambiarla con
-`\password app_runtime` y anotar que la URL de vuelta atrás (base vieja) lleva la clave nueva.
+`\password app_runtime` y anotar que la URL de vuelta atrás (base vieja) lleva la clave nueva. Ojo: la
+API, el worker y el beat de hoy usan ese mismo rol contra la base vieja, así que en cuanto cambie
+la clave sus conexiones nuevas fallan. Se hace **dentro de la ventana**, no antes.
 `verificar_aislamiento.py` (paso 7.3) lo vuelve a comprobar sobre la URL real.
 
 > No sirve probar la clave con `psql -h 127.0.0.1` dentro del contenedor de Postgres: la imagen
@@ -147,6 +149,12 @@ codificada):
 `<host>` es el mismo de las URL actuales de producción; solo cambia la base al final.
 
 ## 5. Migrar a `head` y registrar las habilidades
+
+El contenedor de la API cambia de nombre en cada deploy; en los pasos que siguen:
+
+```bash
+API=$(docker ps --format '{{.Names}}' | grep <uuid-api> | head -1)
+```
 
 Lo hace el **arranque de la API** (`scripts/entrypoint.sh`: `agent-core db migrate` y después
 `agent-core db sync-packs`). Se cargan las dos URL del paso 4 en la API (`DATABASE_URL` también en
@@ -243,7 +251,8 @@ docker exec <uuid-postgres> psql -U postgres -d <base-nueva> -tAc "
     and c.relrowsecurity and not c.relforcerowsecurity"
 ```
 
-Tiene que dar `0`.
+Con el commit ensayado da `1`: `meta_private.meta_tokens`, el pendiente conocido de 7.3. Fuera de
+esa tabla tiene que dar `0` (en `public`, `rls_forced` de 7.3 lo vuelve a mirar).
 
 ### 7.3 Aislamiento (criterio de `produccion-vps.md` §5.3)
 
