@@ -536,7 +536,7 @@
           "tool_calls": [
             {
               "arguments": {},
-              "id": "call_00_3wwb3mrmrZ4wm4edrfXL3390",
+              "id": "call_00_rymgyJpGLto82AoMnU7m7711",
               "name": "get_customer_profile"
             }
           ],

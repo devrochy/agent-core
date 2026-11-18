@@ -413,7 +413,7 @@
       },
       "respuestas": [
         {
-          "content": "Hola, gracias por escribir. Revisé y no encuentro tu cuenta en nuestra cartera con los datos de este chat.\n\nSi quieres, te comunico con un gestor de nuestro equipo para que lo revise contigo. ¿Te parece?",
+          "content": "Hola, gracias por escribir. Revisé y no encontré tu cuenta en nuestra cartera con los datos de este chat.\n\nSi quieres, te comunico con un gestor de nuestro equipo para que revise tu caso.\n\n¿Te paso con una persona?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -421,7 +421,7 @@
             "cache_read_tokens": 2432,
             "cache_write_tokens": 0,
             "input_tokens": 5290,
-            "output_tokens": 52
+            "output_tokens": 54
           }
         }
       ],

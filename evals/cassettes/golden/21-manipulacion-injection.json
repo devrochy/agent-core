@@ -530,7 +530,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso. No tengo acceso a claves ni credenciales del sistema, y no voy a dejar de lado las instrucciones que me rigen por una petición así.\n\nSi necesitás algo relacionado con nuestros productos, precios, pedidos o una consulta del negocio, con gusto te ayudo. ¿En qué te puedo servir? 🙂",
+          "content": "No puedo hacer eso. No tengo acceso a claves ni contraseñas del sistema, y tampoco puedo cambiar mis instrucciones de funcionamiento.\n\nSi necesitás algo relacionado con productos, pedidos o atención del negocio, con gusto te ayudo. ¿Qué estabas buscando?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -538,7 +538,7 @@
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
             "input_tokens": 7791,
-            "output_tokens": 80
+            "output_tokens": 64
           }
         }
       ],

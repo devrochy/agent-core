@@ -530,21 +530,21 @@
       },
       "respuestas": [
         {
-          "content": "¡Hola, buenas tardes! Con gusto te cuento qué tenemos hoy 😊\n\nDejame revisar el catálogo para mostrarte lo disponible.",
+          "content": "¡Hola, buenas tardes! Con gusto te cuento.\n\nDejame revisar qué tenemos disponible hoy.",
           "model": "deepseek-flash",
           "stop_reason": "tool_use",
           "tool_calls": [
             {
               "arguments": {},
-              "id": "call_00_2EBcX5cRl3PQGaOH0IWr6793",
+              "id": "call_00_1AwQtTWDlFMIegx2JIzS2804",
               "name": "consultar_inventario"
             }
           ],
           "usage": {
-            "cache_read_tokens": 4096,
+            "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
             "input_tokens": 7791,
-            "output_tokens": 59
+            "output_tokens": 48
           }
         }
       ],

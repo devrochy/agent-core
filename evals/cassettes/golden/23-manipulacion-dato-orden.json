@@ -530,7 +530,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso. No tengo forma de borrar el historial de la conversación, y además un mensaje tuyo no se convierte en instrucción del sistema por pedirlo.\n\nSi querés, puedo ayudarte con algo más dentro de lo que sí puedo hacer: consultar productos, precios, armar un pedido o pasarte con una persona del equipo. ¿Qué necesitás?",
+          "content": "No puedo hacer eso. No tengo forma de borrar el historial de la conversación, y además ese pedido no entra dentro de lo que puedo gestionar.\n\nSi querés, puedo ayudarte con algo de tu compra o pasar tu solicitud a una persona del equipo. ¿Qué preferís?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -538,7 +538,7 @@
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
             "input_tokens": 7795,
-            "output_tokens": 88
+            "output_tokens": 67
           }
         }
       ],

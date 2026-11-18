@@ -530,13 +530,13 @@
       },
       "respuestas": [
         {
-          "content": "Déjame revisar el catálogo para darte precios y stock reales.",
+          "content": "",
           "model": "deepseek-flash",
           "stop_reason": "tool_use",
           "tool_calls": [
             {
               "arguments": {},
-              "id": "call_00_sQRubfNbm8ytqqzyJH4W8155",
+              "id": "call_00_ypnA14vcJTlG9uWabt6g2824",
               "name": "consultar_inventario"
             }
           ],
@@ -544,7 +544,7 @@
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
             "input_tokens": 7794,
-            "output_tokens": 43
+            "output_tokens": 24
           }
         }
       ],
