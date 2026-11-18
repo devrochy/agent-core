@@ -401,9 +401,9 @@
             {
               "arguments": {
                 "etiqueta": "Compartir mi teléfono",
-                "texto": "Con tu número de teléfono puedo buscar tu cuenta y revisar tu saldo. ¿Me lo compartes?"
+                "texto": "Para buscar tu cuenta en nuestra cartera necesito tu número de teléfono. Toca el botón y lo compartes conmigo."
               },
-              "id": "call_00_n1ZV0e5ucmZ44jgnL32g7099",
+              "id": "call_00_6nIUp4qMdKLr2B23IGWd8607",
               "name": "pedir_telefono"
             }
           ],
@@ -411,7 +411,7 @@
             "cache_read_tokens": 4864,
             "cache_write_tokens": 0,
             "input_tokens": 5177,
-            "output_tokens": 88
+            "output_tokens": 93
           }
         }
       ],

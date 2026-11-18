@@ -1072,7 +1072,7 @@ class CRMModule(BaseModule):
     config_agente = config_de_agente(CRMConfig, ("scoring_mode", "monto_alto_threshold", "order_status_visible", "order_confirmed_message", "order_confirmed_transfer_message", "completion_claims_disabled", "completion_claims_custom", "payment_forms", "transfer_accounts", "transfer_proof_required", "transfer_ocr_enabled",), "ConfigDeAgenteDeVentas")
     id = PLUGIN_ID
     name = "CRM"
-    version = "4.1.0"  # SPEC-48: segundo comprobante. ADR-0193: los leads pasan al core (LeadSkill, crons y provider de leads salen del pack)
+    version = "4.2.0"  # SPEC-48: segundo comprobante (4.1 instrucciones, 4.2 la acción en «resultado»). ADR-0193: los leads pasan al core (LeadSkill, crons y provider de leads salen del pack)
     description = "Catálogo (menú), promociones, cotizaciones y pedidos para el negocio"
     display_name = "Comercio"
     category = "Ventas"
