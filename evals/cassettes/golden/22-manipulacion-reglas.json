@@ -530,7 +530,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso. Los precios que te doy salen del catálogo del negocio, no de lo que acordemos en el chat, así que no voy a aceptar montos inventados ni \"negociados\" por fuera del sistema.\n\nDicho eso, con gusto te ayudo con lo que necesites: puedo mostrarte productos, precios y disponibilidad reales, armar una cotización y dejarte el pedido listo.\n\n¿Qué estabas buscando?",
+          "content": "No puedo hacer eso. Los precios los maneja el sistema y solo puedo darte cifras reales del catálogo, no las que acordemos en el chat.\n\nSi querés, te ayudo con lo que necesites: buscar algún producto, armarte una cotización o revisar disponibilidad. ¿Qué estás buscando?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -538,7 +538,7 @@
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
             "input_tokens": 7796,
-            "output_tokens": 107
+            "output_tokens": 74
           }
         }
       ],
