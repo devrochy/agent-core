@@ -35,9 +35,10 @@
   "stages": [
     {
       "id": "elegir_pedido",
-      "goal": "Identificar el pedido del que habla el cliente con consultar_estado_pedido: el número de Referencias vigentes o el que dé el cliente. Nunca crees un pedido nuevo. Si el cliente habla del cobro de su suscripción y no de un pedido, cierra este recorrido con cancelar_tarea y mándale el link con sub_link_pago; no le pidas un número de pedido.",
+      "goal": "Identificar el pedido del que habla el cliente con consultar_estado_pedido: el número de Referencias vigentes o el que dé el cliente. Nunca crees un pedido nuevo. Si el cliente habla del cobro de su suscripción y no de un pedido, mándale el link con sub_link_pago y cierra este recorrido con cancelar_tarea; no le pidas un número de pedido.",
       "actions": [
-        "consultar_estado_pedido"
+        "consultar_estado_pedido",
+        "sub_link_pago"
       ],
       "exitWhen": {
         "slots": [
