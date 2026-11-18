@@ -77,3 +77,22 @@ async def test_fuera_de_public_ninguna_tabla_queda_con_rls_sin_force() -> None:
     async with get_session() as s:
         check = await _verificar_aislamiento().revisar_rls_otros_esquemas(s)
     assert check.ok is True, check.detail
+
+
+async def test_fuera_de_public_toda_tabla_con_tenant_id_tiene_rls() -> None:
+    """`rls_otros_esquemas` solo ve «habilitada sin FORCE»: una tabla con `tenant_id` y sin RLS pasaría."""
+    from core.db.session import get_session
+
+    async with get_session() as s:
+        filas = (
+            await s.execute(
+                text(
+                    "select n.nspname || '.' || c.relname from pg_class c "
+                    "join pg_namespace n on n.oid = c.relnamespace "
+                    "join pg_attribute a on a.attrelid = c.oid and a.attname = 'tenant_id' and not a.attisdropped "
+                    "where n.nspname not in ('public', 'information_schema') and n.nspname !~ '^pg_' "
+                    "and c.relkind in ('r', 'p') and not c.relrowsecurity"
+                )
+            )
+        ).all()
+    assert not filas, f"con tenant_id y sin RLS fuera de public: {sorted(f[0] for f in filas)}"
