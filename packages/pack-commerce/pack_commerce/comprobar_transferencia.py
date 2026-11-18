@@ -182,8 +182,13 @@ async def comprobar(arguments: dict[str, Any], context: Any) -> dict[str, Any]:
                 resultado_ledger={"order_id": str(order_uuid), "image_sha256": sha},
                 moneda=str(getattr(config, "currency_code", None) or "COP"),
             )
+            # El comprobante trae la hora local del banco, sin zona: el pedido se compara en la zona
+            # del negocio (con UTC, un pago de minutos después parecía anterior al pedido).
+            from core.shared.tiempo_negocio import zona_del_negocio
+
+            creado_local = creado.astimezone(await zona_del_negocio(tenant_id)) if creado.tzinfo else creado
             evaluacion = evaluar_comprobante(
-                extraido, PedidoAComparar(total=total, creado=creado), cuentas, duplicado=duplicado
+                extraido, PedidoAComparar(total=total, creado=creado_local), cuentas, duplicado=duplicado
             )
             guardado, match = extraido_para_guardar(extraido), evaluacion.como_json()
             status = evaluacion.status
