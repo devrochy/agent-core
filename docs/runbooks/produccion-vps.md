@@ -29,11 +29,9 @@ Registro de tiempos y evidencias: se completa la [tabla del final](#registro-de-
 - [ ] Este cambio (scripts y documentación) llegó a `main` con una release: la imagen tiene que
       traer `scripts/verificar_aislamiento.py`, `scripts/comparar_conteos.py` y
       `scripts/vaciar_base_nueva.sql`.
-- [ ] **RLS forzada en `meta_private.meta_tokens`.** La migración `0029` solo recorrió `public`
-      (`docs/BACKLOG.md`). Mientras no exista la migración que lo arregle,
-      `verificar_aislamiento.py` falla en `rls_otros_esquemas`; `rls_forced` (el criterio literal
-      de la HU, solo `public`) pasa igual. Decidir antes del corte: arreglarlo (recomendado) o
-      aceptar el riesgo por escrito.
+- [ ] La imagen trae la migración `0148` (RLS forzada en `meta_private.meta_tokens`): sin ella,
+      `verificar_aislamiento.py` falla en `rls_otros_esquemas` aunque `rls_forced` (solo `public`)
+      pase.
 - [ ] (Opcional) El `Dockerfile` crea `/app/tenants` antes del `chown -R app:app /app`. Si no, se
       hace el paso 5.2.
 - [ ] Decisiones del dueño cerradas (ver [Decisiones pendientes](#decisiones-pendientes-antes-del-corte)).
@@ -769,7 +767,6 @@ Con el corte hecho. Test se cae mientras dure (vive en la máquina de desarrollo
 - **Panel clásico (`/admin` del motor)**: no tiene ruta pública en producción. Si el master lo
   necesita durante la transición, entra por túnel SSH (`ssh -L 127.0.0.1:13003:127.0.0.1:3003
   root@<ip-publica-app>` y `http://127.0.0.1:13003/admin`).
-- **`meta_private.meta_tokens` sin FORCE**: ver la fase 0.
 
 ## Registro de la ejecución
 

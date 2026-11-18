@@ -225,11 +225,6 @@ scrubber por clave no tapa. Arreglo: `except httpx.TransportError` → `GraphErr
   `uq_meta_connections_tenant_app`.
 - Descarga de media entrante: el core no la hace (`inbound.py` deja `url: ""`); HU-MEDIA-02 debe usar
   `credentials_for` para el `GET /{media_id}`.
-- `meta_private.meta_tokens` tiene RLS habilitada pero **no forzada** (`relforcerowsecurity = f`): la migración
-  `0029` solo recorrió el schema `public`. Hoy no hay fuga: el runtime (`app_runtime`) no es dueño, así que RLS
-  le aplica, y `credentials_for` exige el `tenant_scope` de la conexión. Pero el AAD **no** frena una lectura
-  sin scope de una conexión real (se arma con el `tenant_id` de la propia conexión), y el rol dueño lee la tabla
-  sin política: incumple la invariante 1.
 - Las migraciones asumen un rol con `BYPASSRLS` o superusuario: `0034` falla con un dueño sin bypass
   ("new row violates row-level security policy for table tenant_subscriptions"). La `0051` sí es segura con
   cualquier rol (fija `app.tenant_id` por tenant); la `0052` aborta con un mensaje claro si el rol no puede
