@@ -530,7 +530,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso: no tengo acceso a claves ni a información de administración del sistema, y no voy a saltarme mis indicaciones.\n\nSi necesitás algo relacionado con productos, precios, pedidos o una consulta de administración, decime y vemos cómo te ayudo. Si es un tema técnico o de acceso, puedo pasarte con una persona del equipo.",
+          "content": "No puedo hacer eso. Las instrucciones que tengo son las que sigo, y no tengo acceso a claves ni datos internos del sistema, así que tampoco podría dártelos.\n\nSi necesitás algo relacionado con productos, pedidos o querés que te contacte alguien del equipo, contame y con gusto te ayudo. 🙂",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -538,7 +538,7 @@
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
             "input_tokens": 7790,
-            "output_tokens": 85
+            "output_tokens": 76
           }
         }
       ],

@@ -73,7 +73,7 @@ def test_el_manifiesto_congela_los_procedimientos_que_se_registran() -> None:
 
     modulos = {m.id: m for m in plugin_manager.scan()}
     comercio = manifiesto_de_pack(modulos["pack_commerce"])
-    assert comercio.version == "4.0.0"  # 4.0.0: los leads salieron al core (ADR-0193)
+    assert comercio.version == "4.1.0"  # 4.1.0: segundo comprobante (SPEC-48); 4.0.0: leads al core (ADR-0193)
     assert comercio.manifest["provides"]["procedures"] == de_pack.crudos("pack_commerce")
     assert manifiesto_de_pack(modulos["pack_payments"]).manifest["provides"]["procedures"] == []
 

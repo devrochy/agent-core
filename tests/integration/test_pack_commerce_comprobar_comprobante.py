@@ -189,6 +189,34 @@ async def test_la_hora_del_comprobante_es_la_del_negocio(vision) -> None:  # typ
     assert r2["resultado"] == "en_revision", r2
 
 
+async def test_un_segundo_comprobante_se_revisa_y_la_misma_foto_no(vision) -> None:  # type: ignore[no-untyped-def]
+    """Tras un comprobante en revisión, la pista pide revisar la foto nueva; una foto nueva se evalúa de
+    nuevo (y puede pagar) y la misma foto devuelve el resultado ya guardado (ciclo en test, 2026-11-17)."""
+    from core import almacenamiento
+    from core.db.models import Message
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope, tenant_slug
+
+    tid, aid = await _negocio_con_agente()
+    p = await _pedido(tid)
+    vision["leido"] = {**FUERTE, "monto": 50000}
+    r = await _comprobar(tid, aid, p)
+    assert r["resultado"] == "rechazado"
+    assert "vuelve a llamar comprobar_comprobante" in r["hint"]
+    # El cliente manda otra foto: se lee de nuevo y ahora coincide.
+    async with tenant_scope(tid):
+        ref = almacenamiento.guardar("media", _JPEG + uuid.uuid4().bytes, mimetype="image/jpeg", tenant_slug=await tenant_slug(tid))
+        async with get_session() as session:
+            session.add(Message(
+                tenant_id=tid, conversation_id=p["conversation_id"], direction="inbound", sender_type="customer",
+                content="[imagen]", media_type="image/jpeg", media_url=ref.key, created_at=datetime.now(UTC),
+            ))
+    vision["leido"] = FUERTE
+    r2 = await _comprobar(tid, aid, p)
+    assert r2["resultado"] == "pagado" and vision["llamadas"] == 2
+    assert await _estado(tid, p["order_id"]) == ("pagado", 2, 1)
+
+
 async def test_parcial_y_monto_menor(vision) -> None:  # type: ignore[no-untyped-def]
     tid, aid = await _negocio_con_agente()
     p = await _pedido(tid)

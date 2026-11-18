@@ -1,7 +1,7 @@
 {
   "contract": "procedure/1",
   "id": "pack_commerce.comprobar_transferencia",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "Comprobar transferencia",
   "triggers": {
     "description": "El cliente pagó o va a pagar un pedido por transferencia: manda el comprobante, dice que ya transfirió o pregunta si le llegó su transferencia.",
@@ -49,13 +49,13 @@
     },
     {
       "id": "analizar_comprobante",
-      "goal": "El servidor ya comparó el comprobante con el pedido. Si el cliente manda otro comprobante, revisarlo con comprobar_comprobante.",
+      "goal": "El servidor ya comparó el comprobante con el pedido. Si el cliente manda otra foto o dice que mandó el comprobante de nuevo o el correcto, vuelve a llamar comprobar_comprobante: el servidor dice si es nueva o la misma.",
       "actions": ["comprobar_comprobante"],
       "exitWhen": { "slots": ["resultado"] }
     },
     {
       "id": "resultado",
-      "goal": "Contar el resultado tal como lo dijo el servidor: confirmado, en revisión por una persona o que no coincide (ofrecer hablar con una persona). Nunca repitas datos de la foto ni de las cuentas.",
+      "goal": "Contar el resultado tal como lo dijo el servidor: confirmado, en revisión por una persona o que no coincide (ofrecer hablar con una persona). Si después el cliente manda otra foto o dice que la mandó de nuevo, llama comprobar_comprobante otra vez antes de responder; nunca le digas que no hace falta revisarla. Nunca repitas datos de la foto ni de las cuentas.",
       "actions": ["consultar_estado_pedido"]
     }
   ],
