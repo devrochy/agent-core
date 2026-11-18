@@ -401,9 +401,9 @@
             {
               "arguments": {
                 "etiqueta": "Compartir mi teléfono",
-                "texto": "Para buscar tu cuenta en nuestra cartera, ¿me compartes tu teléfono con un toque? Con ese número la ubico."
+                "texto": "Con tu número de teléfono puedo buscar tu cuenta y revisar tu saldo. ¿Me lo compartes?"
               },
-              "id": "call_00_R6AD7tt6DfCZexmDsqdy4423",
+              "id": "call_00_n1ZV0e5ucmZ44jgnL32g7099",
               "name": "pedir_telefono"
             }
           ],
@@ -411,7 +411,7 @@
             "cache_read_tokens": 4864,
             "cache_write_tokens": 0,
             "input_tokens": 5177,
-            "output_tokens": 92
+            "output_tokens": 88
           }
         }
       ],

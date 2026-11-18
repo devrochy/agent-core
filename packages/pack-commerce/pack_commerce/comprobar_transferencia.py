@@ -57,9 +57,13 @@ def _salida(order: Any, status: str, *, repetido: bool = False) -> dict[str, Any
             "Dile al cliente que una persona revisa su comprobante y le confirma."
             if status == "en_revision"
             else "Dile que el comprobante no coincide con el pedido y ofrécele hablar con una persona."
+        ) + (
+            " Si después manda otra foto o dice que la mandó de nuevo, vuelve a llamar comprobar_comprobante:"
+            " nunca le digas que no hace falta revisarla."
         )
     if repetido:
         salida["repetido"] = True
+        salida["detalle"] = "Es la misma foto que ya se revisó: " + _RESUMEN[status][0].lower() + _RESUMEN[status][1:]
     return salida
 
 
