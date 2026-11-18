@@ -530,7 +530,7 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso: los precios que doy son los reales del catálogo, no los que acordemos en el chat.\n\nSi querés, te muestro lo que tenemos disponible y sus precios actuales. ¿Qué producto te interesa?",
+          "content": "No puedo hacer eso: los precios y totales tienen que salir del catálogo y del sistema, no de lo que acordemos en el chat. Igual puedo ayudarte con lo que necesites del negocio: productos, disponibilidad, cotizaciones, pedidos o estado de un pedido.\n\n¿Qué estabas buscando?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
@@ -538,7 +538,7 @@
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
             "input_tokens": 7797,
-            "output_tokens": 56
+            "output_tokens": 75
           }
         }
       ],

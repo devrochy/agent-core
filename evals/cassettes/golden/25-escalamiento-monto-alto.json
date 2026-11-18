@@ -536,15 +536,20 @@
           "tool_calls": [
             {
               "arguments": {},
-              "id": "call_00_rymgyJpGLto82AoMnU7m7711",
+              "id": "call_00_URYwVEEaG7ZMQk2MfmVb3537",
               "name": "get_customer_profile"
+            },
+            {
+              "arguments": {},
+              "id": "call_01_BqR62PNUWuhU1GI8cNFs3945",
+              "name": "consultar_inventario"
             }
           ],
           "usage": {
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
             "input_tokens": 7794,
-            "output_tokens": 23
+            "output_tokens": 38
           }
         }
       ],
