@@ -19,7 +19,7 @@ from celery.signals import (
     worker_process_shutdown,
 )
 
-from core.config import get_settings
+from core.config import get_settings, verificar_clave_secreta
 from core.shared.logger import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -453,6 +453,7 @@ def _load_plugins_on_worker_start(**_kwargs: object) -> None:
     `worker_init` llega ANTES que `setup_logging`: sin configurar acá, los logs del escaneo de
     plugins salían con el default de structlog."""
     configure_logging()
+    verificar_clave_secreta()
     _load_plugins()
 
 
@@ -468,6 +469,7 @@ def _load_plugins_on_beat_start(sender: object = None, **_kwargs: object) -> Non
     despachaba (visto al verificar HU-SUB-09 en test: el beat arrancaba a las
     16:09:23 y los crons se registraban 16:09:24, sin un solo envío después).
     """
+    verificar_clave_secreta()
     _load_plugins()
     scheduler = getattr(sender, "scheduler", None)
     if scheduler is not None:

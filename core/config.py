@@ -433,3 +433,28 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+# Valores que nunca son una clave real: el default del campo y los de ejemplo de la documentación.
+_CLAVES_DE_EJEMPLO = frozenset({"", "change-me", "changeme", "secret", "ci-only-not-a-secret-app-key"})
+LARGO_MINIMO_CLAVE = 32
+
+
+class ClaveSecretaInsegura(RuntimeError):
+    """`APP_SECRET_KEY` firma invitaciones, archivos, A2A, opciones directas, procedimientos y el
+    antiabuso: con el default, cualquiera que lea el repo puede falsificar esas firmas."""
+
+
+def verificar_clave_secreta(settings: Settings | None = None) -> None:
+    """En producción (también test, que corre con `APP_ENV=production`) la API, el worker y el
+    beat no arrancan con una `APP_SECRET_KEY` de ejemplo o corta. Se genera con
+    `openssl rand -hex 32`. Fuera de producción no se exige nada."""
+    settings = settings or get_settings()
+    if settings.app_env != "production":
+        return
+    clave = settings.app_secret_key.strip()
+    if clave.lower() in _CLAVES_DE_EJEMPLO or len(clave) < LARGO_MINIMO_CLAVE:
+        raise ClaveSecretaInsegura(
+            f"APP_SECRET_KEY insegura en producción (de ejemplo o de menos de {LARGO_MINIMO_CLAVE} caracteres); "
+            "genérala con `openssl rand -hex 32`"
+        )
