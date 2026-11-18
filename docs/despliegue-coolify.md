@@ -15,6 +15,10 @@ landing (`solvershub-landing`). Hay **dos entornos y cada uno vive en su propia 
 > [Producción heredada](#producción-heredada-hasta-el-corte), que el runbook apaga y retira. Los
 > UUID de los recursos nuevos se anotan aquí al crearlos (fase 11 del runbook).
 
+> **Salto con base nueva y vacía (D-59, 2026-11-18).** La base nueva se crea al lado de la vieja,
+> en la misma instancia de Postgres, siguiendo
+> [`docs/runbooks/arranque-base-nueva.md`](runbooks/arranque-base-nueva.md).
+
 > A producción se llega por una **release** (`develop` → `main`, skill `release`), nunca por un
 > merge directo ni desde una sesión de asistente.
 
