@@ -169,6 +169,26 @@ async def test_coincidencia_fuerte_paga_guarda_evidencia_y_es_idempotente(vision
     assert vision["llamadas"] == 1 and (await _estado(tid, p["order_id"]))[1] == 1
 
 
+async def test_la_hora_del_comprobante_es_la_del_negocio(vision) -> None:  # type: ignore[no-untyped-def]
+    """El banco imprime la hora local, sin zona. Un pago hecho minutos después del pedido (en hora de
+    Bogotá) coincide; comparado contra el pedido en UTC parecía cinco horas anterior (ciclo en test,
+    2026-11-17)."""
+    from zoneinfo import ZoneInfo
+
+    tid, aid = await _negocio_con_agente()
+    p = await _pedido(tid)
+    local = (datetime.now(UTC) - timedelta(minutes=2)).astimezone(ZoneInfo("America/Bogota"))
+    vision["leido"] = {**FUERTE, "fecha": local.strftime("%Y-%m-%dT%H:%M")}
+    r = await _comprobar(tid, aid, p)
+    assert r["resultado"] == "pagado", r
+    # Una hora local anterior al pedido sigue yendo a revisión.
+    p2 = await _pedido(tid)
+    antes = (datetime.now(UTC) - timedelta(hours=1)).astimezone(ZoneInfo("America/Bogota"))
+    vision["leido"] = {**FUERTE, "fecha": antes.strftime("%Y-%m-%dT%H:%M")}
+    r2 = await _comprobar(tid, aid, p2)
+    assert r2["resultado"] == "en_revision", r2
+
+
 async def test_parcial_y_monto_menor(vision) -> None:  # type: ignore[no-untyped-def]
     tid, aid = await _negocio_con_agente()
     p = await _pedido(tid)
