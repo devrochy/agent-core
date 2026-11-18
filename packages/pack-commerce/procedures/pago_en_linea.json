@@ -1,10 +1,10 @@
 {
   "contract": "procedure/1",
   "id": "pack_commerce.pago_en_linea",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "Pago en línea",
   "triggers": {
-    "description": "El cliente YA tiene un pedido con pago en línea: dice que ya pagó, que no le llegó el link o que venció, pide que se lo reenvíen o pregunta el estado de su pago. No es para una compra nueva.",
+    "description": "El cliente YA tiene un pedido con pago en línea: dice que ya pagó, que no le llegó el link o que venció, pide que se lo reenvíen o pregunta el estado de su pago. No es para una compra nueva ni para el cobro o la mensualidad de una suscripción (eso es sub_link_pago).",
     "examples": [
       "ya pagué por el link",
       "ya hice el pago por el link",
@@ -35,7 +35,7 @@
   "stages": [
     {
       "id": "elegir_pedido",
-      "goal": "Identificar el pedido del que habla el cliente con consultar_estado_pedido: el número de Referencias vigentes o el que dé el cliente. Nunca crees un pedido nuevo.",
+      "goal": "Identificar el pedido del que habla el cliente con consultar_estado_pedido: el número de Referencias vigentes o el que dé el cliente. Nunca crees un pedido nuevo. Si el cliente habla del cobro de su suscripción y no de un pedido, cierra este recorrido con cancelar_tarea y mándale el link con sub_link_pago; no le pidas un número de pedido.",
       "actions": [
         "consultar_estado_pedido"
       ],

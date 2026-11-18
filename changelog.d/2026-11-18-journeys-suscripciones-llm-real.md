@@ -14,3 +14,7 @@ La primera noche de evals con LLM real (run 44357972704) dejó los journeys de s
 - Journeys: 08 y 09 esperan `sub_aplicar_cambio_plan` (no `sub_cambiar_plan`) e insisten con «Sí, confirmo el Plan
   …» («cambio» es negación en el léxico de confirmación); en 12 el paso de los datos ya no exige
   `sub_confirmar_inscripcion`, que solo corre después del «Sí, confirmo» del paso siguiente.
+- `pack_commerce` 4.3.0, `pago_en_linea` 1.1.0: el disparador dice que no es para la mensualidad de una
+  suscripción y la etapa `elegir_pedido` cierra el recorrido (`cancelar_tarea`) y usa `sub_link_pago` si el cliente
+  habla del cobro de su suscripción. En la segunda noche, «pasame el link» abría este recorrido y le pedía un número
+  de pedido a un suscriptor.
