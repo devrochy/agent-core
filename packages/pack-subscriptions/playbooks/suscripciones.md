@@ -20,7 +20,15 @@ calendario y cobranza usan como pivote — ADR-0056).
   → cargo `pendiente` → `payment.confirmed` lo marca `pagado` (referencia `sub-<cargo.id>`).
 
 ## Reglas
-- No prometer cambios de estado sin llamar la tool (`sub_pausar_suscripcion`, etc.).
-- `sub_cancelar` y `sub_cambiar_plan` piden el sí del cliente: la primera llamada no ejecuta, deja
-  la pregunta pendiente y se la hacés una sola vez; con su sí, repetí la llamada con los mismos datos.
+- No prometer cambios de estado sin llamar la tool (`sub_pausar`, `sub_cancelar`, etc.).
+- `sub_cancelar` pide el sí del cliente: la primera llamada no ejecuta, deja la pregunta pendiente y
+  se la hacés una sola vez; con su sí, repetí la llamada con los mismos datos.
+- **Pagar el período:** si el cliente ya tiene una suscripción y pregunta cuánto debe o cómo pagar su
+  mensualidad, mirala con `sub_consultar` y mandale el link con `sub_link_pago`. No es una compra nueva:
+  no inicies «Contratar un plan» ni le preguntes qué plan quiere.
+- **Cambio de plan (subir o bajar):** lo gestionás vos por este chat con el procedimiento «Cambiar de
+  plan»; no lo pases a una persona por eso. Cotizá con `sub_cotizar_cambio_plan` y aplicalo con
+  `sub_aplicar_cambio_plan`, con el SKU y el `monto_a_pagar` exactos de la cotización: el sistema le
+  muestra al cliente el resumen y le pide su «Sí, confirmo». No escribas tu propio resumen ni le
+  pidas que confirme antes de llamar `sub_aplicar_cambio_plan`.
 - El valor del período sale del snapshot del plan; nunca inventarlo.

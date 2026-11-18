@@ -65,6 +65,7 @@ def registrar(host: Any, plugin_id: str) -> None:
     host.register_procedures(de_pack.cargar(plugin_id))
     try:
         host.register_resumen("sub_confirmar_inscripcion", resumen_de_inscripcion)
+        host.register_resumen("sub_aplicar_cambio_plan", resumen_de_cambio_de_plan)
     except PluginError:
         # La tool es del core: si sus skills aún no están registradas, el resumen cae al texto fijo del kernel;
         # no se mata la activación del pack por eso.
@@ -266,3 +267,37 @@ async def resumen_de_inscripcion(args: dict[str, Any], ctx: ToolContext) -> list
         versiones = ",".join(f"{d.get('tipo')}:{d.get('version')}" for d in terminos.documentos)
         datos.append(DatoDeResumen("documentos_version_id", versiones))
     return datos if len(datos) <= 20 else None
+
+
+# Cuándo aplica el cambio, por el `cambio` de la cotización (dato del pack, nunca del modelo).
+_CUANDO_APLICA = {
+    "inmediato": "de inmediato",
+    "pendiente_pago": "al pagar la diferencia",
+    "programado": "desde tu próximo período",
+}
+
+
+async def resumen_de_cambio_de_plan(args: dict[str, Any], ctx: ToolContext) -> list[DatoDeResumen] | None:
+    """Lo que el cliente confirma con `sub_aplicar_cambio_plan`: la cotización VIGENTE del servidor (del plan actual
+    al nuevo, cuánto paga hoy, el precio nuevo y cuándo aplica). Sin esto el kernel mostraba los argumentos crudos:
+    el SKU («Plan: PLAN-PREMIUM») y el monto con el rótulo de una inscripción («Total del primer cargo»), visto en
+    los journeys con LLM real del 2026-11-18. None si el plan ya no vale o el monto de los argumentos no es el de la
+    cotización: el kernel manda el texto fijo sin datos ni botón."""
+    from core.subscriptions.tools import cotizacion_del_cliente
+
+    try:
+        cot = await cotizacion_del_cliente(ctx, str(args.get("plan_code") or ""), args.get("codigo_promocion"))
+        monto = float(cot.get("monto_a_pagar") or 0)
+        if abs(float(args.get("monto_a_pagar") or 0) - monto) > 0.005:
+            return None
+    except (SubscriptionError, TypeError, ValueError):
+        return None
+    datos: list[DatoDeResumen] = [
+        DatoDeResumen("cambio de plan", f"del {cot.get('plan_actual') or ''} al {cot.get('plan_nuevo') or ''}"),
+        DatoDeResumen("a pagar hoy", monto, es_monto=True),
+        DatoDeResumen("precio nuevo", float(cot.get("precio_nuevo") or 0), es_monto=True),
+    ]
+    cuando = _CUANDO_APLICA.get(str(cot.get("cambio") or ""))
+    if cuando:
+        datos.append(DatoDeResumen("el cambio aplica", cuando))
+    return datos

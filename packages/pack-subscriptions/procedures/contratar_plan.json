@@ -1,10 +1,10 @@
 {
   "contract": "procedure/1",
   "id": "pack_subscriptions.contratar_plan",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "title": "Contratar un plan",
   "triggers": {
-    "description": "El cliente quiere comprar, contratar o pagar un plan o suscripción del negocio.",
+    "description": "El cliente quiere comprar o contratar un plan del negocio. No es para pagar el período de una suscripción que ya tiene (eso es sub_link_pago) ni para cambiarse de plan (es «Cambiar de plan»).",
     "examples": [
       "quiero el plan premium",
       "cómo pago el básico",

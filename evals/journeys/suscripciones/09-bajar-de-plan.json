@@ -19,8 +19,8 @@
     {
       "nota": "pide bajar de plan",
       "usuario": "Quiero bajar al Plan Basic, el Premium me queda grande.",
-      "hasta_herramienta": "sub_cambiar_plan",
-      "insistir": "Sí, confirmo el cambio al Plan Basic.",
+      "hasta_herramienta": "sub_aplicar_cambio_plan",
+      "insistir": "Sí, confirmo el Plan Basic.",
       "max_turnos": 4,
       "espera": {
         "texto_no_contiene": [
