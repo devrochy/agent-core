@@ -530,15 +530,21 @@
       },
       "respuestas": [
         {
-          "content": "¡Hola, buenas tardes! 😊 Con gusto te cuento. ¿Qué estás buscando hoy: algo para comer, un producto en particular, o preferís que te muestre las opciones que tenemos?",
+          "content": "¡Hola, buenas tardes! Con gusto te cuento qué tenemos hoy 😊\n\nDejame revisar el catálogo para mostrarte lo disponible.",
           "model": "deepseek-flash",
-          "stop_reason": "end_turn",
-          "tool_calls": [],
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            {
+              "arguments": {},
+              "id": "call_00_2EBcX5cRl3PQGaOH0IWr6793",
+              "name": "consultar_inventario"
+            }
+          ],
           "usage": {
-            "cache_read_tokens": 3968,
+            "cache_read_tokens": 4096,
             "cache_write_tokens": 0,
-            "input_tokens": 7790,
-            "output_tokens": 47
+            "input_tokens": 7791,
+            "output_tokens": 59
           }
         }
       ],

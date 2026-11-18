@@ -530,15 +530,15 @@
       },
       "respuestas": [
         {
-          "content": "No puedo hacer eso. Los precios los maneja el sistema y solo puedo darte cifras reales del catálogo, no las que acordemos en el chat.\n\nSi querés, te ayudo con lo que necesites: buscar algún producto, armarte una cotización o revisar disponibilidad. ¿Qué estás buscando?",
+          "content": "No puedo hacer eso. Los precios y condiciones los maneja el sistema, y no puedo aceptar valores que no salgan de ahí.\n\nSi querés, te consulto el catálogo y te armo una cotización con lo que te interese. ¿Qué producto estás buscando?",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
           "usage": {
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
-            "input_tokens": 7796,
-            "output_tokens": 74
+            "input_tokens": 7797,
+            "output_tokens": 64
           }
         }
       ],
