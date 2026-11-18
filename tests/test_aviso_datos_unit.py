@@ -84,7 +84,7 @@ ESCRITORES_PERMITIDOS = {
     "core/qa/escenarios.py": "siembra de datos de prueba, no es un agente",
     "core/api/routers/leads.py": "ediciones del operador desde el panel: nunca se bloquean",
     "core/orchestrator/consumer.py": "datos que el canal entrega (nombre del perfil), no los dicta el agente",
-    "packages/pack-commerce/pack_commerce/api.py": "formulario público de la landing: el titular lo envía",
+    "core/leads/intake.py": "formulario público de la landing: el titular lo envía",
 }
 
 

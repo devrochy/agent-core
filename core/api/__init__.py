@@ -20,6 +20,7 @@ from core.api.routers import (
     audit,
     auth,
     automatizaciones,
+    captar_leads,
     collaborators,
     connection_agents,
     connection_releases,
@@ -95,6 +96,7 @@ api_router.include_router(playground.router)
 api_router.include_router(escalations.router)
 api_router.include_router(leads.router)
 api_router.include_router(leads_acciones.router)
+api_router.include_router(captar_leads.router)
 api_router.include_router(plugins.router)
 api_router.include_router(skill_installations.router)
 api_router.include_router(procedures.router)

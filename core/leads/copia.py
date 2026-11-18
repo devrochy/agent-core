@@ -41,6 +41,7 @@ LOTE_POR_DEFECTO = 500
 _COMMERCE = "pack_commerce"
 # Campos de la config de commerce que pasan a Captar leads (lo demás de `CRMConfig` sigue en commerce o desaparece).
 _CAMPOS_DE_CONFIG = tuple(config_leads.ConfigCaptarLeads.model_fields)
+_CAMPOS_DE_INTAKE = tuple(c for c in _CAMPOS_DE_CONFIG if c.startswith("lead_intake_"))
 
 _COLUMNAS_LEAD = (
     "id, tenant_id, customer_id, conversation_id, name, phone, email, interest, score, status, idempotency_key, "
@@ -211,15 +212,30 @@ async def _config_de_commerce(tenant_id: uuid.UUID) -> dict[str, Any] | None:
     return {k: v for k, v in datos.items() if k in _CAMPOS_DE_CONFIG}
 
 
+def _intake_vacio(config: config_leads.ConfigCaptarLeads) -> bool:
+    return not config.lead_intake_enabled and not config.lead_intake_secret.get_secret_value()
+
+
 async def _copiar_config(tenant_id: uuid.UUID, *, dry_run: bool) -> bool:
-    """Crea la config de Captar leads desde la de commerce si el negocio aún no tiene. Nunca la pisa: una vez en el
-    core, la edita el dueño ahí. Los secretos no pasan por el log."""
+    """Crea la config de Captar leads desde la de commerce si el negocio aún no tiene. Nunca pisa una config que el
+    dueño ya editó en el core. Los secretos no pasan por el log.
+
+    Una excepción: si el negocio ya tiene config pero con el intake sin configurar (la creó con los valores por
+    defecto el primer lead del chat, `config_leads.asegurar_por_defecto`, antes de correr la copia) y commerce sí lo
+    tenía, se le copian solo los campos `lead_intake_*`. Sin esto, al pasar el intake al core (parte 3 de HU-AOS-70)
+    el formulario de la página de ese negocio respondería 403 `intake_disabled` y sus leads se perderían."""
     datos = await _config_de_commerce(tenant_id)
     if datos is None:
         return False
-    config = config_leads.desde_guardado(datos)
+    desde_commerce = config_leads.desde_guardado(datos)
     async with get_session() as session:
-        if await config_leads.cargar(session, tenant_id) is not None:
+        actual = await config_leads.cargar(session, tenant_id)
+        if actual is None:
+            config = desde_commerce
+        elif _intake_vacio(actual) and not _intake_vacio(desde_commerce):
+            intake = {k: getattr(desde_commerce, k) for k in _CAMPOS_DE_INTAKE}
+            config = actual.model_copy(update=intake)
+        else:
             return False
         if dry_run:
             return True

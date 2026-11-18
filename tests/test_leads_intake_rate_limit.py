@@ -1,4 +1,4 @@
-"""Rate limit del intake público de leads (`POST /api/pack/pack_commerce/leads/{slug}`).
+"""Rate limit del intake público de leads del core (`POST /api/public/leads/{slug}` y su alias, ADR-0193 §5).
 
 El cupo es por (tenant, IP): una IP que manda leads a un tenant no consume el
 cupo de otro. Además, los slugs inexistentes cuentan por IP y, con ese cupo
@@ -12,8 +12,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from pack_commerce import api
 from starlette.requests import Request
+
+from core.leads import intake as api
 
 
 @pytest.fixture

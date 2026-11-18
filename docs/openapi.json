@@ -7538,6 +7538,147 @@
         }
       }
     },
+    "/api/v1/admin/captar-leads/config": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Get Config",
+        "operationId": "get_config_api_v1_admin_captar_leads_config_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptarLeadsConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Save Config",
+        "description": "Reemplaza la config del negocio. Un campo que no llega toma su valor por defecto, salvo los secretos, que\nconservan el guardado (también si llegan vacíos). Valores inválidos: 422 `invalid_config` con `fields`.",
+        "operationId": "save_config_api_v1_admin_captar_leads_config_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptarLeadsConfigSave"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptarLeadsConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/plugins": {
       "get": {
         "tags": [
@@ -53477,6 +53618,54 @@
           "cargo_id"
         ],
         "title": "CanjeOut"
+      },
+      "CaptarLeadsConfigResponse": {
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "title": "Configured",
+            "description": "El negocio ya tiene config de Captar leads (si no, se muestran los valores por defecto)"
+          },
+          "schema": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Schema"
+          },
+          "values": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Values"
+          },
+          "configured_secrets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Configured Secrets"
+          }
+        },
+        "type": "object",
+        "required": [
+          "configured",
+          "schema",
+          "values",
+          "configured_secrets"
+        ],
+        "title": "CaptarLeadsConfigResponse"
+      },
+      "CaptarLeadsConfigSave": {
+        "properties": {
+          "values": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "values"
+        ],
+        "title": "CaptarLeadsConfigSave"
       },
       "CargoItem": {
         "properties": {
