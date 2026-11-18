@@ -35,6 +35,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from core.mcp.types import ScopedHttp, plugin_http
+from core.payments.wompi_minimo import (  # noqa: F401 (reexportados: admin, payments, tests)
+    PRODUCTION_MIN_AMOUNT_COP,
+    SANDBOX_MIN_AMOUNT_COP,
+    min_amount_cop,
+)
 from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
 from pack_payments.providers.base import (
@@ -54,18 +59,6 @@ SANDBOX_BASE_URL = "https://sandbox.wompi.co/v1"
 NETWORK = ("production.wompi.co", "sandbox.wompi.co")
 TIMEOUT = 15.0
 PLUGIN_ID = "pack_payments"
-
-# Mínimo del sandbox de Wompi para la base de una transacción en COP: no está
-# en su guía pública, lo confirmó agent-sale por QA contra el sandbox real
-# (mismo 422 que si no se chequea acá antes de llamar).
-SANDBOX_MIN_AMOUNT_COP = 150_000
-# Mínimo publicado para producción (modelo Agregador; Gateway admite desde $1).
-PRODUCTION_MIN_AMOUNT_COP = 1_500
-
-
-def min_amount_cop(sandbox: bool) -> int:
-    """Mínimo en COP que Wompi acepta en el ambiente dado."""
-    return SANDBOX_MIN_AMOUNT_COP if sandbox else PRODUCTION_MIN_AMOUNT_COP
 
 # Wompi usa su propio vocabulario de estado de transacción; lo normalizamos
 # al de este pack para que ningún pack downstream tenga que conocerlo.
