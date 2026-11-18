@@ -251,8 +251,8 @@ docker exec <uuid-postgres> psql -U postgres -d <base-nueva> -tAc "
     and c.relrowsecurity and not c.relforcerowsecurity"
 ```
 
-Con el commit ensayado da `1`: `meta_private.meta_tokens`, el pendiente conocido de 7.3. Fuera de
-esa tabla tiene que dar `0` (en `public`, `rls_forced` de 7.3 lo vuelve a mirar).
+Tiene que dar `0`. Desde la migración `0148` (agent-core#845), `meta_private.meta_tokens` también
+tiene `FORCE`. En el commit ensayado (`e085a923`, anterior a la `0148`) daba `1` por esa tabla.
 
 ### 7.3 Aislamiento (criterio de `produccion-vps.md` §5.3)
 
@@ -260,22 +260,20 @@ esa tabla tiene que dar `0` (en `public`, `rls_forced` de 7.3 lo vuelve a mirar)
 docker exec "$API" python scripts/verificar_aislamiento.py | tee aislamiento-base-nueva.txt
 ```
 
-Guardar la salida con fecha. Con el commit ensayado sale **código 1**, y es esperado:
+Guardar la salida con fecha. El esperado es **todas las líneas en `[OK]` y código 0**:
 
 ```text
 [OK] rls_forced: RLS forzada en todo public, meta_private sin grants a PUBLIC
-[X ] rls_otros_esquemas: RLS sin FORCE fuera de public: meta_private.meta_tokens
+[OK] rls_otros_esquemas: Fuera de public no hay tablas con RLS sin FORCE
 [OK] rol_runtime: app_runtime no es superusuario, no tiene BYPASSRLS y no es dueño de ninguna base, esquema ni tabla
 [OK] rol_esperado: Conecta como app_runtime
 [OK] contrasena_runtime: No es la contraseña de desarrollo
 ```
 
-`meta_private.meta_tokens` nace de la `0018` con RLS habilitada y sin `FORCE`, y la `0029` solo
-forzó `public`: es el pendiente conocido de `docs/BACKLOG.md` y de la fase 0 de
-`produccion-vps.md`, sin migración que lo arregle todavía. No hay fuga (el runtime no es dueño,
-así que RLS le aplica) y producción sale sin Meta, así que la tabla queda vacía. Cualquier otra
-línea en `[X ]` frena el salto. Cuando exista la migración que fuerza RLS en esa tabla, el
-esperado pasa a ser todo `[OK]` y código 0.
+Cualquier línea en `[X ]` frena el salto. `rls_otros_esquemas` necesita la migración `0148`, que
+fuerza RLS en `meta_private.meta_tokens` (la `0018` la creó sin `FORCE` y la `0029` solo forzó
+`public`). En el commit ensayado (`e085a923`, anterior a la `0148`) esa línea salía en `[X ]` y el
+código era 1.
 
 ### 7.4 Arranque y login
 
@@ -334,8 +332,8 @@ producción:
 | 6. Master | `admin create --role master` sin `--password`: creado; `admin list` con una sola fila |
 | 6.1 `tenant-1` | estaba (`active`, `pack_commerce`); `deactivate` y `purge --confirm "ELIMINAR tenant-1"`: `eliminado por completo`; `tenants` con 0 filas. Prueba de punta a punta del permiso de la `0072` sin superusuario |
 | 7.1 Versiones | las de la tabla de 7.1 |
-| 7.2 RLS sin FORCE | `1`: `meta_private.meta_tokens` (pendiente conocido, ver 7.3). En `public`, 0 |
-| 7.3 Aislamiento | `rls_otros_esquemas` en `[X ]` por `meta_tokens`; los otros cuatro en `[OK]` |
+| 7.2 RLS sin FORCE | `1`: `meta_private.meta_tokens` (antes de la `0148`). En `public`, 0 |
+| 7.3 Aislamiento | `rls_otros_esquemas` en `[X ]` por `meta_tokens` (antes de la `0148`); los otros cuatro en `[OK]`. Con la `0148` sobre una base efímera, los cinco en `[OK]` y código 0 |
 | 7.4 `/healthz` | `200 {"status":"ok"}` antes y después de purgar `tenant-1` y reiniciar la API |
 | 7.4 Login | `POST /api/v1/auth/login` del master `200` con token; `GET /api/v1/admin/me` `200` rol `master`; clave mala `401` |
 | 7.4 Worker y beat | `celery@… ready` y `beat: Starting...`; en 4 minutos, 13 tareas enviadas por el beat y 12 completadas en el worker; `verify_production.py`: `[OK] worker_heartbeat_and_dlq`, `[OK] rls_forced`, `[OK] token_keys_configured` (los de Meta y `PUBLIC_BASE_URL` fallan: no hay borde ni Meta) |
@@ -343,7 +341,8 @@ producción:
 
 Hallazgos que no se arreglan en este runbook:
 
-- `meta_private.meta_tokens` sin `FORCE ROW LEVEL SECURITY`: necesita una migración (invariante 1).
+- `meta_private.meta_tokens` sin `FORCE ROW LEVEL SECURITY`: arreglado con la migración `0148`
+  (agent-core#845).
 - `inbound_trim_blocked_by_pending` salta con un stream recién creado (`last-delivered-id 0-0`):
   es un falso aviso de `core/orchestrator/retencion_streams.py`.
 - La `0003` siembra `tenant-1` en toda base nueva: aquí se purga a mano (paso 6.1).
