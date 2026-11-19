@@ -1,4 +1,4 @@
-"""Recorrido del onboarding obligatorio (HU-SH-10, HU-UX-23): estados y transiciones, sin base de datos."""
+"""Recorrido del onboarding obligatorio (HU-SH-10, HU-UX-23, HU-AOS-84): estados y transiciones, sin base de datos."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def _r(crudo: object, creado: datetime = NUEVO, desde: date | None = CORTE) -> r
 
 
 def _9(**datos: object) -> dict[str, object]:
-    """Un recorrido guardado ya con los 4 pasos de la creación rápida (HU-AOS-81)."""
+    """Un recorrido guardado ya con los 5 pasos de la ruta de lanzamiento (HU-AOS-84)."""
     return {**datos, "pasos": r.TOTAL_PASOS}
 
 
@@ -78,20 +78,57 @@ def test_el_paso_guardado_se_acota() -> None:
     assert _r(_9(estado="en_curso", paso=-4)).paso == 1
 
 
-def test_los_recorridos_de_6_y_9_pasos_se_leen_en_su_equivalente_de_4() -> None:
-    """HU-AOS-81: la bienvenida es de 4 pasos. Lo guardado sin `pasos` es del asistente de 6 (la APK) y lo
-    guardado con 9 es de SPEC-47: se traducen al leerlo. Los pasos del negocio (1 a 4 de 9) son el 1."""
-    de_6 = {1: 1, 2: 1, 3: 1, 4: 1, 5: 3, 6: 4}
+def test_lo_guardado_con_5_pasos_se_lee_tal_cual() -> None:
+    for paso in range(1, 6):
+        assert _r(_9(estado="en_curso", paso=paso)).paso == paso
+    assert r.paso_de_5(4, 5) == 4
+
+
+def test_un_recorrido_de_4_pasos_se_lee_en_su_equivalente_de_5() -> None:
+    """HU-AOS-84: la creación rápida de 4 pasa a 5 con «Datos del cliente» en el 3: 1→1, 2→2, 3→4, 4→5."""
+    for viejo, nuevo in {1: 1, 2: 2, 3: 4, 4: 5}.items():
+        assert _r({"estado": "en_curso", "paso": viejo, "pasos": 4}).paso == nuevo
+        assert r.paso_de_5(viejo, 4) == nuevo
+
+
+def test_el_paso_5_de_4_que_escribia_dejar_listo_es_habilidades() -> None:
+    """El `dejar_listo` anterior escribía `paso=5` (de 9) y `fijar` le ponía `pasos: 4`: es el 2 de 5, no
+    «Revisar y publicar»."""
+    assert _r({"estado": "en_curso", "paso": 5, "pasos": 4}).paso == 2
+    assert _r({"estado": "omitido", "paso": 5, "pasos": 4}).paso == 2
+
+
+def test_los_recorridos_de_6_y_9_pasos_se_leen_en_su_equivalente_de_5() -> None:
+    """Lo guardado sin `pasos` es del asistente de 6 (la APK) y lo guardado con 9 es de SPEC-47: pasan por las
+    tablas de 6 a 9 y de 9 a 4, y de ahí a 5. Los pasos del negocio (1 a 4 de 9) son el 1."""
+    de_6 = {1: 1, 2: 1, 3: 1, 4: 1, 5: 4, 6: 5}
     for viejo, nuevo in de_6.items():
         assert _r({"estado": "en_curso", "paso": viejo}).paso == nuevo
-    de_9 = {1: 1, 4: 1, 5: 2, 6: 2, 7: 3, 8: 4, 9: 4}
+    de_9 = {1: 1, 2: 1, 3: 1, 4: 1, 5: 2, 6: 2, 7: 4, 8: 5, 9: 5}
     for viejo, nuevo in de_9.items():
         assert _r({"estado": "en_curso", "paso": viejo, "pasos": 9}).paso == nuevo
-    # Ya guardado con 4, no se traduce; y un recorrido completo queda en el último paso.
-    assert _r(_9(estado="en_curso", paso=3)).paso == 3
+    # Un recorrido completo queda en el último paso, y un paso que no es entero se lee como el primero.
     assert _r({"estado": "completo", "paso": 6}).paso == r.TOTAL_PASOS
     assert r.paso_guardado({"estado": "en_curso", "paso": True}) == 1
+    # La escala de 4 de HU-AOS-81 sigue igual por debajo.
     assert r.paso_de_4(9, 9) == 4 and r.paso_de_4(2, 4) == 2 and r.paso_de_4(5, None) == 3
+
+
+@pytest.mark.parametrize(
+    "crudo",
+    [
+        {"paso": 99, "pasos": 5},
+        {"paso": -4, "pasos": 5},
+        {"paso": 99, "pasos": 4},
+        {"paso": 0, "pasos": 4},
+        {"paso": 99, "pasos": 9},
+        {"paso": 99},
+        {"paso": 3, "pasos": 7},
+        {"paso": 3, "pasos": True},
+    ],
+)
+def test_cualquier_escala_queda_entre_1_y_5(crudo: dict[str, object]) -> None:
+    assert 1 <= _r({"estado": "en_curso", **crudo}).paso <= r.TOTAL_PASOS
 
 
 def test_avanzar_empieza_y_retoma() -> None:
@@ -160,3 +197,7 @@ def test_finalizar_con_todo_completa_y_la_prueba_la_marca_el_playground() -> Non
         "paso": r.TOTAL_PASOS,
         "completado_en": AHORA.isoformat(),
     }
+
+
+def test_la_bienvenida_tiene_5_pasos_y_dejar_listo_lleva_a_habilidades() -> None:
+    assert (r.TOTAL_PASOS, r.PASO_DE_DEJAR_LISTO) == (5, 2)
