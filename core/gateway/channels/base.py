@@ -118,6 +118,13 @@ class OutboundAdapter(ABC):
     async def send_text(self, credentials: dict[str, str], to_external_id: str, text: str) -> str:
         """Envía un texto. Devuelve el message_id del proveedor."""
 
+    async def send_text_with_html(
+        self, credentials: dict[str, str], to_external_id: str, text: str, html: str
+    ) -> str:
+        """Envía un texto con su versión HTML (ADR-0204). Por defecto ignora el HTML: solo el
+        correo lo usa; los demás canales ya tienen su propio formato."""
+        return await self.send_text(credentials, to_external_id, text)
+
     @abstractmethod
     async def send_image(
         self, credentials: dict[str, str], to_external_id: str, image_url: str, caption: str = ""

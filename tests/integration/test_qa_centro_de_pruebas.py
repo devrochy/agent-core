@@ -142,7 +142,7 @@ async def test_ejecucion_paso_a_paso_captura_e_informe(app_client, qa_listo, mon
     monkeypatch.setattr(get_settings(), "tenants_root", str(tmp_path))
     enviados: list[tuple[str, str, str]] = []
 
-    async def _fake_send(to: str, subject: str, body: str) -> str:
+    async def _fake_send(to: str, subject: str, body: str, html: str | None = None) -> str:
         enviados.append((to, subject, body))
         return "id"
 

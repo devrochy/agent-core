@@ -1310,6 +1310,22 @@ class CalendarSkill(BaseSkill):
             body_t = body_t.rstrip() + "\n\nAgregá la cita a tu calendario: {link}"
         subject = _render_template(subject_t, **values)
         body = _render_template(body_t, **values)
+        # Ficha de la cita (ADR-0204): viaja por la cola como HTML; si falla, sale el texto.
+        html = ""
+        try:
+            from core.gateway.email_templates import html_cita
+
+            html = html_cita(
+                asunto=subject,
+                accion=action,
+                negocio=values["negocio"],
+                cita=values["titulo"],
+                fecha=values["fecha"],
+                hora=values["hora"],
+                enlace="" if action == "cancelled" else link,
+            )
+        except Exception:
+            html = ""
 
         tenant_id = get_current_tenant_id()
         recipients: list[str] = []
@@ -1330,7 +1346,9 @@ class CalendarSkill(BaseSkill):
         for to in recipients:
             try:
                 # Al equipo del negocio le llega aunque el asistente esté en pausa (HU-ARCH-37); al cliente, no.
-                await queue_outbound_email(to, subject, body, al_cliente=to == attendee_email)
+                await queue_outbound_email(
+                    to, subject, body, al_cliente=to == attendee_email, html=html or None
+                )
                 sent_any = True
             except EmailOutboxError as exc:
                 last_reason = exc.reason

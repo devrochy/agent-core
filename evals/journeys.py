@@ -175,7 +175,7 @@ class CorreosSimulados:
     def instalar(self) -> None:
         import core.gateway.system_email as correo
 
-        async def enviar(to: str, subject: str, body: str) -> str:
+        async def enviar(to: str, subject: str, body: str, html: str | None = None) -> str:
             self.enviados.append({"para": to, "asunto": subject, "cuerpo": body})
             return f"<journeys-{uuid.uuid4().hex}@example.com>"
 

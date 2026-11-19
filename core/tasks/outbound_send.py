@@ -353,6 +353,8 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
             await _release_claim(message.id, message.conversation_id, tenant_id)
             return GraphError(str(exc), category="PERMANENT")
 
+        # Presentación del correo (ADR-0204); `getattr` tolera filas/objetos viejos sin la columna.
+        html_correo = getattr(message, "html", None)
         try:
             if message.template_name:
                 # Una plantilla que el canal no sabe enviar (`ChannelError`) es permanente: reintentarla como error
@@ -480,6 +482,11 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
             elif message.media_type == "image" and message.media_url:
                 wamid = await adapter.send_image(
                     credentials, customer.external_id, message.media_url, message.content
+                )
+            elif html_correo:
+                # El correo trae su diseño en la fila (ADR-0204): no se rearma en el canal.
+                wamid = await adapter.send_text_with_html(
+                    credentials, customer.external_id, message.content, html_correo
                 )
             else:
                 wamid = await adapter.send_text(credentials, customer.external_id, message.content)

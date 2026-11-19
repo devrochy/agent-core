@@ -582,6 +582,9 @@ class Message(Base):
     direction: Mapped[str] = mapped_column(Text)      # inbound | outbound
     sender_type: Mapped[str] = mapped_column(Text)    # customer | agent | human
     content: Mapped[str] = mapped_column(Text, default="")
+    # Cuerpo HTML del correo (ADR-0204): viaja junto al texto plano que ya estaba.
+    # NULL = el canal arma el suyo o el correo sale solo en texto.
+    html: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, default="sent")  # queued|sent|delivered|read|failed (outbound)
     # Turno que causó la fila (HU-AOS-10): default del turno vigente, NULL fuera de un turno.
     turn_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=turn_id_de_fila)

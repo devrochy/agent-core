@@ -22,6 +22,7 @@ from core.admin.auth import hash_password
 from core.admin.invitations_service import SIN_CONTRASENA
 from core.db.models import Admin, AdminSession, PasswordResetToken
 from core.db.session import get_session
+from core.gateway.email_templates import html_password_reset
 from core.gateway.system_email import send_system_email
 from core.shared.logger import get_logger
 
@@ -88,7 +89,9 @@ async def solicitar_reset(identifier: str) -> None:
         f"Vence en {TTL_MINUTES} minutos. Si no fuiste tú, ignora este correo."
     )
     try:
-        enviado = await send_system_email(destinatario, subject, body)
+        enviado = await send_system_email(
+            destinatario, subject, body, html_password_reset(codigo=code, minutos=TTL_MINUTES)
+        )
     except Exception:
         log.warning("password_reset_email_failed", admin_id=str(admin.id), exc_info=True)
         return
