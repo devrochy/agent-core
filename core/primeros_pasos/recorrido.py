@@ -37,14 +37,20 @@ log = get_logger(__name__)
 EstadoDelRecorrido = Literal["pendiente", "en_curso", "omitido", "completo", "no_aplica"]
 ESTADOS_GUARDADOS: Final = ("en_curso", "omitido", "completo")
 
-# SPEC-47 (HU-AOS-81, D-SPEC-47-4): la bienvenida es la creación rápida de 4 pasos: 1 Tu negocio y tipo de
-# agente · 2 Habilidades y formas de pago · 3 Datos para probar · 4 Revisar, probar y publicar. Antes fueron
-# 9 (HU-UX-23) y antes 6 (HU-UX-21, la APK todavía los manda sin `pasos`). Lo guardado lleva `pasos` con el
-# total con que se guardó; uno de 9 o de 6 se traduce al leerlo.
-TOTAL_PASOS: Final = 4
+# SPEC-49 (HU-AOS-84, D-77): la bienvenida es la ruta de 5 estaciones: 1 Tu negocio y tipo de agente ·
+# 2 Habilidades y formas de pago · 3 Datos del cliente · 4 Datos para probar · 5 Revisar, probar y publicar.
+# Antes fueron 4 (HU-AOS-81), 9 (HU-UX-23) y 6 (HU-UX-21, la APK todavía los manda sin `pasos`). Lo guardado
+# lleva `pasos` con el total con que se guardó; uno de 4, 9 o 6 se traduce al leerlo.
+TOTAL_PASOS: Final = 5
+PASOS_DE_4: Final = 4
 PASOS_ANTERIORES: Final = 9
 PASO_DE_6_A_9: Final = {1: 1, 2: 3, 3: 4, 4: 4, 5: 7, 6: 8}
 PASO_DE_9_A_4: Final = {1: 1, 2: 1, 3: 1, 4: 1, 5: 2, 6: 2, 7: 3, 8: 4, 9: 4}
+PASO_DE_4_A_5: Final = {1: 1, 2: 2, 3: 4, 4: 5}
+# Totales con que un cliente puede numerar `avanzar` (sin `pasos`, la escala de 6 de la APK).
+ESCALAS_DE_AVANZAR: Final = frozenset({PASOS_DE_4, TOTAL_PASOS, PASOS_ANTERIORES})
+# Al dejar listo el agente sigue «Habilidades».
+PASO_DE_DEJAR_LISTO: Final = 2
 ACCION_AUDITORIA: Final = "onboarding_recorrido"
 
 
@@ -141,23 +147,38 @@ def paso_de_6_a_9(paso: int) -> int:
 
 
 def paso_de_4(paso: int, pasos: int | None) -> int:
-    """El paso de la bienvenida de 4 que corresponde a `paso` numerado sobre `pasos` (4, 9 o, sin dato, 6)."""
+    """El paso de la creación rápida de 4 (HU-AOS-81) que corresponde a `paso` numerado sobre `pasos` (4, 9 o,
+    sin dato, 6). Un `{paso: 5, pasos: 4}` solo lo escribía el `dejar_listo` anterior a HU-AOS-84 con la
+    numeración de 9 («Habilidades»): un paso mayor que 4 guardado con 4 se lee sobre 9."""
+    if pasos == PASOS_DE_4 and paso <= PASOS_DE_4:
+        return max(paso, 1)
+    if pasos in (PASOS_DE_4, PASOS_ANTERIORES):
+        de_9 = paso
+    else:
+        de_9 = paso_de_6_a_9(min(max(paso, 1), 6))
+    return PASO_DE_9_A_4.get(min(max(de_9, 1), PASOS_ANTERIORES), PASOS_DE_4)
+
+
+def paso_de_5(paso: int, pasos: int | None) -> int:
+    """El paso de la bienvenida de 5 que corresponde a `paso` numerado sobre `pasos` (5, 4, 9 o, sin dato, 6).
+    Lo de 9 y de 6 pasa por las tablas de siempre hasta la escala de 4 y de ahí a la de 5. Siempre 1..5."""
     if pasos == TOTAL_PASOS:
-        return paso
-    de_9 = paso if pasos == PASOS_ANTERIORES else paso_de_6_a_9(min(max(paso, 1), 6))
-    return PASO_DE_9_A_4.get(min(max(de_9, 1), PASOS_ANTERIORES), TOTAL_PASOS)
+        return min(max(paso, 1), TOTAL_PASOS)
+    return PASO_DE_4_A_5[paso_de_4(paso, pasos)]
 
 
 def paso_guardado(datos: dict[str, Any]) -> int:
-    """El paso guardado, entre 1 y `TOTAL_PASOS`. Uno guardado con 9 o con 6 pasos se lleva a su
-    equivalente de 4. Un recorrido completo queda en el último paso."""
+    """El paso guardado, entre 1 y `TOTAL_PASOS`. Uno guardado con 4, 9 o 6 pasos se lleva a su
+    equivalente de 5. Un recorrido completo queda en el último paso."""
     paso = datos.get("paso")
     if not isinstance(paso, int) or isinstance(paso, bool):
         return 1
     if datos.get("estado") == "completo":
         return TOTAL_PASOS
     pasos = datos.get("pasos")
-    return min(max(paso_de_4(paso, pasos if isinstance(pasos, int) else None), 1), TOTAL_PASOS)
+    if not isinstance(pasos, int) or isinstance(pasos, bool):
+        pasos = None
+    return paso_de_5(paso, pasos)
 
 
 # --------------------------------------------------------------------- transiciones (puras)
@@ -272,8 +293,8 @@ async def fijar(
     from core.db.session import get_session
 
     _exigir_scope(tenant_id)
-    # Todo lo que se escribe queda con el total de 4 pasos. Si el cambio no trae `paso`, se escribe el ya
-    # traducido: si no, un recorrido guardado con 9 o 6 quedaría marcado como de 4 con el número viejo.
+    # Todo lo que se escribe queda con el total de 5 pasos. Si el cambio no trae `paso`, se escribe el ya
+    # traducido: si no, un recorrido guardado con 4, 9 o 6 quedaría marcado como de 5 con el número viejo.
     if "paso" not in cambios:
         cambios = {**cambios, "paso": (await leer(tenant_id)).paso}
     cambios = {**cambios, "pasos": TOTAL_PASOS}
@@ -324,9 +345,13 @@ async def marcar_prueba(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> None:
 
 __all__ = [
     "ACCION_AUDITORIA",
+    "ESCALAS_DE_AVANZAR",
     "PASOS_ANTERIORES",
+    "PASOS_DE_4",
+    "PASO_DE_4_A_5",
     "PASO_DE_6_A_9",
     "PASO_DE_9_A_4",
+    "PASO_DE_DEJAR_LISTO",
     "TOTAL_PASOS",
     "FaltanPasos",
     "NegocioNoEncontrado",
@@ -343,6 +368,7 @@ __all__ = [
     "leer",
     "marcar_prueba",
     "paso_de_4",
+    "paso_de_5",
     "paso_de_6_a_9",
     "paso_guardado",
 ]

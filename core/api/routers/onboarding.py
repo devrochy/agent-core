@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from core.agents import editor as editor_svc
 from core.agents import versiones
@@ -121,10 +121,20 @@ class AvanzarIn(BaseModel):
     pasos: int | None = Field(
         default=None,
         description=(
-            "Total de pasos con que el cliente numera `paso` (4 desde HU-AOS-81; 9 un panel anterior). Sin él, "
-            "el paso es del asistente de 6 (la APK) y se guarda traducido a su equivalente de 4."
+            "Total de pasos con que el cliente numera `paso`: 5 desde HU-AOS-84; 4 la creación rápida de "
+            "HU-AOS-81 y 9 un panel anterior, que se traducen a su equivalente de 5. Sin él, el paso es del "
+            "asistente de 6 (la APK) y se guarda traducido. Otro total responde 422."
         ),
     )
+
+    @field_validator("pasos")
+    @classmethod
+    def _escala_conocida(cls, pasos: int | None) -> int | None:
+        # Se valida aquí y no con un enum en el esquema: restringir el tipo del contrato rompería la compatibilidad
+        # de `/api/v1` (oasdiff), y ningún cliente manda otro total que 4, 9 o ninguno.
+        if pasos is not None and pasos not in rec.ESCALAS_DE_AVANZAR:
+            raise ValueError("pasos debe ser 4, 5 o 9")
+        return pasos
 
 
 def _puede_ver(principal: Principal, seccion: str | None) -> bool:
@@ -252,9 +262,10 @@ async def avanzar_recorrido(
     require_owner_or_master(principal)
     actual = await _leer_recorrido(principal)
     try:
-        if payload.pasos == rec.TOTAL_PASOS and payload.paso > rec.TOTAL_PASOS:
-            raise rec.TransicionInvalida(f"el paso debe estar entre 1 y {rec.TOTAL_PASOS}")
-        paso = rec.paso_de_4(payload.paso, payload.pasos)
+        # Con 4 o 5 el cliente numera sobre esa escala: un paso mayor no existe (no se adivina cuál quería).
+        if payload.pasos in (rec.TOTAL_PASOS, rec.PASOS_DE_4) and payload.paso > payload.pasos:
+            raise rec.TransicionInvalida(f"el paso debe estar entre 1 y {payload.pasos}")
+        paso = rec.paso_de_5(payload.paso, payload.pasos)
         cambios = rec.cambios_de_avanzar(actual, paso)
     except rec.TransicionInvalida as exc:
         raise _transicion_invalida(exc) from None
@@ -435,8 +446,9 @@ async def dejar_listo(
     if actual.agente_id != cambios["agente_id"]:
         cambios["probado_en"] = None  # otro agente: la prueba anterior no cuenta
     if actual.estado == "pendiente":
-        # Al dejarlo listo sigue «Habilidades» (paso 5 de 9, SPEC-47).
-        cambios.update(estado="en_curso", paso=5)
+        cambios["estado"] = "en_curso"
+    # Al dejarlo listo sigue «Habilidades» (paso 2 de 5, HU-AOS-84); uno que ya va más adelante no retrocede.
+    cambios["paso"] = max(actual.paso, rec.PASO_DE_DEJAR_LISTO)
     try:
         nuevo = await rec.fijar(tid, cambios, actor=actor, accion="dejar-listo")
     except rec.NegocioNoEncontrado:
