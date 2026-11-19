@@ -88,7 +88,7 @@ def correos(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
     """Correo de sistema capturado (sin SMTP real)."""
     enviados: list[dict[str, str]] = []
 
-    async def falso(to: str, subject: str, body: str) -> str:
+    async def falso(to: str, subject: str, body: str, html: str | None = None) -> str:
         enviados.append({"to": to, "subject": subject, "body": body})
         return "msg-test"
 
@@ -808,7 +808,7 @@ async def test_reintento_con_el_correo_corregido_no_manda_el_enlace_a_otro_corre
     correo_a, correo_b = _correo(), _correo()
     referencia, _ = await _pedido_de_plan(vendedor, datos_alta=_datos(correo_a))
 
-    async def smtp_caido(to: str, subject: str, body: str) -> str:
+    async def smtp_caido(to: str, subject: str, body: str, html: str | None = None) -> str:
         raise OSError("smtp caído")
 
     # El alta crea la cuenta de A, pero el correo no sale: al tercer intento, revisión.
@@ -824,7 +824,7 @@ async def test_reintento_con_el_correo_corregido_no_manda_el_enlace_a_otro_corre
     # El master corrige el correo del pedido a B y reintenta, con el SMTP ya funcionando.
     enviados: list[dict[str, str]] = []
 
-    async def smtp_ok(to: str, subject: str, body: str) -> str:
+    async def smtp_ok(to: str, subject: str, body: str, html: str | None = None) -> str:
         enviados.append({"to": to, "subject": subject, "body": body})
         return "msg-test"
 
@@ -868,7 +868,7 @@ async def test_reintento_tras_purgar_el_negocio_no_hereda_su_redis(vendedores, m
     referencia, _ = await _pedido_de_plan(vendedor, datos_alta=_datos(_correo()))
     negocio = id_del_negocio(vendedor, referencia)
 
-    async def smtp_caido(to: str, subject: str, body: str) -> str:
+    async def smtp_caido(to: str, subject: str, body: str, html: str | None = None) -> str:
         raise OSError("smtp caído")
 
     # El alta crea el negocio, pero el correo no sale: queda en revisión con el negocio creado.
@@ -909,7 +909,7 @@ async def test_reintento_tras_purgar_el_negocio_no_hereda_su_redis(vendedores, m
         assert await r.exists(clave) == 1, f"{clave}: el fallo de la limpieza es real"
 
     # Reintentar el alta: el mismo negocio (idempotencia por id), sin el estado del anterior.
-    async def smtp_ok(to: str, subject: str, body: str) -> str:
+    async def smtp_ok(to: str, subject: str, body: str, html: str | None = None) -> str:
         return "msg-test"
 
     monkeypatch.setattr("core.gateway.system_email.send_system_email", smtp_ok)

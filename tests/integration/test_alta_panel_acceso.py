@@ -40,7 +40,7 @@ def correos(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
     """Correo de sistema capturado (sin SMTP real)."""
     enviados: list[dict[str, str]] = []
 
-    async def falso(to: str, subject: str, body: str) -> str:
+    async def falso(to: str, subject: str, body: str, html: str | None = None) -> str:
         enviados.append({"to": to, "subject": subject, "body": body})
         return "msg-test"
 
@@ -177,7 +177,7 @@ async def test_smtp_caido_crea_el_negocio_y_el_reenvio_manda_el_mismo_enlace(
     t1, _t2 = tenant_setup
     master = await api_headers(app_client, t1)
 
-    async def caido(to: str, subject: str, body: str) -> str:
+    async def caido(to: str, subject: str, body: str, html: str | None = None) -> str:
         raise OSError("smtp caído")
 
     monkeypatch.setattr("core.gateway.system_email.send_system_email", caido)
@@ -190,7 +190,7 @@ async def test_smtp_caido_crea_el_negocio_y_el_reenvio_manda_el_mismo_enlace(
 
     enviados: list[dict[str, str]] = []
 
-    async def bueno(to: str, subject: str, body: str) -> str:
+    async def bueno(to: str, subject: str, body: str, html: str | None = None) -> str:
         enviados.append({"to": to, "subject": subject, "body": body})
         return "msg"
 
@@ -210,7 +210,7 @@ async def test_sin_smtp_configurado_se_informa(app_client, tenant_setup, monkeyp
     t1, _t2 = tenant_setup
     master = await api_headers(app_client, t1)
 
-    async def sin_smtp(to: str, subject: str, body: str) -> None:
+    async def sin_smtp(to: str, subject: str, body: str, html: str | None = None) -> None:
         return None
 
     monkeypatch.setattr("core.gateway.system_email.send_system_email", sin_smtp)

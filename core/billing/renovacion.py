@@ -265,11 +265,32 @@ def asunto_y_cuerpo(payload: dict[str, Any], enlace: str) -> tuple[str, str]:
     return asunto, cuerpo
 
 
+def html_de_renovacion(payload: dict[str, Any], enlace: str) -> str:
+    """Versión HTML del aviso de renovación, con la misma información del texto."""
+    from core.gateway.email_templates import html_renovacion
+
+    asunto, _ = asunto_y_cuerpo(payload, enlace)
+    plan = str(payload.get("plan_nombre") or payload.get("plan_id") or "tu plan")
+    inicio = _fecha(payload.get("periodo_inicio"))
+    vence = inicio.strftime("%d/%m/%Y") if inicio else ""
+    mensaje = f"El período de tu plan {plan} en SolversHub vence el {vence}."
+    return html_renovacion(
+        titulo=asunto,
+        mensaje=mensaje,
+        vence=vence,
+        monto=_monto(payload.get("monto")),
+        referencia=str(payload.get("referencia") or ""),
+        enlace=enlace,
+    )
+
+
 REMITENTE_VENDEDOR = "vendedor"
 REMITENTE_PLATAFORMA = "plataforma"
 
 
-async def _enviar_aviso(vendedor: uuid.UUID | None, email: str, asunto: str, cuerpo: str) -> str | None:
+async def _enviar_aviso(
+    vendedor: uuid.UUID | None, email: str, asunto: str, cuerpo: str, html: str | None = None
+) -> str | None:
     """Envía el aviso de renovación. Devuelve por dónde salió (`vendedor` o `plataforma`) o
     None si no hay ningún SMTP configurado.
 
@@ -290,7 +311,7 @@ async def _enviar_aviso(vendedor: uuid.UUID | None, email: str, asunto: str, cue
     from core.gateway.system_email import send_system_email
 
     try:
-        return REMITENTE_PLATAFORMA if await send_system_email(email, asunto, cuerpo) is not None else None
+        return REMITENTE_PLATAFORMA if await send_system_email(email, asunto, cuerpo, html) is not None else None
     except (OSError, smtplib.SMTPException):
         log.warning("billing_renovacion_correo_fallido", exc_info=True)
         raise
@@ -302,12 +323,14 @@ async def _avisar_por_el_panel(
     """Correo a los dueños con el enlace a `/plan` y un push."""
     from core.admin.invitations_service import url_del_panel
 
-    asunto, cuerpo = asunto_y_cuerpo(payload, f"{url_del_panel()}/plan")
+    enlace = f"{url_del_panel()}/plan"
+    asunto, cuerpo = asunto_y_cuerpo(payload, enlace)
+    html = html_de_renovacion(payload, enlace)
     enviados = 0
     sin_smtp = False
     remitentes: set[str] = set()
     for email in await _correos_de_los_duenos(negocio):
-        remitente = await _enviar_aviso(vendedor, email, asunto, cuerpo)
+        remitente = await _enviar_aviso(vendedor, email, asunto, cuerpo, html)
         if remitente is None:
             sin_smtp = True
         else:
@@ -327,4 +350,4 @@ async def _avisar_por_el_panel(
     return {"correos": enviados, "sin_smtp": sin_smtp, "remitente": ",".join(sorted(remitentes)) or None}
 
 
-__all__ = ["asunto_y_cuerpo", "on_platform_renewal_due", "renovar_negocio", "renovar_suscripciones"]
+__all__ = ["asunto_y_cuerpo", "html_de_renovacion", "on_platform_renewal_due", "renovar_negocio", "renovar_suscripciones"]

@@ -100,6 +100,46 @@ def asunto_y_cuerpo(
     return asunto, cuerpo
 
 
+def html_de_acceso(
+    inv: InvitacionOwner, *, negocio: str, nombre: str | None, origen: Literal["compra", "panel"] = "compra"
+) -> str:
+    """Versión HTML del mismo aviso. El texto de `asunto_y_cuerpo` sigue siendo el respaldo
+    y la fuente del asunto; aquí solo se elige la pieza visual (botón, detalle, aviso)."""
+    from core.gateway.email_templates import html_acceso
+
+    asunto, _ = asunto_y_cuerpo(inv, negocio=negocio, nombre=nombre, origen=origen)
+    saludo = f"Hola {nombre}," if nombre else "Hola,"
+    if inv.con_enlace:
+        mensaje = f"Tu negocio «{negocio}» ya está creado en SolversHub."
+        eyebrow = "Tu acceso a SolversHub"
+        cta = "Definir mi contraseña"
+        detalle = f"El enlace es de un solo uso y vence el {inv.vence_texto}."
+        aviso = "Si no fuiste tú, ignora este correo: sin este enlace nadie puede entrar con tu correo."
+    elif origen == "panel":
+        mensaje = f"Te dieron acceso como dueño del negocio «{negocio}» en SolversHub."
+        eyebrow = "Acceso a un negocio"
+        cta = "Aceptar la invitación"
+        detalle = f"Entra con tu cuenta ({inv.email}) y acepta la invitación."
+        aviso = "Si no esperabas este acceso, no lo aceptes."
+    else:
+        mensaje = f"Te invitaron como dueño del negocio «{negocio}» en SolversHub."
+        eyebrow = "Invitación a SolversHub"
+        cta = "Aceptar la invitación"
+        detalle = f"Entra con tu cuenta ({inv.email}) y acepta la invitación."
+        aviso = "Si no reconoces esta compra, no la aceptes."
+    return html_acceso(
+        titulo=asunto,
+        preview=mensaje,
+        eyebrow=eyebrow,
+        saludo=saludo,
+        mensaje=mensaje,
+        cta=cta,
+        enlace=inv.enlace,
+        detalle=detalle,
+        aviso=aviso,
+    )
+
+
 async def enviar_acceso(
     inv: InvitacionOwner, *, negocio: str, nombre: str | None, origen: Literal["compra", "panel"] = "compra"
 ) -> str:
@@ -108,7 +148,8 @@ async def enviar_acceso(
     from core.gateway.system_email import send_system_email
 
     asunto, cuerpo = asunto_y_cuerpo(inv, negocio=negocio, nombre=nombre, origen=origen)
-    enviado = await send_system_email(inv.email, asunto, cuerpo)
+    html = html_de_acceso(inv, negocio=negocio, nombre=nombre, origen=origen)
+    enviado = await send_system_email(inv.email, asunto, cuerpo, html)
     return "enviado" if enviado else "sin_smtp"
 
 
@@ -313,6 +354,7 @@ __all__ = [
     "correo_valido",
     "emitir_y_enviar_acceso",
     "enviar_acceso",
+    "html_de_acceso",
     "motivo_para_no_dar_acceso",
     "reenviar_acceso",
 ]

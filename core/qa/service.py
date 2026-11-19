@@ -47,7 +47,7 @@ from core.qa.estados import (
     estado_de_prueba,
     progreso,
 )
-from core.qa.informe import armar_informe, cuerpo_correo
+from core.qa.informe import ETIQUETA, armar_informe, cuerpo_correo
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
@@ -701,6 +701,42 @@ async def enviar_ejecucion(admin: Admin, comentario: str | None) -> dict[str, An
     return salida
 
 
+def _html_del_informe(
+    informe: dict[str, Any], *, asunto: str, enlace: str | None, quien: str
+) -> str:
+    """Diseño del informe: mismas cifras y fallas que el texto, en una pieza visual."""
+    from core.gateway.email_templates import html_informe_qa
+
+    p = informe.get("progreso") or {}
+    ciclo = str((informe.get("ciclo") or {}).get("nombre") or "")
+    todas = [
+        {
+            "estado": prueba["estado"],
+            "etiqueta": ETIQUETA.get(prueba["estado"], prueba["estado"]),
+            "titulo": " ".join((prueba.get("titulo") or "").split()),
+        }
+        for prueba in informe.get("pruebas") or []
+        if prueba.get("estado") in ("falla", "bloqueada")
+    ]
+    resumen = (
+        f"{quien} envió su informe del ciclo «{ciclo}»: "
+        f"{p.get('terminadas', 0)} de {p.get('total', 0)} terminadas."
+    )
+    return html_informe_qa(
+        titulo=asunto,
+        ciclo=ciclo,
+        resumen=resumen,
+        terminadas=int(p.get("terminadas", 0) or 0),
+        total=int(p.get("total", 0) or 0),
+        ok=int(p.get("ok", 0) or 0),
+        falla=int(p.get("falla", 0) or 0),
+        bloqueada=int(p.get("bloqueada", 0) or 0),
+        fallas=todas[:20],
+        restantes=max(0, len(todas) - 20),
+        enlace=enlace,
+    )
+
+
 async def _avisar_informe(destinatarios: list[str], informe: dict[str, Any], run_id: uuid.UUID) -> None:
     from core.gateway.system_email import send_system_email
 
@@ -715,9 +751,10 @@ async def _avisar_informe(destinatarios: list[str], informe: dict[str, Any], run
         quien = enmascarar_correo(quien)
     asunto = f"Informe de pruebas de {quien} · {(informe.get('ciclo') or {}).get('nombre')}"
     cuerpo = cuerpo_correo(informe, enlace)
+    html = _html_del_informe(informe, asunto=asunto, enlace=enlace, quien=quien)
     for destino in destinatarios:
         try:
-            await send_system_email(destino, asunto, cuerpo)
+            await send_system_email(destino, asunto, cuerpo, html)
         except Exception as exc:  # el informe ya quedó guardado; el correo es solo aviso
             log.warning("qa_informe_correo_fallo", error=type(exc).__name__)
 
