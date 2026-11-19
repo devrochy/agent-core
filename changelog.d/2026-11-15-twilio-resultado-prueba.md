@@ -1,6 +1,0 @@
-## WhatsApp vía Twilio · resultado real del mensaje de prueba (2026-11-15)
-
-- Twilio acepta la prueba (201) y el rechazo llega después por el status callback: el 63015 del Sandbox (el número no mandó `join`) o el 63016 de un sender real (fuera de la ventana de 24 h). Antes el panel decía «Enviamos la prueba» y nunca veía el rechazo.
-- `enviar_prueba` guarda el SID de la última prueba por conexión en Redis (`twilio_prueba_ultima:{tenant}:{conexión}`, TTL de un día, sin migración) y el webhook de estado le aplica cada callback de ese SID. El estado solo avanza (`queued < sent < delivered < read`; `failed` es final) y se escribe con un script Lua, así que dos callbacks simultáneos no se pisan.
-- Nueva ruta `GET /api/v1/admin/connections/twilio/{connection_id}/test-message/{message_sid}` (Conexiones en lectura, bandera `whatsapp_twilio`): `estado`, `provider_status`, `error_code` y `motivo` en palabras (63015 con el `join <código>` y el número del sandbox; 63016; 63003/63024; los demás con el código de Twilio). 404 si ese SID no es la última prueba de la conexión o ya venció.
-- `twilio_connections.last_error_code` no cambia: es la salud de la conexión, y que un destinatario no se haya unido no la pone en error. Log nuevo `twilio_prueba_estado_fallido` si Redis falla al aplicar el estado (el webhook igual responde 200).

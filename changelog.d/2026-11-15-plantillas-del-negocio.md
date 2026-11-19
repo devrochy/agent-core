@@ -1,6 +1,0 @@
-## Las mismas plantillas en todas las conexiones de WhatsApp (HU-CONN-21, 2026-11-15)
-
-- Nueva vista agregada `GET /api/v1/admin/whatsapp-templates`: cada plantilla del negocio una vez (nombre e idioma) con su estado en cada conexión de Meta y de Twilio (aprobada, pendiente, sin enviar, rechazada, pausada, falta o no replicable, y si el texto es distinto), y los avisos por evento cuya plantilla falta o no está aprobada en una conexión activa.
-- `POST /api/v1/admin/whatsapp-templates/copy` copia una plantilla aprobada a otras conexiones (la crea y la envía a aprobación) con resultado por destino: creada, ya existía, distinta (no se pisa), no replicable o error. `POST …/copy-all` copia todas las que falten a una conexión, hasta 10 por pedido, y dice cuántas quedan.
-- Hacia Twilio solo se copian plantillas de texto con variables numeradas (sin encabezado, pie ni botones); de Meta a Meta van los componentes completos salvo un encabezado con multimedia; de Twilio a Meta el texto pasa a un BODY con sus ejemplos. El Sandbox de Twilio y las conexiones pausadas no son destino. En Twilio el nombre no se repite entre idiomas: el mismo nombre en otro idioma queda «no replicable».
-- Sin tabla ni migración nuevas. Log `plantilla_replicada` por destino y contador `agentcore_plantillas_replicadas_total` por resultado.
