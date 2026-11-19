@@ -101,6 +101,7 @@ def test_cada_pack_registra_procedimiento_y_resolvers() -> None:
         host.end_activation()
     assert host.get_resumen("cob_registrar_promesa_saldo") is not None
     assert host.get_resumen("sub_confirmar_inscripcion") is not None
+    assert host.get_resumen("sub_aplicar_cambio_plan") is not None
     assert {p.id for lista in host.get_procedures().values() for p in lista} == {
         i for ids in PUBLICADOS.values() for i in ids
     }

@@ -536,14 +536,14 @@
           "tool_calls": [
             {
               "arguments": {},
-              "id": "call_00_C06ScpnwaZOyxOLgNbEk6191",
+              "id": "call_00_NruoJknRcs8vIEKkxAyZ8301",
               "name": "consultar_inventario"
             }
           ],
           "usage": {
             "cache_read_tokens": 7552,
             "cache_write_tokens": 0,
-            "input_tokens": 7793,
+            "input_tokens": 7794,
             "output_tokens": 24
           }
         }

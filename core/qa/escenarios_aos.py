@@ -33,7 +33,7 @@ from core.qa.escenarios import (
 from core.shared.audit import record_audit
 
 COMERCIO = "pack_commerce"
-CONTRATAR_PLAN = ("pack_subscriptions.contratar_plan", "2.1.0")
+CONTRATAR_PLAN = ("pack_subscriptions.contratar_plan", "2.2.0")
 TOMAR_PEDIDO = ("pack_commerce.tomar_pedido", "1.1.0")
 
 

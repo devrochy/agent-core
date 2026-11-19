@@ -530,15 +530,15 @@
       },
       "respuestas": [
         {
-          "content": "¡Hola, buenas tardes! 😊 Con gusto te cuento. ¿Qué estás buscando hoy: algo para comer, un producto en particular, o preferís que te muestre las opciones que tenemos?",
+          "content": "¡Hola! Buenas tardes 😊 Con gusto te cuento qué tenemos hoy.\n\n¿Buscás algo en particular? Por ejemplo, para comer, algo dulce, bebidas... Contame qué se te antoja y te muestro las opciones disponibles.",
           "model": "deepseek-flash",
           "stop_reason": "end_turn",
           "tool_calls": [],
           "usage": {
-            "cache_read_tokens": 3968,
+            "cache_read_tokens": 4096,
             "cache_write_tokens": 0,
-            "input_tokens": 7790,
-            "output_tokens": 47
+            "input_tokens": 7791,
+            "output_tokens": 57
           }
         }
       ],
