@@ -5084,7 +5084,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -5181,7 +5181,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -6696,6 +6696,86 @@
             }
           }
         ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/leads/{lead_id}/seguimiento/hecho": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Seguimiento Hecho",
+        "description": "Marca como hecho el seguimiento del lead del cliente; queda en su línea de tiempo con la nota (ADR-0193: antes\n`POST /api/v1/pack/commerce/leads/{customer_id}/seguimiento/hecho`, que sigue como alias).",
+        "operationId": "seguimiento_hecho_api_v1_admin_leads__lead_id__seguimiento_hecho_post",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeguimientoHechoIn"
+              }
+            }
+          }
+        },
         "responses": {
           "204": {
             "description": "Successful Response"
@@ -12613,6 +12693,168 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AgentFlowOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/schedule": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Get Agent Schedule",
+        "description": "Horario del borrador del agente y el del negocio que hereda si no tiene uno propio.",
+        "operationId": "get_agent_schedule_api_v1_admin_agents__agent_id__schedule_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentScheduleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Save Agent Schedule",
+        "description": "Guarda el horario propio (o `null` para heredar) con el `lock_version` del borrador. Vale al publicar.",
+        "operationId": "save_agent_schedule_api_v1_admin_agents__agent_id__schedule_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentScheduleIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentScheduleOut"
                 }
               }
             }
@@ -22660,7 +22902,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "409": {
             "content": {
@@ -22811,7 +23053,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "409": {
             "content": {
@@ -23049,7 +23291,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "409": {
             "content": {
@@ -23152,7 +23394,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "409": {
             "content": {
@@ -23257,7 +23499,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "409": {
             "content": {
@@ -23429,7 +23671,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "409": {
             "content": {
@@ -23670,7 +23912,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -23759,7 +24001,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       },
@@ -23854,7 +24096,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -24043,7 +24285,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       },
@@ -38196,6 +38438,624 @@
         }
       }
     },
+    "/api/v1/pack/payments/accounts": {
+      "get": {
+        "tags": [
+          "pack · pagos"
+        ],
+        "summary": "List Accounts",
+        "operationId": "list_accounts_api_v1_pack_payments_accounts_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PaymentAccount"
+                  },
+                  "title": "Response List Accounts Api V1 Pack Payments Accounts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pack · pagos"
+        ],
+        "summary": "Create Account",
+        "operationId": "create_account_api_v1_pack_payments_accounts_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentAccountIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentAccount"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/payments/accounts/{account_id}": {
+      "patch": {
+        "tags": [
+          "pack · pagos"
+        ],
+        "summary": "Update Account",
+        "operationId": "update_account_api_v1_pack_payments_accounts__account_id__patch",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentAccountPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentAccount"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pack · pagos"
+        ],
+        "summary": "Delete Account",
+        "operationId": "delete_account_api_v1_pack_payments_accounts__account_id__delete",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_knowledge/agents/{agent_id}/documents": {
+      "get": {
+        "tags": [
+          "pack · conocimiento"
+        ],
+        "summary": "Listar Documentos",
+        "operationId": "listar_documentos_api_v1_pack_pack_knowledge_agents__agent_id__documents_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentoOut"
+                  },
+                  "title": "Response Listar Documentos Api V1 Pack Pack Knowledge Agents  Agent Id  Documents Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pack · conocimiento"
+        ],
+        "summary": "Subir Documento",
+        "description": "Sube un documento al agente. Queda `pendiente` y el worker lo procesa.",
+        "operationId": "subir_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_subir_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentoOut"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_documentos`, `error.details = {metric, used, limit}`; no se escribió nada."
+          },
+          "413": {
+            "description": "El archivo supera 20 MB (`error.code = muy_grande`)."
+          },
+          "422": {
+            "description": "Tipo o contenido no admitido (`error.code = formato | vacio`)."
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_knowledge/agents/{agent_id}/documents/{document_id}": {
+      "delete": {
+        "tags": [
+          "pack · conocimiento"
+        ],
+        "summary": "Borrar Documento",
+        "operationId": "borrar_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents__document_id__delete",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/pack_knowledge/agents/{agent_id}/documents/{document_id}/reprocess": {
+      "post": {
+        "tags": [
+          "pack · conocimiento"
+        ],
+        "summary": "Reprocesar Documento",
+        "operationId": "reprocesar_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents__document_id__reprocess_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pack/commerce/dashboard": {
       "get": {
         "tags": [
@@ -39893,14 +40753,25 @@
         }
       }
     },
-    "/api/v1/pack/calendar/status": {
+    "/api/v1/pack/commerce/agents/{agent_id}/payment-forms": {
       "get": {
         "tags": [
-          "pack · calendario"
+          "pack · comercio"
         ],
-        "summary": "Calendar Status",
-        "operationId": "calendar_status_api_v1_pack_calendar_status_get",
+        "summary": "Formas De Pago Del Agente",
+        "description": "Formas de pago del agente con su estado, sus cuentas de transferencia y el proveedor en línea.",
+        "operationId": "formas_de_pago_del_agente_api_v1_pack_commerce_agents__agent_id__payment_forms_get",
         "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
           {
             "name": "X-Tenant-Id",
             "in": "header",
@@ -39940,73 +40811,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CalendarStatus"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/calendars": {
-      "get": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "List Calendars",
-        "description": "Agendas del negocio con el nombre que el asistente le dice al cliente.",
-        "operationId": "list_calendars_api_v1_pack_calendar_calendars_get",
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CalendarListOut"
+                  "$ref": "#/components/schemas/FormasDePagoOut"
                 }
               }
             }
@@ -40023,1833 +40828,13 @@
           }
         }
       },
-      "post": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Create Calendar",
-        "description": "Crea una agenda interna (sin cuenta de Google). Las de Google nacen al conectar la cuenta.",
-        "operationId": "create_calendar_api_v1_pack_calendar_calendars_post",
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CalendarIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CalendarOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/calendars/{calendar_id}": {
       "put": {
         "tags": [
-          "pack · calendario"
+          "pack · comercio"
         ],
-        "summary": "Update Calendar",
-        "description": "Edita una agenda: nombre visible, descripción, alias, color, horario, zona, orden y estado.",
-        "operationId": "update_calendar_api_v1_pack_calendar_calendars__calendar_id__put",
-        "parameters": [
-          {
-            "name": "calendar_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Calendar Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CalendarPatch"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CalendarOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/calendars/{calendar_id}/delete": {
-      "post": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Delete Calendar",
-        "description": "Elimina (suave) una agenda. No borra la cuenta de Google: eso va en Conexiones.\n\nLa principal no se elimina. Si tiene citas futuras, hay que pasar `move_to` (otra agenda)\npara moverlas; si no, 409.",
-        "operationId": "delete_calendar_api_v1_pack_calendar_calendars__calendar_id__delete_post",
-        "parameters": [
-          {
-            "name": "calendar_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Calendar Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/CalendarDelete"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Payload"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/types": {
-      "get": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "List Types",
-        "operationId": "list_types_api_v1_pack_calendar_types_get",
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TypeOut"
-                  },
-                  "title": "Response List Types Api V1 Pack Calendar Types Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Create Type",
-        "operationId": "create_type_api_v1_pack_calendar_types_post",
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TypeSave"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/types/{type_id}": {
-      "put": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Update Type",
-        "description": "Edita un tipo de cita (HU-SH-02: responsable y enlace de la reunión).",
-        "operationId": "update_type_api_v1_pack_calendar_types__type_id__put",
-        "parameters": [
-          {
-            "name": "type_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Type Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TypeSave"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/types/{type_id}/delete": {
-      "post": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Delete Type",
-        "operationId": "delete_type_api_v1_pack_calendar_types__type_id__delete_post",
-        "parameters": [
-          {
-            "name": "type_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Type Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/appointments": {
-      "get": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "List Appointments",
-        "description": "Próximas citas (por defecto 30 días) del negocio.",
-        "operationId": "list_appointments_api_v1_pack_calendar_appointments_get",
-        "parameters": [
-          {
-            "name": "days",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 365,
-              "minimum": 1,
-              "default": 30,
-              "title": "Days"
-            }
-          },
-          {
-            "name": "include_past",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Include Past"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AppointmentOut"
-                  },
-                  "title": "Response List Appointments Api V1 Pack Calendar Appointments Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Create Appointment",
-        "description": "Crea una cita: local y, si el negocio tiene Google conectado, también el evento real.",
-        "operationId": "create_appointment_api_v1_pack_calendar_appointments_post",
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AppointmentIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AppointmentOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/appointments/{appointment_id}/cancel": {
-      "post": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Cancel Appointment",
-        "description": "Cancela la cita: borra el evento en Google (best-effort), marca el espejo,\nregistra la actividad y, con `notify` (default), avisa al cliente por correo\ny WhatsApp (HU-CAL-05). Idempotente: cancelar una cita ya cancelada no\nvuelve a avisar.",
-        "operationId": "cancel_appointment_api_v1_pack_calendar_appointments__appointment_id__cancel_post",
-        "parameters": [
-          {
-            "name": "appointment_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Appointment Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/AppointmentCancel"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Payload"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AppointmentCancelOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/blocks": {
-      "get": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "List Blocks",
-        "description": "Bloqueos de la agenda interna (vacaciones, ausencia, feriados, almuerzo).",
-        "operationId": "list_blocks_api_v1_pack_calendar_blocks_get",
-        "parameters": [
-          {
-            "name": "days",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 365,
-              "minimum": 1,
-              "default": 180,
-              "title": "Days"
-            }
-          },
-          {
-            "name": "include_past",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Include Past"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/BlockOut"
-                  },
-                  "title": "Response List Blocks Api V1 Pack Calendar Blocks Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Create Block",
-        "operationId": "create_block_api_v1_pack_calendar_blocks_post",
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BlockIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BlockOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/blocks/{block_id}": {
-      "delete": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Delete Block",
-        "operationId": "delete_block_api_v1_pack_calendar_blocks__block_id__delete",
-        "parameters": [
-          {
-            "name": "block_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Block Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "patch": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Patch Block",
-        "description": "Edita un bloqueo de agenda (arrastrar/redimensionar en la grilla, HU-CAL-03).",
-        "operationId": "patch_block_api_v1_pack_calendar_blocks__block_id__patch",
-        "parameters": [
-          {
-            "name": "block_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Block Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BlockPatch"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BlockOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/week": {
-      "get": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Week View",
-        "description": "Citas + bloqueos de la semana que arranca en `start` (YYYY-MM-DD, lunes si se omite).",
-        "operationId": "week_view_api_v1_pack_calendar_week_get",
-        "parameters": [
-          {
-            "name": "start",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Start"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WeekOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/events": {
-      "get": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Calendar Events",
-        "description": "Citas + bloqueos en formato FullCalendar para la grilla del panel (HU-CAL-03).\n\n`start`/`end` ISO (o YYYY-MM-DD). Sin parámetros, cubre el mes en curso.",
-        "operationId": "calendar_events_api_v1_pack_calendar_events_get",
-        "parameters": [
-          {
-            "name": "start",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Start"
-            }
-          },
-          {
-            "name": "end",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "End"
-            }
-          },
-          {
-            "name": "calendar_ids",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "IDs de agenda separados por coma",
-              "title": "Calendar Ids"
-            },
-            "description": "IDs de agenda separados por coma"
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Calendar Events Api V1 Pack Calendar Events Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/appointments/{appointment_id}": {
-      "patch": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Patch Appointment",
-        "description": "Edita campos/horario de una cita y, si se mueve y `notify`, avisa al cliente\npor correo y WhatsApp y a los colaboradores (HU-CAL-02/05). Valida\nsolapamiento en el servidor.",
-        "operationId": "patch_appointment_api_v1_pack_calendar_appointments__appointment_id__patch",
-        "parameters": [
-          {
-            "name": "appointment_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Appointment Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AppointmentPatch"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AppointmentOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/appointments/{appointment_id}/activities": {
-      "get": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Appointment Activities",
-        "description": "Historial de una cita (programada/reprogramada/cancelada) (HU-CAL-03).",
-        "operationId": "appointment_activities_api_v1_pack_calendar_appointments__appointment_id__activities_get",
-        "parameters": [
-          {
-            "name": "appointment_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Appointment Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ActivityOut"
-                  },
-                  "title": "Response Appointment Activities Api V1 Pack Calendar Appointments  Appointment Id  Activities Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/oauth/start": {
-      "get": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Oauth Start",
-        "description": "Inicia el OAuth2 de Google (302 a accounts.google.com).\n\nCon `connection_id` se reconecta esa cuenta (HU-CAL-08): se sugiere su correo a Google y\nel callback verifica que sea la misma cuenta antes de guardar.\n\nDeja dos cookies httponly que el panel reenvía al navegador: `oauth_state`\n(anti-CSRF, D-SPEC-24-12) y `oauth_next` (a dónde volver). El retorno de Google\nentra por la ruta BFF del panel (D-SPEC-24-11, ADR-0093).\n\nEl `state` lleva el negocio que inició el flujo (`<tenant_id>.<aleatorio>`): el\ncallback guarda la cuenta en el negocio de la sesión, que puede haber cambiado\nmientras el usuario estaba en Google.",
-        "operationId": "oauth_start_api_v1_pack_calendar_oauth_start_get",
-        "parameters": [
-          {
-            "name": "next",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "/calendario",
-              "title": "Next"
-            }
-          },
-          {
-            "name": "connection_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Connection Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "302": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/oauth/callback": {
-      "get": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Oauth Callback",
-        "description": "Vuelve de Google (vía la ruta BFF del panel): valida el `state`, intercambia\nel código, guarda los tokens en la conexión del negocio y regresa al panel.\n\nExige sesión (el BFF reenvía la del usuario): así el negocio es el del\nprincipal y no se puede guardar una cuenta en otro (HU-CAL-07). Sin `state`\no con un `state` distinto al de la cookie, no se intercambia nada (CSRF).",
-        "operationId": "oauth_callback_api_v1_pack_calendar_oauth_callback_get",
-        "parameters": [
-          {
-            "name": "code",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "Code"
-            }
-          },
-          {
-            "name": "state",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "State"
-            }
-          },
-          {
-            "name": "error",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "Error"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "302": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/calendar/appointments/{appointment_id}/asistencia": {
-      "post": {
-        "tags": [
-          "pack · calendario"
-        ],
-        "summary": "Marcar Asistencia",
-        "description": "Marca una cita pasada `asistio` o `no_asistio`. Al `no_asistio`, el asistente le\nofrece reagendar al cliente (plantilla si la ventana está cerrada).",
-        "operationId": "marcar_asistencia_api_v1_pack_calendar_appointments__appointment_id__asistencia_post",
-        "parameters": [
-          {
-            "name": "appointment_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Appointment Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AsistenciaIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AppointmentOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/pack_knowledge/agents/{agent_id}/documents": {
-      "get": {
-        "tags": [
-          "pack · conocimiento"
-        ],
-        "summary": "Listar Documentos",
-        "operationId": "listar_documentos_api_v1_pack_pack_knowledge_agents__agent_id__documents_get",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/DocumentoOut"
-                  },
-                  "title": "Response Listar Documentos Api V1 Pack Pack Knowledge Agents  Agent Id  Documents Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "pack · conocimiento"
-        ],
-        "summary": "Subir Documento",
-        "description": "Sube un documento al agente. Queda `pendiente` y el worker lo procesa.",
-        "operationId": "subir_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents_post",
+        "summary": "Guardar Formas De Pago",
+        "description": "Guarda las formas y las cuentas del agente. Transferencia encendida sin cuenta se guarda y queda\n«Falta configurar» (el agente no la ofrece); tiene que quedar al menos una forma encendida.",
+        "operationId": "guardar_formas_de_pago_api_v1_pack_commerce_agents__agent_id__payment_forms_put",
         "parameters": [
           {
             "name": "agent_id",
@@ -41897,100 +40882,23 @@
         "requestBody": {
           "required": true,
           "content": {
-            "multipart/form-data": {
+            "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Body_subir_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents_post"
+                "$ref": "#/components/schemas/FormasDePagoIn"
               }
             }
           }
         },
         "responses": {
-          "202": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DocumentoOut"
+                  "$ref": "#/components/schemas/FormasDePagoOut"
                 }
               }
             }
-          },
-          "409": {
-            "description": "Tope del plan: `error.code = plan_limit_documentos`, `error.details = {metric, used, limit}`; no se escribió nada."
-          },
-          "413": {
-            "description": "El archivo supera 20 MB (`error.code = muy_grande`)."
-          },
-          "422": {
-            "description": "Tipo o contenido no admitido (`error.code = formato | vacio`)."
-          }
-        }
-      }
-    },
-    "/api/v1/pack/pack_knowledge/agents/{agent_id}/documents/{document_id}": {
-      "delete": {
-        "tags": [
-          "pack · conocimiento"
-        ],
-        "summary": "Borrar Documento",
-        "operationId": "borrar_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents__document_id__delete",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "document_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Document Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -42005,32 +40913,23 @@
         }
       }
     },
-    "/api/v1/pack/pack_knowledge/agents/{agent_id}/documents/{document_id}/reprocess": {
-      "post": {
+    "/api/v1/pack/commerce/orders/{order_id}/payment-proofs": {
+      "get": {
         "tags": [
-          "pack · conocimiento"
+          "pack · comercio"
         ],
-        "summary": "Reprocesar Documento",
-        "operationId": "reprocesar_documento_api_v1_pack_pack_knowledge_agents__agent_id__documents__document_id__reprocess_post",
+        "summary": "Comprobantes Del Pedido",
+        "description": "Comprobantes del pedido (los 20 más recientes) con su imagen firmada y el resultado.",
+        "operationId": "comprobantes_del_pedido_api_v1_pack_commerce_orders__order_id__payment_proofs_get",
         "parameters": [
           {
-            "name": "agent_id",
+            "name": "order_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
               "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "document_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Document Id"
+              "title": "Order Id"
             }
           },
           {
@@ -42067,12 +40966,98 @@
           }
         ],
         "responses": {
-          "202": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DocumentoOut"
+                  "$ref": "#/components/schemas/ComprobantesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/commerce/orders/{order_id}/payment-status": {
+      "post": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Cambiar Estado De Pago",
+        "description": "Revisión manual del pago. Queda quién, cuándo y la nota. Un pedido pagado no se vuelve a\nrechazar desde aquí (un reembolso no es un rechazo); rechazar un comprobante deja el pedido\n`rechazado` y el agente deja de presentarlo como pagado.",
+        "operationId": "cambiar_estado_de_pago_api_v1_pack_commerce_orders__order_id__payment_status_post",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Order Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EstadoDePagoIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComprobantesOut"
                 }
               }
             }
@@ -46283,13 +45268,390 @@
         }
       }
     },
-    "/api/v1/pack/payments/accounts": {
+    "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
-          "pack · pagos"
+          "pack · calendario"
         ],
-        "summary": "List Accounts",
-        "operationId": "list_accounts_api_v1_pack_payments_accounts_get",
+        "summary": "Calendar Status",
+        "operationId": "calendar_status_api_v1_pack_calendar_status_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/calendars": {
+      "get": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "List Calendars",
+        "description": "Agendas del negocio con el nombre que el asistente le dice al cliente.",
+        "operationId": "list_calendars_api_v1_pack_calendar_calendars_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarListOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Create Calendar",
+        "description": "Crea una agenda interna (sin cuenta de Google). Las de Google nacen al conectar la cuenta.",
+        "operationId": "create_calendar_api_v1_pack_calendar_calendars_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/calendars/{calendar_id}": {
+      "put": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Update Calendar",
+        "description": "Edita una agenda: nombre visible, descripción, alias, color, horario, zona, orden y estado.",
+        "operationId": "update_calendar_api_v1_pack_calendar_calendars__calendar_id__put",
+        "parameters": [
+          {
+            "name": "calendar_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Calendar Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/calendars/{calendar_id}/delete": {
+      "post": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Delete Calendar",
+        "description": "Elimina (suave) una agenda. No borra la cuenta de Google: eso va en Conexiones.\n\nLa principal no se elimina. Si tiene citas futuras, hay que pasar `move_to` (otra agenda)\npara moverlas; si no, 409.",
+        "operationId": "delete_calendar_api_v1_pack_calendar_calendars__calendar_id__delete_post",
+        "parameters": [
+          {
+            "name": "calendar_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Calendar Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CalendarDelete"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/types": {
+      "get": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "List Types",
+        "operationId": "list_types_api_v1_pack_calendar_types_get",
         "parameters": [
           {
             "name": "X-Tenant-Id",
@@ -46332,9 +45694,9 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/PaymentAccount"
+                    "$ref": "#/components/schemas/TypeOut"
                   },
-                  "title": "Response List Accounts Api V1 Pack Payments Accounts Get"
+                  "title": "Response List Types Api V1 Pack Calendar Types Get"
                 }
               }
             }
@@ -46353,10 +45715,10 @@
       },
       "post": {
         "tags": [
-          "pack · pagos"
+          "pack · calendario"
         ],
-        "summary": "Create Account",
-        "operationId": "create_account_api_v1_pack_payments_accounts_post",
+        "summary": "Create Type",
+        "operationId": "create_type_api_v1_pack_calendar_types_post",
         "parameters": [
           {
             "name": "X-Tenant-Id",
@@ -46396,7 +45758,313 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PaymentAccountIn"
+                "$ref": "#/components/schemas/TypeSave"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/types/{type_id}": {
+      "put": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Update Type",
+        "description": "Edita un tipo de cita (HU-SH-02: responsable y enlace de la reunión).",
+        "operationId": "update_type_api_v1_pack_calendar_types__type_id__put",
+        "parameters": [
+          {
+            "name": "type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Type Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TypeSave"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/types/{type_id}/delete": {
+      "post": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Delete Type",
+        "operationId": "delete_type_api_v1_pack_calendar_types__type_id__delete_post",
+        "parameters": [
+          {
+            "name": "type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Type Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/appointments": {
+      "get": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "List Appointments",
+        "description": "Próximas citas (por defecto 30 días) del negocio.",
+        "operationId": "list_appointments_api_v1_pack_calendar_appointments_get",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 365,
+              "minimum": 1,
+              "default": 30,
+              "title": "Days"
+            }
+          },
+          {
+            "name": "include_past",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Past"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AppointmentOut"
+                  },
+                  "title": "Response List Appointments Api V1 Pack Calendar Appointments Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Create Appointment",
+        "description": "Crea una cita: local y, si el negocio tiene Google conectado, también el evento real.",
+        "operationId": "create_appointment_api_v1_pack_calendar_appointments_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppointmentIn"
               }
             }
           }
@@ -46407,7 +46075,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PaymentAccount"
+                  "$ref": "#/components/schemas/AppointmentOut"
                 }
               }
             }
@@ -46425,24 +46093,197 @@
         }
       }
     },
-    "/api/v1/pack/payments/accounts/{account_id}": {
-      "patch": {
+    "/api/v1/pack/calendar/appointments/{appointment_id}/cancel": {
+      "post": {
         "tags": [
-          "pack · pagos"
+          "pack · calendario"
         ],
-        "summary": "Update Account",
-        "operationId": "update_account_api_v1_pack_payments_accounts__account_id__patch",
+        "summary": "Cancel Appointment",
+        "description": "Cancela la cita: borra el evento en Google (best-effort), marca el espejo,\nregistra la actividad y, con `notify` (default), avisa al cliente por correo\ny WhatsApp (HU-CAL-05). Idempotente: cancelar una cita ya cancelada no\nvuelve a avisar.",
+        "operationId": "cancel_appointment_api_v1_pack_calendar_appointments__appointment_id__cancel_post",
         "parameters": [
           {
-            "name": "account_id",
+            "name": "appointment_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
               "format": "uuid",
-              "title": "Account Id"
+              "title": "Appointment Id"
             }
           },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AppointmentCancel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppointmentCancelOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/blocks": {
+      "get": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "List Blocks",
+        "description": "Bloqueos de la agenda interna (vacaciones, ausencia, feriados, almuerzo).",
+        "operationId": "list_blocks_api_v1_pack_calendar_blocks_get",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 365,
+              "minimum": 1,
+              "default": 180,
+              "title": "Days"
+            }
+          },
+          {
+            "name": "include_past",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Past"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BlockOut"
+                  },
+                  "title": "Response List Blocks Api V1 Pack Calendar Blocks Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Create Block",
+        "operationId": "create_block_api_v1_pack_calendar_blocks_post",
+        "parameters": [
           {
             "name": "X-Tenant-Id",
             "in": "header",
@@ -46481,18 +46322,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PaymentAccountPatch"
+                "$ref": "#/components/schemas/BlockIn"
               }
             }
           }
         },
         "responses": {
-          "200": {
+          "201": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PaymentAccount"
+                  "$ref": "#/components/schemas/BlockOut"
                 }
               }
             }
@@ -46508,22 +46349,24 @@
             }
           }
         }
-      },
+      }
+    },
+    "/api/v1/pack/calendar/blocks/{block_id}": {
       "delete": {
         "tags": [
-          "pack · pagos"
+          "pack · calendario"
         ],
-        "summary": "Delete Account",
-        "operationId": "delete_account_api_v1_pack_payments_accounts__account_id__delete",
+        "summary": "Delete Block",
+        "operationId": "delete_block_api_v1_pack_calendar_blocks__block_id__delete",
         "parameters": [
           {
-            "name": "account_id",
+            "name": "block_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
               "format": "uuid",
-              "title": "Account Id"
+              "title": "Block Id"
             }
           },
           {
@@ -46574,99 +46417,23 @@
             }
           }
         }
-      }
-    },
-    "/api/v1/pack/commerce/agents/{agent_id}/payment-forms": {
-      "get": {
-        "tags": [
-          "pack · comercio"
-        ],
-        "summary": "Formas De Pago Del Agente",
-        "description": "Formas de pago del agente con su estado, sus cuentas de transferencia y el proveedor en línea.",
-        "operationId": "formas_de_pago_del_agente_api_v1_pack_commerce_agents__agent_id__payment_forms_get",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FormasDePagoOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
       },
-      "put": {
+      "patch": {
         "tags": [
-          "pack · comercio"
+          "pack · calendario"
         ],
-        "summary": "Guardar Formas De Pago",
-        "description": "Guarda las formas y las cuentas del agente. Transferencia encendida sin cuenta se guarda y queda\n«Falta configurar» (el agente no la ofrece); tiene que quedar al menos una forma encendida.",
-        "operationId": "guardar_formas_de_pago_api_v1_pack_commerce_agents__agent_id__payment_forms_put",
+        "summary": "Patch Block",
+        "description": "Edita un bloqueo de agenda (arrastrar/redimensionar en la grilla, HU-CAL-03).",
+        "operationId": "patch_block_api_v1_pack_calendar_blocks__block_id__patch",
         "parameters": [
           {
-            "name": "agent_id",
+            "name": "block_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
               "format": "uuid",
-              "title": "Agent Id"
+              "title": "Block Id"
             }
           },
           {
@@ -46707,7 +46474,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/FormasDePagoIn"
+                "$ref": "#/components/schemas/BlockPatch"
               }
             }
           }
@@ -46718,7 +46485,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FormasDePagoOut"
+                  "$ref": "#/components/schemas/BlockOut"
                 }
               }
             }
@@ -46736,23 +46503,29 @@
         }
       }
     },
-    "/api/v1/pack/commerce/orders/{order_id}/payment-proofs": {
+    "/api/v1/pack/calendar/week": {
       "get": {
         "tags": [
-          "pack · comercio"
+          "pack · calendario"
         ],
-        "summary": "Comprobantes Del Pedido",
-        "description": "Comprobantes del pedido (los 20 más recientes) con su imagen firmada y el resultado.",
-        "operationId": "comprobantes_del_pedido_api_v1_pack_commerce_orders__order_id__payment_proofs_get",
+        "summary": "Week View",
+        "description": "Citas + bloqueos de la semana que arranca en `start` (YYYY-MM-DD, lunes si se omite).",
+        "operationId": "week_view_api_v1_pack_calendar_week_get",
         "parameters": [
           {
-            "name": "order_id",
-            "in": "path",
-            "required": true,
+            "name": "start",
+            "in": "query",
+            "required": false,
             "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Order Id"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
             }
           },
           {
@@ -46794,7 +46567,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ComprobantesOut"
+                  "$ref": "#/components/schemas/WeekOut"
                 }
               }
             }
@@ -46812,23 +46585,492 @@
         }
       }
     },
-    "/api/v1/pack/commerce/orders/{order_id}/payment-status": {
+    "/api/v1/pack/calendar/events": {
+      "get": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Calendar Events",
+        "description": "Citas + bloqueos en formato FullCalendar para la grilla del panel (HU-CAL-03).\n\n`start`/`end` ISO (o YYYY-MM-DD). Sin parámetros, cubre el mes en curso.",
+        "operationId": "calendar_events_api_v1_pack_calendar_events_get",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "name": "calendar_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "IDs de agenda separados por coma",
+              "title": "Calendar Ids"
+            },
+            "description": "IDs de agenda separados por coma"
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Calendar Events Api V1 Pack Calendar Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/appointments/{appointment_id}": {
+      "patch": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Patch Appointment",
+        "description": "Edita campos/horario de una cita y, si se mueve y `notify`, avisa al cliente\npor correo y WhatsApp y a los colaboradores (HU-CAL-02/05). Valida\nsolapamiento en el servidor.",
+        "operationId": "patch_appointment_api_v1_pack_calendar_appointments__appointment_id__patch",
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Appointment Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppointmentPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppointmentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/appointments/{appointment_id}/activities": {
+      "get": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Appointment Activities",
+        "description": "Historial de una cita (programada/reprogramada/cancelada) (HU-CAL-03).",
+        "operationId": "appointment_activities_api_v1_pack_calendar_appointments__appointment_id__activities_get",
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Appointment Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ActivityOut"
+                  },
+                  "title": "Response Appointment Activities Api V1 Pack Calendar Appointments  Appointment Id  Activities Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/oauth/start": {
+      "get": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Oauth Start",
+        "description": "Inicia el OAuth2 de Google (302 a accounts.google.com).\n\nCon `connection_id` se reconecta esa cuenta (HU-CAL-08): se sugiere su correo a Google y\nel callback verifica que sea la misma cuenta antes de guardar.\n\nDeja dos cookies httponly que el panel reenvía al navegador: `oauth_state`\n(anti-CSRF, D-SPEC-24-12) y `oauth_next` (a dónde volver). El retorno de Google\nentra por la ruta BFF del panel (D-SPEC-24-11, ADR-0093).\n\nEl `state` lleva el negocio que inició el flujo (`<tenant_id>.<aleatorio>`): el\ncallback guarda la cuenta en el negocio de la sesión, que puede haber cambiado\nmientras el usuario estaba en Google.",
+        "operationId": "oauth_start_api_v1_pack_calendar_oauth_start_get",
+        "parameters": [
+          {
+            "name": "next",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "/calendario",
+              "title": "Next"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/oauth/callback": {
+      "get": {
+        "tags": [
+          "pack · calendario"
+        ],
+        "summary": "Oauth Callback",
+        "description": "Vuelve de Google (vía la ruta BFF del panel): valida el `state`, intercambia\nel código, guarda los tokens en la conexión del negocio y regresa al panel.\n\nExige sesión (el BFF reenvía la del usuario): así el negocio es el del\nprincipal y no se puede guardar una cuenta en otro (HU-CAL-07). Sin `state`\no con un `state` distinto al de la cookie, no se intercambia nada (CSRF).",
+        "operationId": "oauth_callback_api_v1_pack_calendar_oauth_callback_get",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Code"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "State"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Error"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/calendar/appointments/{appointment_id}/asistencia": {
       "post": {
         "tags": [
-          "pack · comercio"
+          "pack · calendario"
         ],
-        "summary": "Cambiar Estado De Pago",
-        "description": "Revisión manual del pago. Queda quién, cuándo y la nota. Un pedido pagado no se vuelve a\nrechazar desde aquí (un reembolso no es un rechazo); rechazar un comprobante deja el pedido\n`rechazado` y el agente deja de presentarlo como pagado.",
-        "operationId": "cambiar_estado_de_pago_api_v1_pack_commerce_orders__order_id__payment_status_post",
+        "summary": "Marcar Asistencia",
+        "description": "Marca una cita pasada `asistio` o `no_asistio`. Al `no_asistio`, el asistente le\nofrece reagendar al cliente (plantilla si la ventana está cerrada).",
+        "operationId": "marcar_asistencia_api_v1_pack_calendar_appointments__appointment_id__asistencia_post",
         "parameters": [
           {
-            "name": "order_id",
+            "name": "appointment_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
               "format": "uuid",
-              "title": "Order Id"
+              "title": "Appointment Id"
             }
           },
           {
@@ -46869,7 +47111,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/EstadoDePagoIn"
+                "$ref": "#/components/schemas/AsistenciaIn"
               }
             }
           }
@@ -46880,252 +47122,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ComprobantesOut"
+                  "$ref": "#/components/schemas/AppointmentOut"
                 }
               }
             }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/agents/{agent_id}/schedule": {
-      "get": {
-        "tags": [
-          "api",
-          "admin · editor de agentes"
-        ],
-        "summary": "Get Agent Schedule",
-        "description": "Horario del borrador del agente y el del negocio que hereda si no tiene uno propio.",
-        "operationId": "get_agent_schedule_api_v1_admin_agents__agent_id__schedule_get",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentScheduleOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "api",
-          "admin · editor de agentes"
-        ],
-        "summary": "Save Agent Schedule",
-        "description": "Guarda el horario propio (o `null` para heredar) con el `lock_version` del borrador. Vale al publicar.",
-        "operationId": "save_agent_schedule_api_v1_admin_agents__agent_id__schedule_put",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentScheduleIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentScheduleOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/leads/{lead_id}/seguimiento/hecho": {
-      "post": {
-        "tags": [
-          "api",
-          "admin · leads"
-        ],
-        "summary": "Seguimiento Hecho",
-        "description": "Marca como hecho el seguimiento del lead del cliente; queda en su línea de tiempo con la nota (ADR-0193: antes\n`POST /api/v1/pack/commerce/leads/{customer_id}/seguimiento/hecho`, que sigue como alias).",
-        "operationId": "seguimiento_hecho_api_v1_admin_leads__lead_id__seguimiento_hecho_post",
-        "parameters": [
-          {
-            "name": "lead_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Lead Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SeguimientoHechoIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -49611,6 +49611,83 @@
           "notices"
         ],
         "title": "AgentRetiredNotices"
+      },
+      "AgentScheduleIn": {
+        "properties": {
+          "schedule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule",
+            "description": "`null` vuelve a heredar el horario del negocio."
+          },
+          "lock_version": {
+            "type": "integer",
+            "title": "Lock Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "schedule",
+          "lock_version"
+        ],
+        "title": "AgentScheduleIn"
+      },
+      "AgentScheduleOut": {
+        "properties": {
+          "schedule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule",
+            "description": "Horario propio del agente (`{tz, ranges}`); `null` = hereda el del negocio."
+          },
+          "business_hours": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Hours",
+            "description": "El horario del negocio (lo que hereda)."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "agente",
+              "negocio"
+            ],
+            "title": "Source"
+          },
+          "lock_version": {
+            "type": "integer",
+            "title": "Lock Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "schedule",
+          "business_hours",
+          "source",
+          "lock_version"
+        ],
+        "title": "AgentScheduleOut"
       },
       "AgentSkill": {
         "properties": {
@@ -54823,6 +54900,145 @@
         ],
         "title": "CommerceKpi"
       },
+      "ComprobanteOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pagado",
+              "en_revision",
+              "rechazado"
+            ],
+            "title": "Status"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url",
+            "description": "URL firmada de vida corta; `null` si la imagen no está."
+          },
+          "extracted": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Extracted",
+            "description": "Lo que leyó la visión: monto, fecha, estado, banco, cuenta (últimos 4)…"
+          },
+          "match": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Match",
+            "description": "Resultado de la comparación con el pedido y sus motivos."
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "image_url",
+          "extracted",
+          "match",
+          "reviewed_at",
+          "review_note",
+          "created_at"
+        ],
+        "title": "ComprobanteOut"
+      },
+      "ComprobantesOut": {
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Order Id"
+          },
+          "payment_status": {
+            "type": "string",
+            "title": "Payment Status"
+          },
+          "payment_method": {
+            "type": "string",
+            "title": "Payment Method"
+          },
+          "payment_status_changed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Status Changed At"
+          },
+          "payment_status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Status Reason"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ComprobanteOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "order_id",
+          "payment_status",
+          "payment_method",
+          "payment_status_changed_at",
+          "payment_status_reason",
+          "items"
+        ],
+        "title": "ComprobantesOut"
+      },
       "ConexionDeEnvioOut": {
         "properties": {
           "id": {
@@ -58278,6 +58494,45 @@
         ],
         "title": "CronSummary"
       },
+      "CuentaDeTransferencia": {
+        "properties": {
+          "entity": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Entity",
+            "description": "Entidad (Bancolombia, Nequi…)."
+          },
+          "accountType": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Accounttype",
+            "default": ""
+          },
+          "accountNumber": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Accountnumber"
+          },
+          "holderName": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Holdername",
+            "default": ""
+          },
+          "holderDocument": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Holderdocument",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "entity",
+          "accountNumber"
+        ],
+        "title": "CuentaDeTransferencia"
+      },
       "DashboardResponse": {
         "properties": {
           "tenant_id": {
@@ -59785,6 +60040,44 @@
         ],
         "title": "EstadoDatosDePruebaModulo"
       },
+      "EstadoDePagoIn": {
+        "properties": {
+          "accion": {
+            "type": "string",
+            "enum": [
+              "confirmar",
+              "rechazar",
+              "marcar_pagado"
+            ],
+            "title": "Accion",
+            "description": "`confirmar`: el comprobante en revisión es válido. `rechazar`: no lo es. `marcar_pagado`: el pago se verificó por fuera (sin comprobante)."
+          },
+          "proof_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proof Id",
+            "description": "Comprobante que se confirma o rechaza."
+          },
+          "nota": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Nota",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "accion"
+        ],
+        "title": "EstadoDePagoIn"
+      },
       "EstadoImportacion": {
         "properties": {
           "disponible": {
@@ -60490,6 +60783,186 @@
           "titulo"
         ],
         "title": "FormaDeDatosOut"
+      },
+      "FormaDePagoIn": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "efectivo_contraentrega",
+              "transferencia",
+              "pago_en_linea"
+            ],
+            "title": "Method"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "instructions": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Instructions",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "method",
+          "enabled"
+        ],
+        "title": "FormaDePagoIn"
+      },
+      "FormaDePagoOut": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "efectivo_contraentrega",
+              "transferencia",
+              "pago_en_linea"
+            ],
+            "title": "Method"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "activa",
+              "falta_configurar",
+              "apagada"
+            ],
+            "title": "Estado",
+            "description": "`falta_configurar`: encendida pero sin lo que necesita (cuenta o proveedor); el agente no la ofrece."
+          },
+          "falta": {
+            "type": "string",
+            "title": "Falta",
+            "description": "Qué falta, en palabras del dueño; vacío si nada."
+          },
+          "instructions": {
+            "type": "string",
+            "title": "Instructions"
+          },
+          "superpoder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superpoder",
+            "description": "Superpoder del dominio «Formas de pago» que la acompaña; contra entrega no tiene."
+          }
+        },
+        "type": "object",
+        "required": [
+          "method",
+          "label",
+          "enabled",
+          "estado",
+          "falta",
+          "instructions",
+          "superpoder"
+        ],
+        "title": "FormaDePagoOut"
+      },
+      "FormasDePagoIn": {
+        "properties": {
+          "forms": {
+            "items": {
+              "$ref": "#/components/schemas/FormaDePagoIn"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Forms"
+          },
+          "transfer_accounts": {
+            "items": {
+              "$ref": "#/components/schemas/CuentaDeTransferencia"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "title": "Transfer Accounts"
+          },
+          "transfer_proof_required": {
+            "type": "boolean",
+            "title": "Transfer Proof Required",
+            "default": true
+          },
+          "transfer_ocr_enabled": {
+            "type": "boolean",
+            "title": "Transfer Ocr Enabled",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "forms"
+        ],
+        "title": "FormasDePagoIn"
+      },
+      "FormasDePagoOut": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "configurada": {
+            "type": "boolean",
+            "title": "Configurada",
+            "description": "`false`: el agente aún no guardó sus formas y se deducen como antes."
+          },
+          "forms": {
+            "items": {
+              "$ref": "#/components/schemas/FormaDePagoOut"
+            },
+            "type": "array",
+            "title": "Forms"
+          },
+          "transfer_accounts": {
+            "items": {
+              "$ref": "#/components/schemas/CuentaDeTransferencia"
+            },
+            "type": "array",
+            "title": "Transfer Accounts"
+          },
+          "transfer_proof_required": {
+            "type": "boolean",
+            "title": "Transfer Proof Required"
+          },
+          "transfer_ocr_enabled": {
+            "type": "boolean",
+            "title": "Transfer Ocr Enabled"
+          },
+          "pago_en_linea_disponible": {
+            "type": "boolean",
+            "title": "Pago En Linea Disponible",
+            "description": "El negocio tiene una cuenta de pagos en línea conectada."
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "configurada",
+          "forms",
+          "transfer_accounts",
+          "transfer_proof_required",
+          "transfer_ocr_enabled",
+          "pago_en_linea_disponible"
+        ],
+        "title": "FormasDePagoOut"
       },
       "FromScriptIn": {
         "properties": {
@@ -84613,479 +85086,6 @@
           "fecha_hora"
         ],
         "title": "Payment"
-      },
-      "CuentaDeTransferencia": {
-        "properties": {
-          "entity": {
-            "type": "string",
-            "maxLength": 80,
-            "title": "Entity",
-            "description": "Entidad (Bancolombia, Nequi…)."
-          },
-          "accountType": {
-            "type": "string",
-            "maxLength": 80,
-            "title": "Accounttype",
-            "default": ""
-          },
-          "accountNumber": {
-            "type": "string",
-            "maxLength": 80,
-            "title": "Accountnumber"
-          },
-          "holderName": {
-            "type": "string",
-            "maxLength": 80,
-            "title": "Holdername",
-            "default": ""
-          },
-          "holderDocument": {
-            "type": "string",
-            "maxLength": 80,
-            "title": "Holderdocument",
-            "default": ""
-          }
-        },
-        "type": "object",
-        "required": [
-          "entity",
-          "accountNumber"
-        ],
-        "title": "CuentaDeTransferencia"
-      },
-      "FormaDePagoOut": {
-        "properties": {
-          "method": {
-            "type": "string",
-            "enum": [
-              "efectivo_contraentrega",
-              "transferencia",
-              "pago_en_linea"
-            ],
-            "title": "Method"
-          },
-          "label": {
-            "type": "string",
-            "title": "Label"
-          },
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled"
-          },
-          "estado": {
-            "type": "string",
-            "enum": [
-              "activa",
-              "falta_configurar",
-              "apagada"
-            ],
-            "title": "Estado",
-            "description": "`falta_configurar`: encendida pero sin lo que necesita (cuenta o proveedor); el agente no la ofrece."
-          },
-          "falta": {
-            "type": "string",
-            "title": "Falta",
-            "description": "Qué falta, en palabras del dueño; vacío si nada."
-          },
-          "instructions": {
-            "type": "string",
-            "title": "Instructions"
-          },
-          "superpoder": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Superpoder",
-            "description": "Superpoder del dominio «Formas de pago» que la acompaña; contra entrega no tiene."
-          }
-        },
-        "type": "object",
-        "required": [
-          "method",
-          "label",
-          "enabled",
-          "estado",
-          "falta",
-          "instructions",
-          "superpoder"
-        ],
-        "title": "FormaDePagoOut"
-      },
-      "FormasDePagoOut": {
-        "properties": {
-          "agent_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Agent Id"
-          },
-          "configurada": {
-            "type": "boolean",
-            "title": "Configurada",
-            "description": "`false`: el agente aún no guardó sus formas y se deducen como antes."
-          },
-          "forms": {
-            "items": {
-              "$ref": "#/components/schemas/FormaDePagoOut"
-            },
-            "type": "array",
-            "title": "Forms"
-          },
-          "transfer_accounts": {
-            "items": {
-              "$ref": "#/components/schemas/CuentaDeTransferencia"
-            },
-            "type": "array",
-            "title": "Transfer Accounts"
-          },
-          "transfer_proof_required": {
-            "type": "boolean",
-            "title": "Transfer Proof Required"
-          },
-          "transfer_ocr_enabled": {
-            "type": "boolean",
-            "title": "Transfer Ocr Enabled"
-          },
-          "pago_en_linea_disponible": {
-            "type": "boolean",
-            "title": "Pago En Linea Disponible",
-            "description": "El negocio tiene una cuenta de pagos en línea conectada."
-          }
-        },
-        "type": "object",
-        "required": [
-          "agent_id",
-          "configurada",
-          "forms",
-          "transfer_accounts",
-          "transfer_proof_required",
-          "transfer_ocr_enabled",
-          "pago_en_linea_disponible"
-        ],
-        "title": "FormasDePagoOut"
-      },
-      "FormaDePagoIn": {
-        "properties": {
-          "method": {
-            "type": "string",
-            "enum": [
-              "efectivo_contraentrega",
-              "transferencia",
-              "pago_en_linea"
-            ],
-            "title": "Method"
-          },
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled"
-          },
-          "instructions": {
-            "type": "string",
-            "maxLength": 500,
-            "title": "Instructions",
-            "default": ""
-          }
-        },
-        "type": "object",
-        "required": [
-          "method",
-          "enabled"
-        ],
-        "title": "FormaDePagoIn"
-      },
-      "FormasDePagoIn": {
-        "properties": {
-          "forms": {
-            "items": {
-              "$ref": "#/components/schemas/FormaDePagoIn"
-            },
-            "type": "array",
-            "maxItems": 3,
-            "minItems": 1,
-            "title": "Forms"
-          },
-          "transfer_accounts": {
-            "items": {
-              "$ref": "#/components/schemas/CuentaDeTransferencia"
-            },
-            "type": "array",
-            "maxItems": 10,
-            "title": "Transfer Accounts"
-          },
-          "transfer_proof_required": {
-            "type": "boolean",
-            "title": "Transfer Proof Required",
-            "default": true
-          },
-          "transfer_ocr_enabled": {
-            "type": "boolean",
-            "title": "Transfer Ocr Enabled",
-            "default": true
-          }
-        },
-        "type": "object",
-        "required": [
-          "forms"
-        ],
-        "title": "FormasDePagoIn"
-      },
-      "EstadoDePagoIn": {
-        "properties": {
-          "accion": {
-            "type": "string",
-            "enum": [
-              "confirmar",
-              "rechazar",
-              "marcar_pagado"
-            ],
-            "title": "Accion",
-            "description": "`confirmar`: el comprobante en revisión es válido. `rechazar`: no lo es. `marcar_pagado`: el pago se verificó por fuera (sin comprobante)."
-          },
-          "proof_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Proof Id",
-            "description": "Comprobante que se confirma o rechaza."
-          },
-          "nota": {
-            "type": "string",
-            "maxLength": 300,
-            "title": "Nota",
-            "default": ""
-          }
-        },
-        "type": "object",
-        "required": [
-          "accion"
-        ],
-        "title": "EstadoDePagoIn"
-      },
-      "ComprobanteOut": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Id"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pagado",
-              "en_revision",
-              "rechazado"
-            ],
-            "title": "Status"
-          },
-          "image_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Image Url",
-            "description": "URL firmada de vida corta; `null` si la imagen no está."
-          },
-          "extracted": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Extracted",
-            "description": "Lo que leyó la visión: monto, fecha, estado, banco, cuenta (últimos 4)…"
-          },
-          "match": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Match",
-            "description": "Resultado de la comparación con el pedido y sus motivos."
-          },
-          "reviewed_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reviewed At"
-          },
-          "review_note": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Review Note"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "status",
-          "image_url",
-          "extracted",
-          "match",
-          "reviewed_at",
-          "review_note",
-          "created_at"
-        ],
-        "title": "ComprobanteOut"
-      },
-      "ComprobantesOut": {
-        "properties": {
-          "order_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Order Id"
-          },
-          "payment_status": {
-            "type": "string",
-            "title": "Payment Status"
-          },
-          "payment_method": {
-            "type": "string",
-            "title": "Payment Method"
-          },
-          "payment_status_changed_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Payment Status Changed At"
-          },
-          "payment_status_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Payment Status Reason"
-          },
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/ComprobanteOut"
-            },
-            "type": "array",
-            "title": "Items"
-          }
-        },
-        "type": "object",
-        "required": [
-          "order_id",
-          "payment_status",
-          "payment_method",
-          "payment_status_changed_at",
-          "payment_status_reason",
-          "items"
-        ],
-        "title": "ComprobantesOut"
-      },
-      "AgentScheduleIn": {
-        "properties": {
-          "schedule": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Schedule",
-            "description": "`null` vuelve a heredar el horario del negocio."
-          },
-          "lock_version": {
-            "type": "integer",
-            "title": "Lock Version"
-          }
-        },
-        "type": "object",
-        "required": [
-          "schedule",
-          "lock_version"
-        ],
-        "title": "AgentScheduleIn"
-      },
-      "AgentScheduleOut": {
-        "properties": {
-          "schedule": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Schedule",
-            "description": "Horario propio del agente (`{tz, ranges}`); `null` = hereda el del negocio."
-          },
-          "business_hours": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Business Hours",
-            "description": "El horario del negocio (lo que hereda)."
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "agente",
-              "negocio"
-            ],
-            "title": "Source"
-          },
-          "lock_version": {
-            "type": "integer",
-            "title": "Lock Version"
-          }
-        },
-        "type": "object",
-        "required": [
-          "schedule",
-          "business_hours",
-          "source",
-          "lock_version"
-        ],
-        "title": "AgentScheduleOut"
       }
     }
   }
