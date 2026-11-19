@@ -110,14 +110,30 @@ async def test_el_telefono_propio_se_guarda_sin_pisar_otro(conexion) -> None:
     assert await _telefono(conexion, cliente.id) == "+573001112233"
 
 
-async def test_los_logs_del_contacto_no_llevan_el_numero(conexion) -> None:
-    from structlog.testing import capture_logs
+class _LogQueAnota:
+    """Sustituto del logger del módulo: con `cache_logger_on_first_use` (lo activa `configure_logging` al importar
+    `core.main`) el logger queda atado a la lista de procesadores de su primer uso, y si otro test configura una lista
+    nueva `capture_logs` deja de ver sus eventos (pasó en `test_tool_sin_binding_v3.py`, core#850)."""
 
+    def __init__(self, eventos: list[dict[str, Any]]) -> None:
+        self._eventos = eventos
+
+    def __getattr__(self, nivel: str) -> Any:
+        def anotar(event: str, **kw: Any) -> None:
+            self._eventos.append({"event": event, "log_level": nivel, **kw})
+
+        return anotar
+
+
+async def test_los_logs_del_contacto_no_llevan_el_numero(conexion, monkeypatch: pytest.MonkeyPatch) -> None:
+    import core.orchestrator.consumer as consumer
+
+    logs: list[dict[str, Any]] = []
+    monkeypatch.setattr(consumer, "log", _LogQueAnota(logs))
     usuario = str(secrets.randbelow(10**9))
-    with capture_logs() as logs:
-        await _resolver(conexion, _campos(conexion, usuario, shared_phone="+573005556677"))
-        await _resolver(conexion, _campos(conexion, usuario, shared_phone="+573004443322"))  # conflicto
-        await _resolver(conexion, _campos(conexion, usuario, shared_phone="no-es"))  # inválido
+    await _resolver(conexion, _campos(conexion, usuario, shared_phone="+573005556677"))
+    await _resolver(conexion, _campos(conexion, usuario, shared_phone="+573004443322"))  # conflicto
+    await _resolver(conexion, _campos(conexion, usuario, shared_phone="no-es"))  # inválido
     eventos = [e for e in logs if str(e.get("event", "")).startswith("telegram.contacto")]
     assert {e["event"] for e in eventos} == {
         "telegram.contacto.compartido", "telegram.contacto.conflicto", "telegram.contacto.invalido"
